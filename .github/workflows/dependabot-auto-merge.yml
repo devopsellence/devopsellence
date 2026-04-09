@@ -1,31 +1,62 @@
 name: Dependabot Auto Merge
 
 on:
-  pull_request_target:
+  workflow_run:
+    workflows:
+      - Agent CI
+      - CLI CI
+      - Control Plane CI
+      - e2e-shared
+      - e2e-solo
     types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
+      - completed
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
 
 jobs:
-  enable-auto-merge:
-    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.draft == false
+  merge:
+    if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Enable auto-merge for Dependabot PR
+      - name: Merge passing Dependabot PR
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
-          state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft --jq '.state + ":" + (.isDraft | tostring)')"
-          if [ "$state" != "OPEN:false" ]; then
-            echo "PR #$PR_NUMBER is not an open ready PR"
+          set -euo pipefail
+
+          if [[ -z "${PR_NUMBER:-}" || "${PR_NUMBER}" == "null" ]]; then
+            echo "No associated pull request for workflow run"
             exit 0
           fi
 
-          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch
+          pr_state="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author,state,isDraft --jq '.author.login + ":" + .state + ":" + (.isDraft | tostring)')"
+          if [[ "${pr_state}" != "app/dependabot:OPEN:false" ]]; then
+            echo "PR #${PR_NUMBER} is not an open Dependabot PR"
+            exit 0
+          fi
+
+          runs_json="$(gh run list --repo "$REPO" --commit "$HEAD_SHA" --limit 50 --json workflowName,event,status,conclusion,url)"
+          latest_runs="$(echo "$runs_json" | jq 'reduce [.[] | select(.event == "pull_request")][] as $run ({}; if has($run.workflowName) then . else . + {($run.workflowName): $run} end)')"
+          relevant_runs="$(echo "$latest_runs" | jq 'to_entries | map(select(.key as $name | ["Agent CI", "CLI CI", "Control Plane CI", "e2e-shared", "e2e-solo"] | index($name)))')"
+          relevant_count="$(echo "$relevant_runs" | jq 'length')"
+
+          if [[ "$relevant_count" -eq 0 ]]; then
+            echo "No relevant CI workflows found for ${HEAD_SHA}"
+            exit 0
+          fi
+
+          blocking_runs="$(echo "$relevant_runs" | jq -r '.[] | select(.value.status != "completed" or .value.conclusion != "success") | "\(.key):\(.value.status):\(.value.conclusion // "pending"):\(.value.url)"')"
+          if [[ -n "${blocking_runs}" ]]; then
+            echo "CI not ready for merge:"
+            echo "${blocking_runs}"
+            exit 0
+          fi
+
+          gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "Approving Dependabot PR after successful CI." || true
+          gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --delete-branch

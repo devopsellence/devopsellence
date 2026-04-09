@@ -28,6 +28,18 @@ if [[ "${GIT_COMMON_DIR}" != /* ]]; then
   GIT_COMMON_DIR="${ROOT}/${GIT_COMMON_DIR}"
 fi
 
+ensure_runner_image() {
+  if docker image inspect "${RUNNER_IMAGE}" >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ "${DEVOPSELLENCE_E2E_BUILD_RUNNER_IMAGE:-}" == "1" ]]; then
+    echo "[build] runner image ${RUNNER_IMAGE}"
+    docker build -f test/e2e/runner.Dockerfile -t "${RUNNER_IMAGE}" control-plane
+    return
+  fi
+}
+
 EXTRA_MOUNTS=()
 declare -A SEEN_MOUNTS
 
@@ -55,6 +67,8 @@ for repo_root in "${CLI_ROOT}" "${AGENT_ROOT}" "${GCP_MOCK_ROOT}"; do
   fi
   add_mount_if_needed "${repo_root}"
 done
+
+ensure_runner_image
 
 docker run --rm \
   --network host \

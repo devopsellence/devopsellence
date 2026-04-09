@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@v4
         with:
           install: true
 
@@ -39,7 +39,7 @@ jobs:
 
       - name: Upload e2e logs
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-solo-logs
           path: test/e2e/log/direct-e2e-*.log

@@ -1,0 +1,74 @@
+name: e2e-shared
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/e2e-shared.yml
+      - .github/workflows/e2e-runner-image.yml
+      - test/**
+      - agent/**
+      - cli/**
+      - control-plane/**
+      - mise.toml
+  pull_request:
+    paths:
+      - .github/workflows/e2e-shared.yml
+      - .github/workflows/e2e-runner-image.yml
+      - test/**
+      - agent/**
+      - cli/**
+      - control-plane/**
+      - mise.toml
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  E2E_RUNNER_IMAGE_NAME: devopsellence-e2e-runner-v2
+
+jobs:
+  e2e-shared:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Normalize owner
+        id: owner
+        run: echo "value=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Preload e2e helper images
+        env:
+          ENVOY_IMAGE: docker.io/envoyproxy/envoy@sha256:d9b4a70739d92b3e28cd407f106b0e90d55df453d7d87773efd22b4429777fe8
+        run: |
+          docker pull postgres:16
+          docker pull registry:2
+          docker pull "$ENVOY_IMAGE"
+
+      - name: Run shared mode e2e
+        env:
+          DEVOPSELLENCE_CLI_ROOT: ${{ github.workspace }}/cli
+          DEVOPSELLENCE_AGENT_ROOT: ${{ github.workspace }}/agent
+          DEVOPSELLENCE_GCP_MOCK_ROOT: ${{ github.workspace }}/test/support/gcp-mock
+          DEVOPSELLENCE_E2E_RUNNER_IMAGE: ghcr.io/${{ steps.owner.outputs.value }}/${{ env.E2E_RUNNER_IMAGE_NAME }}:master
+          DEVOPSELLENCE_E2E_BUILD_RUNNER_IMAGE: "1"
+        run: test/e2e/run-in-runner.sh
+
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-shared-logs
+          path: |
+            control-plane/log/e2e-*.log
+            control-plane/tmp/e2e
+          if-no-files-found: ignore

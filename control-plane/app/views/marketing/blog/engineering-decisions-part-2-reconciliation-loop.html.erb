@@ -1,0 +1,157 @@
+<% content_for :title, "#{@post[:title]} | devopsellence blog" %>
+
+<main class="page page-article">
+  <header class="article-header">
+    <p class="article-back"><%= link_to "&larr; Blog".html_safe, blog_path %></p>
+    <p class="article-series-label"><%= @post[:series] %> &mdash; Part <%= @post[:part] %> of 6</p>
+    <h1><%= @post[:title] %></h1>
+    <div class="article-meta">
+      <time><%= @post[:date].strftime("%B %-d, %Y") %></time>
+      <span><%= @post[:reading_time] %></span>
+    </div>
+  </header>
+
+  <article class="article-body">
+
+    <p>The devopsellence agent is a single Go binary that runs on your server. Its job is simple: every 2 seconds, check what should be running and make it so. That's the entire architecture of the agent &mdash; a loop that fetches desired state, compares it to actual state, and reconciles the difference.</p>
+
+    <p>This article explains how that loop works, step by step.</p>
+
+    <h2>The loop</h2>
+
+    <p>Every 2 seconds (configurable), the agent executes the same sequence:</p>
+
+    <div class="article-diagram">
+      <div class="article-diagram-chain">
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">1</div>
+          <div class="article-diagram-chain-content">
+            <strong>Fetch desired state</strong>
+            <p>The agent asks its authority: "what should be running on this node?" The authority is typically Cloud Storage (a signed JSON envelope), but falls back through multiple layers if GCS is unavailable.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">2</div>
+          <div class="article-diagram-chain-content">
+            <strong>Verify the envelope</strong>
+            <p>The desired-state envelope is cryptographically signed (RS256, Cloud KMS). The agent verifies the signature, checks the sequence number is monotonically increasing, validates the payload hash, and confirms the timestamp is recent. Any failure means the envelope is rejected.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">3</div>
+          <div class="article-diagram-chain-content">
+            <strong>Compute the diff</strong>
+            <p>The agent lists all containers it manages (identified by the <code>devopsellence.managed</code> label) and computes a content hash for each. It compares these hashes to what the desired state declares. Containers with matching hashes are left alone. Missing containers are created. Extra containers are removed. Changed containers are replaced.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">4</div>
+          <div class="article-diagram-chain-content">
+            <strong>Reconcile</strong>
+            <p>For web services: pull image, create new container, wait for health check, update Envoy routing, drain old container. For workers: pull image, stop old container, start new one. For release commands: run one-time task, report result.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">5</div>
+          <div class="article-diagram-chain-content">
+            <strong>Report status</strong>
+            <p>The agent reports what happened (containers running, errors encountered, reconciliation complete) to the control plane. The control plane uses this to track rollout progress across all nodes.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">6</div>
+          <div class="article-diagram-chain-content">
+            <strong>Sleep and repeat</strong>
+            <p>Wait 2 seconds. Go to step 1.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p>The loop is <strong>idempotent</strong>. Running it once or a thousand times with the same desired state produces the same result. If the agent crashes and restarts, it picks up exactly where it left off. If nothing has changed, the loop is a no-op: fetch, compare hashes, find no diff, report, sleep.</p>
+
+    <h2>Hash-based drift detection</h2>
+
+    <p>The agent needs to know whether a running container matches the desired state. It does this with content hashing.</p>
+
+    <p>Every container managed by devopsellence gets two labels:</p>
+
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+        <span class="terminal-bar-title">Container labels</span>
+      </div>
+      <div class="terminal-body">
+        <pre class="config-pre"><code>devopsellence.managed = true
+devopsellence.hash    = a3f8c1...
+devopsellence.service = web</code></pre>
+      </div>
+    </div>
+
+    <p>The <code>devopsellence.hash</code> is computed from the container's <strong>image digest</strong>, <strong>environment variables</strong>, <strong>port bindings</strong>, <strong>entrypoint</strong>, <strong>command</strong>, and <strong>volume mounts</strong>. If any of these change in the desired state, the hash changes, and the agent knows the container needs to be replaced.</p>
+
+    <p>This is simple and reliable. The agent doesn't need to inspect the running container's configuration or diff individual fields. One hash comparison answers the question: "is this container correct?"</p>
+
+    <p>If a container is running but its hash doesn't match the desired state, it's replaced. If a container is running but isn't in the desired state at all, it's removed. If a container is in the desired state but not running, it's created. This handles every drift scenario &mdash; manual changes, container crashes, configuration updates, image changes &mdash; with the same mechanism.</p>
+
+    <h2>The authority hierarchy</h2>
+
+    <p>When the agent decides what to reconcile, it does not rely on a single source. The decision tree looks like this:</p>
+
+    <ol>
+      <li><strong>Local override</strong> &mdash; if an operator writes <code>desired-state-override.json</code>, that file wins immediately. This is the emergency brake glass: a deliberate local override takes precedence over remote state.</li>
+      <li><strong>GCS immutable envelope</strong> &mdash; the normal remote source. A signed JSON object at a sequence-indexed path (e.g., <code>gs://bucket/path-seq-42.json</code>). Immutable once written.</li>
+      <li><strong>GCS pointer</strong> &mdash; a lightweight JSON object that redirects to the current immutable envelope. Used by newer agents that support the <code>desired_state_pointer.v1</code> capability.</li>
+      <li><strong>Control plane inline envelope</strong> &mdash; the control plane can return the signed envelope directly in the assignment API response. Today this is primarily how unassigned nodes receive their empty desired state.</li>
+      <li><strong>Disk cache</strong> &mdash; the last successfully verified envelope is written to <code>desired-state-cache.json</code> on disk. If remote sources are temporarily unavailable, the agent reconciles from cached state.</li>
+    </ol>
+
+    <p>This structure means the agent can keep running through cascading failures. In normal operation it follows the assigned remote source. During an incident, an explicit local override can take control immediately. If remote reads fail, the disk cache keeps the last verified state alive. Running containers are never stopped just because the state source is temporarily unavailable.</p>
+
+    <h2>Sequence numbers prevent rollback</h2>
+
+    <p>Every desired-state envelope has a monotonically increasing sequence number. The agent tracks the highest sequence it has seen. If it receives an envelope with a lower or equal sequence number, it's rejected.</p>
+
+    <p>This prevents a subtle attack: if someone replaces the GCS object with an older version (a rollback attack), the agent ignores it because the sequence number is stale. It also prevents split-brain scenarios during GCS eventual consistency &mdash; if a node briefly sees an old version of the object, the sequence guard catches it.</p>
+
+    <h2>Why 2 seconds?</h2>
+
+    <p>The 2-second polling interval is a deliberate choice. It's fast enough that deploys converge almost immediately &mdash; within one cycle of publishing. It's slow enough that the load on Cloud Storage is negligible (one GET request per node every 2 seconds is nothing for GCS).</p>
+
+    <p>We intentionally chose fast polling over event-driven notification. Events add complexity: WebSocket connections, reconnection logic, message ordering, acknowledgment. Polling is stateless. If the agent misses a cycle (GC pause, network blip), it catches up on the next one. There's no missed-event recovery logic because there are no events to miss.</p>
+
+    <p>The trade-off is that deploy latency has a 0-2 second jitter. In practice, for a tool where the image pull typically takes 5-30 seconds, 2 seconds of polling jitter is negligible. If we later need sub-second convergence, we can add a notification hint channel without changing the core loop &mdash; the poll would simply happen sooner when a hint arrives.</p>
+
+    <h2>Auth check: the slower loop</h2>
+
+    <p>Alongside the 2-second reconciliation loop, the agent runs a 30-second authentication check. This loop:</p>
+
+    <ul>
+      <li>Validates the agent's access token with the control plane.</li>
+      <li>Refreshes tokens if they're approaching expiry.</li>
+      <li>Checks for assignment changes (was this node assigned to a new environment? unassigned entirely?).</li>
+      <li>Fetches updated GCP credentials via Workload Identity Federation if needed.</li>
+    </ul>
+
+    <p>This is deliberately slower than the reconciliation loop. Authentication state changes infrequently (assignments happen at operator-initiated moments, not every 2 seconds), so checking every 30 seconds is sufficient. Decoupling the auth check from reconciliation means a slow auth response doesn't delay container operations.</p>
+
+    <h2>What makes this different</h2>
+
+    <p>The reconciliation loop is not a novel idea. Kubernetes kubelets do the same thing. Terraform plans work on the same principle. The difference is scope and simplicity:</p>
+
+    <ul>
+      <li><strong>Single app per node.</strong> The agent reconciles at most two containers (web + worker) and one Envoy sidecar. There's no scheduler, no bin-packing, no resource negotiation.</li>
+      <li><strong>No coordination.</strong> Each agent operates independently. There's no leader election, no consensus protocol, no distributed state. Ten agents on ten servers run ten independent loops.</li>
+      <li><strong>Five lines of state.</strong> The desired state for a node is: which image to run, which environment variables to set, which secrets to resolve, which health check to use, and which ports to expose. That's it.</li>
+    </ul>
+
+    <p>The result is a reconciliation loop you can read end to end in an afternoon. No abstraction layers, no plugin systems, no extension points. Just: fetch, compare, reconcile, report, sleep.</p>
+
+    <p>Next: <strong><%= link_to "Part 3 — Zero-downtime deploys without a central load balancer", blog_post_path(slug: "engineering-decisions-part-3-zero-downtime") %></strong></p>
+
+  </article>
+
+  <%= render "marketing/blog/series_nav" %>
+</main>

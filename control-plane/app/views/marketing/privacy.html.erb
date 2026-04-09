@@ -1,0 +1,95 @@
+<% content_for :title, "devopsellence | privacy policy" %>
+
+<main class="page page-prose">
+  <header class="page-header">
+    <h1>Privacy policy</h1>
+    <p class="page-lead">This policy explains what devopsellence collects, why, how we use it, and the choices you have.</p>
+    <p class="page-meta">Effective date: <%= @legal_effective_date %></p>
+  </header>
+
+  <section class="prose-section">
+    <h2>What we collect</h2>
+    <p>We collect the information needed to run the service you ask us to run.</p>
+    <ul>
+      <li>Account data such as your email address, account kind, and login state.</li>
+      <li>Identity-provider data from GitHub or Google, including provider identifiers, verified email, and basic profile metadata.</li>
+      <li>Workspace data such as organizations, projects, environments, releases, deployments, node names, labels, and runtime configuration.</li>
+      <li>Infrastructure metadata such as desired-state locations, public IPs, provider server identifiers, region and size selections, and environment secret names.</li>
+      <li>Secrets and Cloudflare tunnel tokens that you submit so we can provision runtime access and managed HTTPS ingress.</li>
+      <li>Authentication and security data such as session state, API token digests, refresh token digests, bootstrap token digests, and audit timestamps.</li>
+      <li>Technical data such as IP address, user agent, request logs, and operational telemetry.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>How we use information</h2>
+    <ul>
+      <li>To authenticate you and keep your account secure.</li>
+      <li>To create organizations, environments, releases, nodes, and optional preview capacity.</li>
+      <li>To store, publish, sign, and deliver desired state to nodes.</li>
+      <li>To provision and control runtime resources.</li>
+      <li>To investigate incidents, prevent abuse, enforce limits, and improve reliability.</li>
+      <li>To communicate with you about the service.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>How information is shared</h2>
+    <p>We do not sell personal information.</p>
+    <ul>
+      <li>With infrastructure providers we use to run the service, including Google Cloud and configured managed-node providers.</li>
+      <li>With identity providers you choose for login, such as GitHub or Google.</li>
+      <li>With Cloudflare when you enable tunnel-backed ingress.</li>
+      <li>With service providers that help us operate the product, only as needed.</li>
+      <li>When required by law or to protect safety and security.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Secrets and runtime data</h2>
+    <p>devopsellence handles operationally sensitive deployment data. We use it to run your workloads, not to inspect application content for unrelated purposes.</p>
+    <ul>
+      <li>Environment secrets and tunnel tokens are used to provision runtime access and managed HTTPS ingress.</li>
+      <li>Release and deployment metadata are used to build, publish, and reconcile desired state on nodes.</li>
+      <li>You are responsible for the content of the applications, images, data, and secrets you deploy.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Retention</h2>
+    <ul>
+      <li>We keep records for as long as your account or workspace remains active, and longer if needed for security, disputes, or compliance.</li>
+      <li>Short-lived authentication artifacts expire automatically.</li>
+      <li>We may retain logs, backups, and security records for a limited period after deletion.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Your choices</h2>
+    <ul>
+      <li>You can update configuration, rotate secrets, revoke tokens, and delete environments.</li>
+      <li>You can stop using the service at any time.</li>
+      <li>For account or workspace deletion, contact us.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Security</h2>
+    <p>We use administrative, technical, and organizational measures to protect information. No system is perfectly secure.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Children</h2>
+    <p>devopsellence is not directed to children under 13.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Changes</h2>
+    <p>We may update this policy as the service evolves. Updated versions will be posted here with a new effective date.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Contact</h2>
+    <p>Questions: <a href="mailto:<%= @contact_email %>"><%= @contact_email %></a></p>
+  </section>
+</main>

@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package devopsellence.agent.v1;
+
+option go_package = "github.com/devopsellence/devopsellence/agent/internal/desiredstatepb;desiredstatepb";
+
+message DesiredState {
+  reserved 1, 5;
+  reserved "node_id", "init";
+  string revision = 2;
+  repeated Container containers = 3;
+  Ingress ingress = 4;
+  Task release_command = 6;
+}
+
+message Container {
+  string service_name = 1;
+  string image = 2;
+  repeated string entrypoint = 3;
+  repeated string command = 4;
+  map<string, string> env = 5;
+  map<string, string> secret_refs = 6;
+  Healthcheck healthcheck = 7;
+  uint32 port = 8;
+  repeated VolumeMount volume_mounts = 9;
+}
+
+message Healthcheck {
+  reserved 1;
+  reserved "test";
+  int64 interval_seconds = 2;
+  int64 timeout_seconds = 3;
+  int32 retries = 4;
+  int64 start_period_seconds = 5;
+  string path = 6;
+  uint32 port = 7;
+}
+
+message VolumeMount {
+  string source = 1;
+  string target = 2;
+}
+
+message Task {
+  string name = 1;
+  string image = 2;
+  repeated string entrypoint = 3;
+  repeated string command = 4;
+  map<string, string> env = 5;
+  map<string, string> secret_refs = 6;
+  repeated VolumeMount volume_mounts = 7;
+}
+
+message Ingress {
+  string hostname = 1;
+  string tunnel_token = 2;
+  string tunnel_token_secret_ref = 3;
+  string mode = 4;
+  reserved 5, 6;
+  reserved "origin_hostname", "origin_port";
+}

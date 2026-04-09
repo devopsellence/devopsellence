@@ -1,0 +1,23 @@
+[tools]
+go = "1.25.8"
+protoc = "33.1"
+protoc-gen-go = "1.34.2"
+
+[env]
+MISE_CACHE_DIR = ".mise-cache"
+
+[tasks.build]
+description = "Build all packages"
+run = "GOCACHE=$(pwd)/.gocache go build ./..."
+
+[tasks.fmt]
+description = "Format Go files"
+run = "gofmt -w $(rg --files -g '*.go' cmd internal)"
+
+[tasks.test]
+description = "Run unit and integration tests"
+run = "GOCACHE=$(pwd)/.gocache go test ./..."
+
+[tasks.protoc]
+description = "Generate protobuf Go code"
+run = "protoc --go_out=. --go_opt=module=github.com/devopsellence/devopsellence/agent proto/devopsellence/agent/v1/desired_state.proto"

@@ -1,0 +1,21 @@
+<p>
+  Activity from <%= @window_start.utc.iso8601 %> to <%= @window_end.utc.iso8601 %>.
+</p>
+
+<% if @users.any? %>
+  <p>New user signups</p>
+  <ul>
+    <% @users.each do |user| %>
+      <li><%= user %></li>
+    <% end %>
+  </ul>
+<% end %>
+
+<% if @deployed_hostnames.any? %>
+  <p>New deployed apps</p>
+  <ul>
+    <% @deployed_hostnames.each do |hostname| %>
+      <li><%= hostname %></li>
+    <% end %>
+  </ul>
+<% end %>

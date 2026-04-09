@@ -1,0 +1,94 @@
+<% content_for :title, "#{@post[:title]} | devopsellence blog" %>
+
+<main class="page page-article">
+  <header class="article-header">
+    <p class="article-back"><%= link_to "&larr; Blog".html_safe, blog_path %></p>
+    <p class="article-series-label"><%= @post[:series] %> &mdash; Part <%= @post[:part] %> of 7</p>
+    <h1><%= @post[:title] %></h1>
+    <div class="article-meta">
+      <time><%= @post[:date].strftime("%B %-d, %Y") %></time>
+      <span><%= @post[:reading_time] %></span>
+    </div>
+  </header>
+
+  <article class="article-body">
+
+    <p>Many deployment platforms handle HTTPS by terminating TLS at a central load balancer or proxy. This means the platform holds the TLS private key &mdash; for every domain, for every customer. If the platform is compromised, every certificate's private key is exposed.</p>
+
+    <p>devopsellence takes a fundamentally different approach for its direct DNS ingress mode: <strong>the agent generates its own RSA private key on the server. The key never leaves the machine. The control plane never sees it.</strong></p>
+
+    <h2>The CSR flow</h2>
+
+    <div class="article-diagram">
+      <div class="article-diagram-chain">
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">1</div>
+          <div class="article-diagram-chain-content">
+            <strong>Agent generates a key pair</strong>
+            <p>On the server, the agent generates a 2048-bit RSA private key using <code>crypto/rand</code>. The key is written to disk with <code>0400</code> permissions (read-only, owner only). It is owned by the Envoy process UID. <strong>The key never leaves the machine.</strong></p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">2</div>
+          <div class="article-diagram-chain-content">
+            <strong>CSR sent to control plane</strong>
+            <p>The agent creates a Certificate Signing Request containing only the <strong>public key</strong> and the hostname. The CSR is sent to the control plane via an authenticated API call. The private key is not included &mdash; a CSR by definition contains only the public key.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">3</div>
+          <div class="article-diagram-chain-content">
+            <strong>Control plane issues certificate via Let's Encrypt</strong>
+            <p>The control plane validates the CSR hostname, creates an ACME order with Let's Encrypt, and completes a DNS-01 challenge by creating a TXT record in Cloudflare. Once validated, Let's Encrypt signs the certificate. The control plane returns it to the agent.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">4</div>
+          <div class="article-diagram-chain-content">
+            <strong>Agent configures Envoy</strong>
+            <p>The agent loads the certificate and its local private key into Envoy's xDS configuration as inline bytes. Envoy terminates HTTPS on port 8443. The control plane was never in the TLS data path.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p>The control plane acts as a certificate issuance coordinator, not a key holder. It sees the CSR (which contains the public key), performs domain validation with Let's Encrypt, and returns the signed certificate. At no point does it see, store, or transmit the private key.</p>
+
+    <h2>Automatic renewal</h2>
+
+    <p>The agent monitors certificate expiry and automatically renews when the certificate is within 30 days of expiring (configurable via <code>--ingress-cert-renew-before</code>). On renewal:</p>
+
+    <ol>
+      <li>A <strong>fresh key pair</strong> is generated. The agent doesn't reuse the old private key.</li>
+      <li>A new CSR is created and sent to the control plane.</li>
+      <li>The control plane completes a new ACME order and returns the certificate.</li>
+      <li>The certificate and key files are written atomically (temp file + rename) to prevent partial state.</li>
+    </ol>
+
+    <p>The agent validates that the returned certificate matches the hostname and that its public key matches the locally generated private key. This prevents a malicious control plane from returning a certificate for the wrong hostname.</p>
+
+    <h2>Two ingress modes</h2>
+
+    <p>devopsellence supports two ingress strategies:</p>
+
+    <p><strong>Tunnel mode</strong> (default) uses a Cloudflare tunnel. The agent runs a <code>cloudflared</code> sidecar container that creates an outbound tunnel to Cloudflare's edge. Cloudflare terminates TLS. No certificate is needed on the server, no ports need to be open, and no public IP is required. This is ideal for demos, staging, and home-lab servers that don't have a public address.</p>
+
+    <p><strong>Direct DNS mode</strong> points DNS directly to the server's public IP. The agent terminates TLS locally using the certificate flow described above. This is the production path for serious workloads &mdash; it supports custom domains (via CNAME or ALIAS to the canonical hostname) and lets you place your own load balancer in front of multiple servers.</p>
+
+    <p>In both modes, the control plane never holds your TLS private key.</p>
+
+    <h2>What this gives you</h2>
+
+    <ul>
+      <li><strong>Private key locality.</strong> The key is generated on the server and stays there. A control plane compromise doesn't expose your TLS keys.</li>
+      <li><strong>Automatic HTTPS.</strong> No manual certificate management. Let's Encrypt issuance and renewal are fully automated.</li>
+      <li><strong>Atomic file operations.</strong> Certificate and key writes use temp-file-plus-rename to prevent Envoy from reading a partially written file.</li>
+      <li><strong>Standard CSR model.</strong> The same issuance model used by enterprise CAs and large-scale certificate management systems. The subscriber holds the key; the issuer signs the certificate.</li>
+    </ul>
+
+    <p>Next: <strong><%= link_to "Part 6 — What breaks and what doesn't", blog_post_path(slug: "gcp-primitives-part-6-resilience") %></strong></p>
+
+  </article>
+
+  <%= render "marketing/blog/series_nav" %>
+</main>

@@ -1,0 +1,30 @@
+# Caches
+.gocache/
+.gomodcache/
+.mise-cache/
+
+# Local config
+mise.local.toml
+.env
+.env.*
+
+# Secrets and keys
+*.pem
+*.key
+
+# Build artifacts
+dist/
+bin/
+!control-plane/bin/
+!control-plane/bin/**
+test/e2e/log/
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/

@@ -1,0 +1,73 @@
+<% content_for :title, "devopsellence | architecture" %>
+
+<main class="page page-prose">
+  <header class="page-header">
+    <h1>Architecture</h1>
+    <p class="page-lead">devopsellence keeps VMs as the unit of execution. It separates deployment coordination from application execution and composes with existing infrastructure primitives instead of abstracting over them.</p>
+  </header>
+
+  <section class="prose-section">
+    <h2>The split</h2>
+    <p>The control plane tracks organizations, environments, releases, and rollout state. Nodes pull their current target, verify signed desired state, and reconcile containers locally. The control plane decides. VM agents execute.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Deploy flow</h2>
+    <ol class="flow-list">
+      <li>
+        <strong>Publish</strong>
+        <span>CLI or GitHub Actions pushes a release into the control plane.</span>
+      </li>
+      <li>
+        <strong>Sequence</strong>
+        <span>The control plane assigns capacity, advances desired-state sequence numbers, and publishes signed envelopes.</span>
+      </li>
+      <li>
+        <strong>Deliver</strong>
+        <span>On today's managed backend, existing GCP primitives carry artifacts: Artifact Registry for images, GCS for signed desired state, Secret Manager for runtime secrets.</span>
+      </li>
+      <li>
+        <strong>Reconcile</strong>
+        <span>Agents on your nodes fetch their target, verify signatures, and reconcile web and worker containers locally.</span>
+      </li>
+    </ol>
+  </section>
+
+  <section class="prose-section">
+    <h2>Security</h2>
+    <p>Security comes from machine boundaries and provider primitives, not from inventing a new platform layer.</p>
+    <ul>
+      <li>Per-environment runtime access scoped through service accounts and IAM bindings.</li>
+      <li>Workload Identity for short-lived token exchange instead of long-lived credentials.</li>
+      <li>Signed desired state with JWKS-backed verification before agents apply changes.</li>
+      <li>Secrets in Google Secret Manager with environment-scoped access grants.</li>
+      <li>Optional Cloud KMS key versions for node identity and desired-state signing.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Resilience</h2>
+    <p>The management plane is separate from the workload plane.</p>
+    <ul>
+      <li>Control plane is authoritative for assignment lineage, publish sequencing, and rollout observation.</li>
+      <li>Desired state published to GCS, keeping runtime delivery off inline control-plane bytes.</li>
+      <li>Control plane outage: running containers continue, deploys and management operations pause.</li>
+      <li>Deeper offline restart recovery is an active hardening area.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Degradation model</h2>
+    <p>Infrastructure degrades in layers, not all at once.</p>
+    <ul>
+      <li><strong>Control plane down</strong> &mdash; Running apps keep serving. New deploys, assignments, and token refresh stall until recovery.</li>
+      <li><strong>GCP services impaired</strong> &mdash; Running containers continue. Fresh desired-state reads, image pulls, and secret reads degrade next. Healthy running work is preserved first.</li>
+      <li><strong>Design principle</strong> &mdash; Management pauses before customer traffic does.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Where this is heading</h2>
+    <p>Two product tracks are emerging: managed control plane plus your servers, and a fully self-hosted standalone edition with no GCP dependency. Both keep VMs as the unit of execution. See the <%= link_to "roadmap", roadmap_path %>.</p>
+  </section>
+</main>

@@ -1,0 +1,89 @@
+<%
+require "uri"
+
+database_url_for = lambda do |env_key, suffix = nil|
+  explicit_url = ENV.fetch(env_key, "").strip
+  next explicit_url unless explicit_url.empty?
+
+  base_url = ENV.fetch("DATABASE_URL", "").strip
+  next base_url if suffix.nil? || base_url.empty?
+
+  uri = URI.parse(base_url)
+  database_name = uri.path.sub(%r{\A/}, "")
+  uri.path = "/#{database_name}#{suffix}"
+  uri.to_s
+end
+
+queue_default_max_connections = lambda do
+  worker_threads = Integer(ENV.fetch("JOB_THREADS") { 2 })
+
+  # Solid Queue requires max(worker_threads) plus supervisor/heartbeat threads.
+  worker_threads + 2
+end
+
+queue_max_connections = lambda do
+  explicit = ENV["QUEUE_DATABASE_MAX_CONNECTIONS"].to_s.strip
+  next explicit unless explicit.empty?
+
+  queue_default_max_connections.call
+end
+%>
+
+default: &default
+  adapter: postgresql
+  max_connections: <%= ENV.fetch("DATABASE_MAX_CONNECTIONS") { ENV.fetch("RAILS_MAX_THREADS") { 5 } } %>
+
+development:
+  primary:
+    <<: *default
+    url: <%= database_url_for.call("DATABASE_URL", "_development") %>
+  cache:
+    <<: *default
+    url: <%= database_url_for.call("CACHE_DATABASE_URL", "_development_cache") %>
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *default
+    url: <%= database_url_for.call("QUEUE_DATABASE_URL", "_development_queue") %>
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *default
+    url: <%= database_url_for.call("CABLE_DATABASE_URL", "_development_cable") %>
+    migrations_paths: db/cable_migrate
+
+test:
+  primary:
+    <<: *default
+    url: <%= database_url_for.call("DATABASE_URL", "_test") %>
+  cache:
+    <<: *default
+    url: <%= database_url_for.call("CACHE_DATABASE_URL", "_test_cache") %>
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *default
+    url: <%= database_url_for.call("QUEUE_DATABASE_URL", "_test_queue") %>
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *default
+    url: <%= database_url_for.call("CABLE_DATABASE_URL", "_test_cable") %>
+    migrations_paths: db/cable_migrate
+
+production:
+  primary: &production_primary
+    <<: *default
+    url: <%= database_url_for.call("DATABASE_URL") %>
+    max_connections: <%= ENV.fetch("PRIMARY_DATABASE_MAX_CONNECTIONS") { ENV.fetch("DATABASE_MAX_CONNECTIONS") { ENV.fetch("RAILS_MAX_THREADS") { 5 } } } %>
+  cache:
+    <<: *production_primary
+    url: <%= database_url_for.call("CACHE_DATABASE_URL", "_cache") %>
+    migrations_paths: db/cache_migrate
+    max_connections: <%= ENV.fetch("CACHE_DATABASE_MAX_CONNECTIONS") { 2 } %>
+  queue:
+    <<: *production_primary
+    url: <%= database_url_for.call("QUEUE_DATABASE_URL", "_queue") %>
+    migrations_paths: db/queue_migrate
+    max_connections: <%= queue_max_connections.call %>
+  cable:
+    <<: *production_primary
+    url: <%= database_url_for.call("CABLE_DATABASE_URL", "_cable") %>
+    migrations_paths: db/cable_migrate
+    max_connections: <%= ENV.fetch("CABLE_DATABASE_MAX_CONNECTIONS") { 1 } %>

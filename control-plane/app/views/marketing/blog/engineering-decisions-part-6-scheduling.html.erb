@@ -1,0 +1,200 @@
+<% content_for :title, "#{@post[:title]} | devopsellence blog" %>
+
+<main class="page page-article">
+  <header class="article-header">
+    <p class="article-back"><%= link_to "&larr; Blog".html_safe, blog_path %></p>
+    <p class="article-series-label"><%= @post[:series] %> &mdash; Part <%= @post[:part] %> of 6</p>
+    <h1><%= @post[:title] %></h1>
+    <div class="article-meta">
+      <time><%= @post[:date].strftime("%B %-d, %Y") %></time>
+      <span><%= @post[:reading_time] %></span>
+    </div>
+  </header>
+
+  <article class="article-body">
+
+    <p>Kubernetes has a scheduler that decides where pods run based on resource requests, affinity rules, taints, tolerations, and topology constraints. It's a sophisticated system that solves a hard problem: placing many workloads efficiently across many nodes.</p>
+
+    <p>devopsellence doesn't have a scheduler. Instead, it has <strong>labels</strong>, <strong>capabilities</strong>, and <strong>explicit assignment</strong>. You decide which server runs which environment. The system validates that the server can do what the environment needs. Then it provisions the identity infrastructure and publishes desired state. The simplicity is intentional &mdash; when each node runs one environment, there's no bin-packing problem to solve.</p>
+
+    <h2>Node labels</h2>
+
+    <p>Every node has a set of labels that describe what role it plays. Today, there are two labels:</p>
+
+    <ul>
+      <li><strong><code>web</code></strong> &mdash; this node should run the web service (HTTP traffic via Envoy).</li>
+      <li><strong><code>worker</code></strong> &mdash; this node should run the worker service (background jobs).</li>
+    </ul>
+
+    <p>By default, a node gets the <code>web</code> label. You can set labels explicitly:</p>
+
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+        <span class="terminal-bar-title">Setting node labels</span>
+      </div>
+      <div class="terminal-body">
+        <pre class="config-pre"><code># Web-only node (default)
+devopsellence node label set NODE_ID --labels web
+
+# Worker-only node
+devopsellence node label set NODE_ID --labels worker
+
+# Node that runs both web and worker
+devopsellence node label set NODE_ID --labels web,worker</code></pre>
+      </div>
+    </div>
+
+    <p>When the control plane publishes desired state for a node, it checks the node's labels against the release's services. If the release has a web service and the node is labeled <code>web</code>, the web container is included. If the release has a worker service and the node is labeled <code>worker</code>, the worker container is included. If a node has both labels, it runs both.</p>
+
+    <p>This is deliberate: labels are explicit, not inferred. You tell the system what each server does. The system doesn't guess based on resource availability or heuristics.</p>
+
+    <h2>Node capabilities</h2>
+
+    <p>Labels describe what services a node should run. Capabilities describe what features a node supports. The agent reports its capabilities to the control plane, and the control plane uses them to validate assignments and feature availability.</p>
+
+    <p>Current capabilities include:</p>
+
+    <ul>
+      <li><strong><code>direct_dns_ingress.v1</code></strong> &mdash; the agent can terminate TLS locally and serve traffic on public ports. Required for environments using direct DNS ingress.</li>
+      <li><strong><code>release_command.v1</code></strong> &mdash; the agent can execute one-time release commands (like database migrations) before the main rollout.</li>
+      <li><strong><code>desired_state_pointer.v1</code></strong> &mdash; the agent supports the pointer-based desired state fetch (immutable GCS objects instead of mutable overwrites).</li>
+    </ul>
+
+    <p>Capabilities are versioned so the control plane can require specific feature levels. If an environment uses direct DNS ingress but the assigned node doesn't support <code>direct_dns_ingress.v1</code>, the assignment is rejected with a clear error explaining what's missing.</p>
+
+    <p>This is similar to Kubernetes taints and tolerations, but much simpler. There's no scheduler making placement decisions &mdash; you make the decision, and the system validates it.</p>
+
+    <h2>Assignment: the "scheduling" event</h2>
+
+    <p>In devopsellence, "scheduling" is an explicit human action: you assign a node to an environment.</p>
+
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+        <span class="terminal-bar-title">Assigning a node</span>
+      </div>
+      <div class="terminal-body">
+        <pre class="config-pre"><code># Assign a node to production
+devopsellence node attach NODE_ID --env production
+
+# Or register a new node directly into an environment
+devopsellence node register --env production</code></pre>
+      </div>
+    </div>
+
+    <p>When you assign a node, the control plane executes a precise sequence:</p>
+
+    <div class="article-diagram">
+      <div class="article-diagram-chain">
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">1</div>
+          <div class="article-diagram-chain-content">
+            <strong>Validate</strong>
+            <p>Check that the node belongs to the same organization as the environment. Verify that the node's capabilities meet the environment's requirements (e.g., direct DNS ingress support if needed). Ensure no conflicting assignment exists.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">2</div>
+          <div class="article-diagram-chain-content">
+            <strong>Provision identity</strong>
+            <p>Ensure the organization bundle exists (GCP project-level resources). Ensure the environment bundle exists (per-environment service account, IAM bindings, GCS paths). Claim a node bundle from the warm pool (per-node identity and storage).</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">3</div>
+          <div class="article-diagram-chain-content">
+            <strong>Bind</strong>
+            <p>Set the node's <code>environment_id</code>. Attach the claimed node bundle. Copy the GCS storage location (bucket and object path) to the node record. Set the initial desired state sequence number.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">4</div>
+          <div class="article-diagram-chain-content">
+            <strong>Publish</strong>
+            <p>Write the initial desired state to GCS for this node. Enqueue ingress reconciliation (DNS records, TLS certificates). The agent picks up the new state on its next poll cycle.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p>The entire assignment completes in under a second because the expensive GCP provisioning was done ahead of time by the warm pool. The assignment itself is a database update, a bundle claim, and a GCS write.</p>
+
+    <h2>The warm pool model</h2>
+
+    <p>GCP identity provisioning (creating service accounts, IAM bindings, Workload Identity configuration, GCS paths) takes time &mdash; seconds to minutes depending on IAM propagation. If assignment had to provision these resources inline, every node assignment would be slow and fragile (GCP API errors would block assignment).</p>
+
+    <p>Instead, devopsellence pre-provisions bundles in a warm pool:</p>
+
+    <ul>
+      <li><strong>Organization bundles</strong> &mdash; created once per organization. Contains the GCP project-level identity provider and pool.</li>
+      <li><strong>Environment bundles</strong> &mdash; created once per environment. Contains the per-environment GCP service account, Secret Manager access bindings, and GCS path prefix.</li>
+      <li><strong>Node bundles</strong> &mdash; pre-provisioned in batches. Each contains a per-node GCP service account, specific GCS object path, and Workload Identity binding. The warm pool keeps several unclaimed bundles ready.</li>
+    </ul>
+
+    <p>Background jobs continuously monitor pool levels and provision new bundles when inventory runs low. When an assignment happens, it claims an existing bundle &mdash; no GCP API calls in the critical path.</p>
+
+    <p>This is the same principle as Kubernetes' cluster autoscaler pre-warming node pools, applied at the identity level. Cheap resources (IAM configuration, GCS paths) are created ahead of time. Expensive resources (actual servers) are provisioned by the user when needed.</p>
+
+    <h2>Deployment publishing and label matching</h2>
+
+    <p>When a new release is published to an environment, the control plane validates and publishes to all assigned nodes:</p>
+
+    <ol>
+      <li><strong>Validate assignments.</strong> At least one node must be labeled <code>web</code> (every release needs a web service). If the release has a worker service, at least one node must be labeled <code>worker</code>. If the release has a release command, at least one web node must support <code>release_command.v1</code>.</li>
+      <li><strong>Run release command (if any).</strong> Select one capable web node. Publish the release command task to that node only. Wait for success before proceeding.</li>
+      <li><strong>Publish to all nodes.</strong> For each assigned node, build a desired-state envelope containing only the services that match the node's labels. A web-only node gets the web container spec. A worker-only node gets the worker container spec. A node with both labels gets both.</li>
+    </ol>
+
+    <p>The result is that each node receives a tailored desired state &mdash; it only sees the containers it should run. The agent doesn't need to filter or make decisions. It reconciles everything in the envelope.</p>
+
+    <h2>Stateful workloads: the single-node constraint</h2>
+
+    <p>If a release defines volume mounts (persistent storage), the environment is constrained to a single assigned node. This is enforced at publish time &mdash; the control plane rejects the deployment if multiple nodes are assigned to an environment with volumes.</p>
+
+    <p>The reason is straightforward: Docker volumes are local to a single host. There's no distributed volume system (no EBS-backed PVs, no Ceph, no NFS). If two nodes tried to run the same stateful service, they'd each have independent local volumes with divergent data. Rather than build a distributed storage layer, devopsellence enforces the constraint: stateful workloads run on one node.</p>
+
+    <p>This is the right trade-off for the use case. A small team running PostgreSQL or SQLite on a single server doesn't need distributed storage &mdash; they need their data to persist across deploys on that server. Docker volumes provide exactly that.</p>
+
+    <h2>How this compares to Kubernetes scheduling</h2>
+
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+        <span class="terminal-bar-title">Scheduling comparison</span>
+      </div>
+      <div class="terminal-body">
+        <pre class="config-pre"><code>Kubernetes:
+  Scheduling is automatic. The scheduler places pods
+  based on resource requests, affinity, topology, and
+  constraints. You describe what you want; the scheduler
+  decides where.
+
+devopsellence:
+  Scheduling is explicit. You assign a node to an
+  environment. The system validates the assignment and
+  provisions identity. You decide where; the system
+  ensures it's valid.</code></pre>
+      </div>
+    </div>
+
+    <p>Kubernetes' scheduler is powerful because the problem is hard: placing thousands of pods across hundreds of nodes with competing resource demands. devopsellence's scheduling is simple because the problem is simple: assigning a handful of servers to a handful of environments, one-to-one.</p>
+
+    <p>The complexity you need should match the complexity of your problem. For a team running a web app on 3 servers, automatic scheduling adds cognitive overhead without solving a real problem. You know which servers you have. You know which environments you're running. Assigning one to the other is a single command.</p>
+
+    <hr>
+
+    <p>This concludes the series. If you want to understand how devopsellence leverages GCP infrastructure for security and resilience, read <strong><%= link_to "Building VM-native deployment tooling on GCP primitives", blog_post_path(slug: "gcp-primitives-part-1-the-architecture") %></strong>.</p>
+
+    <p>Questions or feedback? <a href="mailto:<%= @contact_email %>"><%= @contact_email %></a></p>
+
+  </article>
+
+  <%= render "marketing/blog/series_nav" %>
+</main>

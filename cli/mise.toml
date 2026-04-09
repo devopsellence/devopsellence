@@ -1,0 +1,10 @@
+[tools]
+go = "1.25.8"
+
+[tasks.build]
+description = "Build devopsellence CLI binary"
+run = "mkdir -p bin .gocache && GOCACHE=$(pwd)/.gocache go build -o bin/devopsellence ./cmd/devopsellence"
+
+[tasks.test]
+description = "Run unit tests"
+run = "GOCACHE=$(pwd)/.gocache go test ./..."

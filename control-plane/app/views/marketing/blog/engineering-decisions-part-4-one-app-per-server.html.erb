@@ -1,0 +1,106 @@
+<% content_for :title, "#{@post[:title]} | devopsellence blog" %>
+
+<main class="page page-article">
+  <header class="article-header">
+    <p class="article-back"><%= link_to "&larr; Blog".html_safe, blog_path %></p>
+    <p class="article-series-label"><%= @post[:series] %> &mdash; Part <%= @post[:part] %> of 6</p>
+    <h1><%= @post[:title] %></h1>
+    <div class="article-meta">
+      <time><%= @post[:date].strftime("%B %-d, %Y") %></time>
+      <span><%= @post[:reading_time] %></span>
+    </div>
+  </header>
+
+  <article class="article-body">
+
+    <p>devopsellence assigns one application environment per server. A node running your production environment runs <em>only</em> your production environment. It doesn't share resources with staging, doesn't host a second team's app, doesn't pack multiple workloads onto the same machine.</p>
+
+    <p>This is a deliberate constraint, not a limitation we haven't gotten around to fixing. It simplifies everything the agent does, eliminates entire classes of operational problems, and matches how most small-to-medium teams actually use their infrastructure.</p>
+
+    <h2>What "one app per server" means concretely</h2>
+
+    <p>Each node in devopsellence has a single <code>environment_id</code> &mdash; a foreign key to one environment. This is enforced at the database level. A node is either:</p>
+
+    <ul>
+      <li><strong>Assigned</strong> to exactly one environment (e.g., <code>myapp-production</code>), or</li>
+      <li><strong>Unassigned</strong> &mdash; waiting in the pool for an assignment.</li>
+    </ul>
+
+    <p>An assigned node runs at most two application containers: one web service (serving HTTP traffic through Envoy) and one optional worker service (processing background jobs). Plus the Envoy sidecar. In tunnel mode, it may also run <code>cloudflared</code>. The important part is that it runs one environment's runtime, not a pile of unrelated workloads.</p>
+
+    <h2>What this simplifies</h2>
+
+    <p><strong>Envoy configuration.</strong> One upstream cluster, one set of endpoints, one health check target. The agent's xDS server pushes a configuration with a single cluster named <code>devopsellence_web</code>. No virtual host routing between multiple apps. No request matching rules. No path-based routing. Just "all traffic goes to the one web container on this node."</p>
+
+    <p><strong>Zero-downtime deploys.</strong> The agent coordinates one cutover at a time. Start new container, health check, swap EDS, drain old container. With multiple apps, you'd need to coordinate multiple independent cutovers, handle partial failures (app A succeeded but app B failed), and manage Envoy routing for multiple upstreams simultaneously.</p>
+
+    <p><strong>Resource isolation.</strong> Your production web app gets the entire server's CPU, memory, and disk I/O. There's no noisy neighbor &mdash; no staging environment suddenly eating all the memory, no batch job starving your web process of CPU. You don't need cgroups, resource limits, or OOM priority tuning. The OS handles one workload.</p>
+
+    <p><strong>Secret isolation.</strong> The agent's GCP credentials (via Workload Identity Federation) are scoped to one environment's service account. It can only access one environment's secrets in Secret Manager, one environment's desired state in Cloud Storage. There's no risk of a multi-tenant agent leaking secrets between environments.</p>
+
+    <p><strong>Debugging.</strong> When something goes wrong on a server, the answer to "what's running here?" is always one environment. <code>docker ps</code> shows your app container, maybe a worker, Envoy, and optionally <code>cloudflared</code>. Logs are for one application. Resource usage is for one workload. There's no detective work to figure out which of five co-located apps is causing the problem.</p>
+
+    <h2>The Kubernetes comparison</h2>
+
+    <p>Kubernetes takes the opposite approach, and for good reason. In Kubernetes, a node runs many pods from many workloads. The kubelet, scheduler, and resource system work together to bin-pack workloads efficiently across a cluster.</p>
+
+    <p>This makes sense when you have:</p>
+
+    <ul>
+      <li><strong>Dozens or hundreds of microservices</strong> that need to share infrastructure cost-efficiently.</li>
+      <li><strong>Variable resource demands</strong> &mdash; some services are CPU-bound, some are memory-bound, and packing them together improves utilization.</li>
+      <li><strong>A platform team</strong> that operates the cluster, manages node pools, configures resource quotas, and handles the multi-tenancy complexity.</li>
+      <li><strong>Large fleets</strong> where the overhead of one-app-per-node would be prohibitively expensive.</li>
+    </ul>
+
+    <p>But Kubernetes' multi-tenant model comes with real complexity:</p>
+
+    <ul>
+      <li><strong>Resource limits and requests.</strong> Every pod needs CPU/memory requests and limits. Set them too low and your app gets throttled or OOM-killed. Set them too high and you waste capacity. Getting this right requires profiling, monitoring, and iterating &mdash; and it changes as your app's behavior changes.</li>
+      <li><strong>Noisy neighbors.</strong> Even with resource limits, co-located pods compete for shared resources: disk I/O, network bandwidth, CPU cache. A burst in one pod can cause latency spikes in another.</li>
+      <li><strong>Namespace isolation.</strong> You need NetworkPolicies, RBAC, resource quotas, and pod security standards to prevent workloads from interfering with each other. Each is a configuration surface that can be misconfigured.</li>
+      <li><strong>Scheduling complexity.</strong> The scheduler considers resource availability, affinity rules, taints, tolerations, topology spread constraints, and priority classes. This is powerful for large clusters, but it's machinery you're paying for in cognitive load.</li>
+    </ul>
+
+    <p>devopsellence sidesteps all of this by not scheduling multiple workloads on the same node. There's no scheduler because there's nothing to schedule &mdash; one environment maps to one (or more) servers, and each server runs that environment exclusively.</p>
+
+    <h2>How you scale</h2>
+
+    <p>In devopsellence, scaling horizontally means adding servers. Need more capacity for production? Add a node and assign it to the production environment. Each additional node gets desired state for that same environment, pulls the same release image, and then runs the subset of services its labels call for.</p>
+
+    <p>For multi-node environments, you place a load balancer in front of your nodes (Cloudflare LB, AWS ALB, your own Nginx/HAProxy). Each node terminates TLS and runs Envoy independently. The load balancer distributes traffic across nodes. Adding or removing a node is an assignment operation in the control plane, not a cluster scaling event.</p>
+
+    <p>This is more expensive per-unit than Kubernetes bin-packing. A node running a small Rails app at 5% CPU utilization is "wasting" 95% of the server. But for the teams devopsellence targets &mdash; running 1 to 20 servers &mdash; the cost difference is marginal, and the operational simplicity is significant. A $10/month VPS running one app reliably is cheaper than the engineering time to operate a Kubernetes cluster.</p>
+
+    <h2>The warm pool model</h2>
+
+    <p>To make node assignment fast, devopsellence pre-provisions GCP identity bundles in a warm pool. Each bundle includes a GCP service account, IAM bindings, a Cloud Storage path for desired state, and Workload Identity configuration.</p>
+
+    <p>When you assign a node to an environment, the control plane claims a warm bundle from the pool. The GCP resources are already provisioned &mdash; there's no waiting for IAM propagation or bucket creation. Assignment is a database update plus a GCS write, completing in under a second.</p>
+
+    <p>Background jobs continuously refill the warm pool, so there are always pre-provisioned bundles available. This is the same principle as Kubernetes' node auto-provisioning, applied at a simpler scale: keep capacity ready so that scaling operations are instant.</p>
+
+    <h2>When one-app-per-server is wrong</h2>
+
+    <p>This model doesn't fit every use case:</p>
+
+    <ul>
+      <li><strong>Microservice architectures with 50+ services.</strong> If you're running dozens of small services, dedicating a server to each one is wasteful. You need bin-packing, and Kubernetes is the right tool.</li>
+      <li><strong>Batch processing with variable demand.</strong> If you have jobs that need 100 cores for 10 minutes and then nothing, you want elastic scheduling across shared nodes. devopsellence's one-app-per-node model can't share unused capacity between environments.</li>
+      <li><strong>Cost-sensitive environments with many small apps.</strong> If you're running 30 low-traffic apps and want to put them on 3 servers, devopsellence's model won't do this. You'd need 30 servers (or a different tool).</li>
+    </ul>
+
+    <p>devopsellence is designed for a different profile: teams running 1-5 applications across 1-20 servers, where each application is important enough to deserve its own resources and simple enough that the team doesn't want to operate a cluster to run it.</p>
+
+    <h2>The constraint is the feature</h2>
+
+    <p>One app per server is not a temporary limitation. It's a design principle that cascades through the entire system. The agent is simpler because it manages one workload. Envoy is simpler because it routes to one upstream. Secrets are simpler because credentials are scoped to one environment. Debugging is simpler because the answer is always "it's the one app running on this server."</p>
+
+    <p>Every additional workload you pack onto a shared node adds a dimension of complexity: resource contention, isolation boundaries, failure blast radius, security scope. devopsellence trades server utilization for operational simplicity. For the workloads it targets, that's the right trade.</p>
+
+    <p>Next: <strong><%= link_to "Part 5 — Why Docker and not Kubernetes", blog_post_path(slug: "engineering-decisions-part-5-docker-not-kubernetes") %></strong></p>
+
+  </article>
+
+  <%= render "marketing/blog/series_nav" %>
+</main>

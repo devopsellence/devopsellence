@@ -1,0 +1,71 @@
+<% content_for :title, "devopsellence | blog" %>
+
+<main class="page blog-page">
+  <header class="page-header">
+    <h1>Blog</h1>
+    <p class="page-lead">Engineering deep dives, architecture decisions, and updates from the devopsellence team.</p>
+  </header>
+
+  <% if @featured %>
+    <section class="blog-featured">
+      <%= link_to blog_post_path(slug: @featured[:slug]), class: "blog-featured-link" do %>
+        <span class="blog-featured-label">Featured</span>
+        <h2 class="blog-featured-title"><%= @featured[:title] %></h2>
+        <p class="blog-featured-desc"><%= @featured[:description] %></p>
+        <div class="blog-card-meta">
+          <time><%= @featured[:date].strftime("%B %-d, %Y") %></time>
+          <span><%= @featured[:reading_time] %></span>
+        </div>
+      <% end %>
+    </section>
+  <% end %>
+
+  <section class="blog-topics">
+    <% @topics.each do |topic_name, topic_desc| %>
+      <% posts = @posts_by_topic[topic_name] || [] %>
+      <% next if posts.empty? %>
+      <div class="blog-topic">
+        <div class="blog-topic-header">
+          <h2 class="blog-topic-name"><%= topic_name %></h2>
+          <p class="blog-topic-desc"><%= topic_desc %></p>
+        </div>
+        <div class="blog-topic-list">
+          <% posts.each do |post| %>
+            <%= link_to blog_post_path(slug: post[:slug]), class: "blog-topic-item" do %>
+              <span class="blog-topic-item-title"><%= post[:title] %></span>
+              <span class="blog-topic-item-meta">
+                <% if post[:series] %>
+                  <span class="blog-topic-item-series"><%= post[:series] == "Building VM-native deployment tooling on GCP primitives" ? "GCP Primitives" : "Engineering Decisions" %></span>
+                <% end %>
+                <span><%= post[:reading_time] %></span>
+              </span>
+            <% end %>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  </section>
+
+  <section class="blog-series-index">
+    <h2 class="blog-series-index-title">Read end to end</h2>
+    <p class="blog-series-index-desc">These articles also form two multi-part series, designed to be read in order.</p>
+    <% @series.each do |series_name, posts| %>
+      <details class="blog-series-details">
+        <summary class="blog-series-summary">
+          <span class="blog-series-summary-name"><%= series_name %></span>
+          <span class="blog-series-summary-count"><%= posts.size %> parts</span>
+        </summary>
+        <ol class="blog-series-parts">
+          <% posts.each do |post| %>
+            <li>
+              <%= link_to blog_post_path(slug: post[:slug]) do %>
+                <span class="blog-series-part-title"><%= post[:title] %></span>
+                <span class="blog-series-part-meta"><%= post[:reading_time] %></span>
+              <% end %>
+            </li>
+          <% end %>
+        </ol>
+      </details>
+    <% end %>
+  </section>
+</main>

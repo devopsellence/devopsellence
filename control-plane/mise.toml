@@ -1,0 +1,23 @@
+[tasks.postgres-up]
+description = "Start PostgreSQL container"
+run = '''
+bundle exec ruby script/postgres_up
+'''
+
+[tasks.test]
+description = "Run test suite with PostgreSQL"
+depends = ["postgres-up"]
+env = { DATABASE_URL = "postgres://postgres:postgres@127.0.0.1/devopsellence_test", RAILS_ENV = "test" }
+run = '''
+bin/rails db:test:prepare
+bin/rails test
+'''
+
+[tasks.test-system]
+description = "Run system test suite with PostgreSQL"
+depends = ["postgres-up"]
+env = { DATABASE_URL = "postgres://postgres:postgres@127.0.0.1/devopsellence_test", RAILS_ENV = "test" }
+run = '''
+bin/rails db:test:prepare
+bin/rails test:system
+'''

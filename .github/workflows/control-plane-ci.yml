@@ -1,0 +1,118 @@
+name: Control Plane CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/control-plane-ci.yml
+      - control-plane/**
+      - mise.toml
+  pull_request:
+    paths:
+      - .github/workflows/control-plane-ci.yml
+      - control-plane/**
+      - mise.toml
+
+defaults:
+  run:
+    working-directory: control-plane
+
+jobs:
+  scan_ruby:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+          working-directory: control-plane
+      - run: bin/brakeman --no-pager
+      - run: bin/bundler-audit
+
+  scan_js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+          working-directory: control-plane
+      - run: bin/importmap audit
+
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      RUBOCOP_CACHE_ROOT: tmp/rubocop
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+          working-directory: control-plane
+      - uses: actions/cache@v5
+        env:
+          DEPENDENCIES_HASH: ${{ hashFiles('control-plane/.ruby-version', 'control-plane/**/.rubocop.yml', 'control-plane/**/.rubocop_todo.yml', 'control-plane/Gemfile.lock') }}
+        with:
+          path: control-plane/${{ env.RUBOCOP_CACHE_ROOT }}
+          key: rubocop-${{ runner.os }}-${{ env.DEPENDENCIES_HASH }}-${{ github.ref_name == github.event.repository.default_branch && github.run_id || 'default' }}
+          restore-keys: |
+            rubocop-${{ runner.os }}-${{ env.DEPENDENCIES_HASH }}-
+      - run: bin/rubocop -f github
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+          working-directory: control-plane
+      - run: bin/rails db:test:prepare test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1/devopsellence_test
+          RAILS_ENV: test
+
+  system-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+          working-directory: control-plane
+      - run: bin/rails db:test:prepare test:system
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1/devopsellence_test
+          RAILS_ENV: test
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: screenshots
+          path: control-plane/tmp/screenshots
+          if-no-files-found: ignore

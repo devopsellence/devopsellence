@@ -1,0 +1,17 @@
+<% series_posts = MarketingController::BLOG_POSTS.select { |p| p[:series] == @post[:series] }.sort_by { |p| p[:part] } %>
+<% if series_posts.size > 1 %>
+  <nav class="series-nav" aria-label="Series navigation">
+    <h4 class="series-nav-title"><%= @post[:series] %></h4>
+    <ol class="series-nav-list">
+      <% series_posts.each do |post| %>
+        <li class="<%= 'series-nav-current' if post[:slug] == @post[:slug] %>">
+          <% if post[:slug] == @post[:slug] %>
+            <strong><%= post[:title] %></strong>
+          <% else %>
+            <%= link_to post[:title], blog_post_path(slug: post[:slug]) %>
+          <% end %>
+        </li>
+      <% end %>
+    </ol>
+  </nav>
+<% end %>

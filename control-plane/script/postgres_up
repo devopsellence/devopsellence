@@ -1,0 +1,65 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "open3"
+require "pg"
+require "uri"
+
+ROOT = File.expand_path("..", __dir__)
+WAIT_TIMEOUT = 60
+DEFAULT_DATABASE_URL = "postgres://postgres:postgres@127.0.0.1/devopsellence_development"
+
+def database_url
+  ENV.fetch("DATABASE_URL", DEFAULT_DATABASE_URL)
+end
+
+def base_connection_params
+  url = database_url
+  uri = URI.parse(url)
+
+  {
+    host: uri.host || "127.0.0.1",
+    port: uri.port || 5432,
+    user: URI.decode_www_form_component(uri.user || ""),
+    password: URI.decode_www_form_component(uri.password || ""),
+    connect_timeout: 2
+  }
+end
+
+def connection_params
+  base_connection_params.merge(dbname: ENV.fetch("POSTGRES_READY_DB", "postgres"))
+end
+
+def database_ready?
+  PG.connect(**connection_params) do |connection|
+    connection.exec("SELECT 1")
+  end
+  true
+rescue PG::Error
+  false
+end
+
+def ensure_compose_postgres!
+  output, status = Open3.capture2e("docker", "compose", "up", "-d", "postgres", chdir: ROOT)
+  return if status.success?
+
+  warn output
+  exit(status.exitstatus || 1)
+end
+
+if database_ready?
+  warn "postgres already reachable; skipping docker compose"
+  exit 0
+end
+
+ensure_compose_postgres!
+
+deadline = Time.now + WAIT_TIMEOUT
+until database_ready?
+  if Time.now >= deadline
+    warn "postgres did not become ready within #{WAIT_TIMEOUT}s"
+    exit 1
+  end
+
+  sleep 1
+end

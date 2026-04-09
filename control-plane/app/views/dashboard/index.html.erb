@@ -1,0 +1,387 @@
+<div class="w-full max-w-7xl space-y-6">
+  <div class="flex flex-wrap items-start justify-between gap-4">
+    <div class="space-y-2">
+      <h1 class="text-2xl font-semibold tracking-tight">dashboard</h1>
+      <p class="text-sm text-slate-600">
+        Manage organizations, project environments, node assignments, releases, and deployments.
+      </p>
+    </div>
+
+    <%= button_to "Sign out", logout_path, method: :delete,
+      class: "rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50",
+      form: { data: { turbo: false } } %>
+  </div>
+
+  <% if flash[:notice] %>
+    <p class="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800"><%= flash[:notice] %></p>
+  <% end %>
+
+  <% if flash[:alert] %>
+    <p class="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"><%= flash[:alert] %></p>
+  <% end %>
+
+  <div class="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
+    <aside class="space-y-4">
+      <section class="rounded-lg border border-slate-200 bg-white p-4">
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500">organizations</h2>
+        <% if @organizations.any? %>
+          <ul class="mt-3 space-y-2">
+            <% @memberships.each do |membership| %>
+              <% organization = membership.organization %>
+              <% selected = @selected_organization&.id == organization.id %>
+              <li class="rounded-md border px-3 py-2 <%= selected ? "border-slate-900 bg-slate-50" : "border-slate-200" %>">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-medium"><%= organization.name %></p>
+                    <p class="text-xs text-slate-500"><%= membership.role %></p>
+                  </div>
+                  <%= link_to "Open", dashboard_path(organization_id: organization.id), class: "rounded border border-slate-300 px-2 py-1 text-xs" %>
+                </div>
+              </li>
+            <% end %>
+          </ul>
+        <% else %>
+          <p class="mt-3 text-sm text-slate-600">No organizations yet.</p>
+        <% end %>
+
+        <%= form_with url: dashboard_organizations_path, method: :post, class: "mt-4 grid gap-2" do %>
+          <%= text_field_tag :name, nil, required: true, placeholder: "new organization", class: "w-full rounded border border-slate-300 px-3 py-2 text-sm" %>
+          <%= submit_tag "Create organization", class: "rounded bg-slate-900 px-3 py-2 text-sm text-white" %>
+        <% end %>
+      </section>
+
+      <% if @selected_organization %>
+        <section class="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500">projects</h2>
+          <p class="mt-1 text-xs text-slate-500">organization: <%= @selected_organization.name %></p>
+
+          <% if @projects.any? %>
+            <ul class="mt-3 space-y-2">
+              <% @projects.each do |project| %>
+                <% selected = @selected_project&.id == project.id %>
+                <li class="rounded-md border px-3 py-2 <%= selected ? "border-slate-900 bg-slate-50" : "border-slate-200" %>">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-medium"><%= project.name %></p>
+                      <p class="text-xs text-slate-500">project #<%= project.id %></p>
+                    </div>
+                    <%= link_to "Open", dashboard_path(organization_id: @selected_organization.id, project_id: project.id), class: "rounded border border-slate-300 px-2 py-1 text-xs" %>
+                  </div>
+                </li>
+              <% end %>
+            </ul>
+          <% else %>
+            <p class="mt-3 text-sm text-slate-600">No projects yet.</p>
+          <% end %>
+
+          <% if @owner_selected %>
+            <%= form_with url: dashboard_projects_path(@selected_organization), method: :post, class: "mt-4 grid gap-2" do %>
+              <%= text_field_tag :name, nil, required: true, placeholder: "new project", class: "w-full rounded border border-slate-300 px-3 py-2 text-sm" %>
+              <%= submit_tag "Create project", class: "rounded bg-slate-900 px-3 py-2 text-sm text-white" %>
+            <% end %>
+          <% end %>
+        </section>
+
+        <% if @selected_project %>
+          <section class="rounded-lg border border-slate-200 bg-white p-4">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500">environments</h2>
+            <p class="mt-1 text-xs text-slate-500">project #<%= @selected_project.id %></p>
+
+            <% if @environments.any? %>
+              <ul class="mt-3 space-y-2">
+                <% @environments.each do |environment| %>
+                  <% selected = @selected_environment&.id == environment.id %>
+                  <li class="rounded-md border px-3 py-2 <%= selected ? "border-slate-900 bg-slate-50" : "border-slate-200" %>">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="min-w-0">
+                        <p class="truncate text-sm font-medium"><%= environment.name %></p>
+                        <p class="text-xs text-slate-500">env #<%= environment.id %> • identity v<%= environment.identity_version %></p>
+                      </div>
+                      <%= link_to "Open", dashboard_path(organization_id: @selected_organization.id, project_id: @selected_project.id, environment_id: environment.id), class: "rounded border border-slate-300 px-2 py-1 text-xs" %>
+                    </div>
+                  </li>
+                <% end %>
+              </ul>
+            <% else %>
+              <p class="mt-3 text-sm text-slate-600">No environments yet.</p>
+            <% end %>
+
+            <% if @owner_selected %>
+              <%= form_with url: dashboard_environments_path(@selected_project), method: :post, class: "mt-4 grid gap-2" do %>
+                <%= text_field_tag :name, nil, required: true, placeholder: "new environment", class: "w-full rounded border border-slate-300 px-3 py-2 text-sm" %>
+                <%= submit_tag "Create environment", class: "rounded bg-slate-900 px-3 py-2 text-sm text-white" %>
+              <% end %>
+            <% end %>
+          </section>
+        <% end %>
+      <% end %>
+    </aside>
+
+    <main class="space-y-4">
+      <% if @selected_organization.nil? %>
+        <section class="rounded-lg border border-slate-200 bg-white p-8 text-center">
+          <p class="text-sm text-slate-600">Create or select an organization to get started.</p>
+        </section>
+      <% else %>
+        <section class="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 class="text-base font-semibold"><%= @selected_organization.name %></h2>
+          <p class="mt-1 text-sm text-slate-600">role: <%= @selected_membership&.role || "unknown" %></p>
+          <div class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <p>runtime status: <span class="font-semibold text-slate-900"><%= @selected_organization.provisioning_status %></span></p>
+            <p>bucket: <%= @selected_organization.gcs_bucket_name %></p>
+            <p>gar repo: <%= @selected_organization.gar_repository_path %></p>
+            <% if @selected_organization.provisioning_error.present? %>
+              <p class="text-amber-700"><%= @selected_organization.provisioning_error %></p>
+            <% end %>
+          </div>
+          <div class="mt-4 grid gap-3 sm:grid-cols-5">
+            <div class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <p class="text-xs text-slate-500">projects</p>
+              <p class="text-lg font-semibold"><%= @projects.size %></p>
+            </div>
+            <div class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <p class="text-xs text-slate-500">environments</p>
+              <p class="text-lg font-semibold"><%= @environments.size %></p>
+            </div>
+            <div class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <p class="text-xs text-slate-500">nodes</p>
+              <p class="text-lg font-semibold"><%= @nodes.size %></p>
+            </div>
+            <div class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <p class="text-xs text-slate-500">releases</p>
+              <p class="text-lg font-semibold"><%= @releases.size %></p>
+            </div>
+            <div class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <p class="text-xs text-slate-500">deployments</p>
+              <p class="text-lg font-semibold"><%= @deployments.size %></p>
+            </div>
+          </div>
+
+          <% if @owner_selected %>
+            <div class="mt-4 flex flex-wrap items-center gap-3">
+              <%= button_to "Bootstrap node", dashboard_bootstrap_node_path(@selected_organization), method: :post, class: "rounded bg-slate-900 px-4 py-2 text-sm text-white" %>
+              <p class="text-xs text-slate-500">Creates a one-time install token.</p>
+            </div>
+            <% if @raw_token.present? %>
+              <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p class="text-xs font-semibold uppercase tracking-wide text-amber-700">Install command (shown once)</p>
+                <code class="mt-1 block overflow-x-auto text-xs text-amber-900">curl -fsSL <%= @public_base_url %>/install.sh | bash -s -- --token "<%= @raw_token %>"</code>
+              </div>
+            <% end %>
+          <% end %>
+        </section>
+
+        <% if @selected_project %>
+          <section class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold">node assignments</h2>
+              <% if @selected_environment %>
+                <p class="text-xs text-slate-500">target environment: #<%= @selected_environment.id %> (<%= @selected_environment.name %>)</p>
+              <% end %>
+            </div>
+
+            <% if @nodes.any? %>
+              <div class="mt-3 overflow-x-auto">
+                <table class="min-w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                      <th class="px-2 py-2">node</th>
+                      <th class="px-2 py-2">runtime</th>
+                      <th class="px-2 py-2">assignment</th>
+                      <th class="px-2 py-2">last seen</th>
+                      <th class="px-2 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <% @nodes.each do |node| %>
+                      <% environment = node.environment %>
+                      <tr class="border-b border-slate-100">
+                        <td class="px-2 py-2">
+                          <p class="font-medium"><%= node.name.presence || "node-#{node.id}" %></p>
+                          <p class="text-xs text-slate-500">#<%= node.id %></p>
+                          <p class="text-xs text-slate-500">labels: <%= node.labels.join(", ") %></p>
+                        </td>
+                        <td class="px-2 py-2 text-xs text-slate-700">
+                          <p><span class="font-medium">status:</span> <%= node.provisioning_status %></p>
+                          <p><span class="font-medium">sa:</span> <%= environment&.service_account_email.presence || "unassigned" %></p>
+                          <p><span class="font-medium">path:</span> <%= node.desired_state_bucket.presence && node.desired_state_object_path.present? ? "gs://#{node.desired_state_bucket}/#{node.desired_state_object_path}" : "pending" %></p>
+                        </td>
+                        <td class="px-2 py-2 text-slate-700">
+                          <% if environment %>
+                            project #<%= environment.project_id %> / env #<%= environment.id %> / render seq <%= node.desired_state_sequence %>
+                          <% else %>
+                            unassigned
+                          <% end %>
+                        </td>
+                        <td class="px-2 py-2 text-slate-700"><%= node.last_seen_at || "never" %></td>
+                        <td class="px-2 py-2 text-right">
+                          <% if @owner_selected %>
+                            <%= form_with url: dashboard_node_labels_path(node), method: :post, class: "mb-2 inline-flex items-center gap-2" do %>
+                              <%= text_field_tag :labels, node.labels.join(","), class: "w-32 rounded border border-slate-300 px-2 py-1 text-xs" %>
+                              <%= submit_tag "Labels", class: "rounded border border-slate-300 px-2 py-1 text-xs" %>
+                            <% end %>
+                          <% end %>
+                          <% if @owner_selected && @selected_environment %>
+                            <%= form_with url: dashboard_assignments_path(@selected_environment), method: :post, class: "inline-flex" do %>
+                              <%= hidden_field_tag :node_id, node.id %>
+                              <%= submit_tag "Assign", class: "rounded border border-slate-300 px-2 py-1 text-xs" %>
+                            <% end %>
+                          <% end %>
+                        </td>
+                      </tr>
+                    <% end %>
+                  </tbody>
+                </table>
+              </div>
+            <% else %>
+              <p class="mt-3 text-sm text-slate-600">No nodes in this organization yet.</p>
+            <% end %>
+          </section>
+
+          <% if @selected_environment %>
+            <section class="rounded-lg border border-slate-200 bg-white p-4">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <h2 class="text-base font-semibold">environment secrets</h2>
+                  <p class="text-xs text-slate-500">Control-plane managed. Values are written to Google Secret Manager; only refs are shown here.</p>
+                </div>
+              </div>
+
+              <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                <div class="overflow-x-auto">
+                  <table class="min-w-full text-sm">
+                    <thead>
+                      <tr class="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <th class="px-2 py-2">service</th>
+                        <th class="px-2 py-2">name</th>
+                        <th class="px-2 py-2">secret ref</th>
+                        <th class="px-2 py-2">updated</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <% @environment_secrets.each do |secret| %>
+                        <tr class="border-b border-slate-100">
+                          <td class="px-2 py-2 font-medium text-slate-700"><%= secret.service_name %></td>
+                          <td class="px-2 py-2 font-mono text-xs text-slate-700"><%= secret.name %></td>
+                          <td class="px-2 py-2 font-mono text-[11px] text-slate-500"><%= secret.secret_ref %></td>
+                          <td class="px-2 py-2 text-slate-500"><%= secret.updated_at&.strftime("%Y-%m-%d %H:%M") || "n/a" %></td>
+                        </tr>
+                      <% end %>
+                      <% if @environment_secrets.empty? %>
+                        <tr>
+                          <td colspan="4" class="px-2 py-6 text-center text-slate-500">No managed secrets yet.</td>
+                        </tr>
+                      <% end %>
+                    </tbody>
+                  </table>
+                </div>
+
+                <% if @owner_selected %>
+                  <%= form_with url: dashboard_environment_secrets_path(@selected_environment), method: :post, class: "space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3" do %>
+                    <div>
+                      <%= label_tag :service_name, "service", class: "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600" %>
+                      <%= select_tag :service_name, options_for_select([[Node::LABEL_WEB, Node::LABEL_WEB], [Node::LABEL_WORKER, Node::LABEL_WORKER]]), class: "w-full rounded border border-slate-300 px-3 py-2 text-sm" %>
+                    </div>
+                    <div>
+                      <%= label_tag :name, "env var name", class: "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600" %>
+                      <%= text_field_tag :name, nil, required: true, placeholder: "SECRET_KEY_BASE", class: "w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm" %>
+                    </div>
+                    <div>
+                      <%= label_tag :value, "secret value", class: "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600" %>
+                      <%= password_field_tag :value, nil, required: true, class: "w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm" %>
+                    </div>
+                    <p class="text-xs text-slate-500">Submitting again rotates the secret by adding a new GSM version.</p>
+                    <%= submit_tag "Save secret", class: "rounded bg-slate-900 px-3 py-2 text-sm text-white" %>
+                  <% end %>
+                <% end %>
+              </div>
+            </section>
+          <% end %>
+
+          <section class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div class="space-y-3">
+                <h2 class="text-base font-semibold">releases</h2>
+                <% if @owner_selected %>
+                  <%= form_with url: dashboard_releases_path(@selected_project), method: :post, class: "space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3" do %>
+                    <div class="grid gap-3 sm:grid-cols-2">
+                      <%= text_field_tag :git_sha, nil, required: true, placeholder: "git sha", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag :revision, nil, placeholder: "revision (defaults to git sha)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag :image_repository, nil, required: true, placeholder: "image repository inside org gar repo", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag :image_digest, nil, required: true, placeholder: "image digest (sha256:...)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag :entrypoint, nil, placeholder: "entrypoint (optional)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag :command, nil, placeholder: "command (optional)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= number_field_tag :port, 3000, min: 1, placeholder: "app port", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag "healthcheck[path]", "/up", placeholder: "healthcheck path", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= number_field_tag "healthcheck[port]", 3000, min: 1, class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= number_field_tag :healthcheck_interval_seconds, 5, min: 1, class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= number_field_tag :healthcheck_timeout_seconds, 2, min: 1, class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                    </div>
+                    <div class="grid gap-3 lg:grid-cols-2">
+                      <div>
+                        <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-600">env json</p>
+                        <%= text_area_tag :env_json, @default_env_json, required: true, rows: 8, class: "w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs" %>
+                      </div>
+                      <div>
+                        <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-600">secret refs json</p>
+                        <%= text_area_tag :secret_refs_json, @default_secret_refs_json, required: true, rows: 8, class: "w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs" %>
+                      </div>
+                    </div>
+                    <%= submit_tag "Create release", class: "rounded bg-slate-900 px-4 py-2 text-sm text-white" %>
+                  <% end %>
+                <% end %>
+
+                <% if @releases.any? %>
+                  <ul class="space-y-2">
+                    <% @releases.each do |release| %>
+                      <li class="rounded-md border border-slate-200 px-3 py-2">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p class="text-sm font-medium">release #<%= release.id %> • <%= release.status %></p>
+                            <p class="text-xs text-slate-600">revision: <%= release.revision %></p>
+                            <p class="text-xs text-slate-600">git: <%= release.git_sha %></p>
+                            <p class="text-xs text-slate-600">image: <%= release.image_reference_for(@selected_organization) %></p>
+                          </div>
+                          <% if @owner_selected && @selected_environment %>
+                            <%= form_with url: dashboard_publish_release_path(release), method: :post, class: "inline-flex" do %>
+                              <%= hidden_field_tag :environment_id, @selected_environment.id %>
+                              <%= submit_tag "Publish to env ##{@selected_environment.id}", class: "rounded border border-slate-300 px-2 py-1 text-xs" %>
+                            <% end %>
+                          <% end %>
+                        </div>
+                      </li>
+                    <% end %>
+                  </ul>
+                <% else %>
+                  <p class="text-sm text-slate-600">No releases yet.</p>
+                <% end %>
+              </div>
+
+              <div class="space-y-3">
+                <h2 class="text-base font-semibold">deployments</h2>
+                <% if @selected_environment %>
+                  <p class="text-xs text-slate-500">showing environment #<%= @selected_environment.id %></p>
+                  <% if @deployments.any? %>
+                    <ul class="space-y-2">
+                      <% @deployments.each do |deployment| %>
+                        <li class="rounded-md border border-slate-200 px-3 py-2">
+                          <p class="text-sm font-medium">deployment #<%= deployment.id %> • <%= deployment.status %></p>
+                          <p class="text-xs text-slate-600">release #<%= deployment.release_id %> • seq <%= deployment.sequence %></p>
+                          <p class="text-xs text-slate-500"><%= deployment.published_at %></p>
+                        </li>
+                      <% end %>
+                    </ul>
+                  <% else %>
+                    <p class="text-sm text-slate-600">No deployments yet for this environment.</p>
+                  <% end %>
+                <% else %>
+                  <p class="text-sm text-slate-600">Select an environment to view deployment history.</p>
+                <% end %>
+              </div>
+            </div>
+          </section>
+        <% end %>
+      <% end %>
+    </main>
+  </div>
+</div>

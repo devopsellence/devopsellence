@@ -1,0 +1,46 @@
+name: e2e-solo
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/e2e-solo.yml
+      - test/e2e/direct_e2e.rb
+      - agent/**
+      - cli/**
+      - mise.toml
+  pull_request:
+    paths:
+      - .github/workflows/e2e-solo.yml
+      - test/e2e/direct_e2e.rb
+      - agent/**
+      - cli/**
+      - mise.toml
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-solo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+
+      - name: Run solo mode e2e
+        env:
+          DEVOPSELLENCE_CLI_ROOT: ${{ github.workspace }}/cli
+          DEVOPSELLENCE_AGENT_ROOT: ${{ github.workspace }}/agent
+        run: ruby test/e2e/direct_e2e.rb
+
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-solo-logs
+          path: test/e2e/log/direct-e2e-*.log
+          if-no-files-found: ignore

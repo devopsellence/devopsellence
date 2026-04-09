@@ -1,0 +1,32 @@
+name: CLI CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/cli-ci.yml
+      - cli/**
+      - mise.toml
+  pull_request:
+    paths:
+      - .github/workflows/cli-ci.yml
+      - cli/**
+      - mise.toml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: cli
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          working_directory: cli
+      - run: mise run test

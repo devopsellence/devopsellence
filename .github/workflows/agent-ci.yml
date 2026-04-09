@@ -1,0 +1,32 @@
+name: Agent CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/agent-ci.yml
+      - agent/**
+      - mise.toml
+  pull_request:
+    paths:
+      - .github/workflows/agent-ci.yml
+      - agent/**
+      - mise.toml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: agent
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          working_directory: agent
+      - run: mise run test

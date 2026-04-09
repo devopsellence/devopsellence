@@ -1,0 +1,95 @@
+name: CLI Release
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CLI version to release, like v0.1.0"
+        required: true
+      prerelease:
+        description: "Mark the release as a prerelease"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: cli
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && format('cli-{0}', inputs.version) || github.ref_name }}
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          working_directory: cli
+
+      - name: Normalize release version
+        run: |
+          VERSION="${RELEASE_VERSION#cli-}"
+          echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "RELEASE_PRERELEASE=${{ inputs.prerelease }}" >> "$GITHUB_ENV"
+          elif [[ "$VERSION" == *-* ]]; then
+            echo "RELEASE_PRERELEASE=true" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_PRERELEASE=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build release artifacts
+        run: |
+          set -euo pipefail
+          commit="${GIT_COMMIT:-$(git rev-parse --short=12 HEAD)}"
+          build_time="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+          dist_dir="dist/${RELEASE_VERSION}"
+          rm -rf "$dist_dir"
+          mkdir -p "$dist_dir" .gocache
+          : > "$dist_dir/SHA256SUMS"
+
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            artifact="${goos}-${goarch}"
+            output="${dist_dir}/${artifact}"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOCACHE="$PWD/.gocache" \
+              go build \
+                -trimpath \
+                -ldflags "-s -w -X github.com/devopsellence/cli/internal/version.Version=${RELEASE_VERSION} -X github.com/devopsellence/cli/internal/version.Commit=${commit} -X github.com/devopsellence/cli/internal/version.Date=${build_time}" \
+                -o "$output" \
+                ./cmd/devopsellence
+            sha256sum "$output" | sed "s#  ${dist_dir}/#  #" >> "$dist_dir/SHA256SUMS"
+          done
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          asset_dir="dist/${RELEASE_VERSION}"
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            create_args=(
+              gh release create "$TAG_NAME"
+              --title "CLI ${RELEASE_VERSION}"
+              --notes "CLI binary release for ${RELEASE_VERSION}"
+              --target "$GITHUB_SHA"
+            )
+            if [[ "${RELEASE_PRERELEASE}" == "true" ]]; then
+              create_args+=(--prerelease)
+            fi
+            "${create_args[@]}"
+          fi
+          gh release upload "$TAG_NAME" "${asset_dir}"/* --clobber

@@ -1,0 +1,26 @@
+# Bundler
+/.bundle
+
+# Rails credentials
+/config/*.key
+
+# SQLite
+/db/*.sqlite3
+/db/*.sqlite3-*
+
+# Logs and temp files
+/log/*
+!/log/.keep
+/tmp/*
+!/tmp/.keep
+!/tmp/pids/
+/tmp/pids/*
+!/tmp/pids/.keep
+/tmp/storage/*
+!/tmp/storage/
+!/tmp/storage/.keep
+/storage/*
+!/storage/.keep
+/public/assets
+/app/assets/builds/*
+!/app/assets/builds/.keep

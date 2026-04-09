@@ -1,0 +1,146 @@
+<% content_for :title, "#{@post[:title]} | devopsellence blog" %>
+
+<main class="page page-article">
+  <header class="article-header">
+    <p class="article-back"><%= link_to "&larr; Blog".html_safe, blog_path %></p>
+    <p class="article-series-label"><%= @post[:series] %> &mdash; Part <%= @post[:part] %> of 7</p>
+    <h1><%= @post[:title] %></h1>
+    <div class="article-meta">
+      <time><%= @post[:date].strftime("%B %-d, %Y") %></time>
+      <span><%= @post[:reading_time] %></span>
+    </div>
+  </header>
+
+  <article class="article-body">
+
+    <p>The previous articles in this series described how devopsellence delegates secrets, deploy state, images, signing, and identity to GCP services. This article answers the practical question: <strong>what actually happens when each layer fails?</strong></p>
+
+    <p>The answer is specific and testable for each failure mode. The design principle is that <strong>failures cascade outward from the runtime, never inward.</strong> The control plane is the furthest component from your users. GCP services are in the middle. Your servers and the agent are closest. A failure at the outer edge should never reach the inner edge.</p>
+
+    <h2>Control plane down</h2>
+
+    <p>The control plane is a Rails application. It can go down for many reasons: bad deploy, database migration, transient infrastructure issue, or planned maintenance.</p>
+
+    <p><strong>What keeps working:</strong></p>
+    <ul>
+      <li>Running applications continue serving traffic. Agents don't need the control plane to operate &mdash; they read desired state from GCS, secrets from Secret Manager, and images from Artifact Registry.</li>
+      <li>Envoy continues routing HTTPS traffic. TLS certificates are local to the server.</li>
+      <li>Agents continue their 2-second reconciliation loop, verifying cached state.</li>
+    </ul>
+
+    <p><strong>What pauses:</strong></p>
+    <ul>
+      <li>New deploys cannot be published (the CLI can't reach the control plane).</li>
+      <li>Environment changes, node assignments, and secret management stall.</li>
+      <li>Token refresh will eventually fail. Access tokens have a 1-hour TTL, and refresh tokens need the control plane to rotate. But agents cache GCP access tokens independently (~1 hour), so GCP access continues for at least that window.</li>
+      <li>New subject tokens for Workload Identity exchange cannot be issued. Existing GCP tokens continue working until they expire.</li>
+    </ul>
+
+    <p><strong>Recovery:</strong> When the control plane comes back, agents resume normal operation. No manual intervention needed. The reconciliation loop picks up where it left off.</p>
+
+    <h2>Cloud Storage impaired</h2>
+
+    <p>GCS holds the signed desired-state envelopes that agents poll every 2 seconds.</p>
+
+    <p><strong>What keeps working:</strong></p>
+    <ul>
+      <li>Agents serve from cached state. The in-memory cache holds the most recent verified envelope. The disk cache (<code>desired-state-cache.json</code>) survives agent restarts.</li>
+      <li>Running containers continue. Health checks continue. Traffic keeps flowing.</li>
+    </ul>
+
+    <p><strong>What pauses:</strong></p>
+    <ul>
+      <li>New deployments that have been published but not yet fetched by agents will be delayed until GCS recovers.</li>
+      <li>Agents log cache hits and continue. They don't crash or stop serving.</li>
+    </ul>
+
+    <p><strong>Recovery:</strong> Agents pick up the latest envelope from GCS on the next successful poll. Sequence numbers ensure they never apply stale state &mdash; they'll skip straight to the newest envelope.</p>
+
+    <h2>Secret Manager impaired</h2>
+
+    <p>Secret Manager holds runtime secret values that agents resolve during deployment.</p>
+
+    <p><strong>What keeps working:</strong></p>
+    <ul>
+      <li>Running containers already have their secrets injected as environment variables. A Secret Manager outage doesn't affect containers that are already running.</li>
+      <li>The agent's reconciliation loop continues. Existing deployments are unaffected.</li>
+    </ul>
+
+    <p><strong>What pauses:</strong></p>
+    <ul>
+      <li>New deployments that require secret resolution will stall. The agent will retry on the next reconciliation cycle (2 seconds).</li>
+      <li>If a container restarts (crash, health check failure), the agent needs to resolve secrets again to recreate it. If Secret Manager is down at that moment, the container recreation stalls.</li>
+    </ul>
+
+    <p><strong>Recovery:</strong> Agents resolve secrets on the next successful Secret Manager call and proceed with reconciliation.</p>
+
+    <h2>Artifact Registry impaired</h2>
+
+    <p>Artifact Registry stores Docker images.</p>
+
+    <p><strong>What keeps working:</strong></p>
+    <ul>
+      <li>If the image is already pulled on the node, the agent uses the local copy. Docker caches images locally, so existing deployments don't need to re-pull.</li>
+      <li>Running containers continue. Images are needed at pull time, not at run time.</li>
+    </ul>
+
+    <p><strong>What pauses:</strong></p>
+    <ul>
+      <li>New deployments with a new image tag will stall until the pull succeeds.</li>
+      <li>If a node is freshly provisioned and has no cached images, the first deployment will wait for Artifact Registry.</li>
+    </ul>
+
+    <h2>Agent restarts</h2>
+
+    <p>The agent process on your server can restart (OOM kill, manual restart, server reboot).</p>
+
+    <p><strong>What happens:</strong></p>
+    <ul>
+      <li>The disk cache (<code>desired-state-cache.json</code>) is loaded on startup. The agent immediately knows what it should be running.</li>
+      <li>If GCS and Secret Manager are reachable, the agent reconciles to the current state within one cycle (2 seconds).</li>
+      <li>If GCS is unreachable, the agent falls back to the disk cache and runs containers from cached state.</li>
+      <li>Envoy is restarted and configured via xDS. Traffic resumes after health checks pass.</li>
+    </ul>
+
+    <p>The gap between agent restart and traffic recovery depends on container start time and health check configuration. For a typical web app, this is seconds, not minutes.</p>
+
+    <h2>The cascade principle</h2>
+
+    <p>Each failure mode is contained to its layer:</p>
+
+    <div class="article-diagram">
+      <div class="article-diagram-chain">
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">&times;</div>
+          <div class="article-diagram-chain-content">
+            <strong>Control plane fails</strong>
+            <p>Management pauses. Running apps unaffected. No customer traffic impact.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">&times;</div>
+          <div class="article-diagram-chain-content">
+            <strong>GCP service fails</strong>
+            <p>New deploys stall. Running apps continue from cache. Customer traffic continues.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">&times;</div>
+          <div class="article-diagram-chain-content">
+            <strong>Agent restarts</strong>
+            <p>Brief traffic gap during container startup. Recovers from disk cache in seconds.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p>Failures at the outer edge (control plane) have the least impact on users. Failures at the inner edge (agent/server) have the most, but recover the fastest. This is the opposite of a monolithic architecture where a single database outage takes down everything.</p>
+
+    <p>The three-layer split doesn't prevent failures. It contains them. Your users don't care if the control plane is down for 10 minutes, as long as their apps keep serving traffic. That's the property this architecture is designed to provide.</p>
+
+    <p>Next: <strong><%= link_to "Part 7 — What's next: standalone mode and multi-provider support", blog_post_path(slug: "gcp-primitives-part-7-whats-next") %></strong></p>
+
+  </article>
+
+  <%= render "marketing/blog/series_nav" %>
+</main>

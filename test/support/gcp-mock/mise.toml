@@ -1,0 +1,10 @@
+[tools]
+go = "1.25.8"
+
+[tasks.build]
+description = "Build gcp-mock"
+run = "mkdir -p bin .gocache && GOCACHE=$(pwd)/.gocache go build -o bin/gcp-mock ./cmd/gcp-mock"
+
+[tasks.test]
+description = "Run gcp-mock tests"
+run = "GOCACHE=$(pwd)/.gocache go test ./..."

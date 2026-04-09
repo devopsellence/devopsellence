@@ -1,0 +1,156 @@
+<% content_for :title, "#{@post[:title]} | devopsellence blog" %>
+
+<main class="page page-article">
+  <header class="article-header">
+    <p class="article-back"><%= link_to "&larr; Blog".html_safe, blog_path %></p>
+    <p class="article-series-label"><%= @post[:series] %> &mdash; Part <%= @post[:part] %> of 6</p>
+    <h1><%= @post[:title] %></h1>
+    <div class="article-meta">
+      <time><%= @post[:date].strftime("%B %-d, %Y") %></time>
+      <span><%= @post[:reading_time] %></span>
+    </div>
+  </header>
+
+  <article class="article-body">
+
+    <p>Zero-downtime deploys are table stakes for production web applications. Most platforms achieve this with a central load balancer that drains connections from old instances and shifts traffic to new ones. This works, but it means the platform operates infrastructure in the traffic path &mdash; a load balancer that every request passes through, managed by the same system that manages your deploys.</p>
+
+    <p>devopsellence takes a different approach. <strong>Every node runs its own Envoy proxy.</strong> The agent manages Envoy's configuration via xDS (Envoy's native discovery service protocol), swapping traffic between containers locally. There is no central load balancer in the devopsellence architecture. Zero-downtime deploys happen entirely on the node, coordinated by the agent.</p>
+
+    <h2>Why Envoy on every node</h2>
+
+    <p>The agent needs a reverse proxy that can:</p>
+
+    <ol>
+      <li>Route traffic to the current web container.</li>
+      <li>Swap the upstream endpoint atomically when a new container is ready.</li>
+      <li>Drain in-flight connections to the old container gracefully.</li>
+      <li>Terminate TLS (for direct DNS ingress mode).</li>
+      <li>Reload configuration without restarting or dropping connections.</li>
+    </ol>
+
+    <p>Nginx requires a config file reload (and often a process restart) to change upstreams. HAProxy can do runtime changes via its stats socket, but the API is limited. Envoy was purpose-built for dynamic configuration via its xDS APIs &mdash; Listener Discovery, Cluster Discovery, Route Discovery, and Endpoint Discovery services. The agent can change any aspect of Envoy's configuration at runtime, without restarts, without config file writes, without dropped connections.</p>
+
+    <p>The agent runs an embedded xDS server that Envoy connects to over a Unix domain socket. When the agent needs to change routing, it pushes a new xDS snapshot. Envoy picks it up within milliseconds. No file I/O, no process signals, no race conditions between writing a config and reloading.</p>
+
+    <h2>The zero-downtime choreography</h2>
+
+    <p>When a new deployment arrives (the agent detects a new desired-state envelope with a changed container hash), the following sequence executes:</p>
+
+    <div class="article-diagram">
+      <div class="article-diagram-chain">
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">1</div>
+          <div class="article-diagram-chain-content">
+            <strong>Pull the new image</strong>
+            <p>The agent pulls the image from Artifact Registry (or any configured Docker registry) using short-lived credentials. The old container continues serving traffic through Envoy throughout this step.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">2</div>
+          <div class="article-diagram-chain-content">
+            <strong>Start the new container</strong>
+            <p>The agent creates and starts the new container on the Docker network. It binds to an internal port &mdash; not the host port. The old container is still running. Envoy is still routing to the old container. Users see no change.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">3</div>
+          <div class="article-diagram-chain-content">
+            <strong>Wait for health check</strong>
+            <p>The agent polls the new container's health check endpoint (e.g., <code>GET /up</code> on the configured port). It waits for a startup grace period, then retries with backoff until the container reports healthy. If the health check never passes, the deploy is aborted &mdash; the old container continues serving, and the failed new container is removed.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">4</div>
+          <div class="article-diagram-chain-content">
+            <strong>Swap Envoy's upstream (EDS update)</strong>
+            <p>The agent pushes a new Endpoint Discovery Service snapshot to Envoy, replacing the old container's IP:port with the new container's IP:port. Envoy atomically starts routing new requests to the new container. This is not a reload or restart &mdash; it's a runtime configuration update.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">5</div>
+          <div class="article-diagram-chain-content">
+            <strong>Drain delay</strong>
+            <p>The agent waits a short drain period (configurable, typically 100-500ms) to ensure Envoy has fully applied the new routing. This prevents a race where the agent stops the old container before Envoy finishes updating its internal state.</p>
+          </div>
+        </div>
+        <div class="article-diagram-chain-step">
+          <div class="article-diagram-chain-num">6</div>
+          <div class="article-diagram-chain-content">
+            <strong>Stop the old container</strong>
+            <p>The agent sends <code>SIGTERM</code> to the old container. Docker waits for the configured stop timeout (typically 30 seconds) for the process to shut down gracefully. In-flight requests that started before the EDS swap have this window to complete. After the timeout, Docker sends <code>SIGKILL</code>.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p>During this entire sequence, traffic is always flowing to a healthy container. At no point are both containers down. At no point does Envoy have no upstream. The old container serves until the new one is verified healthy. The new container starts receiving traffic only after it passes health checks.</p>
+
+    <h2>What happens when the new container fails</h2>
+
+    <p>If the new container's health check never passes, the deploy is aborted. The agent:</p>
+
+    <ol>
+      <li>Stops and removes the failed new container.</li>
+      <li>Leaves the old container running. Envoy continues routing to it.</li>
+      <li>Reports the failure to the control plane with the last health check error and container logs.</li>
+      <li>On the next reconciliation cycle, the agent detects the desired state still wants the new version, so it tries again. If the image is genuinely broken, this will keep failing &mdash; which is visible in the deployment status as a stuck rollout.</li>
+    </ol>
+
+    <p>This is a critical safety property: <strong>a bad deploy never takes down a running application.</strong> The old container keeps serving until something healthy replaces it.</p>
+
+    <h2>Release commands: running migrations first</h2>
+
+    <p>Many web applications need to run a one-time command before the new code starts &mdash; typically a database migration. devopsellence handles this with <strong>release commands</strong>.</p>
+
+    <p>When a release includes a release command (e.g., <code>bundle exec rails db:migrate</code>):</p>
+
+    <ol>
+      <li>The control plane selects one capable node (one that supports the <code>release_command.v1</code> capability) and publishes the release command as a task in the desired state.</li>
+      <li>The agent on that node creates a temporary container with the same image and environment as the web service, but with the release command as its entrypoint.</li>
+      <li>The agent waits for the command to complete and captures the exit code and last 100 lines of output.</li>
+      <li>If the command succeeds, the agent reports success. The control plane then publishes the normal rollout (containers on all nodes) in a new desired-state update.</li>
+      <li>If the command fails, the deployment is marked as failed. The old containers continue running.</li>
+    </ol>
+
+    <p>Release commands run exactly once per deployment, on a single node, before any container rollout begins. This prevents the race condition where a new container starts before the database migration has run.</p>
+
+    <h2>Envoy's xDS configuration</h2>
+
+    <p>The agent configures Envoy with four discovery services:</p>
+
+    <ul>
+      <li><strong>LDS (Listener Discovery)</strong> &mdash; HTTP and HTTPS listeners. In tunnel mode, Envoy listens on port 8000 (internal only). In direct DNS mode, it also listens on 8080 (HTTP redirect) and 8443 (HTTPS with TLS termination).</li>
+      <li><strong>CDS (Cluster Discovery)</strong> &mdash; a single upstream cluster named <code>devopsellence_web</code> pointing to the current web container.</li>
+      <li><strong>EDS (Endpoint Discovery)</strong> &mdash; the IP and port of the current web container within the Docker network. This is the part that changes during deploys.</li>
+      <li><strong>RDS (Route Discovery)</strong> &mdash; virtual host configuration mapping the hostname to the upstream cluster.</li>
+    </ul>
+
+    <p>All of this is served over a Unix domain socket &mdash; not TCP. Envoy connects to the agent's xDS server at startup via its bootstrap configuration. The socket is local to the server, requires no authentication (same trust boundary), and avoids the overhead of TLS handshakes for control plane communication.</p>
+
+    <h2>Why not a central load balancer?</h2>
+
+    <p>A central load balancer (AWS ALB, Cloudflare LB, Nginx reverse proxy) is the standard approach. devopsellence supports placing one in front of your nodes for multi-server setups &mdash; but it doesn't require or operate one.</p>
+
+    <p>The advantage of per-node Envoy is <strong>independence</strong>. Each node handles its own zero-downtime cutover without coordination. There's no central component that needs to know about container health across multiple servers. No distributed health check state. No load balancer configuration that needs to be updated when containers change.</p>
+
+    <p>For single-server deployments (which is most devopsellence use cases), a central load balancer would add latency, cost, and a failure domain for no benefit. For multi-server deployments, you bring your own load balancer (Cloudflare, AWS ALB, whatever you prefer) and point it at your nodes. Each node's Envoy handles the last mile.</p>
+
+    <h2>Workers: simpler, no Envoy</h2>
+
+    <p>Worker services (background jobs, queue consumers) don't receive HTTP traffic, so they don't use Envoy. The reconciliation for workers is simpler:</p>
+
+    <ol>
+      <li>Pull the new image.</li>
+      <li>Stop the old container (SIGTERM, then SIGKILL after timeout).</li>
+      <li>Start the new container.</li>
+    </ol>
+
+    <p>There is a brief gap between stopping the old worker and starting the new one. For most background job systems (Sidekiq, Celery, Bull), this is fine &mdash; the job broker retries any in-progress work. If your worker can't tolerate any gap, you'd use a job system with at-least-once delivery guarantees, which you should be doing anyway for resilience against crashes.</p>
+
+    <p>Next: <strong><%= link_to "Part 4 — One app per server: the power of a deliberate constraint", blog_post_path(slug: "engineering-decisions-part-4-one-app-per-server") %></strong></p>
+
+  </article>
+
+  <%= render "marketing/blog/series_nav" %>
+</main>

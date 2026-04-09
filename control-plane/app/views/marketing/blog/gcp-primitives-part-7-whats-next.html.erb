@@ -1,0 +1,88 @@
+<% content_for :title, "#{@post[:title]} | devopsellence blog" %>
+
+<main class="page page-article">
+  <header class="article-header">
+    <p class="article-back"><%= link_to "&larr; Blog".html_safe, blog_path %></p>
+    <p class="article-series-label"><%= @post[:series] %> &mdash; Part <%= @post[:part] %> of 7</p>
+    <h1><%= @post[:title] %></h1>
+    <div class="article-meta">
+      <time><%= @post[:date].strftime("%B %-d, %Y") %></time>
+      <span><%= @post[:reading_time] %></span>
+    </div>
+  </header>
+
+  <article class="article-body">
+
+    <p>The previous six articles described how devopsellence uses GCP primitives to build VM-native deployment tooling with strong security and resilience properties. Secret Manager keeps secrets out of the database. Cloud Storage decouples delivery from the control plane. Cloud KMS provides HSM-backed signing. Workload Identity eliminates stored credentials on nodes. The architecture works well, and we believe it's the right default.</p>
+
+    <p>But it shouldn't be the only option.</p>
+
+    <h2>The GCP coupling</h2>
+
+    <p>Today, devopsellence requires GCP. Every environment provisions a GCP service account, IAM bindings, a GCS path, Secret Manager entries, and Workload Identity configuration. This is the right architecture for the managed service, where we control the infrastructure and can guarantee the GCP integration is correctly provisioned.</p>
+
+    <p>But it creates friction for two use cases we care about:</p>
+
+    <p><strong>Self-hosting.</strong> The <%= link_to "roadmap", roadmap_path %> includes a fully self-hosted standalone path. If you want to run devopsellence on your own infrastructure, requiring a GCP project with KMS, Secret Manager, Cloud Storage, Artifact Registry, and Workload Identity is a significant setup burden. Some organizations run on AWS. Some run on bare metal. VM-native tooling that only works with one cloud provider is a harder sell for self-hosted use.</p>
+
+    <p><strong>Development and testing.</strong> Running the full GCP integration locally requires either a GCP project or extensive mocking. A simpler mode that stores state locally would make development faster and the contributor experience better.</p>
+
+    <h2>Standalone mode</h2>
+
+    <p>We're introducing a <strong>standalone mode</strong> that makes GCP optional. In standalone mode, the control plane uses local alternatives for each GCP service:</p>
+
+    <ul>
+      <li><strong>Secrets</strong> &mdash; encrypted at rest in the database instead of Secret Manager. The encryption key is managed locally.</li>
+      <li><strong>Desired state</strong> &mdash; served directly by the control plane API instead of published to GCS. Agents poll the control plane instead of Cloud Storage.</li>
+      <li><strong>Image registry</strong> &mdash; any Docker-compatible registry (Docker Hub, GitHub Container Registry, self-hosted) instead of Artifact Registry.</li>
+      <li><strong>Signing</strong> &mdash; local RSA keys loaded from environment variables instead of Cloud KMS. Same algorithm (RS256), same envelope format, different key backend.</li>
+      <li><strong>Authentication</strong> &mdash; direct token-based agent authentication instead of Workload Identity Federation. Agents authenticate to the control plane and receive scoped credentials directly.</li>
+    </ul>
+
+    <p>The agent doesn't change. It still verifies signed envelopes, still reconciles containers, still runs Envoy. The difference is where it fetches state and secrets from. The envelope format, signature verification, and reconciliation loop are the same regardless of mode.</p>
+
+    <h2>The abstraction layer</h2>
+
+    <p>Standalone mode is the first step toward a pluggable infrastructure layer. The control plane already has internal abstractions for storage, signing, and secret management. Standalone mode formalizes these abstractions and provides a second implementation alongside GCP.</p>
+
+    <p>This opens the path to future backends:</p>
+
+    <ul>
+      <li><strong>AWS</strong> &mdash; S3 for desired state, ECR for images, AWS Secrets Manager for secrets, AWS KMS for signing, IAM Roles Anywhere for workload identity.</li>
+      <li><strong>Azure</strong> &mdash; Blob Storage, ACR, Key Vault, Managed Identity.</li>
+      <li><strong>Self-hosted</strong> &mdash; MinIO for object storage, Vault for secrets, local keys for signing.</li>
+    </ul>
+
+    <p>We're not building all of these today. But by making GCP optional and introducing clean abstractions, we're creating the foundation for these to be built without rewriting the core.</p>
+
+    <h2>Trade-offs</h2>
+
+    <p>Standalone mode is simpler to set up, but it gives up some properties that the GCP integration provides:</p>
+
+    <ul>
+      <li><strong>Secrets in the database.</strong> Encrypted, but still in the database. A database compromise with the encryption key exposes secret values. Secret Manager's IAM-scoped access and automatic audit trail are not replicated.</li>
+      <li><strong>Control plane in the delivery path.</strong> Agents poll the control plane for desired state instead of GCS. A control plane outage affects the ability to deliver new state (though cached state still works).</li>
+      <li><strong>No HSM-backed signing.</strong> Signing keys are in environment variables, not hardware security modules. Application compromise exposes the signing key.</li>
+      <li><strong>Stored credentials.</strong> Without Workload Identity, agents may need stored credentials to access the image registry.</li>
+    </ul>
+
+    <p>These are real trade-offs, not theoretical ones. For a production deployment where security and resilience matter most, the GCP integration remains the strongest option. For self-hosting, development, or environments where GCP isn't available, standalone mode provides a practical alternative with the same deploy experience.</p>
+
+    <h2>Design principle</h2>
+
+    <p>The principle behind this work is: <strong>use the best primitives available for the environment you're running in.</strong> On GCP, that means Secret Manager, Cloud Storage, Cloud KMS, and Workload Identity. On AWS, it would mean their equivalents. Self-hosted, it means the best you can do with local infrastructure.</p>
+
+    <p>The core deploy experience &mdash; <code>devopsellence deploy</code>, signed desired state, zero-downtime rollouts, secret injection, managed HTTPS &mdash; should work everywhere. The infrastructure layer that provides security and resilience properties should use the best tools available in each environment.</p>
+
+    <p>We built on GCP primitives because they provide properties that are genuinely difficult to replicate from scratch. We're making them optional because VM-native deployment tooling should meet you where you are.</p>
+
+    <hr>
+
+    <p>This concludes the series. If you want to understand the architecture in detail, start from <strong><%= link_to "Part 1 — Why we built a deployment platform on GCP primitives", blog_post_path(slug: "gcp-primitives-part-1-the-architecture") %></strong>.</p>
+
+    <p>Questions or feedback? <a href="mailto:<%= @contact_email %>"><%= @contact_email %></a></p>
+
+  </article>
+
+  <%= render "marketing/blog/series_nav" %>
+</main>

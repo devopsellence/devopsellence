@@ -1,0 +1,94 @@
+<% content_for :title, "devopsellence | terms of service" %>
+
+<main class="page page-prose">
+  <header class="page-header">
+    <h1>Terms of service</h1>
+    <p class="page-lead">These terms govern your use of the devopsellence website, dashboard, APIs, CLI, agent, preview capacity, and related services.</p>
+    <p class="page-meta">Effective date: <%= @legal_effective_date %></p>
+  </header>
+
+  <section class="prose-section">
+    <h2>Acceptance</h2>
+    <p>By using devopsellence, you agree to these terms. If you use the service for an organization, you represent that you are authorized to bind that organization.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>The service</h2>
+    <p>devopsellence provides software and hosted services for building, publishing, and operating containerized applications on infrastructure you control, plus optional preview capacity and related hosted features.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Accounts and access</h2>
+    <ul>
+      <li>You are responsible for activity under your account, API tokens, bootstrap tokens, and connected identity providers.</li>
+      <li>You must provide accurate registration information and keep it current.</li>
+      <li>Notify us promptly if you believe your account or credentials have been compromised.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Acceptable use</h2>
+    <p>You may not use devopsellence to:</p>
+    <ul>
+      <li>Break the law or violate the rights of others.</li>
+      <li>Interfere with, probe, or bypass security or rate limits.</li>
+      <li>Access data, environments, or secrets you are not authorized to access.</li>
+      <li>Deploy malware, abusive workloads, credential-harvesting systems, or unlawful content.</li>
+      <li>Use trial resources for denial-of-service activity, cryptomining, or resource exhaustion.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Your applications and content</h2>
+    <ul>
+      <li>You keep ownership of your code, images, secrets, data, and other content.</li>
+      <li>You grant us the limited rights needed to host, transmit, sign, store, and operate that content.</li>
+      <li>You are responsible for the legality, security, and operation of workloads you deploy.</li>
+    </ul>
+  </section>
+
+  <section class="prose-section">
+    <h2>Service changes</h2>
+    <p>We may change, suspend, or discontinue parts of the service at any time. Some features may be experimental and change more quickly.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Fees</h2>
+    <p>If we offer paid plans, pricing and billing terms will be presented at purchase or on the applicable pricing surface.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Suspension and termination</h2>
+    <p>We may suspend or terminate access if you violate these terms, create security or abuse risk, fail to pay applicable fees, or if continued operation would cause harm.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Disclaimers</h2>
+    <p>The service is provided "as is" and "as available." We do not promise uninterrupted operation or that the service will be fit for every workload.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Limitation of liability</h2>
+    <p>To the maximum extent permitted by law, devopsellence will not be liable for indirect, incidental, special, consequential, or punitive damages arising from the service or these terms.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Privacy</h2>
+    <p>Your use of the service is also subject to the <%= link_to "Privacy Policy", privacy_path %>.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Trademarks</h2>
+    <p>devopsellence, related names, logos, and brand features are trademarks or service marks of their owner. These terms do not grant you any license to use our trademarks, logos, or branding except for reasonable factual reference or with prior written permission.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Changes to these terms</h2>
+    <p>We may update these terms. Revised versions will be posted here with a new effective date.</p>
+  </section>
+
+  <section class="prose-section">
+    <h2>Contact</h2>
+    <p>Questions: <a href="mailto:<%= @contact_email %>"><%= @contact_email %></a></p>
+  </section>
+</main>

@@ -1,0 +1,37 @@
+<% content_for :title, "devopsellence | sign in" %>
+<% content_for :body_class, "public-page public-page--auth" %>
+
+<div class="page-shell">
+<main class="page">
+    <section class="auth-center">
+      <div class="auth-panel">
+        <h1 class="auth-title">continue with GitHub or Google</h1>
+
+        <% if flash[:notice] %>
+          <p class="flash flash--notice"><%= flash[:notice] %></p>
+        <% end %>
+
+        <% if flash[:alert] %>
+          <p class="flash flash--alert"><%= flash[:alert] %></p>
+        <% end %>
+
+        <% if session[:login_redirect_uri].present? %>
+          <p class="auth-note">finish signing in to continue in your CLI.</p>
+        <% elsif session[:login_redirect_path]&.start_with?("/setup/") %>
+          <p class="auth-note">sign in to get your deploy token.</p>
+        <% else %>
+          <p class="auth-note">browser sign-in only for now. choose GitHub or Google below.</p>
+        <% end %>
+
+        <% oauth_providers = available_oauth_providers %>
+        <% if oauth_providers.any? %>
+          <% oauth_providers.each do |provider| %>
+            <%= button_to provider.label, provider.path, method: :post, class: "provider-button provider-button--#{provider.key.dasherize}", form: { data: { turbo: false } } %>
+          <% end %>
+        <% else %>
+          <p class="auth-note">sign-in is temporarily unavailable.</p>
+        <% end %>
+      </div>
+    </section>
+  </main>
+</div>

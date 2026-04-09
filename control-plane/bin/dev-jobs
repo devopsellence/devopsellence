@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+run_managed_maintenance() {
+  bin/rails runner "ManagedNodes::RefillPoolsJob.perform_now; ManagedNodes::ExpireLeasesJob.perform_now"
+}
+
+run_managed_maintenance
+
+while true; do
+  sleep 600
+  run_managed_maintenance
+done

@@ -1,0 +1,33 @@
+# frozen_string_literal: true
+
+module NodeDesiredState
+  class IngressPayload
+    def self.build(node:, environment:, release:)
+      return nil unless node.labeled?(Node::LABEL_WEB)
+      return nil unless release.requires_label?(Node::LABEL_WEB)
+      return nil unless Devopsellence::IngressConfig.managed?
+
+      ingress = environment.environment_ingress
+      return nil unless ingress&.hostname.present?
+
+      if environment.tunnel_ingress?
+        return nil unless ingress.status == EnvironmentIngress::STATUS_READY
+
+        {
+          hostname: ingress.hostname,
+          mode: Environment::INGRESS_STRATEGY_TUNNEL,
+          public_url: ingress.public_url,
+          tunnel_token_secret_ref: ingress.tunnel_token_secret_ref
+        }
+      else
+        return nil unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
+
+        {
+          hostname: ingress.hostname,
+          mode: Environment::INGRESS_STRATEGY_DIRECT_DNS,
+          public_url: ingress.public_url
+        }
+      end
+    end
+  end
+end

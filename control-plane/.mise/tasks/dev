@@ -1,0 +1,76 @@
+#!/usr/bin/env sh
+set -eu
+
+service_account="${DEVOPSELLENCE_DEV_CONTROL_PLANE_SERVICE_ACCOUNT:-}"
+quota_project="${DEVOPSELLENCE_DEV_GCP_QUOTA_PROJECT:-}"
+adc_file="${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}/application_default_credentials.json"
+cloudflared_pid=""
+default_database_url="postgres://postgres:postgres@127.0.0.1/devopsellence_development"
+
+ensure_dev_gcp_adc() {
+  if [ -z "${service_account}" ] || [ -z "${quota_project}" ]; then
+    echo "DEVOPSELLENCE_DEV_CONTROL_PLANE_SERVICE_ACCOUNT or DEVOPSELLENCE_DEV_GCP_QUOTA_PROJECT not set; skipping ADC refresh" >&2
+    return
+  fi
+
+  if ! command -v gcloud >/dev/null 2>&1; then
+    echo "gcloud not found; install it before running mise dev" >&2
+    exit 1
+  fi
+
+  if [ ! -f "${adc_file}" ] || ! grep -q "${service_account}" "${adc_file}" 2>/dev/null; then
+    needs_login="1"
+  elif ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
+    needs_login="1"
+  else
+    needs_login="0"
+  fi
+
+  if [ "${needs_login}" = "1" ]; then
+    echo "Refreshing GCP ADC for ${service_account}..."
+    gcloud auth application-default login --impersonate-service-account="${service_account}"
+  fi
+
+  quota_output="$(
+    gcloud auth application-default set-quota-project "${quota_project}" 2>&1 >/dev/null
+  )" || {
+    case "${quota_output}" in
+      *"credentials are not user credentials"* )
+        :
+        ;;
+      *)
+        echo "${quota_output}" >&2
+        exit 1
+        ;;
+    esac
+  }
+}
+
+cleanup() {
+  if [ -n "${cloudflared_pid}" ] && kill -0 "${cloudflared_pid}" 2>/dev/null; then
+    kill "${cloudflared_pid}" 2>/dev/null || true
+    wait "${cloudflared_pid}" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
+ensure_dev_gcp_adc
+
+mise run postgres-up >/dev/null
+export DATABASE_URL="${DATABASE_URL:-$default_database_url}"
+
+if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    echo "cloudflared not found; install it or unset CLOUDFLARE_TUNNEL_TOKEN" >&2
+    exit 1
+  fi
+
+  echo "Starting cloudflared tunnel..."
+  cloudflared tunnel run --token "${CLOUDFLARE_TUNNEL_TOKEN}" &
+  cloudflared_pid=$!
+else
+  echo "CLOUDFLARE_TUNNEL_TOKEN not set; starting bin/dev without cloudflared" >&2
+fi
+
+bin/dev "$@"

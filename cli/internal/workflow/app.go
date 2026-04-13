@@ -1621,7 +1621,12 @@ func (a *App) NodeDelete(ctx context.Context, opts NodeDeleteOptions) error {
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(result)
 	}
-	a.Printer.Println("Delete requested for managed node #" + strconv.Itoa(intFromMap(result, "id")) + "; server scheduled for delete.")
+	if managed, _ := result["managed"].(bool); managed {
+		a.Printer.Println("Delete requested for managed node #" + strconv.Itoa(intFromMap(result, "id")) + "; server scheduled for delete.")
+		return nil
+	}
+	a.Printer.Println("Removed node #" + strconv.Itoa(intFromMap(result, "id")) + ".")
+	a.Printer.Println("If the agent is still installed, run `devopsellence-agent uninstall --purge-runtime` on the machine to clean it up.")
 	return nil
 }
 

@@ -685,7 +685,7 @@ func TestNodeDeleteDeletesUnassignedManagedNode(t *testing.T) {
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/cli/nodes/55":
-			return jsonResponse(t, map[string]any{"id": 55, "revoked_at": "2026-04-08T12:00:00Z"}), nil
+			return jsonResponse(t, map[string]any{"id": 55, "managed": true, "revoked_at": "2026-04-08T12:00:00Z"}), nil
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 			return nil, nil
@@ -696,6 +696,32 @@ func TestNodeDeleteDeletesUnassignedManagedNode(t *testing.T) {
 		t.Fatalf("NodeDelete() error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Delete requested for managed node #55; server scheduled for delete.") {
+		t.Fatalf("NodeDelete() output = %q", stdout.String())
+	}
+}
+
+func TestNodeDeleteDeletesUnassignedCustomerManagedNode(t *testing.T) {
+	t.Parallel()
+
+	root := makeRailsRoot(t, "ShopApp")
+	var stdout bytes.Buffer
+	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/cli/nodes/55":
+			return jsonResponse(t, map[string]any{"id": 55, "managed": false, "revoked_at": "2026-04-08T12:00:00Z"}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	}))
+	app.Printer.Out = &stdout
+	if err := app.NodeDelete(context.Background(), NodeDeleteOptions{NodeID: 55}); err != nil {
+		t.Fatalf("NodeDelete() error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Removed node #55.") {
+		t.Fatalf("NodeDelete() output = %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "devopsellence-agent uninstall --purge-runtime") {
 		t.Fatalf("NodeDelete() output = %q", stdout.String())
 	}
 }

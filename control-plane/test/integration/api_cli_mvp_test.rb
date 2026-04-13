@@ -981,7 +981,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_equal %w[web worker], node.reload.labels
   end
 
-  test "legacy node delete rejects customer-managed nodes through the cli api" do
+  test "node delete rejects assigned customer-managed nodes through the cli api" do
     user = User.create!(email: "owner-#{SecureRandom.hex(4)}@example.com", confirmed_at: Time.current)
     organization = Organization.create!(name: "acme")
     OrganizationMembership.create!(organization: organization, user: user, role: OrganizationMembership::ROLE_OWNER)
@@ -1013,7 +1013,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     end
 
     assert_response :unprocessable_entity
-    assert_equal "node remove is unsupported for customer-managed nodes; use node detach, then run devopsellence-agent uninstall --purge-runtime on the machine", json_body.fetch("error_description")
+    assert_equal "node remove requires an unassigned node; use node detach first", json_body.fetch("error_description")
     assert_equal environment.id, node.reload.environment_id
     assert_nil node.revoked_at
   end
@@ -1048,9 +1048,33 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       as: :json
 
     assert_response :unprocessable_entity
-    assert_equal "node remove requires an unassigned managed node; use node detach first", json_body.fetch("error_description")
+    assert_equal "node remove requires an unassigned node; use node detach first", json_body.fetch("error_description")
     assert_equal environment.id, node.reload.environment_id
     assert_nil node.revoked_at
+  end
+
+  test "node delete retires an unassigned customer-managed node through the cli api" do
+    user = User.create!(email: "owner-#{SecureRandom.hex(4)}@example.com", confirmed_at: Time.current)
+    organization = Organization.create!(name: "acme")
+    OrganizationMembership.create!(organization: organization, user: user, role: OrganizationMembership::ROLE_OWNER)
+    ensure_test_organization_runtime!(organization)
+    node, = issue_test_node!(organization: organization, name: "dev-laptop")
+    fake_broker = mock("broker")
+    fake_broker.stubs(:revoke_node_bundle_impersonation!).returns(
+      Runtime::Broker::LocalClient::Result.new(status: :ready, message: nil)
+    )
+    Runtime::Broker.stubs(:current).returns(fake_broker)
+
+    delete "/api/v1/cli/nodes/#{node.id}",
+      headers: auth_headers_for(user),
+      as: :json
+
+    assert_response :success
+    assert_equal node.id, json_body.fetch("id")
+    assert_equal false, json_body.fetch("managed")
+    assert_nil json_body["environment_id"]
+    assert_not_nil json_body.fetch("revoked_at")
+    assert_not Node.exists?(node.id)
   end
 
   test "node delete retires an unassigned managed node through the cli api" do
@@ -1081,6 +1105,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_equal node.id, json_body.fetch("id")
+    assert_equal true, json_body.fetch("managed")
     assert_nil json_body["environment_id"]
     assert_not_nil json_body.fetch("revoked_at")
     assert_not_nil node.reload.revoked_at

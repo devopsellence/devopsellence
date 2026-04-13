@@ -15,19 +15,12 @@ class AgentDownloadsController < ActionController::Base
       )
 
       response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-      send_data artifact.body,
-        filename: artifact.filename,
-        type: "application/octet-stream",
-        disposition: "attachment"
+      redirect_to artifact.url, allow_other_host: true
     end
   rescue AgentReleases::Fetcher::NotConfiguredError => error
     render plain: "agent binary unavailable: #{error.message}", status: :service_unavailable
   rescue AgentReleases::Fetcher::UnsupportedTargetError => error
     render plain: error.message, status: :unprocessable_entity
-  rescue AgentReleases::Fetcher::NotFoundError => error
-    render plain: error.message, status: :not_found
-  rescue AgentReleases::Fetcher::Error => error
-    render plain: "agent binary download failed: #{error.message}", status: :bad_gateway
   end
 
   private

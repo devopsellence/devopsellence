@@ -11,17 +11,10 @@ class AgentChecksumsController < ActionController::Base
       artifact = AgentReleases::Fetcher.build.fetch_checksums(version: version)
 
       response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-      send_data artifact.body,
-        filename: artifact.filename,
-        type: "text/plain",
-        disposition: "attachment"
+      redirect_to artifact.url, allow_other_host: true
     end
   rescue AgentReleases::Fetcher::NotConfiguredError => error
     render plain: "agent checksums unavailable: #{error.message}", status: :service_unavailable
-  rescue AgentReleases::Fetcher::NotFoundError => error
-    render plain: error.message, status: :not_found
-  rescue AgentReleases::Fetcher::Error => error
-    render plain: "agent checksum download failed: #{error.message}", status: :bad_gateway
   end
 
   private

@@ -3,7 +3,7 @@
 require "test_helper"
 
 class CliDownloadsTest < ActionDispatch::IntegrationTest
-  FakeArtifact = Struct.new(:body, :filename, keyword_init: true)
+  FakeArtifact = Struct.new(:url, :filename, keyword_init: true)
 
   class FakeFetcher
     attr_reader :calls
@@ -22,13 +22,8 @@ class CliDownloadsTest < ActionDispatch::IntegrationTest
     end
   end
 
-  test "returns service unavailable when no version or release config is configured" do
-    with_env(
-      "DEVOPSELLENCE_CLI_STABLE_VERSION" => nil,
-      "DEVOPSELLENCE_CLI_RELEASE_PROJECT_ID" => nil,
-      "DEVOPSELLENCE_CLI_RELEASE_REGION" => nil,
-      "DEVOPSELLENCE_CLI_RELEASE_REPOSITORY" => nil
-    ) do
+  test "returns service unavailable when no version is requested and no stable version is configured" do
+    with_env("DEVOPSELLENCE_CLI_STABLE_VERSION" => nil) do
       get cli_download_path
     end
 
@@ -36,25 +31,23 @@ class CliDownloadsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "cli binary unavailable"
   end
 
-  test "downloads explicit version from the configured fetcher" do
-    fetcher = FakeFetcher.new(result: FakeArtifact.new(body: "binary", filename: "devopsellence"))
+  test "redirects explicit version to the configured release asset url" do
+    fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://github.com/devopsellence/devopsellence/releases/download/cli-v0.1.0/darwin-arm64", filename: "devopsellence"))
 
     with_cli_release_fetcher(fetcher) do
       get cli_download_path, params: { version: "v0.1.0", os: "darwin", arch: "arm64" }
     end
 
-    assert_response :success
-    assert_equal "binary", response.body
+    assert_response :redirect
+    assert_equal "https://github.com/devopsellence/devopsellence/releases/download/cli-v0.1.0/darwin-arm64", response.location
     assert_equal [{ version: "v0.1.0", os: "darwin", arch: "arm64" }], fetcher.calls
-    assert_equal "application/octet-stream", response.media_type
-    assert_match(/attachment/, response.headers["Content-Disposition"])
     assert_includes response.headers["Cache-Control"], "public"
     assert_includes response.headers["Cache-Control"], "max-age=31536000"
     assert_includes response.headers["Cache-Control"], "immutable"
   end
 
   test "redirects unversioned requests to the stable version without downloading" do
-    fetcher = FakeFetcher.new(result: FakeArtifact.new(body: "binary", filename: "devopsellence"))
+    fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "devopsellence"))
 
     with_env("DEVOPSELLENCE_CLI_STABLE_VERSION" => "v1.2.3") do
       with_cli_release_fetcher(fetcher) do

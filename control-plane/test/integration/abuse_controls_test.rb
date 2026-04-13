@@ -3,7 +3,7 @@
 require "test_helper"
 
 class AbuseControlsTest < ActionDispatch::IntegrationTest
-  FakeArtifact = Struct.new(:body, :filename, keyword_init: true)
+  FakeArtifact = Struct.new(:url, :filename, keyword_init: true)
 
   class DownloadFetcher
     def initialize(result:)
@@ -236,14 +236,14 @@ class AbuseControlsTest < ActionDispatch::IntegrationTest
 
   test "rate limits public artifact downloads per ip across binaries and checksums" do
     remote_addr = { "REMOTE_ADDR" => "203.0.113.10" }
-    cli_fetcher = DownloadFetcher.new(result: FakeArtifact.new(body: "binary", filename: "devopsellence"))
-    checksum_fetcher = ChecksumFetcher.new(result: FakeArtifact.new(body: "checksums", filename: "SHA256SUMS"))
+    cli_fetcher = DownloadFetcher.new(result: FakeArtifact.new(url: "https://example.test/devopsellence", filename: "devopsellence"))
+    checksum_fetcher = ChecksumFetcher.new(result: FakeArtifact.new(url: "https://example.test/SHA256SUMS", filename: "SHA256SUMS"))
 
     with_cli_release_fetcher(cli_fetcher) do
       with_agent_release_fetcher(checksum_fetcher) do
         60.times do
           get cli_download_path, params: { version: "v0.1.0", os: "linux", arch: "amd64" }, headers: remote_addr
-          assert_response :success
+          assert_response :redirect
         end
 
         get agent_checksums_path, params: { version: "v0.1.0" }, headers: remote_addr

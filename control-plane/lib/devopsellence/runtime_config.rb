@@ -19,8 +19,6 @@ module Devopsellence
     DEFAULT_ACME_CONTACT_EMAIL = "admin@devopsellence.com"
     DEFAULT_ACME_DIRECTORY_URL = "https://acme-v02.api.letsencrypt.org/directory"
     DEFAULT_ACME_STAGING_DIRECTORY_URL = "https://acme-staging-v02.api.letsencrypt.org/directory"
-    DEFAULT_AGENT_RELEASE_PACKAGE = "devopsellence-agent"
-    DEFAULT_CLI_RELEASE_PACKAGE = "devopsellence-cli"
     DEFAULT_MANAGED_PROVIDER = "hetzner"
     DEFAULT_MANAGED_REGION = "ash"
     DEFAULT_MANAGED_SIZE = "cpx11"
@@ -80,12 +78,6 @@ module Devopsellence
       acme_directory_url: ["DEVOPSELLENCE_ACME_DIRECTORY_URL", DEFAULT_ACME_DIRECTORY_URL],
       agent_stable_version: ["DEVOPSELLENCE_AGENT_STABLE_VERSION", ""],
       cli_stable_version: ["DEVOPSELLENCE_CLI_STABLE_VERSION", ""],
-      agent_release_project_id: ["DEVOPSELLENCE_AGENT_RELEASE_PROJECT_ID", ""],
-      agent_release_region: ["DEVOPSELLENCE_AGENT_RELEASE_REGION", ""],
-      agent_release_repository: ["DEVOPSELLENCE_AGENT_RELEASE_REPOSITORY", ""],
-      cli_release_project_id: ["DEVOPSELLENCE_CLI_RELEASE_PROJECT_ID", ""],
-      cli_release_region: ["DEVOPSELLENCE_CLI_RELEASE_REGION", ""],
-      cli_release_repository: ["DEVOPSELLENCE_CLI_RELEASE_REPOSITORY", ""],
       agent_container_image: ["DEVOPSELLENCE_AGENT_CONTAINER_IMAGE", ""],
       agent_container_repository: ["DEVOPSELLENCE_AGENT_CONTAINER_REPOSITORY", ""],
       managed_default_provider: ["DEVOPSELLENCE_MANAGED_DEFAULT_PROVIDER", DEFAULT_MANAGED_PROVIDER],
@@ -130,8 +122,6 @@ module Devopsellence
         OPTIONAL_DEFAULTS.each do |name, (key, fallback)|
           config[name] = env.fetch(key, fallback).to_s.strip
         end
-        config.agent_release_package = DEFAULT_AGENT_RELEASE_PACKAGE
-        config.cli_release_package = DEFAULT_CLI_RELEASE_PACKAGE
         config.managed_pool_candidates = build_managed_pool_candidates(config)
         validate_runtime_backend!(config)
         validate_workload_identity_resource_names!(config)

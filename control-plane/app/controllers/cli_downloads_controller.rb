@@ -15,19 +15,12 @@ class CliDownloadsController < ActionController::Base
       )
 
       response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-      send_data artifact.body,
-        filename: artifact.filename,
-        type: "application/octet-stream",
-        disposition: "attachment"
+      redirect_to artifact.url, allow_other_host: true
     end
   rescue CliReleases::Fetcher::NotConfiguredError => error
     render plain: "cli binary unavailable: #{error.message}", status: :service_unavailable
   rescue CliReleases::Fetcher::UnsupportedTargetError => error
     render plain: error.message, status: :unprocessable_entity
-  rescue CliReleases::Fetcher::NotFoundError => error
-    render plain: error.message, status: :not_found
-  rescue CliReleases::Fetcher::Error => error
-    render plain: "cli binary download failed: #{error.message}", status: :bad_gateway
   end
 
   private

@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "base64"
 require "digest"
 require "fileutils"
 require "json"
@@ -38,10 +37,7 @@ class E2E
   DEFAULT_ENVOY_IMAGE = "docker.io/envoyproxy/envoy@sha256:d9b4a70739d92b3e28cd407f106b0e90d55df453d7d87773efd22b4429777fe8"
   DEFAULT_RUNTIME_BACKEND = "standalone"
   RUNNER_IMAGE_FINGERPRINT_LABEL = "devopsellence.e2e.runner_fingerprint"
-  CLI_RELEASE_PROJECT = "devopsellence-e2e-cli"
-  AGENT_RELEASE_PROJECT = "devopsellence-e2e-agent"
   RELEASE_REGION = "local"
-  RELEASE_REPOSITORY = "devopsellence-releases"
   CONTROL_PLANE_PROJECT = "devopsellence-e2e-control-plane"
   RUNTIME_PROJECT = "devopsellence-e2e-runtime"
   RUNTIME_PROJECT_NUMBER = "123456789012"
@@ -141,7 +137,6 @@ class E2E
     step("postgres") { start_postgres! }
     step("registry") { start_registry! }
     step("gcp-mock") { start_gcp_mock! }
-    step("seed releases") { seed_release_artifacts! }
     step("control plane") { start_control_plane! }
     step("download endpoints") { assert_release_downloads! }
     step("auth token") { create_user_token! }
@@ -351,29 +346,6 @@ class E2E
       http_post_json("#{@host_gcp_mock_base_url}/__admin/reset", {})
     end
 
-    def seed_release_artifacts!
-      entries = []
-      seed_release_package!(entries, project_id: CLI_RELEASE_PROJECT, package: "devopsellence-cli", root: @cli_root)
-      seed_release_package!(entries, project_id: AGENT_RELEASE_PROJECT, package: "devopsellence-agent", root: @agent_root)
-      http_post_json("#{@host_gcp_mock_base_url}/__admin/seed/releases", { entries: entries })
-    end
-
-    def seed_release_package!(entries, project_id:, package:, root:)
-      dist_dir = root.join("dist", @release_version)
-      %w[linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 SHA256SUMS].each do |name|
-        path = dist_dir.join(name)
-        entries << {
-          project_id: project_id,
-          location: RELEASE_REGION,
-          repository: RELEASE_REPOSITORY,
-          package: package,
-          version: @release_version,
-          source_name: name,
-          content_b64: Base64.strict_encode64(path.binread)
-        }
-      end
-    end
-
     def start_control_plane!
       run_runner!("bin/rails db:prepare", timeout: 300)
       start_runner_service(
@@ -408,10 +380,22 @@ class E2E
     end
 
     def assert_release_downloads!
-      assert_artifact_download!("/cli/download?version=#{@release_version}&os=linux&arch=amd64", @cli_root.join("dist", @release_version, "linux-amd64"))
-      assert_artifact_download!("/agent/download?version=#{@release_version}&os=linux&arch=amd64", @agent_root.join("dist", @release_version, "linux-amd64"))
-      assert_artifact_download!("/cli/checksums?version=#{@release_version}", @cli_root.join("dist", @release_version, "SHA256SUMS"))
-      assert_artifact_download!("/agent/checksums?version=#{@release_version}", @agent_root.join("dist", @release_version, "SHA256SUMS"))
+      assert_artifact_redirect!(
+        "/cli/download?version=#{@release_version}&os=linux&arch=amd64",
+        "https://github.com/devopsellence/devopsellence/releases/download/cli-#{@release_version}/linux-amd64"
+      )
+      assert_artifact_redirect!(
+        "/agent/download?version=#{@release_version}&os=linux&arch=amd64",
+        "https://github.com/devopsellence/devopsellence/releases/download/agent-#{@release_version}/linux-amd64"
+      )
+      assert_artifact_redirect!(
+        "/cli/checksums?version=#{@release_version}",
+        "https://github.com/devopsellence/devopsellence/releases/download/cli-#{@release_version}/SHA256SUMS"
+      )
+      assert_artifact_redirect!(
+        "/agent/checksums?version=#{@release_version}",
+        "https://github.com/devopsellence/devopsellence/releases/download/agent-#{@release_version}/SHA256SUMS"
+      )
     end
 
     def create_user_token!
@@ -629,8 +613,6 @@ class E2E
         raise "expected gcp-mock desired state write" unless events.any? { |entry| entry["type"] == "object_written" }
         http_post_json("#{@host_gcp_mock_base_url}/__admin/assert", { event_type: "access_token_generated", min_count: 1 })
       end
-
-      http_post_json("#{@host_gcp_mock_base_url}/__admin/assert", { event_type: "release_downloaded", min_count: 2 })
 
       assert_direct_dns_feature!
     end
@@ -925,13 +907,7 @@ class E2E
     def release_env
       {
         "DEVOPSELLENCE_AGENT_STABLE_VERSION" => @release_version,
-        "DEVOPSELLENCE_CLI_STABLE_VERSION" => @release_version,
-        "DEVOPSELLENCE_AGENT_RELEASE_PROJECT_ID" => AGENT_RELEASE_PROJECT,
-        "DEVOPSELLENCE_AGENT_RELEASE_REGION" => RELEASE_REGION,
-        "DEVOPSELLENCE_AGENT_RELEASE_REPOSITORY" => RELEASE_REPOSITORY,
-        "DEVOPSELLENCE_CLI_RELEASE_PROJECT_ID" => CLI_RELEASE_PROJECT,
-        "DEVOPSELLENCE_CLI_RELEASE_REGION" => RELEASE_REGION,
-        "DEVOPSELLENCE_CLI_RELEASE_REPOSITORY" => RELEASE_REPOSITORY
+        "DEVOPSELLENCE_CLI_STABLE_VERSION" => @release_version
       }
     end
 
@@ -997,11 +973,10 @@ class E2E
       @agent_root.join("dist", @release_version, "linux-amd64")
     end
 
-    def assert_artifact_download!(path, expected_path)
-      body = http_get("#{@host_control_plane_base_url}#{path}").fetch(:body)
-      actual_sha = Digest::SHA256.hexdigest(body)
-      expected_sha = Digest::SHA256.file(expected_path).hexdigest
-      raise "artifact digest mismatch for #{path}" unless actual_sha == expected_sha
+    def assert_artifact_redirect!(path, expected_location)
+      response = http_get("#{@host_control_plane_base_url}#{path}")
+      raise "expected redirect for #{path}, got #{response.fetch(:status)}" unless response.fetch(:status).between?(300, 399)
+      raise "redirect location mismatch for #{path}" unless response.fetch(:location) == expected_location
     end
 
     def public_probe_url(base_url)
@@ -1141,7 +1116,7 @@ class E2E
       uri = URI(url)
       request = Net::HTTP::Get.new(uri)
       response = http_request(uri, request)
-      { status: response.code.to_i, body: response.body.to_s }
+      { status: response.code.to_i, body: response.body.to_s, location: response["Location"].to_s }
     end
 
     def http_request(uri, request)

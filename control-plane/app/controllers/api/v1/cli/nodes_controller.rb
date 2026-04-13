@@ -54,29 +54,29 @@ module Api
             .find_by(id: params[:id])
           return render_error("forbidden", "owner role required", status: :forbidden) unless node
           return render_error("forbidden", "manual node management is unavailable for trial organizations", status: :forbidden) if node.organization&.trial?
-          unless node.managed?
-            return render_error(
-              "invalid_request",
-              "node remove is unsupported for customer-managed nodes; use node detach, then run devopsellence-agent uninstall --purge-runtime on the machine",
-              status: :unprocessable_entity
-            )
-          end
+          organization_id = node.organization_id
+          managed = node.managed?
           if node.environment_id.present?
             return render_error(
               "invalid_request",
-              "node remove requires an unassigned managed node; use node detach first",
+              "node remove requires an unassigned node; use node detach first",
               status: :unprocessable_entity
             )
           end
 
-          result = Nodes::Cleanup.new(node: node).call
+          result = if managed
+            Nodes::Cleanup.new(node: node).call
+          else
+            Nodes::Retire.new(node: node).call
+          end
 
           render json: {
             id: node.id,
-            organization_id: node.organization_id,
-            environment_id: result.environment&.id,
-            desired_state_uri: result.desired_state&.uri,
-            revoked_at: node.revoked_at&.utc&.iso8601
+            organization_id: organization_id,
+            environment_id: result.respond_to?(:environment) ? result.environment&.id : nil,
+            desired_state_uri: result.respond_to?(:desired_state) ? result.desired_state&.uri : nil,
+            revoked_at: (result.respond_to?(:revoked_at) ? result.revoked_at : node.revoked_at)&.utc&.iso8601,
+            managed: managed
           }
         end
 

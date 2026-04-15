@@ -93,7 +93,11 @@ jobs:
               fi
             fi
 
-            gh pr merge "$pr_number" --repo "$REPO" --squash --delete-branch --match-head-commit "$head_sha"
+            echo "Merging Dependabot PR #${pr_number}"
+            if ! gh pr merge "$pr_number" --repo "$REPO" --squash --delete-branch --match-head-commit "$head_sha"; then
+              echo "::warning::Dependabot PR #${pr_number} passed CI but is not mergeable. It may need a rebase or conflict resolution."
+              return 0
+            fi
           }
 
           if [[ "$EVENT_NAME" == "workflow_run" ]]; then

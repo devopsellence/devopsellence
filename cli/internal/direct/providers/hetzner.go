@@ -3,6 +3,8 @@ package providers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -60,7 +62,7 @@ func (h *Hetzner) CreateServer(ctx context.Context, input CreateServerInput) (Se
 	sshKeyName := ""
 	if strings.TrimSpace(input.SSHPublicKey) != "" {
 		var err error
-		sshKeyName, err = h.ensureSSHKey(ctx, input.Name, input.SSHPublicKey)
+		sshKeyName, err = h.ensureSSHKey(ctx, input.SSHPublicKey)
 		if err != nil {
 			return Server{}, err
 		}
@@ -139,8 +141,9 @@ func (h *Hetzner) ensureConfigured() error {
 	return nil
 }
 
-func (h *Hetzner) ensureSSHKey(ctx context.Context, nodeName, publicKey string) (string, error) {
-	name := "devopsellence-" + nodeName
+func (h *Hetzner) ensureSSHKey(ctx context.Context, publicKey string) (string, error) {
+	name := contentAddressedSSHKeyName(publicKey)
+	normalizedPublicKey := canonicalSSHPublicKey(publicKey)
 	var list struct {
 		SSHKeys []map[string]any `json:"ssh_keys"`
 	}
@@ -149,6 +152,9 @@ func (h *Hetzner) ensureSSHKey(ctx context.Context, nodeName, publicKey string) 
 	}
 	for _, key := range list.SSHKeys {
 		if fmt.Sprint(key["name"]) == name {
+			if canonicalSSHPublicKey(fmt.Sprint(key["public_key"])) != normalizedPublicKey {
+				return "", fmt.Errorf("Hetzner SSH key %q exists with different public key content", name)
+			}
 			return name, nil
 		}
 	}
@@ -157,11 +163,24 @@ func (h *Hetzner) ensureSSHKey(ctx context.Context, nodeName, publicKey string) 
 	}
 	if err := h.doJSON(ctx, http.MethodPost, "/ssh_keys", map[string]any{
 		"name":       name,
-		"public_key": publicKey,
+		"public_key": normalizedPublicKey,
 	}, &created); err != nil {
 		return "", err
 	}
 	return fmt.Sprint(created.SSHKey["name"]), nil
+}
+
+func contentAddressedSSHKeyName(publicKey string) string {
+	sum := sha256.Sum256([]byte(canonicalSSHPublicKey(publicKey)))
+	return "devopsellence-ssh-" + hex.EncodeToString(sum[:])[:16]
+}
+
+func canonicalSSHPublicKey(publicKey string) string {
+	fields := strings.Fields(publicKey)
+	if len(fields) >= 2 {
+		return fields[0] + " " + fields[1]
+	}
+	return strings.TrimSpace(publicKey)
 }
 
 func (h *Hetzner) ensureFirewall(ctx context.Context) (any, error) {

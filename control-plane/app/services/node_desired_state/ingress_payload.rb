@@ -23,9 +23,14 @@ module NodeDesiredState
         return nil unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
 
         {
+          hosts: [ ingress.hostname ],
           hostname: ingress.hostname,
-          mode: Environment::INGRESS_STRATEGY_DIRECT_DNS,
-          public_url: ingress.public_url
+          mode: "public",
+          public_url: ingress.public_url,
+          tls: {
+            mode: "auto"
+          },
+          redirect_http: true
         }
       end
     end

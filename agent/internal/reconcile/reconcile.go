@@ -205,6 +205,9 @@ func (r *Reconciler) reconcileService(ctx context.Context, revision string, ingr
 		if r.opts.Envoy == nil {
 			return result, fmt.Errorf("envoy manager required for web service")
 		}
+		if err := r.opts.Envoy.Ensure(ctx, ingress); err != nil {
+			return result, fmt.Errorf("ensure envoy: %w", err)
+		}
 		if r.opts.IngressCert != nil {
 			if err := r.opts.IngressCert.Ensure(ctx, ingress); err != nil {
 				return result, fmt.Errorf("ensure ingress certificate: %w", err)

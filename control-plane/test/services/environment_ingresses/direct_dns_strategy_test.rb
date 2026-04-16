@@ -37,7 +37,7 @@ module EnvironmentIngresses
 
       assert_equal ingress, result
       assert_equal EnvironmentIngress::STATUS_DEGRADED, ingress.reload.status
-      assert_equal "no eligible direct_dns web nodes with fresh heartbeat, settled rollout, and ready TLS", ingress.last_error
+      assert_equal "no eligible public web nodes with fresh heartbeat and settled rollout", ingress.last_error
       assert_equal [], client.operations
     end
 
@@ -127,7 +127,7 @@ module EnvironmentIngresses
       DirectDnsStrategy.new(environment:, ingress:, client:).call
 
       assert_equal EnvironmentIngress::STATUS_DEGRADED, ingress.reload.status
-      assert_equal "no eligible direct_dns web nodes with fresh heartbeat, settled rollout, and ready TLS", ingress.last_error
+      assert_equal "no eligible public web nodes with fresh heartbeat and settled rollout", ingress.last_error
       assert_equal [], client.operations
     end
 

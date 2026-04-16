@@ -59,8 +59,13 @@ devopsellence deploy
 devopsellence status
 ```
 
-Today, solo mode exposes the app through Envoy on `http://<server>:8000`.
-Shared-style tunnel mode and automatic SSL for solo mode are planned, but not available yet.
+Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each public web node, then configure hostnames:
+
+```bash
+devopsellence ingress set --host app.example.com --tls-email ops@example.com
+devopsellence ingress check --wait 5m
+devopsellence deploy
+```
 
 Store solo-mode deploy secrets locally:
 

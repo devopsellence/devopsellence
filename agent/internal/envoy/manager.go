@@ -14,14 +14,15 @@ import (
 
 	"log/slog"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 	"github.com/devopsellence/devopsellence/agent/internal/engine"
-	cerrdefs "github.com/containerd/errdefs"
 )
 
 const (
 	ingressModeTunnel    = "tunnel"
 	ingressModeDirectDNS = "direct_dns"
+	ingressModePublic    = "public"
 )
 
 type Config struct {
@@ -37,6 +38,8 @@ type Config struct {
 	TLSCertPath     string
 	TLSKeyPath      string
 	ClusterName     string
+	ChallengeHost   string
+	ChallengePort   uint16
 	Healthcheck     *engine.Healthcheck
 	StartupTimeout  time.Duration
 	RestartPolicy   string
@@ -78,6 +81,12 @@ func New(engine engine.Engine, config Config, logger *slog.Logger) *Manager {
 	}
 	if config.Healthcheck == nil {
 		config.Healthcheck = defaultHealthcheck()
+	}
+	if config.ChallengeHost == "" {
+		config.ChallengeHost = "host.docker.internal"
+	}
+	if config.ChallengePort == 0 {
+		config.ChallengePort = 15980
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
@@ -251,6 +260,9 @@ func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingre
 		Health:  m.config.Healthcheck,
 		Restart: engine.RestartPolicyFromString(m.config.RestartPolicy),
 	}
+	if directDNSListenerConfigEnabled(ingress) {
+		spec.ExtraHosts = []string{"host.docker.internal:host-gateway"}
+	}
 	spec.Ports = portBindingsForIngress(m.config.Port, ingress)
 
 	if err := m.engine.CreateAndStart(ctx, spec); err != nil {
@@ -258,6 +270,15 @@ func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingre
 	}
 
 	return nil
+}
+
+func directDNSListenerConfigEnabled(ingress *desiredstatepb.Ingress) bool {
+	switch normalizedIngressMode(ingress) {
+	case ingressModeDirectDNS, ingressModePublic:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) waitReady(ctx context.Context) error {
@@ -362,29 +383,71 @@ func normalizedRoutePath(path string) string {
 }
 
 func (m *Manager) directDNSListenerConfig(ingress *desiredstatepb.Ingress) (*directDNSListenerConfig, error) {
-	if normalizedIngressMode(ingress) != ingressModeDirectDNS {
+	switch normalizedIngressMode(ingress) {
+	case ingressModeDirectDNS, ingressModePublic:
+	default:
 		return nil, nil
 	}
-	if strings.TrimSpace(m.config.TLSCertPath) == "" {
-		return nil, fmt.Errorf("direct_dns ingress requires --envoy-tls-cert-path")
-	}
-	if strings.TrimSpace(m.config.TLSKeyPath) == "" {
-		return nil, fmt.Errorf("direct_dns ingress requires --envoy-tls-key-path")
-	}
-	certificatePEM, err := os.ReadFile(m.config.TLSCertPath)
-	if err != nil {
-		return nil, fmt.Errorf("read direct_dns tls cert: %w", err)
-	}
-	privateKeyPEM, err := os.ReadFile(m.config.TLSKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("read direct_dns tls key: %w", err)
+	tlsMode := ingressTLSMode(ingress)
+	tlsDesired := tlsMode != "off"
+	tlsEnabled := false
+	challengeEnabled := tlsMode == "auto"
+	var certificatePEM []byte
+	var privateKeyPEM []byte
+	if tlsDesired {
+		if strings.TrimSpace(m.config.TLSCertPath) == "" {
+			return nil, fmt.Errorf("public ingress requires --envoy-tls-cert-path")
+		}
+		if strings.TrimSpace(m.config.TLSKeyPath) == "" {
+			return nil, fmt.Errorf("public ingress requires --envoy-tls-key-path")
+		}
+		var err error
+		certificatePEM, err = os.ReadFile(m.config.TLSCertPath)
+		if err != nil {
+			if tlsMode == "auto" && os.IsNotExist(err) {
+				return &directDNSListenerConfig{
+					HTTPPort:         m.config.PublicHTTPPort,
+					HTTPSPort:        m.config.PublicHTTPSPort,
+					Hosts:            ingressHosts(ingress),
+					TLSEnabled:       false,
+					ChallengeEnabled: challengeEnabled,
+					RedirectHTTP:     false,
+					ChallengeHost:    m.config.ChallengeHost,
+					ChallengePort:    m.config.ChallengePort,
+				}, nil
+			}
+			return nil, fmt.Errorf("read public ingress tls cert: %w", err)
+		}
+		privateKeyPEM, err = os.ReadFile(m.config.TLSKeyPath)
+		if err != nil {
+			if tlsMode == "auto" && os.IsNotExist(err) {
+				return &directDNSListenerConfig{
+					HTTPPort:         m.config.PublicHTTPPort,
+					HTTPSPort:        m.config.PublicHTTPSPort,
+					Hosts:            ingressHosts(ingress),
+					TLSEnabled:       false,
+					ChallengeEnabled: challengeEnabled,
+					RedirectHTTP:     false,
+					ChallengeHost:    m.config.ChallengeHost,
+					ChallengePort:    m.config.ChallengePort,
+				}, nil
+			}
+			return nil, fmt.Errorf("read public ingress tls key: %w", err)
+		}
+		tlsEnabled = true
 	}
 
 	return &directDNSListenerConfig{
-		HTTPPort:       m.config.PublicHTTPPort,
-		HTTPSPort:      m.config.PublicHTTPSPort,
-		CertificatePEM: certificatePEM,
-		PrivateKeyPEM:  privateKeyPEM,
+		HTTPPort:         m.config.PublicHTTPPort,
+		HTTPSPort:        m.config.PublicHTTPSPort,
+		Hosts:            ingressHosts(ingress),
+		TLSEnabled:       tlsEnabled,
+		ChallengeEnabled: challengeEnabled,
+		RedirectHTTP:     tlsEnabled && ingress.GetRedirectHttp(),
+		ChallengeHost:    m.config.ChallengeHost,
+		ChallengePort:    m.config.ChallengePort,
+		CertificatePEM:   certificatePEM,
+		PrivateKeyPEM:    privateKeyPEM,
 	}, nil
 }
 
@@ -394,19 +457,20 @@ func publishHostPortForIngress(ingress *desiredstatepb.Ingress) bool {
 
 func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress) []engine.PortBinding {
 	switch normalizedIngressMode(ingress) {
-	case ingressModeDirectDNS:
-		return []engine.PortBinding{
-			{
-				ContainerPort: 8080,
-				HostPort:      80,
-				Protocol:      "tcp",
-			},
-			{
+	case ingressModeDirectDNS, ingressModePublic:
+		ports := []engine.PortBinding{{
+			ContainerPort: 8080,
+			HostPort:      80,
+			Protocol:      "tcp",
+		}}
+		if ingressTLSMode(ingress) != "off" {
+			ports = append(ports, engine.PortBinding{
 				ContainerPort: 8443,
 				HostPort:      443,
 				Protocol:      "tcp",
-			},
+			})
 		}
+		return ports
 	case ingressModeTunnel:
 		if ingress != nil {
 			return nil
@@ -460,4 +524,35 @@ func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {
 		return ingressModeTunnel
 	}
 	return mode
+}
+
+func ingressTLSMode(ingress *desiredstatepb.Ingress) string {
+	if ingress == nil || ingress.Tls == nil {
+		return "auto"
+	}
+	mode := strings.TrimSpace(ingress.Tls.Mode)
+	if mode == "" {
+		return "auto"
+	}
+	return mode
+}
+
+func ingressHosts(ingress *desiredstatepb.Ingress) []string {
+	if ingress == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	hosts := []string{}
+	for _, host := range ingress.Hosts {
+		host = strings.TrimSpace(host)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	if legacy := strings.TrimSpace(ingress.Hostname); legacy != "" && !seen[legacy] {
+		hosts = append(hosts, legacy)
+	}
+	return hosts
 }

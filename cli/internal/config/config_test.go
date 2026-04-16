@@ -172,7 +172,7 @@ func TestWriteAndLoadReleaseCommand(t *testing.T) {
 	}
 }
 
-func TestDirectNodeLabelsRoundTrip(t *testing.T) {
+func TestDirectNodeLabelsMigrateToSoloRoles(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -191,13 +191,19 @@ func TestDirectNodeLabelsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	labels := loaded.Direct.Nodes["prod-1"].Labels
-	if strings.Join(labels, ",") != "web,worker" {
-		t.Fatalf("labels = %#v, want web,worker", labels)
+	if loaded.Direct != nil {
+		t.Fatalf("direct config should be migrated away")
+	}
+	roles := loaded.Nodes["prod-1"].Roles
+	if strings.Join(roles, ",") != "web,worker" {
+		t.Fatalf("roles = %#v, want web,worker", roles)
+	}
+	if labels := loaded.Solo.Nodes["prod-1"].Labels; strings.Join(labels, ",") != "web,worker" {
+		t.Fatalf("runtime labels = %#v, want web,worker", labels)
 	}
 }
 
-func TestDirectNodeLegacyUnlabeledRoundTrip(t *testing.T) {
+func TestDirectNodeLegacyUnlabeledMigrateToAllRoles(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -212,21 +218,22 @@ func TestDirectNodeLegacyUnlabeledRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	if labels := loaded.Direct.Nodes["prod-1"].Labels; labels != nil {
-		t.Fatalf("legacy labels = %#v, want nil", labels)
+	if loaded.Direct != nil {
+		t.Fatalf("direct config should be migrated away")
+	}
+	if roles := loaded.Nodes["prod-1"].Roles; strings.Join(roles, ",") != "web,worker" {
+		t.Fatalf("legacy roles = %#v, want web,worker", roles)
 	}
 }
 
-func TestValidateRejectsUnknownDirectNodeLabel(t *testing.T) {
+func TestValidateRejectsUnknownNodeRole(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Direct = &DirectConfig{Nodes: map[string]DirectNode{
-		"prod-1": {Host: "203.0.113.10", User: "root", Labels: []string{"db"}},
-	}}
+	project.Nodes = map[string]NodeConfig{"prod-1": {Roles: []string{"db"}}}
 	err := Validate(&project)
-	if err == nil || !strings.Contains(err.Error(), "unsupported label") {
-		t.Fatalf("expected unsupported label validation error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported role") {
+		t.Fatalf("expected unsupported role validation error, got %v", err)
 	}
 }
 

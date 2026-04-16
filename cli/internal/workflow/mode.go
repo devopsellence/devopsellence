@@ -85,7 +85,7 @@ func (a *App) suggestedMode() Mode {
 		return ModeSolo
 	}
 	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
-	if err == nil && cfg != nil && cfg.Direct != nil && len(cfg.Direct.Nodes) > 0 {
+	if err == nil && cfg != nil && cfg.Solo != nil && len(cfg.Solo.Nodes) > 0 {
 		return ModeSolo
 	}
 	return ModeShared

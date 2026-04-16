@@ -528,6 +528,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}),
 	}
 	deployCommand.Flags().StringSliceVar(&deploySoloOpts.Nodes, "nodes", nil, "Comma-separated node names (solo mode)")
+	deployCommand.Flags().BoolVar(&deploySoloOpts.SkipDNSCheck, "skip-dns-check", false, "Skip ingress DNS readiness check before deploy (solo mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Organization, "org", os.Getenv("DEVOPSELLENCE_ORGANIZATION"), "Organization name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Project, "project", os.Getenv("DEVOPSELLENCE_PROJECT"), "Project name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Image, "image", "", "Deploy an existing digest ref instead of building locally (shared mode)")
@@ -535,6 +536,42 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	deployCommand.Flags().BoolVar(&deploySharedOpts.NonInteractive, "non-interactive", false, "Disable interactive prompts if re-initialization is needed (shared mode)")
 	deployCommand.Flags().BoolVar(&deploySharedOpts.SkipRailsMasterKeySync, "no-rails-master-key-sync", false, "Do not auto-sync config/master.key to the shared secret RAILS_MASTER_KEY")
 	root.AddCommand(deployCommand)
+
+	var ingressSetOpts IngressSetOptions
+	var ingressCheckOpts IngressCheckOptions
+	ingressCommand := &cobra.Command{
+		Use:   "ingress",
+		Short: "Manage public hostnames and TLS",
+	}
+	ingressSetCommand := &cobra.Command{
+		Use:   "set",
+		Short: "Set ingress hostnames and TLS policy",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ingressSetOpts.RedirectHTTPChanged = cmd.Flags().Changed("redirect-http")
+			return runByMode(func(ctx context.Context) error {
+				return app.IngressSet(ctx, ingressSetOpts)
+			}, func(ctx context.Context) error {
+				return app.IngressSet(ctx, ingressSetOpts)
+			})(cmd, args)
+		},
+	}
+	ingressSetCommand.Flags().StringSliceVar(&ingressSetOpts.Hosts, "host", nil, "Hostname, repeatable or comma-separated")
+	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSMode, "tls-mode", "auto", "TLS mode: auto, manual, or off")
+	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSEmail, "tls-email", "", "ACME account email")
+	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSCADirectoryURL, "acme-ca", "", "ACME directory URL override")
+	ingressSetCommand.Flags().BoolVar(&ingressSetOpts.RedirectHTTP, "redirect-http", true, "Redirect HTTP to HTTPS")
+	ingressCheckCommand := &cobra.Command{
+		Use:   "check",
+		Short: "Check that ingress DNS points at public web nodes",
+		RunE: runByMode(func(ctx context.Context) error {
+			return app.IngressCheck(ctx, ingressCheckOpts)
+		}, func(ctx context.Context) error {
+			return app.IngressCheck(ctx, ingressCheckOpts)
+		}),
+	}
+	ingressCheckCommand.Flags().DurationVar(&ingressCheckOpts.Wait, "wait", 0, "Poll until DNS is ready or this timeout elapses")
+	ingressCommand.AddCommand(ingressSetCommand, ingressCheckCommand)
+	root.AddCommand(ingressCommand)
 
 	var statusSharedOpts StatusOptions
 	var statusSoloOpts DirectStatusOptions

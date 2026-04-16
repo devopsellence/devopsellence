@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,11 +20,13 @@ import (
 	"github.com/devopsellence/cli/internal/direct"
 	"github.com/devopsellence/cli/internal/direct/providers"
 	"github.com/devopsellence/cli/internal/discovery"
+	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/ui"
 )
 
 type DirectDeployOptions struct {
-	Nodes []string
+	Nodes        []string
+	SkipDNSCheck bool
 }
 
 type DirectStatusOptions struct {
@@ -94,6 +97,19 @@ type providerNodeCreateResult struct {
 }
 
 type DirectSetupOptions struct{}
+
+type IngressSetOptions struct {
+	Hosts               []string
+	TLSMode             string
+	TLSEmail            string
+	TLSCADirectoryURL   string
+	RedirectHTTP        bool
+	RedirectHTTPChanged bool
+}
+
+type IngressCheckOptions struct {
+	Wait time.Duration
+}
 
 func (a *App) createProviderNode(ctx context.Context, opts DirectNodeCreateOptions, projectName string) (providerNodeCreateResult, error) {
 	if opts.Name == "" {
@@ -175,15 +191,18 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 		return err
 	}
 
-	nodes, err := a.resolveNodes(cfg.Direct, opts.Nodes)
+	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
 	if err != nil {
 		return err
 	}
 	if len(nodes) == 0 {
-		return fmt.Errorf("no nodes configured; add direct.nodes to devopsellence.yml")
+		return fmt.Errorf("no nodes configured; add solo.nodes to devopsellence.yml")
 	}
 	releaseNode, err := validateDirectNodeSchedule(cfg, nodes)
 	if err != nil {
+		return err
+	}
+	if err := a.checkIngressBeforeDeploy(ctx, cfg, nodes, opts.SkipDNSCheck); err != nil {
 		return err
 	}
 
@@ -229,7 +248,7 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 		wg.Add(1)
 		go func(name string, node config.DirectNode) {
 			defer wg.Done()
-			desiredStateJSON, err := direct.BuildDesiredStateForLabels(cfg, imageTag, shortSHA, secrets, node.Labels, name == releaseNode)
+			desiredStateJSON, err := direct.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Labels, soloNodePublic(cfg, name), name == releaseNode)
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
@@ -334,7 +353,7 @@ func (a *App) DirectStatus(ctx context.Context, opts DirectStatusOptions) error 
 		return err
 	}
 
-	nodes, err := a.resolveNodes(cfg.Direct, opts.Nodes)
+	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
 	if err != nil {
 		return err
 	}
@@ -461,17 +480,17 @@ func (a *App) DirectNodeList(_ context.Context, _ DirectNodeListOptions) error {
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"schema_version": outputSchemaVersion,
-			"nodes":          cfg.Direct.Nodes,
+			"nodes":          cfg.Solo.Nodes,
 		})
 	}
-	names := sortedDirectNodeNames(cfg.Direct.Nodes)
+	names := sortedSoloNodeNames(cfg.Solo.Nodes)
 	if len(names) == 0 {
 		a.Printer.Println("No nodes.")
 		return nil
 	}
 	for _, name := range names {
-		node := cfg.Direct.Nodes[name]
-		a.Printer.Println(fmt.Sprintf("%s  host=%s  labels=%s", name, node.Host, strings.Join(node.Labels, ",")))
+		node := cfg.Solo.Nodes[name]
+		a.Printer.Println(fmt.Sprintf("%s  host=%s  roles=%s public=%t", name, node.Host, strings.Join(node.Labels, ","), soloNodePublic(cfg, name)))
 	}
 	return nil
 }
@@ -497,10 +516,11 @@ func (a *App) DirectLogs(ctx context.Context, opts DirectLogsOptions) error {
 		return err
 	}
 
-	node, ok := cfg.Direct.Nodes[opts.Node]
+	soloNode, ok := cfg.Solo.Nodes[opts.Node]
 	if !ok {
 		return fmt.Errorf("node %q not found in config", opts.Node)
 	}
+	node := directNodeFromSolo(soloNode)
 
 	if opts.Follow {
 		// Stream directly to the user's terminal — do not buffer.
@@ -520,16 +540,21 @@ func (a *App) DirectNodeLabelSet(_ context.Context, opts DirectNodeLabelSetOptio
 	if err != nil {
 		return err
 	}
-	node, ok := cfg.Direct.Nodes[opts.Node]
+	soloNode, ok := cfg.Solo.Nodes[opts.Node]
 	if !ok {
 		return fmt.Errorf("node %q not found in config", opts.Node)
 	}
+	node := directNodeFromSolo(soloNode)
 	labels, err := parseDirectLabels(opts.Labels)
 	if err != nil {
 		return err
 	}
 	node.Labels = labels
-	cfg.Direct.Nodes[opts.Node] = node
+	cfg.Solo.Nodes[opts.Node] = config.SoloNode(node)
+	if cfg.Nodes == nil {
+		cfg.Nodes = map[string]config.NodeConfig{}
+	}
+	cfg.Nodes[opts.Node] = config.NodeConfig{Roles: labels, Public: hasDirectLabel(labels, config.NodeRoleWeb)}
 	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 		return err
 	}
@@ -549,10 +574,11 @@ func (a *App) DirectAgentInstall(ctx context.Context, opts DirectAgentInstallOpt
 	if err != nil {
 		return err
 	}
-	node, ok := cfg.Direct.Nodes[opts.Node]
+	soloNode, ok := cfg.Solo.Nodes[opts.Node]
 	if !ok {
 		return fmt.Errorf("node %q not found in config", opts.Node)
 	}
+	node := directNodeFromSolo(soloNode)
 	if !a.Printer.JSON {
 		a.Printer.Println("Installing direct agent on " + opts.Node + "...")
 	}
@@ -571,7 +597,7 @@ func (a *App) DirectDoctor(ctx context.Context, opts DirectDoctorOptions) error 
 	if err != nil {
 		return err
 	}
-	nodes, err := a.resolveNodes(cfg.Direct, opts.Nodes)
+	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
 	if err != nil {
 		return err
 	}
@@ -675,10 +701,10 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		if cfg == nil {
 			return "", errors.New("No solo nodes configured yet. Run `devopsellence setup`.")
 		}
-		if cfg.Direct == nil || len(cfg.Direct.Nodes) == 0 {
+		if cfg.Solo == nil || len(cfg.Solo.Nodes) == 0 {
 			return "", errors.New("No solo nodes configured yet. Run `devopsellence setup`.")
 		}
-		return fmt.Sprintf("%d node(s) configured", len(cfg.Direct.Nodes)), nil
+		return fmt.Sprintf("%d node(s) configured", len(cfg.Solo.Nodes)), nil
 	})
 
 	ok := true
@@ -703,7 +729,7 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		}
 		a.Printer.Println(prefix, fmt.Sprintf("%v:", check["name"]), check["detail"])
 	}
-	if ok && cfg != nil && cfg.Direct != nil && len(cfg.Direct.Nodes) > 0 {
+	if ok && cfg != nil && cfg.Solo != nil && len(cfg.Solo.Nodes) > 0 {
 		return a.DirectDoctor(ctx, DirectDoctorOptions{})
 	}
 	return nil
@@ -720,8 +746,8 @@ func (a *App) DirectNodeCreate(ctx context.Context, opts DirectNodeCreateOptions
 	if opts.Deploy && a.Printer.JSON {
 		return fmt.Errorf("node create --deploy is not supported with --json")
 	}
-	if cfg.Direct != nil {
-		if _, ok := cfg.Direct.Nodes[opts.Name]; ok {
+	if cfg.Solo != nil {
+		if _, ok := cfg.Solo.Nodes[opts.Name]; ok {
 			return fmt.Errorf("direct node %q already exists", opts.Name)
 		}
 	}
@@ -871,10 +897,11 @@ func (a *App) DirectNodeRemove(ctx context.Context, opts DirectNodeRemoveOptions
 	if err != nil {
 		return err
 	}
-	node, ok := cfg.Direct.Nodes[opts.Name]
+	soloNode, ok := cfg.Solo.Nodes[opts.Name]
 	if !ok {
 		return fmt.Errorf("node %q not found in config", opts.Name)
 	}
+	node := directNodeFromSolo(soloNode)
 	if node.Provider == "" || node.ProviderServerID == "" {
 		return fmt.Errorf("node %q does not have provider metadata; refusing provider delete", opts.Name)
 	}
@@ -885,7 +912,8 @@ func (a *App) DirectNodeRemove(ctx context.Context, opts DirectNodeRemoveOptions
 	if err := provider.DeleteServer(ctx, node.ProviderServerID); err != nil {
 		return err
 	}
-	delete(cfg.Direct.Nodes, opts.Name)
+	delete(cfg.Solo.Nodes, opts.Name)
+	delete(cfg.Nodes, opts.Name)
 	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 		return err
 	}
@@ -974,6 +1002,93 @@ func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 	return a.DirectDoctor(ctx, DirectDoctorOptions{Nodes: []string{name}})
 }
 
+func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
+	discovered, err := discovery.Discover(a.Cwd)
+	if err != nil {
+		return err
+	}
+	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		cfg = directDefaultProjectConfig(discovered)
+	}
+	hosts := normalizeIngressHosts(opts.Hosts)
+	if len(hosts) == 0 {
+		return fmt.Errorf("ingress set requires at least one --host")
+	}
+	tlsMode := strings.TrimSpace(opts.TLSMode)
+	if tlsMode == "" {
+		tlsMode = "auto"
+	}
+	switch tlsMode {
+	case "auto", "off", "manual":
+	default:
+		return fmt.Errorf("ingress tls mode must be auto, off, or manual")
+	}
+	redirectHTTP := tlsMode == "auto"
+	if opts.RedirectHTTPChanged {
+		redirectHTTP = opts.RedirectHTTP
+	}
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: hosts,
+		TLS: config.IngressTLSConfig{
+			Mode:           tlsMode,
+			Email:          strings.TrimSpace(opts.TLSEmail),
+			CADirectoryURL: strings.TrimSpace(opts.TLSCADirectoryURL),
+		},
+		RedirectHTTP: redirectHTTP,
+	}
+	written, err := a.ConfigStore.Write(discovered.WorkspaceRoot, *cfg)
+	if err != nil {
+		return err
+	}
+	if a.Printer.JSON {
+		return a.Printer.PrintJSON(map[string]any{
+			"schema_version": outputSchemaVersion,
+			"ingress":        written.Ingress,
+			"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
+		})
+	}
+	a.Printer.Println("Ingress hosts:", strings.Join(written.Ingress.Hosts, ","))
+	a.Printer.Println("TLS:", written.Ingress.TLS.Mode)
+	a.Printer.Println("Config:", a.ConfigStore.PathFor(discovered.WorkspaceRoot))
+	return nil
+}
+
+func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {
+	cfg, _, err := a.loadDirectConfig()
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(opts.Wait)
+	for {
+		report, err := ingressDNSReport(ctx, cfg, nil)
+		if err != nil {
+			return err
+		}
+		if report.OK || opts.Wait <= 0 || time.Now().After(deadline) {
+			if a.Printer.JSON {
+				if err := a.Printer.PrintJSON(report); err != nil {
+					return err
+				}
+			} else {
+				printIngressDNSReport(a.Printer, report)
+			}
+			if !report.OK {
+				return ExitError{Code: 1, Err: fmt.Errorf("ingress DNS is not ready")}
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 func (a *App) directProgress(nodeName string) func(string) {
 	if a.Printer.JSON {
 		return func(string) {}
@@ -998,8 +1113,8 @@ func (a *App) loadDirectConfig() (*config.ProjectConfig, string, error) {
 	if cfg == nil {
 		return nil, "", fmt.Errorf("no devopsellence.yml found; run `devopsellence setup --mode solo`")
 	}
-	if cfg.Direct == nil || len(cfg.Direct.Nodes) == 0 {
-		return nil, "", fmt.Errorf("no direct.nodes configured in devopsellence.yml")
+	if cfg.Solo == nil || len(cfg.Solo.Nodes) == 0 {
+		return nil, "", fmt.Errorf("no solo.nodes configured in devopsellence.yml")
 	}
 	return cfg, workspaceRoot, nil
 }
@@ -1031,28 +1146,41 @@ func directDefaultProjectConfig(discovered discovery.Result) *config.ProjectConf
 }
 
 func (a *App) writeDirectNode(workspaceRoot string, cfg *config.ProjectConfig, name string, node config.DirectNode) error {
-	if cfg.Direct == nil {
-		cfg.Direct = &config.DirectConfig{Nodes: map[string]config.DirectNode{}}
+	roles := node.Labels
+	if len(roles) == 0 {
+		roles = append([]string(nil), config.DirectDefaultLabels...)
 	}
-	if cfg.Direct.Nodes == nil {
-		cfg.Direct.Nodes = map[string]config.DirectNode{}
+	if cfg.Solo == nil {
+		cfg.Solo = &config.SoloConfig{Nodes: map[string]config.SoloNode{}}
 	}
-	cfg.Direct.Nodes[name] = node
+	if cfg.Solo.Nodes == nil {
+		cfg.Solo.Nodes = map[string]config.SoloNode{}
+	}
+	node.Labels = roles
+	cfg.Solo.Nodes[name] = config.SoloNode(node)
+	if cfg.Nodes == nil {
+		cfg.Nodes = map[string]config.NodeConfig{}
+	}
+	cfg.Nodes[name] = config.NodeConfig{Roles: roles, Public: hasDirectLabel(roles, config.NodeRoleWeb)}
 	_, err := a.ConfigStore.Write(workspaceRoot, *cfg)
 	return err
 }
 
 // resolveNodes filters nodes by the given names, or returns all if names is empty.
 // Returns an error if any requested name is not present in the config.
-func (a *App) resolveNodes(dc *config.DirectConfig, names []string) (map[string]config.DirectNode, error) {
+func (a *App) resolveNodes(dc *config.SoloConfig, names []string) (map[string]config.DirectNode, error) {
 	if len(names) == 0 {
-		return dc.Nodes, nil
+		result := make(map[string]config.DirectNode, len(dc.Nodes))
+		for name, node := range dc.Nodes {
+			result[name] = directNodeFromSolo(node)
+		}
+		return result, nil
 	}
 	result := make(map[string]config.DirectNode, len(names))
 	var unknown []string
 	for _, name := range names {
 		if node, ok := dc.Nodes[name]; ok {
-			result[name] = node
+			result[name] = directNodeFromSolo(node)
 		} else {
 			unknown = append(unknown, name)
 		}
@@ -1065,6 +1193,181 @@ func (a *App) resolveNodes(dc *config.DirectConfig, names []string) (map[string]
 		return nil, fmt.Errorf("unknown node(s): %s (available: %s)", strings.Join(unknown, ", "), strings.Join(available, ", "))
 	}
 	return result, nil
+}
+
+func directNodeFromSolo(node config.SoloNode) config.DirectNode {
+	return config.DirectNode(node)
+}
+
+func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
+	names := make([]string, 0, len(nodes))
+	for name := range nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func hasDirectLabel(labels []string, want string) bool {
+	for _, label := range labels {
+		if strings.TrimSpace(label) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func soloNodePublic(cfg *config.ProjectConfig, name string) bool {
+	if cfg == nil || cfg.Nodes == nil {
+		return false
+	}
+	return cfg.Nodes[name].Public
+}
+
+type ingressDNSReportResult struct {
+	SchemaVersion int                    `json:"schema_version"`
+	OK            bool                   `json:"ok"`
+	ExpectedIPs   []string               `json:"expected_ips"`
+	Hosts         []ingressDNSHostResult `json:"hosts"`
+}
+
+type ingressDNSHostResult struct {
+	Host     string   `json:"host"`
+	OK       bool     `json:"ok"`
+	Resolved []string `json:"resolved,omitempty"`
+	Missing  []string `json:"missing,omitempty"`
+	Error    string   `json:"error,omitempty"`
+}
+
+func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.DirectNode, skip bool) error {
+	if skip || cfg == nil || cfg.Ingress == nil || cfg.Ingress.TLS.Mode != "auto" {
+		return nil
+	}
+	report, err := ingressDNSReport(ctx, cfg, nodes)
+	if err != nil {
+		return err
+	}
+	if report.OK {
+		return nil
+	}
+	if !a.Printer.JSON {
+		printIngressDNSReport(a.Printer, report)
+	}
+	return fmt.Errorf("ingress DNS is not ready; update DNS or pass --skip-dns-check")
+}
+
+func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.DirectNode) (ingressDNSReportResult, error) {
+	hosts := []string{}
+	if cfg != nil && cfg.Ingress != nil {
+		hosts = normalizeIngressHosts(cfg.Ingress.Hosts)
+	}
+	if len(hosts) == 0 {
+		return ingressDNSReportResult{}, fmt.Errorf("ingress.hosts is not configured")
+	}
+	expected := publicWebNodeIPs(cfg, selected)
+	if len(expected) == 0 {
+		return ingressDNSReportResult{}, fmt.Errorf("no public web nodes configured")
+	}
+	report := ingressDNSReportResult{
+		SchemaVersion: outputSchemaVersion,
+		OK:            true,
+		ExpectedIPs:   expected,
+		Hosts:         make([]ingressDNSHostResult, 0, len(hosts)),
+	}
+	for _, host := range hosts {
+		result := ingressDNSHostResult{Host: host}
+		resolved, err := net.DefaultResolver.LookupHost(ctx, host)
+		if err != nil {
+			result.Error = err.Error()
+		}
+		result.Resolved = normalizeIngressHosts(resolved)
+		result.Missing = missingStrings(expected, result.Resolved)
+		result.OK = err == nil && len(result.Missing) == 0
+		if !result.OK {
+			report.OK = false
+		}
+		report.Hosts = append(report.Hosts, result)
+	}
+	return report, nil
+}
+
+func printIngressDNSReport(printer output.Printer, report ingressDNSReportResult) {
+	printer.Println("Expected IPs:", strings.Join(report.ExpectedIPs, ","))
+	for _, host := range report.Hosts {
+		state := "ok"
+		if !host.OK {
+			state = "fail"
+		}
+		line := fmt.Sprintf("%s  %s", state, host.Host)
+		if len(host.Resolved) > 0 {
+			line += " resolved=" + strings.Join(host.Resolved, ",")
+		}
+		if len(host.Missing) > 0 {
+			line += " missing=" + strings.Join(host.Missing, ",")
+		}
+		if host.Error != "" {
+			line += " error=" + host.Error
+		}
+		printer.Println(line)
+	}
+}
+
+func publicWebNodeIPs(cfg *config.ProjectConfig, selected map[string]config.DirectNode) []string {
+	if cfg == nil || cfg.Solo == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	ips := []string{}
+	for _, name := range sortedSoloNodeNames(cfg.Solo.Nodes) {
+		if selected != nil {
+			if _, ok := selected[name]; !ok {
+				continue
+			}
+		}
+		meta := cfg.Nodes[name]
+		if !meta.Public || !hasDirectLabel(meta.Roles, config.NodeRoleWeb) {
+			continue
+		}
+		host := strings.TrimSpace(cfg.Solo.Nodes[name].Host)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		ips = append(ips, host)
+	}
+	sort.Strings(ips)
+	return ips
+}
+
+func normalizeIngressHosts(values []string) []string {
+	seen := map[string]bool{}
+	normalized := []string{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" || seen[part] {
+				continue
+			}
+			seen[part] = true
+			normalized = append(normalized, part)
+		}
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+func missingStrings(want, have []string) []string {
+	haveSet := map[string]bool{}
+	for _, value := range have {
+		haveSet[value] = true
+	}
+	missing := []string{}
+	for _, value := range want {
+		if !haveSet[value] {
+			missing = append(missing, value)
+		}
+	}
+	return missing
 }
 
 // shellQuote returns a POSIX shell safe single-quoted string.

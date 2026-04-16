@@ -16,10 +16,16 @@ type originListenerConfig struct {
 }
 
 type directDNSListenerConfig struct {
-	HTTPPort       uint16
-	HTTPSPort      uint16
-	CertificatePEM []byte
-	PrivateKeyPEM  []byte
+	HTTPPort         uint16
+	HTTPSPort        uint16
+	Hosts            []string
+	TLSEnabled       bool
+	ChallengeEnabled bool
+	RedirectHTTP     bool
+	ChallengeHost    string
+	ChallengePort    uint16
+	CertificatePEM   []byte
+	PrivateKeyPEM    []byte
 }
 
 // xdsSocketName is the Unix socket filename placed alongside the bootstrap YAML.

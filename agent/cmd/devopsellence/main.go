@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/devopsellence/devopsellence/agent/internal/acme"
 	"github.com/devopsellence/devopsellence/agent/internal/agent"
 	"github.com/devopsellence/devopsellence/agent/internal/auth"
 	"github.com/devopsellence/devopsellence/agent/internal/authority/direct"
@@ -24,7 +25,6 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/gcp"
 	"github.com/devopsellence/devopsellence/agent/internal/lifecycle"
 	"github.com/devopsellence/devopsellence/agent/internal/observability"
-	"github.com/devopsellence/devopsellence/agent/internal/origincert"
 	"github.com/devopsellence/devopsellence/agent/internal/reconcile"
 	"github.com/devopsellence/devopsellence/agent/internal/registryauth"
 	"github.com/devopsellence/devopsellence/agent/internal/report/controlplane"
@@ -219,19 +219,14 @@ func runNormal(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		TunnelToken:    cfg.CloudflareTunnelToken,
 		StartupTimeout: cfg.StopTimeout,
 	}, logger)
-	originCertManager, err := origincert.New(origincert.Config{
-		BaseURL:     cfg.ControlPlaneBaseURL,
+	ingressCertManager := acme.New(acme.Config{
 		CertPath:    cfg.EnvoyTLSCertPath,
 		KeyPath:     cfg.EnvoyTLSKeyPath,
 		FileUID:     cfg.EnvoyUID,
 		FileGID:     cfg.EnvoyGID,
 		RenewBefore: cfg.IngressCertRenewBefore,
-		Tokens:      authManager,
+		Logger:      logger,
 	})
-	if err != nil {
-		logger.Error("ingress cert manager init failed", "error", err)
-		os.Exit(1)
-	}
 	if auth.AssignmentEligible(authManager.DesiredStateTarget().Mode) {
 		triggerSystemImagePrefetch()
 	}
@@ -244,7 +239,7 @@ func runNormal(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		Envoy:         envoyManager,
 		Cloudflared:   cloudflaredManager,
 		ImagePullAuth: imagePullAuth,
-		IngressCert:   originCertManager,
+		IngressCert:   ingressCertManager,
 		Logger:        logger,
 	})
 

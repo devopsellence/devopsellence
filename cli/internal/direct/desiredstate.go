@@ -14,6 +14,7 @@ import (
 type desiredStateJSON struct {
 	Revision       string          `json:"revision,omitempty"`
 	Containers     []containerJSON `json:"containers,omitempty"`
+	Ingress        *ingressJSON    `json:"ingress,omitempty"`
 	ReleaseCommand *taskJSON       `json:"releaseCommand,omitempty"`
 }
 
@@ -50,6 +51,19 @@ type taskJSON struct {
 	VolumeMounts []volumeMountJSON `json:"volumeMounts,omitempty"`
 }
 
+type ingressJSON struct {
+	Hosts        []string       `json:"hosts,omitempty"`
+	Mode         string         `json:"mode,omitempty"`
+	TLS          ingressTLSJSON `json:"tls,omitempty"`
+	RedirectHTTP bool           `json:"redirectHttp,omitempty"`
+}
+
+type ingressTLSJSON struct {
+	Mode           string `json:"mode,omitempty"`
+	Email          string `json:"email,omitempty"`
+	CADirectoryURL string `json:"caDirectoryUrl,omitempty"`
+}
+
 // BuildDesiredState produces desired-state JSON from a ProjectConfig, image tag,
 // git revision, and pre-resolved secrets. Secrets are merged into env vars;
 // no secret_refs appear in the output.
@@ -61,6 +75,12 @@ func BuildDesiredState(cfg *config.ProjectConfig, imageTag, revision string, sec
 // A nil labels slice preserves the legacy direct behavior: run all configured
 // services. A non-nil labels slice schedules only matching services.
 func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseCommand bool) ([]byte, error) {
+	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseCommand)
+}
+
+// BuildDesiredStateForNode produces desired-state JSON for one node, including
+// public ingress only when the node is a public web node.
+func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, publicWebNode bool, includeReleaseCommand bool) ([]byte, error) {
 	ds := desiredStateJSON{
 		Revision: revision,
 	}
@@ -71,6 +91,10 @@ func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision st
 			return nil, fmt.Errorf("build web container: %w", err)
 		}
 		ds.Containers = append(ds.Containers, webContainer)
+	}
+
+	if publicWebNode && cfg.Ingress != nil && (labels == nil || hasLabel(labels, config.DirectLabelWeb)) {
+		ds.Ingress = buildIngress(cfg.Ingress)
 	}
 
 	if cfg.Worker != nil && (labels == nil || hasLabel(labels, config.DirectLabelWorker)) {
@@ -104,6 +128,26 @@ func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision st
 		return nil, fmt.Errorf("marshal desired state: %w", err)
 	}
 	return data, nil
+}
+
+func buildIngress(ingress *config.IngressConfig) *ingressJSON {
+	if ingress == nil || len(ingress.Hosts) == 0 {
+		return nil
+	}
+	mode := strings.TrimSpace(ingress.TLS.Mode)
+	if mode == "" {
+		mode = "auto"
+	}
+	return &ingressJSON{
+		Hosts: append([]string(nil), ingress.Hosts...),
+		Mode:  "public",
+		TLS: ingressTLSJSON{
+			Mode:           mode,
+			Email:          strings.TrimSpace(ingress.TLS.Email),
+			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
+		},
+		RedirectHTTP: ingress.RedirectHTTP,
+	}
 }
 
 func hasLabel(labels []string, want string) bool {

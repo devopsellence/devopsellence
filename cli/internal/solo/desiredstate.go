@@ -1,4 +1,4 @@
-package direct
+package solo
 
 import (
 	"encoding/json"
@@ -68,24 +68,24 @@ type ingressTLSJSON struct {
 // git revision, and pre-resolved secrets. Secrets are merged into env vars;
 // no secret_refs appear in the output.
 func BuildDesiredState(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string) ([]byte, error) {
-	return BuildDesiredStateForLabels(cfg, imageTag, revision, secrets, nil, cfg.ReleaseCommand != "")
+	return BuildDesiredStateForRoles(cfg, imageTag, revision, secrets, nil, cfg.ReleaseCommand != "")
 }
 
-// BuildDesiredStateForLabels produces desired-state JSON for one direct node.
-// A nil labels slice preserves the legacy direct behavior: run all configured
-// services. A non-nil labels slice schedules only matching services.
-func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseCommand bool) ([]byte, error) {
-	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseCommand)
+// BuildDesiredStateForRoles produces desired-state JSON for one solo node.
+// A nil roles slice preserves the legacy solo behavior: run all configured
+// services. A non-nil roles slice schedules only matching services.
+func BuildDesiredStateForRoles(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, roles []string, includeReleaseCommand bool) ([]byte, error) {
+	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, roles, false, includeReleaseCommand)
 }
 
 // BuildDesiredStateForNode produces desired-state JSON for one node, including
 // public ingress only when the node is a public web node.
-func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, publicWebNode bool, includeReleaseCommand bool) ([]byte, error) {
+func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, roles []string, publicWebNode bool, includeReleaseCommand bool) ([]byte, error) {
 	ds := desiredStateJSON{
 		Revision: revision,
 	}
 
-	if labels == nil || hasLabel(labels, config.DirectLabelWeb) {
+	if roles == nil || hasRole(roles, config.NodeRoleWeb) {
 		webContainer, err := buildContainer("web", cfg.Web, imageTag, secrets)
 		if err != nil {
 			return nil, fmt.Errorf("build web container: %w", err)
@@ -93,11 +93,11 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 		ds.Containers = append(ds.Containers, webContainer)
 	}
 
-	if publicWebNode && cfg.Ingress != nil && (labels == nil || hasLabel(labels, config.DirectLabelWeb)) {
+	if publicWebNode && cfg.Ingress != nil && (roles == nil || hasRole(roles, config.NodeRoleWeb)) {
 		ds.Ingress = buildIngress(cfg.Ingress)
 	}
 
-	if cfg.Worker != nil && (labels == nil || hasLabel(labels, config.DirectLabelWorker)) {
+	if cfg.Worker != nil && (roles == nil || hasRole(roles, config.NodeRoleWorker)) {
 		workerContainer, err := buildContainer("worker", *cfg.Worker, imageTag, secrets)
 		if err != nil {
 			return nil, fmt.Errorf("build worker container: %w", err)
@@ -150,9 +150,9 @@ func buildIngress(ingress *config.IngressConfig) *ingressJSON {
 	}
 }
 
-func hasLabel(labels []string, want string) bool {
-	for _, label := range labels {
-		if strings.TrimSpace(label) == want {
+func hasRole(roles []string, want string) bool {
+	for _, role := range roles {
+		if strings.TrimSpace(role) == want {
 			return true
 		}
 	}

@@ -13,8 +13,8 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/acme"
 	"github.com/devopsellence/devopsellence/agent/internal/agent"
 	"github.com/devopsellence/devopsellence/agent/internal/auth"
-	"github.com/devopsellence/devopsellence/agent/internal/authority/direct"
 	"github.com/devopsellence/devopsellence/agent/internal/authority/remote"
+	"github.com/devopsellence/devopsellence/agent/internal/authority/solo"
 	"github.com/devopsellence/devopsellence/agent/internal/cloudflared"
 	"github.com/devopsellence/devopsellence/agent/internal/config"
 	cpregistry "github.com/devopsellence/devopsellence/agent/internal/controlplane"
@@ -77,15 +77,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cfg.Mode == config.ModeDirect {
-		runDirect(ctx, cfg, eng, logger, metrics)
+	if cfg.Mode == config.ModeSolo {
+		runSolo(ctx, cfg, eng, logger, metrics)
 	} else {
 		runNormal(ctx, cfg, eng, logger, registry, metrics)
 	}
 }
 
-func runDirect(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, metrics *observability.Metrics) {
-	desiredAuthority := direct.New(cfg.DesiredStateOverridePath, logger.With("authority", "direct"))
+func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, metrics *observability.Metrics) {
+	desiredAuthority := solo.New(cfg.DesiredStateOverridePath, logger.With("authority", "solo"))
 
 	envoyManager := envoy.New(eng, envoy.Config{
 		Image:          cfg.EnvoyImage,

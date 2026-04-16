@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devopsellence/cli/internal/direct/providers"
+	"github.com/devopsellence/cli/internal/solo/providers"
 	"github.com/devopsellence/cli/internal/state"
 )
 
@@ -126,7 +126,7 @@ func (a *App) ProviderLogout(_ context.Context, opts ProviderLogoutOptions) erro
 	return nil
 }
 
-func (a *App) resolveDirectProvider(providerSlug string) (providers.Provider, error) {
+func (a *App) resolveSoloProvider(providerSlug string) (providers.Provider, error) {
 	token, _, err := providerToken(a.ProviderState, providerSlug)
 	if err != nil {
 		return nil, err

@@ -15,7 +15,7 @@ Pick a workspace mode.
 | Auth | SSH keys | Browser (GitHub / Google) |
 | Secrets | Local `.env` file | Encrypted server-side |
 | Images | Streamed over SSH | Pushed to registry |
-| HTTPS | Coming soon | Built-in (tunnel or Let's Encrypt) |
+| HTTPS | Built-in (Envoy + Let's Encrypt) | Built-in (Envoy + tunnel or Let's Encrypt) |
 | Team workflows | Single operator | Orgs, projects, environments |
 | Best for | Side projects, single-dev apps | Teams, production, multi-env |
 
@@ -46,7 +46,7 @@ devopsellence provider login hetzner
 devopsellence setup
 ```
 
-Or create a Hetzner-backed node directly:
+Or create a Hetzner-backed node from the provider:
 
 ```bash
 devopsellence node create prod-1 --provider hetzner
@@ -98,10 +98,10 @@ In shared mode, `node create` provisions the server and runs the registration in
 `devopsellence` reads `devopsellence.yml` from the app root:
 
 ```yaml
-schema_version: 3
+schema_version: 4
 app:
   type: rails
-organization: direct
+organization: solo
 project: myapp
 default_environment: production
 build:
@@ -115,14 +115,24 @@ web:
     path: /up
     port: 3000
 release_command: bin/rails db:migrate
-direct:
+ingress:
+  hosts:
+    - app.example.com
+  tls:
+    mode: auto
+    email: ops@example.com
+  redirect_http: true
+nodes:
+  prod-1:
+    roles:
+      - web
+    public: true
+solo:
   nodes:
     prod-1:
       host: 203.0.113.10
       user: root
       ssh_key: ~/.ssh/id_ed25519
-      labels:
-        - web
 ```
 
 ## Need more than solo mode?

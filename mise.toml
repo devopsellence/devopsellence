@@ -19,7 +19,7 @@ run = "ruby test/e2e/e2e.rb"
 
 [tasks."e2e-solo"]
 description = "Run the solo mode e2e workflow (CLI + Agent, no control plane)"
-run = "ruby test/e2e/direct_e2e.rb"
+run = "ruby test/e2e/solo_e2e.rb"
 
 [tasks."e2e-runner-image-build"]
 description = "Build the local e2e runner image"

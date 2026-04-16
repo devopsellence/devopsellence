@@ -13,8 +13,8 @@ import (
 	"github.com/devopsellence/cli/internal/discovery"
 )
 
-func TestDirectImageTagSlugifiesProjectName(t *testing.T) {
-	got := directImageTag("ShopApp", "abc1234")
+func TestSoloImageTagSlugifiesProjectName(t *testing.T) {
+	got := soloImageTag("ShopApp", "abc1234")
 	if got != "shop-app:abc1234" {
 		t.Fatalf("image tag = %q, want shop-app:abc1234", got)
 	}
@@ -38,7 +38,7 @@ func TestDockerBuildArgsRejectsMultiplePlatforms(t *testing.T) {
 	}
 }
 
-func TestValidateDirectNodeScheduleSelectsReleaseNode(t *testing.T) {
+func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Web: config.ServiceConfig{Port: 3000},
 		Worker: &config.ServiceConfig{
@@ -46,12 +46,12 @@ func TestValidateDirectNodeScheduleSelectsReleaseNode(t *testing.T) {
 		},
 		ReleaseCommand: "rails db:migrate",
 	}
-	nodes := map[string]config.DirectNode{
-		"worker-a": {Labels: []string{config.DirectLabelWorker}},
-		"web-a":    {Labels: []string{config.DirectLabelWeb}},
-		"web-b":    {Labels: []string{config.DirectLabelWeb}},
+	nodes := map[string]config.SoloNode{
+		"worker-a": {Roles: []string{config.NodeRoleWorker}},
+		"web-a":    {Roles: []string{config.NodeRoleWeb}},
+		"web-b":    {Roles: []string{config.NodeRoleWeb}},
 	}
-	got, err := validateDirectNodeSchedule(cfg, nodes)
+	got, err := validateSoloNodeSchedule(cfg, nodes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,41 +60,41 @@ func TestValidateDirectNodeScheduleSelectsReleaseNode(t *testing.T) {
 	}
 }
 
-func TestValidateDirectNodeScheduleRejectsMissingWorker(t *testing.T) {
+func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Web:    config.ServiceConfig{Port: 3000},
 		Worker: &config.ServiceConfig{Command: "sidekiq"},
 	}
-	_, err := validateDirectNodeSchedule(cfg, map[string]config.DirectNode{
-		"web-a": {Labels: []string{config.DirectLabelWeb}},
+	_, err := validateSoloNodeSchedule(cfg, map[string]config.SoloNode{
+		"web-a": {Roles: []string{config.NodeRoleWeb}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "worker") {
 		t.Fatalf("expected missing worker error, got %v", err)
 	}
 }
 
-func TestDirectNodeCanRunLegacyUnlabeledNode(t *testing.T) {
-	node := config.DirectNode{}
-	if !directNodeCanRun(node, config.DirectLabelWeb) || !directNodeCanRun(node, config.DirectLabelWorker) {
-		t.Fatal("legacy unlabeled node should run all labels")
+func TestSoloNodeCanRunLegacyUnlabeledNode(t *testing.T) {
+	node := config.SoloNode{}
+	if !soloNodeCanRun(node, config.NodeRoleWeb) || !soloNodeCanRun(node, config.NodeRoleWorker) {
+		t.Fatal("legacy unlabeled node should run all roles")
 	}
 }
 
-func TestParseDirectLabels(t *testing.T) {
-	got, err := parseDirectLabels("web,worker web")
+func TestParseSoloRoles(t *testing.T) {
+	got, err := parseSoloRoles("web,worker web")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{config.DirectLabelWeb, config.DirectLabelWorker}
+	want := []string{config.NodeRoleWeb, config.NodeRoleWorker}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("labels = %#v, want %#v", got, want)
+		t.Fatalf("roles = %#v, want %#v", got, want)
 	}
 }
 
-func TestDirectAgentInstallScriptConfiguresDirectMode(t *testing.T) {
-	script := directAgentInstallScript(directAgentInstallScriptOptions{BaseURL: "https://example.test"})
+func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{
-		"--mode=direct",
+		"--mode=solo",
 		"--auth-state-path=/var/lib/devopsellence/auth.json",
 		"--desired-state-override-path=/var/lib/devopsellence/desired-state-override.json",
 		"AGENT_BIN=/usr/local/bin/devopsellence-agent",
@@ -150,7 +150,7 @@ func TestRemoteReadAndJournalCommandsSupportPasswordlessSudo(t *testing.T) {
 	}
 }
 
-func TestApplyDirectRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
+func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestApplyDirectRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 		},
 	}
 	secrets := map[string]string{}
-	notice, err := applyDirectRailsMasterKey(dir, cfg, secrets)
+	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestApplyDirectRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 	}
 }
 
-func TestApplyDirectRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
+func TestApplySoloRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestApplyDirectRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
 		Web: config.ServiceConfig{Env: map[string]string{}},
 	}
 	secrets := map[string]string{railsMasterKeySecretName: "from-env"}
-	notice, err := applyDirectRailsMasterKey(dir, cfg, secrets)
+	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,8 +210,8 @@ func TestApplyDirectRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
 	}
 }
 
-func TestDefaultDirectSSHPublicKeyCandidates(t *testing.T) {
-	got := defaultDirectSSHPublicKeyCandidates()
+func TestDefaultSoloSSHPublicKeyCandidates(t *testing.T) {
+	got := defaultSoloSSHPublicKeyCandidates()
 	if len(got) == 0 {
 		t.Fatal("expected default public key candidates")
 	}
@@ -222,13 +222,13 @@ func TestDefaultDirectSSHPublicKeyCandidates(t *testing.T) {
 	}
 }
 
-func TestDirectDefaultProjectConfigUsesDiscovery(t *testing.T) {
-	cfg := directDefaultProjectConfig(discovery.Result{
+func TestSoloDefaultProjectConfigUsesDiscovery(t *testing.T) {
+	cfg := soloDefaultProjectConfig(discovery.Result{
 		ProjectName:     "ShopApp",
 		AppType:         config.AppTypeGeneric,
 		InferredWebPort: 8080,
 	})
-	if cfg.Organization != "direct" || cfg.Project != "ShopApp" {
+	if cfg.Organization != "solo" || cfg.Project != "ShopApp" {
 		t.Fatalf("config identity = org %q project %q", cfg.Organization, cfg.Project)
 	}
 	if cfg.App.Type != config.AppTypeGeneric {

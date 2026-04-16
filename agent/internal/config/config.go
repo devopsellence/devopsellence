@@ -15,7 +15,7 @@ import (
 
 const (
 	ModeNormal = "normal"
-	ModeDirect = "direct"
+	ModeSolo   = "solo"
 )
 
 type Config struct {
@@ -108,7 +108,7 @@ func Load(args []string) (*Config, error) {
 		defaultNodeName = "devopsellence-node"
 	}
 
-	fs.StringVar(&mode, "mode", ModeNormal, "agent mode: normal or direct (direct skips control plane and GCP)")
+	fs.StringVar(&mode, "mode", ModeNormal, "agent mode: normal or solo (solo skips control plane and GCP)")
 	fs.BoolVar(&showVersion, "version", false, "print build version and exit")
 	fs.StringVar(&metricsAddr, "metrics-addr", "127.0.0.1:9102", "metrics listen address")
 	fs.StringVar(&dockerSock, "docker-sock", "/var/run/docker.sock", "docker socket path")
@@ -198,8 +198,8 @@ func Load(args []string) (*Config, error) {
 		return cfg, nil
 	}
 
-	if cfg.Mode != ModeNormal && cfg.Mode != ModeDirect {
-		return nil, fmt.Errorf("--mode must be %q or %q", ModeNormal, ModeDirect)
+	if cfg.Mode != ModeNormal && cfg.Mode != ModeSolo {
+		return nil, fmt.Errorf("--mode must be %q or %q", ModeNormal, ModeSolo)
 	}
 
 	if cfg.AuthStatePath == "" {
@@ -223,8 +223,8 @@ func Load(args []string) (*Config, error) {
 		cfg.EnvoyTLSKeyPath = filepath.Join(stateDir, "ingress-key.pem")
 	}
 
-	if cfg.Mode == ModeDirect {
-		// Solo path (`direct` internally): only basic validation, no control plane or GCP requirements.
+	if cfg.Mode == ModeSolo {
+		// Solo path: only basic validation, no control plane or GCP requirements.
 		return cfg, nil
 	}
 

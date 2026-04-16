@@ -23,12 +23,10 @@ const (
 	AppTypeGeneric         = "generic"
 	NodeRoleWeb            = "web"
 	NodeRoleWorker         = "worker"
-	DirectLabelWeb         = NodeRoleWeb
-	DirectLabelWorker      = NodeRoleWorker
 )
 
 var DefaultBuildPlatforms = []string{"linux/amd64"}
-var DirectDefaultLabels = []string{NodeRoleWeb}
+var SoloDefaultRoles = []string{NodeRoleWeb}
 
 type Volume struct {
 	Source string `yaml:"source" json:"source"`
@@ -90,7 +88,7 @@ type SoloNode struct {
 	Port             int      `yaml:"port,omitempty" json:"port,omitempty"`
 	SSHKey           string   `yaml:"ssh_key,omitempty" json:"ssh_key,omitempty"`
 	AgentStateDir    string   `yaml:"agent_state_dir,omitempty" json:"agent_state_dir,omitempty"`
-	Labels           []string `yaml:"-" json:"-"` // runtime alias for node roles
+	Roles            []string `yaml:"-" json:"-"` // runtime copy from top-level nodes.<name>.roles
 	Provider         string   `yaml:"provider,omitempty" json:"provider,omitempty"`
 	ProviderServerID string   `yaml:"provider_server_id,omitempty" json:"provider_server_id,omitempty"`
 	ProviderRegion   string   `yaml:"provider_region,omitempty" json:"provider_region,omitempty"`
@@ -98,7 +96,7 @@ type SoloNode struct {
 	ProviderImage    string   `yaml:"provider_image,omitempty" json:"provider_image,omitempty"`
 }
 
-type DirectNode struct {
+type LegacyDirectNode struct {
 	Host             string   `yaml:"host" json:"host"`
 	User             string   `yaml:"user" json:"user"`
 	Port             int      `yaml:"port,omitempty" json:"port,omitempty"`
@@ -116,8 +114,8 @@ type SoloConfig struct {
 	Nodes map[string]SoloNode `yaml:"nodes" json:"nodes"`
 }
 
-type DirectConfig struct {
-	Nodes map[string]DirectNode `yaml:"nodes" json:"nodes"`
+type LegacyDirectConfig struct {
+	Nodes map[string]LegacyDirectNode `yaml:"nodes" json:"nodes"`
 }
 
 type ProjectConfig struct {
@@ -133,7 +131,7 @@ type ProjectConfig struct {
 	Ingress            *IngressConfig        `yaml:"ingress,omitempty" json:"ingress,omitempty"`
 	Nodes              map[string]NodeConfig `yaml:"nodes,omitempty" json:"nodes,omitempty"`
 	Solo               *SoloConfig           `yaml:"solo,omitempty" json:"solo,omitempty"`
-	Direct             *DirectConfig         `yaml:"direct,omitempty" json:"direct,omitempty"` // legacy schema v3 migration input only
+	LegacyDirect       *LegacyDirectConfig   `yaml:"direct,omitempty" json:"direct,omitempty"` // legacy schema v3 migration input only
 }
 
 type Project = ProjectConfig
@@ -181,7 +179,7 @@ func Load(path string) (*ProjectConfig, error) {
 	if cfg.SchemaVersion == 0 {
 		return nil, fmt.Errorf("invalid %s in %s: schema_version must be %d; re-run `devopsellence setup`", filepath.Base(path), path, SchemaVersion)
 	}
-	migrateLegacyDirectConfig(&cfg)
+	migrateLegacySoloConfig(&cfg)
 	if cfg.SchemaVersion == 3 {
 		cfg.SchemaVersion = SchemaVersion
 	}
@@ -247,7 +245,7 @@ func Write(workspaceRoot string, cfg ProjectConfig) (ProjectConfig, error) {
 	if cfg.SchemaVersion == 3 {
 		cfg.SchemaVersion = SchemaVersion
 	}
-	migrateLegacyDirectConfig(&cfg)
+	migrateLegacySoloConfig(&cfg)
 	applyDefaults(&cfg)
 	if err := Validate(&cfg); err != nil {
 		return ProjectConfig{}, err
@@ -396,7 +394,7 @@ func Validate(cfg *ProjectConfig) error {
 			}
 		}
 	}
-	if cfg.Direct != nil {
+	if cfg.LegacyDirect != nil {
 		return errors.New("direct.nodes has been replaced by solo.nodes and top-level nodes; re-run `devopsellence setup`")
 	}
 	return nil
@@ -472,7 +470,7 @@ func applyDefaults(cfg *ProjectConfig) {
 	for name, node := range cfg.Nodes {
 		node.Roles = normalizeNodeRoles(node.Roles)
 		if len(node.Roles) == 0 {
-			node.Roles = append([]string(nil), DirectDefaultLabels...)
+			node.Roles = append([]string(nil), SoloDefaultRoles...)
 		}
 		cfg.Nodes[name] = node
 	}
@@ -493,24 +491,24 @@ func applyDefaults(cfg *ProjectConfig) {
 			meta := cfg.Nodes[name]
 			roles := normalizeNodeRoles(meta.Roles)
 			if len(roles) == 0 {
-				roles = normalizeDirectLabels(node.Labels)
+				roles = normalizeNodeRoles(node.Roles)
 			}
 			if len(roles) == 0 {
-				roles = append([]string(nil), DirectDefaultLabels...)
+				roles = append([]string(nil), SoloDefaultRoles...)
 			}
 			meta.Roles = roles
 			if !meta.Public && hasRole(roles, NodeRoleWeb) {
 				meta.Public = true
 			}
 			cfg.Nodes[name] = meta
-			node.Labels = append([]string(nil), roles...)
+			node.Roles = append([]string(nil), roles...)
 			cfg.Solo.Nodes[name] = node
 		}
 	}
-	cfg.Direct = nil
+	cfg.LegacyDirect = nil
 }
 
-func normalizeDirectLabels(labels []string) []string {
+func normalizeLegacyDirectLabels(labels []string) []string {
 	if labels == nil {
 		return nil
 	}
@@ -558,8 +556,8 @@ func normalizeStringList(values []string) []string {
 	return normalized
 }
 
-func migrateLegacyDirectConfig(cfg *ProjectConfig) {
-	if cfg == nil || cfg.Direct == nil {
+func migrateLegacySoloConfig(cfg *ProjectConfig) {
+	if cfg == nil || cfg.LegacyDirect == nil {
 		return
 	}
 	if cfg.Solo == nil {
@@ -571,9 +569,9 @@ func migrateLegacyDirectConfig(cfg *ProjectConfig) {
 	if cfg.Nodes == nil {
 		cfg.Nodes = map[string]NodeConfig{}
 	}
-	for name, node := range cfg.Direct.Nodes {
+	for name, node := range cfg.LegacyDirect.Nodes {
 		if _, ok := cfg.Solo.Nodes[name]; !ok {
-			cfg.Solo.Nodes[name] = SoloNode(node)
+			cfg.Solo.Nodes[name] = soloNodeFromLegacyDirectNode(node)
 		}
 		if _, ok := cfg.Nodes[name]; !ok {
 			roles := normalizeNodeRoles(node.Labels)
@@ -583,8 +581,24 @@ func migrateLegacyDirectConfig(cfg *ProjectConfig) {
 			cfg.Nodes[name] = NodeConfig{Roles: roles, Public: hasRole(roles, NodeRoleWeb)}
 		}
 	}
-	cfg.Direct = nil
+	cfg.LegacyDirect = nil
 	cfg.SchemaVersion = SchemaVersion
+}
+
+func soloNodeFromLegacyDirectNode(node LegacyDirectNode) SoloNode {
+	return SoloNode{
+		Host:             node.Host,
+		User:             node.User,
+		Port:             node.Port,
+		SSHKey:           node.SSHKey,
+		AgentStateDir:    node.AgentStateDir,
+		Roles:            normalizeLegacyDirectLabels(node.Labels),
+		Provider:         node.Provider,
+		ProviderServerID: node.ProviderServerID,
+		ProviderRegion:   node.ProviderRegion,
+		ProviderSize:     node.ProviderSize,
+		ProviderImage:    node.ProviderImage,
+	}
 }
 
 func hasRole(roles []string, want string) bool {

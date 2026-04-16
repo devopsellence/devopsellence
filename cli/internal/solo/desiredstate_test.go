@@ -1,4 +1,4 @@
-package direct
+package solo
 
 import (
 	"encoding/json"
@@ -123,7 +123,7 @@ func TestBuildDesiredState_WithWorkerAndReleaseCommand(t *testing.T) {
 	}
 }
 
-func TestBuildDesiredStateForLabelsFiltersServices(t *testing.T) {
+func TestBuildDesiredStateForRolesFiltersServices(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: "myapp",
 		Web: config.ServiceConfig{
@@ -140,7 +140,7 @@ func TestBuildDesiredStateForLabelsFiltersServices(t *testing.T) {
 		ReleaseCommand: "rails db:migrate",
 	}
 
-	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.DirectLabelWorker}, false)
+	data, err := BuildDesiredStateForRoles(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWorker}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestBuildDesiredStateForLabelsFiltersServices(t *testing.T) {
 	}
 }
 
-func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
+func TestBuildDesiredStateForRolesIncludesReleaseWhenSelected(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: "myapp",
 		Web: config.ServiceConfig{
@@ -168,7 +168,7 @@ func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 		ReleaseCommand: "rails db:migrate",
 	}
 
-	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.DirectLabelWeb}, true)
+	data, err := BuildDesiredStateForRoles(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWeb}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
 		},
 	}
 
-	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.DirectLabelWeb}, true, false)
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWeb}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestBuildDesiredStateForNodeOmitsIngressForWorkerNode(t *testing.T) {
 		Ingress: &config.IngressConfig{Hosts: []string{"app.example.com"}},
 	}
 
-	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.DirectLabelWorker}, true, false)
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWorker}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

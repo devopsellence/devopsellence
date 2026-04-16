@@ -1,4 +1,4 @@
-package direct
+package solo
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"github.com/devopsellence/cli/internal/config"
 )
 
-func sshArgs(node config.DirectNode, command string) []string {
+func sshArgs(node config.SoloNode, command string) []string {
 	args := []string{
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
@@ -27,7 +27,7 @@ func sshArgs(node config.DirectNode, command string) []string {
 // RunSSH executes a command on a remote node via ssh.
 // It inherits the user's ~/.ssh/config, agent forwarding, and known hosts.
 // If stdin is non-nil it is piped to the remote command.
-func RunSSH(ctx context.Context, node config.DirectNode, command string, stdin io.Reader) (string, error) {
+func RunSSH(ctx context.Context, node config.SoloNode, command string, stdin io.Reader) (string, error) {
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs(node, command)...)
 	if stdin != nil {
 		cmd.Stdin = stdin
@@ -46,7 +46,7 @@ func RunSSH(ctx context.Context, node config.DirectNode, command string, stdin i
 // RunSSHInteractive runs a command on a remote node, connecting stdout and
 // stderr directly to the provided writers. Use this for long-running streaming
 // commands like `journalctl -f` where output must not be buffered.
-func RunSSHInteractive(ctx context.Context, node config.DirectNode, command string, stdout, stderr io.Writer) error {
+func RunSSHInteractive(ctx context.Context, node config.SoloNode, command string, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs(node, command)...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -57,7 +57,7 @@ func RunSSHInteractive(ctx context.Context, node config.DirectNode, command stri
 	return nil
 }
 
-func RunSSHInteractiveWithStdin(ctx context.Context, node config.DirectNode, command string, stdin io.Reader, stdout, stderr io.Writer) error {
+func RunSSHInteractiveWithStdin(ctx context.Context, node config.SoloNode, command string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs(node, command)...)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
@@ -72,7 +72,7 @@ func RunSSHInteractiveWithStdin(ctx context.Context, node config.DirectNode, com
 // RunSSHStream executes a command on a remote node via ssh, streaming stdin
 // from the provided reader. Unlike RunSSH it does not capture stdout.
 // This is used for piping docker save output to docker load on the remote.
-func RunSSHStream(ctx context.Context, node config.DirectNode, command string, stdin io.Reader) error {
+func RunSSHStream(ctx context.Context, node config.SoloNode, command string, stdin io.Reader) error {
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs(node, command)...)
 	cmd.Stdin = stdin
 

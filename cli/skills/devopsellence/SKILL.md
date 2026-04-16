@@ -92,7 +92,7 @@ devopsellence node detach <id>
 devopsellence node remove <id>
 ```
 
-Use these in solo mode when the user wants direct SSH workflows without the control plane:
+Use these in solo mode when the user wants SSH-first workflows without the control plane:
 
 ```bash
 devopsellence mode use solo

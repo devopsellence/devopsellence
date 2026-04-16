@@ -11,6 +11,6 @@ func ResolveWithToken(slug, token string) (Provider, error) {
 	case "hetzner":
 		return NewHetzner(token), nil
 	default:
-		return nil, fmt.Errorf("unsupported direct server provider %q", slug)
+		return nil, fmt.Errorf("unsupported solo server provider %q", slug)
 	}
 }

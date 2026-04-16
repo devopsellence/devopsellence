@@ -172,16 +172,16 @@ func TestWriteAndLoadReleaseCommand(t *testing.T) {
 	}
 }
 
-func TestDirectNodeLabelsMigrateToSoloRoles(t *testing.T) {
+func TestLegacyDirectNodeLabelsMigrateToSoloRoles(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Direct = &DirectConfig{Nodes: map[string]DirectNode{
+	project.LegacyDirect = &LegacyDirectConfig{Nodes: map[string]LegacyDirectNode{
 		"prod-1": {
 			Host:   "203.0.113.10",
 			User:   "root",
-			Labels: []string{DirectLabelWeb, DirectLabelWorker, DirectLabelWeb},
+			Labels: []string{NodeRoleWeb, NodeRoleWorker, NodeRoleWeb},
 		},
 	}}
 	if _, err := Write(root, project); err != nil {
@@ -191,24 +191,24 @@ func TestDirectNodeLabelsMigrateToSoloRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	if loaded.Direct != nil {
+	if loaded.LegacyDirect != nil {
 		t.Fatalf("direct config should be migrated away")
 	}
 	roles := loaded.Nodes["prod-1"].Roles
 	if strings.Join(roles, ",") != "web,worker" {
 		t.Fatalf("roles = %#v, want web,worker", roles)
 	}
-	if labels := loaded.Solo.Nodes["prod-1"].Labels; strings.Join(labels, ",") != "web,worker" {
-		t.Fatalf("runtime labels = %#v, want web,worker", labels)
+	if roles := loaded.Solo.Nodes["prod-1"].Roles; strings.Join(roles, ",") != "web,worker" {
+		t.Fatalf("runtime roles = %#v, want web,worker", roles)
 	}
 }
 
-func TestDirectNodeLegacyUnlabeledMigrateToAllRoles(t *testing.T) {
+func TestLegacyDirectNodeUnlabeledMigrateToAllRoles(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Direct = &DirectConfig{Nodes: map[string]DirectNode{
+	project.LegacyDirect = &LegacyDirectConfig{Nodes: map[string]LegacyDirectNode{
 		"prod-1": {Host: "203.0.113.10", User: "root"},
 	}}
 	if _, err := Write(root, project); err != nil {
@@ -218,7 +218,7 @@ func TestDirectNodeLegacyUnlabeledMigrateToAllRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	if loaded.Direct != nil {
+	if loaded.LegacyDirect != nil {
 		t.Fatalf("direct config should be migrated away")
 	}
 	if roles := loaded.Nodes["prod-1"].Roles; strings.Join(roles, ",") != "web,worker" {

@@ -105,9 +105,10 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     organization = Organization.create!(name: "alpha")
     OrganizationMembership.create!(organization: organization, user: user, role: OrganizationMembership::ROLE_OWNER)
     project = organization.projects.create!(name: "ShopApp")
-    project.environments.create!(name: "production")
+    environment = project.environments.create!(name: "production")
+    environment_bundle = ensure_test_environment_bundle!(environment)
 
-    assert_difference("Project.count", -1) do
+    assert_difference(["Project.count", "Environment.count", "EnvironmentBundle.count"], -1) do
       delete "/api/v1/cli/projects/#{project.id}",
         headers: auth_headers_for(user),
         as: :json
@@ -116,6 +117,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_equal true, json_body.fetch("deleted")
     assert_equal "ShopApp", json_body.fetch("name")
+    assert_not EnvironmentBundle.exists?(environment_bundle.id)
   end
 
   test "owner can create a project through the cli api" do

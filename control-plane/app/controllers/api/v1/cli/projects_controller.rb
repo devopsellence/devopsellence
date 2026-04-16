@@ -39,6 +39,10 @@ module Api
           project = owner_project(params[:id])
           return render_error("forbidden", "owner role required", status: :forbidden) unless project
 
+          project.environments.find_each do |environment|
+            Environments::Delete.new(environment:).call
+          end
+
           unless project.destroy
             return render_error("invalid_request", project.errors.full_messages.to_sentence, status: :unprocessable_entity)
           end

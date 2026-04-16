@@ -651,7 +651,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(secretCommand)
 
 	var nodeRegisterOpts NodeBootstrapOptions
-	var nodeCreateSoloOpts DirectNodeCreateOptions
+	var nodeCreateOpts DirectNodeCreateOptions
+	var nodeCreateBootstrapOpts NodeBootstrapOptions
 	var nodeListSharedOpts NodeListOptions
 	var nodeListSoloOpts DirectNodeListOptions
 	var nodeAttachOpts NodeAssignOptions
@@ -681,25 +682,32 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeRegisterCommand.Flags().BoolVar(&nodeRegisterOpts.Unassigned, "unassigned", false, "Register the node without auto-attaching it to the current environment")
 	nodeCreateCommand := &cobra.Command{
 		Use:   "create <name>",
-		Short: "Create a provider-managed solo node",
+		Short: "Create a provider-managed node",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			nodeCreateSoloOpts.Name = args[0]
+			nodeCreateOpts.Name = args[0]
 			return runByMode(func(ctx context.Context) error {
-				return app.DirectNodeCreate(ctx, nodeCreateSoloOpts)
-			}, func(context.Context) error {
-				return ExitError{Code: 2, Err: fmt.Errorf("node create is not available in shared mode yet")}
+				return app.DirectNodeCreate(ctx, nodeCreateOpts)
+			}, func(ctx context.Context) error {
+				return app.SharedNodeCreate(ctx, SharedNodeCreateOptions{
+					DirectNodeCreateOptions: nodeCreateOpts,
+					NodeBootstrapOptions:    nodeCreateBootstrapOpts,
+				})
 			})(cmd, args)
 		},
 	}
-	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Provider, "provider", "hetzner", "Provider")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Region, "region", "ash", "Provider region")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Size, "size", "cx22", "Provider machine size")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Image, "image", "", "Provider image")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Labels, "labels", "", "Comma-separated labels")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")
-	nodeCreateCommand.Flags().BoolVar(&nodeCreateSoloOpts.NoInstall, "no-install", false, "Create the provider machine without installing the agent")
-	nodeCreateCommand.Flags().BoolVar(&nodeCreateSoloOpts.Deploy, "deploy", false, "Install the agent and deploy after create")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Provider, "provider", "hetzner", "Provider")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Region, "region", "ash", "Provider region")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Size, "size", "cx22", "Provider machine size")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Image, "image", "", "Provider image")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Labels, "labels", "", "Comma-separated labels")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.NoInstall, "no-install", false, "Create the provider machine without installing the agent")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Deploy, "deploy", false, "Install the agent and deploy after create (solo mode only)")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Organization, "org", "", "Shared-mode organization name override")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Project, "project", "", "Shared-mode project name override")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Environment, "env", "", "Shared-mode environment name override")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateBootstrapOpts.Unassigned, "unassigned", false, "Shared mode: register without auto-attaching to the current environment")
 	nodeListCommand := &cobra.Command{
 		Use:   "list",
 		Short: "List nodes",

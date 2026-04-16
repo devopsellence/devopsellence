@@ -123,9 +123,24 @@
 
   <section class="prose-section" id="connect-servers">
     <h2>Shared nodes</h2>
-    <p>In shared mode, nodes are Linux servers or VMs running the devopsellence agent and attached to an organization. Manual node management is available in paid orgs; preview accounts start on managed capacity. When you're ready to attach your own machines, <code>devopsellence node register</code> prints the install command to run on the node.</p>
+    <p>In shared mode, nodes are Linux servers or VMs running the devopsellence agent and attached to an organization. Manual node management is available in paid orgs; preview accounts start on managed capacity. Use <code>devopsellence node create</code> to provision a Hetzner node and register it, or <code>devopsellence node register</code> when the server already exists.</p>
 
-    <h3>Default: auto-attach to the current environment</h3>
+    <h3>Provider create: auto-attach to the current environment</h3>
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+      </div>
+      <div class="terminal-body">
+        <div class="tl"><span class="tp">$</span> devopsellence provider login hetzner</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node create prod-1 --provider hetzner</div>
+        <div class="tl tl-muted"># Server is created, the agent is installed, and the node is registered.</div>
+      </div>
+    </div>
+    <p>In shared mode, create uses the same provider flags as solo mode, then runs the registration install command on the new server.</p>
+
+    <h3>Existing server: auto-attach to the current environment</h3>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -800,6 +815,10 @@ release_command: bundle exec rails db:migrate</code></pre>
         <dd>List nodes for the current mode. In shared mode this shows assignment and agent status.</dd>
       </div>
       <div class="docs-field">
+        <dt><code>devopsellence node create &lt;name&gt;</code></dt>
+        <dd>Create a provider-managed node. In shared mode this provisions the server, installs the agent, and registers the node.</dd>
+      </div>
+      <div class="docs-field">
         <dt><code>devopsellence node attach</code></dt>
         <dd>Attach a node to an environment. Usage: <code>devopsellence node attach &lt;id&gt; --env production</code>.</dd>
       </div>
@@ -869,7 +888,7 @@ release_command: bundle exec rails db:migrate</code></pre>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence provider login hetzner</code></dt>
-        <dd>Save and validate a local Hetzner API token for solo node provisioning.</dd>
+        <dd>Save and validate a local Hetzner API token for node provisioning.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node create &lt;name&gt;</code></dt>

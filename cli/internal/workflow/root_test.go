@@ -131,6 +131,27 @@ func TestNodeRegisterHelpSignalsTrialPolicy(t *testing.T) {
 	}
 }
 
+func TestNodeCreateRunsInSharedMode(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"--mode", "shared", "node", "create", "prod-1", "--deploy"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want shared node create to run")
+	}
+	if !strings.Contains(err.Error(), "only available in solo mode") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if strings.Contains(err.Error(), "not available in shared mode") {
+		t.Fatalf("Execute() still used old shared-mode guard: %v", err)
+	}
+}
+
 func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 	t.Parallel()
 

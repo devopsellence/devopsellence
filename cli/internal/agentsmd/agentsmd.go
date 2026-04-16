@@ -87,6 +87,8 @@ Shared mode secrets:
 
 Shared mode:
 - `+"`devopsellence mode use shared`"+`
+- `+"`devopsellence provider login hetzner`"+`
+- `+"`devopsellence node create prod-1`"+`
 - `+"`devopsellence deploy --image registry.example.com/app@sha256:...`"+`
 - `+"`devopsellence node register`"+`
 - `+"`devopsellence node list`"+`

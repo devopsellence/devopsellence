@@ -36,7 +36,7 @@ devopsellence provider login hetzner
 devopsellence setup
 ```
 
-Or create a Hetzner-backed solo node directly:
+Or create a Hetzner-backed node directly:
 
 ```bash
 devopsellence node create prod-1 --provider hetzner
@@ -68,12 +68,15 @@ When you want sign-in, teams, org/project/env context, hosted deploy APIs, or ma
 ```bash
 devopsellence mode use shared
 devopsellence setup
+devopsellence provider login hetzner
+devopsellence node create prod-1 --provider hetzner
 devopsellence deploy
 devopsellence status
 devopsellence open
 ```
 
 The root verbs stay the same. The selected workspace mode decides how they behave.
+In shared mode, `node create` provisions the server and runs the registration install command.
 
 ### Example config
 

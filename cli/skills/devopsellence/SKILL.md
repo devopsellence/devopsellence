@@ -94,6 +94,8 @@ Use these in solo mode when the user wants direct SSH workflows without the cont
 
 ```bash
 devopsellence mode use solo
+devopsellence provider login hetzner
+devopsellence node create prod-1
 devopsellence setup
 devopsellence deploy
 devopsellence node logs <name> --follow

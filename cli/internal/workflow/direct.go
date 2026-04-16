@@ -63,7 +63,7 @@ type DirectDoctorOptions struct {
 	Nodes []string
 }
 
-type DirectServerCreateOptions struct {
+type DirectNodeCreateOptions struct {
 	Name         string
 	Provider     string
 	Region       string
@@ -71,11 +71,11 @@ type DirectServerCreateOptions struct {
 	Image        string
 	Labels       string
 	SSHPublicKey string
-	Install      bool
+	NoInstall    bool
 	Deploy       bool
 }
 
-type DirectServerDeleteOptions struct {
+type DirectNodeRemoveOptions struct {
 	Name string
 	Yes  bool
 }
@@ -622,16 +622,16 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) DirectServerCreate(ctx context.Context, opts DirectServerCreateOptions) error {
+func (a *App) DirectNodeCreate(ctx context.Context, opts DirectNodeCreateOptions) error {
 	cfg, workspaceRoot, err := a.loadProjectConfigForDirectUpdate()
 	if err != nil {
 		return err
 	}
 	if opts.Name == "" {
-		return fmt.Errorf("server name is required")
+		return fmt.Errorf("node name is required")
 	}
 	if opts.Deploy && a.Printer.JSON {
-		return fmt.Errorf("direct server create --deploy is not supported with --json")
+		return fmt.Errorf("node create --deploy is not supported with --json")
 	}
 	if cfg.Direct != nil {
 		if _, ok := cfg.Direct.Nodes[opts.Name]; ok {
@@ -649,7 +649,7 @@ func (a *App) DirectServerCreate(ctx context.Context, opts DirectServerCreateOpt
 	if opts.Size == "" {
 		opts.Size = "cx22"
 	}
-	provider, err := providers.Resolve(providerSlug)
+	provider, err := a.resolveDirectProvider(providerSlug)
 	if err != nil {
 		return err
 	}
@@ -666,6 +666,9 @@ func (a *App) DirectServerCreate(ctx context.Context, opts DirectServerCreateOpt
 		Size:         opts.Size,
 		Image:        opts.Image,
 		SSHPublicKey: sshPublicKey,
+		Labels: map[string]string{
+			"devopsellence_project": discovery.Slugify(cfg.Project),
+		},
 	})
 	if err != nil {
 		return err
@@ -698,7 +701,7 @@ func (a *App) DirectServerCreate(ctx context.Context, opts DirectServerCreateOpt
 	if err := a.writeDirectNode(workspaceRoot, cfg, opts.Name, node); err != nil {
 		return err
 	}
-	if opts.Install || opts.Deploy {
+	if !opts.NoInstall || opts.Deploy {
 		if !a.Printer.JSON {
 			a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
 		}
@@ -724,13 +727,13 @@ func (a *App) DirectServerCreate(ctx context.Context, opts DirectServerCreateOpt
 			"config_path":        a.ConfigStore.PathFor(workspaceRoot),
 		})
 	}
-	a.Printer.Println("Created direct node " + opts.Name + " at " + node.Host)
+	a.Printer.Println("Created solo node " + opts.Name + " at " + node.Host)
 	return nil
 }
 
-func (a *App) DirectServerDelete(ctx context.Context, opts DirectServerDeleteOptions) error {
+func (a *App) DirectNodeRemove(ctx context.Context, opts DirectNodeRemoveOptions) error {
 	if !opts.Yes {
-		return fmt.Errorf("direct server delete requires --yes")
+		return fmt.Errorf("node remove requires --yes")
 	}
 	cfg, workspaceRoot, err := a.loadDirectConfig()
 	if err != nil {
@@ -743,7 +746,7 @@ func (a *App) DirectServerDelete(ctx context.Context, opts DirectServerDeleteOpt
 	if node.Provider == "" || node.ProviderServerID == "" {
 		return fmt.Errorf("node %q does not have provider metadata; refusing provider delete", opts.Name)
 	}
-	provider, err := providers.Resolve(node.Provider)
+	provider, err := a.resolveDirectProvider(node.Provider)
 	if err != nil {
 		return err
 	}
@@ -757,15 +760,15 @@ func (a *App) DirectServerDelete(ctx context.Context, opts DirectServerDeleteOpt
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "deleted"})
 	}
-	a.Printer.Println("Deleted direct server " + opts.Name)
+	a.Printer.Println("Removed solo node " + opts.Name)
 	return nil
 }
 
 func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 	if !a.Printer.Interactive {
-		return fmt.Errorf("direct setup requires an interactive terminal; use direct server create or edit devopsellence.yml")
+		return fmt.Errorf("direct setup requires an interactive terminal; use node create or edit devopsellence.yml")
 	}
-	mode, err := a.promptLine("Server source (existing/hetzner)", "existing")
+	mode, err := a.promptLine("Node source (existing/hetzner)", "existing")
 	if err != nil {
 		return err
 	}
@@ -790,14 +793,13 @@ func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 		if err != nil {
 			return err
 		}
-		if err := a.DirectServerCreate(ctx, DirectServerCreateOptions{
+		if err := a.DirectNodeCreate(ctx, DirectNodeCreateOptions{
 			Name:         name,
 			Provider:     "hetzner",
 			Region:       region,
 			Size:         size,
 			Labels:       labels,
 			SSHPublicKey: sshPublicKey,
-			Install:      true,
 		}); err != nil {
 			return err
 		}

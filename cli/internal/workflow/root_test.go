@@ -87,6 +87,7 @@ func TestRootHelpShowsModeFirstFlows(t *testing.T) {
 		"context",
 		"mode",
 		"node",
+		"provider",
 		"secret",
 	} {
 		if !strings.Contains(text, snippet) {
@@ -99,6 +100,7 @@ func TestRootHelpShowsModeFirstFlows(t *testing.T) {
 		"project     ",
 		"org         ",
 		"env         ",
+		"server",
 	} {
 		if strings.Contains(text, hidden) {
 			t.Fatalf("help output unexpectedly showed legacy command %q: %q", hidden, text)
@@ -141,7 +143,7 @@ func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, snippet := range []string{"register", "attach", "detach", "remove", "logs"} {
+	for _, snippet := range []string{"register", "create", "attach", "detach", "remove", "logs"} {
 		if !strings.Contains(stdout.String(), snippet) {
 			t.Fatalf("help output = %q, want %q command", stdout.String(), snippet)
 		}

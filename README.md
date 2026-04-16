@@ -29,10 +29,17 @@ Choose the workspace mode once:
 devopsellence mode use solo
 ```
 
-Prepare the app, connect a server, and install the agent:
+Prepare the app, connect a node, and install the agent:
 
 ```bash
+devopsellence provider login hetzner
 devopsellence setup
+```
+
+Or create a Hetzner-backed solo node directly:
+
+```bash
+devopsellence node create prod-1 --provider hetzner
 ```
 
 Deploy over SSH:

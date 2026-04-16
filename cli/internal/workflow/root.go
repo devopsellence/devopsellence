@@ -445,6 +445,48 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	authCommand.AddCommand(authTokenCommand)
 	root.AddCommand(authCommand)
 
+	var providerLoginOpts ProviderLoginOptions
+	var providerStatusOpts ProviderStatusOptions
+	var providerLogoutOpts ProviderLogoutOptions
+	providerCommand := &cobra.Command{Use: "provider", Short: "Manage infrastructure provider credentials"}
+	providerLoginCommand := &cobra.Command{
+		Use:   "login <provider>",
+		Short: "Save a provider API token",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			providerLoginOpts.Provider = args[0]
+			return runWithTimeout(cmd, func(ctx context.Context) error {
+				return app.ProviderLogin(ctx, providerLoginOpts)
+			})
+		},
+	}
+	providerLoginCommand.Flags().StringVar(&providerLoginOpts.Token, "token", "", "Provider API token")
+	providerLoginCommand.Flags().BoolVar(&providerLoginOpts.TokenStdin, "stdin", false, "Read provider API token from stdin")
+	providerStatusCommand := &cobra.Command{
+		Use:   "status <provider>",
+		Short: "Check provider credential status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			providerStatusOpts.Provider = args[0]
+			return runWithTimeout(cmd, func(ctx context.Context) error {
+				return app.ProviderStatus(ctx, providerStatusOpts)
+			})
+		},
+	}
+	providerLogoutCommand := &cobra.Command{
+		Use:   "logout <provider>",
+		Short: "Remove a stored provider API token",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			providerLogoutOpts.Provider = args[0]
+			return runWithTimeout(cmd, func(ctx context.Context) error {
+				return app.ProviderLogout(ctx, providerLogoutOpts)
+			})
+		},
+	}
+	providerCommand.AddCommand(providerLoginCommand, providerStatusCommand, providerLogoutCommand)
+	root.AddCommand(providerCommand)
+
 	aliasCommand := &cobra.Command{Use: "alias", Short: "Manage local command aliases"}
 	aliasCommand.AddCommand(&cobra.Command{
 		Use:   "lfg",
@@ -459,7 +501,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Short: "Prepare the current workspace for its selected mode",
 		Long: strings.Join([]string{
 			"Mode-driven workspace setup.",
-			"  solo   - initialize config if needed, add a server, and install the agent",
+			"  solo   - initialize config if needed, add a node, and install the agent",
 			"  shared - sign in, create/select org/project/env, and write workspace config",
 		}, "\n"),
 		RunE: runByMode(func(ctx context.Context) error {
@@ -609,11 +651,13 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(secretCommand)
 
 	var nodeRegisterOpts NodeBootstrapOptions
+	var nodeCreateSoloOpts DirectNodeCreateOptions
 	var nodeListSharedOpts NodeListOptions
 	var nodeListSoloOpts DirectNodeListOptions
 	var nodeAttachOpts NodeAssignOptions
 	var nodeDetachOpts NodeUnassignOptions
-	var nodeRemoveOpts NodeDeleteOptions
+	var nodeRemoveSoloOpts DirectNodeRemoveOptions
+	var nodeRemoveSharedOpts NodeDeleteOptions
 	var nodeLabelSharedOpts NodeLabelSetOptions
 	var nodeLabelSoloOpts DirectNodeLabelSetOptions
 	var nodeDiagnoseOpts NodeDiagnoseOptions
@@ -635,6 +679,27 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeRegisterCommand.Flags().StringVar(&nodeRegisterOpts.Project, "project", "", "Project name override")
 	nodeRegisterCommand.Flags().StringVar(&nodeRegisterOpts.Environment, "env", "", "Environment name override")
 	nodeRegisterCommand.Flags().BoolVar(&nodeRegisterOpts.Unassigned, "unassigned", false, "Register the node without auto-attaching it to the current environment")
+	nodeCreateCommand := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a provider-managed solo node",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nodeCreateSoloOpts.Name = args[0]
+			return runByMode(func(ctx context.Context) error {
+				return app.DirectNodeCreate(ctx, nodeCreateSoloOpts)
+			}, func(context.Context) error {
+				return ExitError{Code: 2, Err: fmt.Errorf("node create is not available in shared mode yet")}
+			})(cmd, args)
+		},
+	}
+	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Provider, "provider", "hetzner", "Provider")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Region, "region", "ash", "Provider region")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Size, "size", "cx22", "Provider machine size")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Image, "image", "", "Provider image")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.Labels, "labels", "", "Comma-separated labels")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateSoloOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateSoloOpts.NoInstall, "no-install", false, "Create the provider machine without installing the agent")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateSoloOpts.Deploy, "deploy", false, "Install the agent and deploy after create")
 	nodeListCommand := &cobra.Command{
 		Use:   "list",
 		Short: "List nodes",
@@ -679,20 +744,24 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	nodeRemoveCommand := &cobra.Command{
-		Use:   "remove <id>",
-		Short: "Remove a shared node",
+		Use:   "remove <target>",
+		Short: "Remove a node",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, parseErr := strconv.Atoi(args[0])
-			if parseErr != nil {
-				return ExitError{Code: 2, Err: fmt.Errorf("invalid node id %q: must be a number", args[0])}
-			}
-			nodeRemoveOpts.NodeID = id
-			return runSharedOnly("node remove", func(ctx context.Context) error {
-				return app.NodeDelete(ctx, nodeRemoveOpts)
+			return runByMode(func(ctx context.Context) error {
+				nodeRemoveSoloOpts.Name = args[0]
+				return app.DirectNodeRemove(ctx, nodeRemoveSoloOpts)
+			}, func(ctx context.Context) error {
+				id, parseErr := strconv.Atoi(args[0])
+				if parseErr != nil {
+					return ExitError{Code: 2, Err: fmt.Errorf("invalid node id %q: must be a number", args[0])}
+				}
+				nodeRemoveSharedOpts.NodeID = id
+				return app.NodeDelete(ctx, nodeRemoveSharedOpts)
 			})(cmd, args)
 		},
 	}
+	nodeRemoveCommand.Flags().BoolVar(&nodeRemoveSoloOpts.Yes, "yes", false, "Confirm solo node removal")
 	nodeLabelSetCommand := &cobra.Command{
 		Use:   "set <target>",
 		Short: "Replace a node's labels",
@@ -744,48 +813,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	nodeLogsCommand.Flags().BoolVarP(&nodeLogsOpts.Follow, "follow", "f", false, "Follow log output")
-	nodeCommand.AddCommand(nodeRegisterCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand)
+	nodeCommand.AddCommand(nodeRegisterCommand, nodeCreateCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand)
 	root.AddCommand(nodeCommand)
-
-	var serverCreateOpts DirectServerCreateOptions
-	var serverDeleteOpts DirectServerDeleteOptions
-	serverCommand := &cobra.Command{
-		Use:   "server",
-		Short: "Manage solo server provisioning",
-	}
-	serverCreateCommand := &cobra.Command{
-		Use:   "create <name>",
-		Short: "Create a provider-managed solo server",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			serverCreateOpts.Name = args[0]
-			return runSoloOnly("server create", func(ctx context.Context) error {
-				return app.DirectServerCreate(ctx, serverCreateOpts)
-			})(cmd, args)
-		},
-	}
-	serverCreateCommand.Flags().StringVar(&serverCreateOpts.Provider, "provider", "hetzner", "Server provider")
-	serverCreateCommand.Flags().StringVar(&serverCreateOpts.Region, "region", "ash", "Provider region")
-	serverCreateCommand.Flags().StringVar(&serverCreateOpts.Size, "size", "cx22", "Provider server size")
-	serverCreateCommand.Flags().StringVar(&serverCreateOpts.Image, "image", "", "Provider image")
-	serverCreateCommand.Flags().StringVar(&serverCreateOpts.Labels, "labels", "", "Comma-separated labels")
-	serverCreateCommand.Flags().StringVar(&serverCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")
-	serverCreateCommand.Flags().BoolVar(&serverCreateOpts.Install, "install", false, "Install the agent after create")
-	serverCreateCommand.Flags().BoolVar(&serverCreateOpts.Deploy, "deploy", false, "Install the agent and deploy after create")
-	serverDeleteCommand := &cobra.Command{
-		Use:   "delete <name>",
-		Short: "Delete a provider-managed solo server",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			serverDeleteOpts.Name = args[0]
-			return runSoloOnly("server delete", func(ctx context.Context) error {
-				return app.DirectServerDelete(ctx, serverDeleteOpts)
-			})(cmd, args)
-		},
-	}
-	serverDeleteCommand.Flags().BoolVar(&serverDeleteOpts.Yes, "yes", false, "Confirm server deletion")
-	serverCommand.AddCommand(serverCreateCommand, serverDeleteCommand)
-	root.AddCommand(serverCommand)
 
 	var agentInstallOpts DirectAgentInstallOptions
 	agentCommand := &cobra.Command{

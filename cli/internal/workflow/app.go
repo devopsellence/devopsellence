@@ -68,6 +68,7 @@ type App struct {
 	API                *api.Client
 	State              *state.Store
 	WorkspaceState     *state.Store
+	ProviderState      *state.Store
 	ConfigStore        config.Store
 	Docker             DockerClient
 	Git                git.Client
@@ -329,6 +330,7 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 	loginBase := apiBase
 	store := state.New(state.DefaultPath(filepath.Join("devopsellence", "auth.json")))
 	workspaceStore := state.New(state.DefaultPath(filepath.Join("devopsellence", "workspace.json")))
+	providerStore := state.New(state.DefaultPath(filepath.Join("devopsellence", "providers.json")))
 	return &App{
 		In:                 in,
 		Printer:            output.New(out, err, jsonMode),
@@ -336,6 +338,7 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 		API:                api.New(apiBase),
 		State:              store,
 		WorkspaceState:     workspaceStore,
+		ProviderState:      providerStore,
 		ConfigStore:        config.NewStore(),
 		Docker:             docker.Runner{},
 		Git:                git.Client{},

@@ -1,0 +1,250 @@
+package workflow
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/devopsellence/cli/internal/direct/providers"
+	"github.com/devopsellence/cli/internal/state"
+)
+
+const providerHetzner = "hetzner"
+
+type ProviderLoginOptions struct {
+	Provider   string
+	Token      string
+	TokenStdin bool
+}
+
+type ProviderStatusOptions struct {
+	Provider string
+}
+
+type ProviderLogoutOptions struct {
+	Provider string
+}
+
+func (a *App) ProviderLogin(ctx context.Context, opts ProviderLoginOptions) error {
+	providerSlug, err := normalizeProvider(opts.Provider)
+	if err != nil {
+		return ExitError{Code: 2, Err: err}
+	}
+	token, err := a.providerLoginToken(opts)
+	if err != nil {
+		return err
+	}
+	provider, err := providers.ResolveWithToken(providerSlug, token)
+	if err != nil {
+		return err
+	}
+	if !a.Printer.JSON {
+		a.Printer.Println("Validating " + providerSlug + " token...")
+	}
+	if err := provider.Validate(ctx); err != nil {
+		return err
+	}
+	if err := saveProviderToken(a.ProviderState, providerSlug, token); err != nil {
+		return err
+	}
+	if a.Printer.JSON {
+		return a.Printer.PrintJSON(map[string]any{
+			"schema_version": outputSchemaVersion,
+			"provider":       providerSlug,
+			"configured":     true,
+			"source":         "state",
+		})
+	}
+	a.Printer.Println("Saved " + providerSlug + " provider token.")
+	return nil
+}
+
+func (a *App) ProviderStatus(ctx context.Context, opts ProviderStatusOptions) error {
+	providerSlug, err := normalizeProvider(opts.Provider)
+	if err != nil {
+		return ExitError{Code: 2, Err: err}
+	}
+	token, source, err := providerToken(a.ProviderState, providerSlug)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(token) == "" {
+		if a.Printer.JSON {
+			return a.Printer.PrintJSON(map[string]any{
+				"schema_version": outputSchemaVersion,
+				"provider":       providerSlug,
+				"configured":     false,
+			})
+		}
+		a.Printer.Println(providerSlug + " provider is not configured.")
+		return nil
+	}
+	provider, err := providers.ResolveWithToken(providerSlug, token)
+	if err != nil {
+		return err
+	}
+	if err := provider.Validate(ctx); err != nil {
+		return err
+	}
+	if a.Printer.JSON {
+		return a.Printer.PrintJSON(map[string]any{
+			"schema_version": outputSchemaVersion,
+			"provider":       providerSlug,
+			"configured":     true,
+			"source":         source,
+		})
+	}
+	a.Printer.Println(providerSlug + " provider is configured (" + source + ").")
+	return nil
+}
+
+func (a *App) ProviderLogout(_ context.Context, opts ProviderLogoutOptions) error {
+	providerSlug, err := normalizeProvider(opts.Provider)
+	if err != nil {
+		return ExitError{Code: 2, Err: err}
+	}
+	deleted, err := deleteProviderToken(a.ProviderState, providerSlug)
+	if err != nil {
+		return err
+	}
+	if a.Printer.JSON {
+		return a.Printer.PrintJSON(map[string]any{
+			"schema_version": outputSchemaVersion,
+			"provider":       providerSlug,
+			"deleted":        deleted,
+		})
+	}
+	if deleted {
+		a.Printer.Println("Removed " + providerSlug + " provider token.")
+	} else {
+		a.Printer.Println(providerSlug + " provider token was not stored.")
+	}
+	return nil
+}
+
+func (a *App) resolveDirectProvider(providerSlug string) (providers.Provider, error) {
+	token, _, err := providerToken(a.ProviderState, providerSlug)
+	if err != nil {
+		return nil, err
+	}
+	return providers.ResolveWithToken(providerSlug, token)
+}
+
+func (a *App) providerLoginToken(opts ProviderLoginOptions) (string, error) {
+	if opts.TokenStdin {
+		data, err := io.ReadAll(a.In)
+		if err != nil {
+			return "", ExitError{Code: 1, Err: err}
+		}
+		token := strings.TrimRight(string(data), "\r\n")
+		if strings.TrimSpace(token) == "" {
+			return "", ExitError{Code: 2, Err: errors.New("provider token is required")}
+		}
+		return token, nil
+	}
+	if strings.TrimSpace(opts.Token) != "" {
+		return opts.Token, nil
+	}
+	if !a.Printer.Interactive {
+		return "", ExitError{Code: 2, Err: errors.New("missing required option: --token or --stdin")}
+	}
+	return a.promptSecretValue("Hetzner API token")
+}
+
+func normalizeProvider(provider string) (string, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		provider = providerHetzner
+	}
+	switch provider {
+	case providerHetzner:
+		return provider, nil
+	default:
+		return "", fmt.Errorf("unsupported provider %q", provider)
+	}
+}
+
+func providerToken(store *state.Store, provider string) (string, string, error) {
+	if token, err := readProviderToken(store, provider); err != nil {
+		return "", "", err
+	} else if token != "" {
+		return token, "state", nil
+	}
+	for _, name := range []string{"DEVOPSELLENCE_HETZNER_API_TOKEN", "HCLOUD_TOKEN"} {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value, name, nil
+		}
+	}
+	return "", "", nil
+}
+
+func readProviderToken(store *state.Store, provider string) (string, error) {
+	value, err := providerRecord(store, provider)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(stringFromAny(value["token"])), nil
+}
+
+func saveProviderToken(store *state.Store, provider, token string) error {
+	if store == nil {
+		return errors.New("provider state store is required")
+	}
+	return store.Update(func(current map[string]any) (map[string]any, error) {
+		providersMap := mapFromAny(current["providers"])
+		providersMap[provider] = map[string]any{
+			"token":      token,
+			"updated_at": time.Now().UTC().Format(time.RFC3339),
+		}
+		current["providers"] = providersMap
+		return current, nil
+	})
+}
+
+func deleteProviderToken(store *state.Store, provider string) (bool, error) {
+	if store == nil {
+		return false, nil
+	}
+	deleted := false
+	err := store.Update(func(current map[string]any) (map[string]any, error) {
+		providersMap := mapFromAny(current["providers"])
+		if _, ok := providersMap[provider]; ok {
+			delete(providersMap, provider)
+			deleted = true
+		}
+		current["providers"] = providersMap
+		return current, nil
+	})
+	return deleted, err
+}
+
+func providerRecord(store *state.Store, provider string) (map[string]any, error) {
+	if store == nil {
+		return map[string]any{}, nil
+	}
+	current, err := store.Read()
+	if err != nil {
+		return nil, err
+	}
+	providersMap := mapFromAny(current["providers"])
+	return mapFromAny(providersMap[provider]), nil
+}
+
+func mapFromAny(value any) map[string]any {
+	result := map[string]any{}
+	if value == nil {
+		return result
+	}
+	source, ok := value.(map[string]any)
+	if !ok {
+		return result
+	}
+	for key, entry := range source {
+		result[key] = entry
+	}
+	return result
+}

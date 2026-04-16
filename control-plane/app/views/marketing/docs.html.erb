@@ -192,11 +192,11 @@
 
   <section class="prose-section" id="solo-mode">
     <h2>Solo mode</h2>
-    <p>Solo mode deploys over SSH without the control plane. The CLI builds the image locally, streams it to each configured server, writes desired state on the server, and the agent reconciles containers from local files.</p>
+    <p>Solo mode deploys over SSH without the control plane. The CLI builds the image locally, streams it to each configured node, writes desired state on the node, and the agent reconciles containers from local files.</p>
     <p>Today, solo mode exposes web traffic through Envoy on <code>http://&lt;node-host&gt;:8000</code>. Shared-style tunnel mode and automatic SSL for solo mode are planned, but not available yet.</p>
 
-    <h3>Set up a server</h3>
-    <p>Use the setup wizard for an existing SSH server or a Hetzner server created by the CLI:</p>
+    <h3>Set up a node</h3>
+    <p>Use the setup wizard for an existing SSH node or a Hetzner node created by the CLI:</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -206,14 +206,14 @@
       <div class="terminal-body">
         <div class="tl"><span class="tp">$</span> devopsellence mode use solo</div>
         <div class="tl"><span class="tp">$</span> devopsellence setup</div>
-        <div class="tl tl-muted"># Existing server: prompts for host, user, labels, and SSH private key path.</div>
+        <div class="tl tl-muted"># Existing node: prompts for host, user, labels, and SSH private key path.</div>
         <div class="tl tl-muted"># Hetzner: prompts for region, size, labels, and SSH public key path.</div>
       </div>
     </div>
     <p>The wizard creates <code>devopsellence.yml</code> when needed, writes the solo node inventory, installs Docker when supported, installs <code>devopsellence-agent</code>, starts the <code>devopsellence-agent</code> systemd service, and runs <code>doctor</code>.</p>
 
-    <h3>Create a Hetzner server</h3>
-    <p>Provider tokens stay outside the config file. For Hetzner, set <code>DEVOPSELLENCE_HETZNER_API_TOKEN</code> or <code>HCLOUD_TOKEN</code>:</p>
+    <h3>Create a Hetzner node</h3>
+    <p>Provider tokens stay outside the config file. Save a Hetzner token locally, or set <code>DEVOPSELLENCE_HETZNER_API_TOKEN</code> or <code>HCLOUD_TOKEN</code>:</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -221,13 +221,12 @@
         <span class="dot dot-green"></span>
       </div>
       <div class="terminal-body">
-        <div class="tl"><span class="tp">$</span> export HCLOUD_TOKEN=...</div>
-        <div class="tl"><span class="tp">$</span> devopsellence server create prod-1 \</div>
+        <div class="tl"><span class="tp">$</span> devopsellence provider login hetzner</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node create prod-1 \</div>
         <div class="tl">    --provider hetzner \</div>
         <div class="tl">    --region ash \</div>
         <div class="tl">    --size cx22 \</div>
-        <div class="tl">    --ssh-public-key ~/.ssh/id_ed25519.pub \</div>
-        <div class="tl">    --install</div>
+        <div class="tl">    --ssh-public-key ~/.ssh/id_ed25519.pub</div>
       </div>
     </div>
     <p>Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in <code>devopsellence.yml</code>. The provider API token and SSH private key value are not written to config.</p>
@@ -869,12 +868,16 @@ release_command: bundle exec rails db:migrate</code></pre>
         <dd>Replace labels for a solo node in <code>devopsellence.yml</code>.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>devopsellence server create &lt;name&gt;</code></dt>
-        <dd>Create a provider-managed solo server. Hetzner is supported with <code>--provider hetzner</code>.</dd>
+        <dt><code>devopsellence provider login hetzner</code></dt>
+        <dd>Save and validate a local Hetzner API token for solo node provisioning.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>devopsellence server delete &lt;name&gt; --yes</code></dt>
-        <dd>Delete a provider-managed solo server recorded in local config.</dd>
+        <dt><code>devopsellence node create &lt;name&gt;</code></dt>
+        <dd>Create a provider-managed solo node. Hetzner is supported with <code>--provider hetzner</code>.</dd>
+      </div>
+      <div class="docs-field">
+        <dt><code>devopsellence node remove &lt;name&gt; --yes</code></dt>
+        <dd>Delete a provider-managed solo node recorded in local config.</dd>
       </div>
     </dl>
 
@@ -964,7 +967,7 @@ release_command: bundle exec rails db:migrate</code></pre>
       </div>
       <div class="docs-field">
         <dt><code>DEVOPSELLENCE_HETZNER_API_TOKEN</code></dt>
-        <dd>Hetzner API token for <code>devopsellence server create</code>. <code>HCLOUD_TOKEN</code> is also supported.</dd>
+        <dd>Hetzner API token for <code>devopsellence node create</code>. <code>HCLOUD_TOKEN</code> is also supported.</dd>
       </div>
       <div class="docs-field">
         <dt><code>HCLOUD_TOKEN</code></dt>

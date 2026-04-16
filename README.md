@@ -29,10 +29,17 @@ Choose the workspace mode once:
 devopsellence mode use solo
 ```
 
-Prepare the app, connect a server, and install the agent:
+Prepare the app, connect a node, and install the agent:
 
 ```bash
+devopsellence provider login hetzner
 devopsellence setup
+```
+
+Or create a Hetzner-backed node directly:
+
+```bash
+devopsellence node create prod-1 --provider hetzner
 ```
 
 Deploy over SSH:
@@ -61,12 +68,15 @@ When you want sign-in, teams, org/project/env context, hosted deploy APIs, or ma
 ```bash
 devopsellence mode use shared
 devopsellence setup
+devopsellence provider login hetzner
+devopsellence node create prod-1 --provider hetzner
 devopsellence deploy
 devopsellence status
 devopsellence open
 ```
 
 The root verbs stay the same. The selected workspace mode decides how they behave.
+In shared mode, `node create` provisions the server and runs the registration install command.
 
 ### Example config
 

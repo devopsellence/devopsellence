@@ -77,15 +77,18 @@ Shared mode secrets:
 - `+"`printf '%%s' \"$VALUE\" | devopsellence secret set NAME --service web --stdin`"+`
 - `+"`devopsellence secret delete NAME --service web`"+`
 
-Solo mode:
-- `+"`devopsellence mode use solo`"+`
-- `+"`devopsellence secret set NAME --value ...`"+`
-- `+"`devopsellence node list`"+`
-- `+"`devopsellence node logs NODE --follow`"+`
-- `+"`devopsellence server create prod-1 --install`"+`
+	Solo mode:
+	- `+"`devopsellence mode use solo`"+`
+	- `+"`devopsellence provider login hetzner`"+`
+	- `+"`devopsellence secret set NAME --value ...`"+`
+	- `+"`devopsellence node list`"+`
+	- `+"`devopsellence node logs NODE --follow`"+`
+	- `+"`devopsellence node create prod-1`"+`
 
 Shared mode:
 - `+"`devopsellence mode use shared`"+`
+- `+"`devopsellence provider login hetzner`"+`
+- `+"`devopsellence node create prod-1`"+`
 - `+"`devopsellence deploy --image registry.example.com/app@sha256:...`"+`
 - `+"`devopsellence node register`"+`
 - `+"`devopsellence node list`"+`

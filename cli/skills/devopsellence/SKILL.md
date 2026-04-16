@@ -83,6 +83,8 @@ Use these in shared mode when the user wants to run on their own machine or VM:
 
 ```bash
 devopsellence mode use shared
+devopsellence provider login hetzner
+devopsellence node create prod-1
 devopsellence node register
 devopsellence node list --json
 devopsellence node attach <id>
@@ -94,6 +96,8 @@ Use these in solo mode when the user wants direct SSH workflows without the cont
 
 ```bash
 devopsellence mode use solo
+devopsellence provider login hetzner
+devopsellence node create prod-1
 devopsellence setup
 devopsellence deploy
 devopsellence node logs <name> --follow

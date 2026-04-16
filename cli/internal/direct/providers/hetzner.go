@@ -3,6 +3,8 @@ package providers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,8 +14,10 @@ import (
 )
 
 const (
-	hetznerAPIBaseURL   = "https://api.hetzner.cloud/v1"
-	defaultHetznerImage = "ubuntu-24.04"
+	hetznerAPIBaseURL       = "https://api.hetzner.cloud/v1"
+	defaultHetznerImage     = "ubuntu-24.04"
+	defaultHetznerFirewall  = "devopsellence-solo"
+	devopsellenceManagedKey = "devopsellence_managed"
 )
 
 type Hetzner struct {
@@ -23,11 +27,32 @@ type Hetzner struct {
 }
 
 func NewHetznerFromEnv() *Hetzner {
+	return NewHetzner("")
+}
+
+func NewHetzner(token string) *Hetzner {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		token = firstEnv("DEVOPSELLENCE_HETZNER_API_TOKEN", "HCLOUD_TOKEN")
+	}
 	return &Hetzner{
 		baseURL: hetznerAPIBaseURL,
-		token:   firstEnv("DEVOPSELLENCE_HETZNER_API_TOKEN", "HCLOUD_TOKEN"),
+		token:   token,
 		client:  http.DefaultClient,
 	}
+}
+
+func (h *Hetzner) Validate(ctx context.Context) error {
+	if err := h.ensureConfigured(); err != nil {
+		return err
+	}
+	var body struct {
+		Locations []map[string]any `json:"locations"`
+	}
+	if err := h.doJSON(ctx, http.MethodGet, "/locations", nil, &body); err != nil {
+		return fmt.Errorf("validate hetzner token: %w", err)
+	}
+	return nil
 }
 
 func (h *Hetzner) CreateServer(ctx context.Context, input CreateServerInput) (Server, error) {
@@ -37,20 +62,34 @@ func (h *Hetzner) CreateServer(ctx context.Context, input CreateServerInput) (Se
 	sshKeyName := ""
 	if strings.TrimSpace(input.SSHPublicKey) != "" {
 		var err error
-		sshKeyName, err = h.ensureSSHKey(ctx, input.Name, input.SSHPublicKey)
+		sshKeyName, err = h.ensureSSHKey(ctx, input.SSHPublicKey)
 		if err != nil {
 			return Server{}, err
 		}
 	}
+	firewallID, err := h.ensureFirewall(ctx)
+	if err != nil {
+		return Server{}, err
+	}
 	image := strings.TrimSpace(input.Image)
 	if image == "" {
 		image = defaultHetznerImage
+	}
+	labels := map[string]string{
+		devopsellenceManagedKey: "true",
+		"devopsellence_node":    input.Name,
+	}
+	for key, value := range input.Labels {
+		if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+			labels[key] = value
+		}
 	}
 	payload := map[string]any{
 		"name":        input.Name,
 		"server_type": input.Size,
 		"location":    input.Region,
 		"image":       image,
+		"labels":      labels,
 		"public_net": map[string]bool{
 			"ipv4_enabled": true,
 			"ipv6_enabled": true,
@@ -58,6 +97,9 @@ func (h *Hetzner) CreateServer(ctx context.Context, input CreateServerInput) (Se
 	}
 	if sshKeyName != "" {
 		payload["ssh_keys"] = []string{sshKeyName}
+	}
+	if firewallID != nil {
+		payload["firewalls"] = []map[string]any{{"firewall": firewallID}}
 	}
 	var body struct {
 		Server map[string]any `json:"server"`
@@ -94,13 +136,14 @@ func (h *Hetzner) Ready(server Server) bool {
 
 func (h *Hetzner) ensureConfigured() error {
 	if strings.TrimSpace(h.token) == "" {
-		return fmt.Errorf("configure DEVOPSELLENCE_HETZNER_API_TOKEN or HCLOUD_TOKEN for direct Hetzner servers")
+		return fmt.Errorf("run `devopsellence provider login hetzner` or configure DEVOPSELLENCE_HETZNER_API_TOKEN/HCLOUD_TOKEN for Hetzner servers")
 	}
 	return nil
 }
 
-func (h *Hetzner) ensureSSHKey(ctx context.Context, nodeName, publicKey string) (string, error) {
-	name := "devopsellence-" + nodeName
+func (h *Hetzner) ensureSSHKey(ctx context.Context, publicKey string) (string, error) {
+	name := contentAddressedSSHKeyName(publicKey)
+	normalizedPublicKey := canonicalSSHPublicKey(publicKey)
 	var list struct {
 		SSHKeys []map[string]any `json:"ssh_keys"`
 	}
@@ -109,6 +152,9 @@ func (h *Hetzner) ensureSSHKey(ctx context.Context, nodeName, publicKey string) 
 	}
 	for _, key := range list.SSHKeys {
 		if fmt.Sprint(key["name"]) == name {
+			if canonicalSSHPublicKey(fmt.Sprint(key["public_key"])) != normalizedPublicKey {
+				return "", fmt.Errorf("Hetzner SSH key %q exists with different public key content", name)
+			}
 			return name, nil
 		}
 	}
@@ -117,11 +163,65 @@ func (h *Hetzner) ensureSSHKey(ctx context.Context, nodeName, publicKey string) 
 	}
 	if err := h.doJSON(ctx, http.MethodPost, "/ssh_keys", map[string]any{
 		"name":       name,
-		"public_key": publicKey,
+		"public_key": normalizedPublicKey,
 	}, &created); err != nil {
 		return "", err
 	}
 	return fmt.Sprint(created.SSHKey["name"]), nil
+}
+
+func contentAddressedSSHKeyName(publicKey string) string {
+	sum := sha256.Sum256([]byte(canonicalSSHPublicKey(publicKey)))
+	return "devopsellence-ssh-" + hex.EncodeToString(sum[:])[:16]
+}
+
+func canonicalSSHPublicKey(publicKey string) string {
+	fields := strings.Fields(publicKey)
+	if len(fields) >= 2 {
+		return fields[0] + " " + fields[1]
+	}
+	return strings.TrimSpace(publicKey)
+}
+
+func (h *Hetzner) ensureFirewall(ctx context.Context) (any, error) {
+	var list struct {
+		Firewalls []map[string]any `json:"firewalls"`
+	}
+	if err := h.doJSON(ctx, http.MethodGet, "/firewalls?name="+defaultHetznerFirewall, nil, &list); err != nil {
+		return "", err
+	}
+	for _, firewall := range list.Firewalls {
+		if fmt.Sprint(firewall["name"]) == defaultHetznerFirewall {
+			return firewall["id"], nil
+		}
+	}
+	var created struct {
+		Firewall map[string]any `json:"firewall"`
+	}
+	payload := map[string]any{
+		"name": defaultHetznerFirewall,
+		"labels": map[string]string{
+			devopsellenceManagedKey: "true",
+		},
+		"rules": []map[string]any{
+			hetznerFirewallRule("22"),
+			hetznerFirewallRule("80"),
+			hetznerFirewallRule("443"),
+		},
+	}
+	if err := h.doJSON(ctx, http.MethodPost, "/firewalls", payload, &created); err != nil {
+		return "", err
+	}
+	return created.Firewall["id"], nil
+}
+
+func hetznerFirewallRule(port string) map[string]any {
+	return map[string]any{
+		"direction":  "in",
+		"protocol":   "tcp",
+		"port":       port,
+		"source_ips": []string{"0.0.0.0/0", "::/0"},
+	}
 }
 
 func (h *Hetzner) doJSON(ctx context.Context, method, path string, payload any, out any) error {

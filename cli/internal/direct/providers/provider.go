@@ -16,9 +16,11 @@ type CreateServerInput struct {
 	Size         string
 	Image        string
 	SSHPublicKey string
+	Labels       map[string]string
 }
 
 type Provider interface {
+	Validate(context.Context) error
 	CreateServer(context.Context, CreateServerInput) (Server, error)
 	DeleteServer(context.Context, string) error
 	GetServer(context.Context, string) (Server, error)

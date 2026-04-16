@@ -19,6 +19,7 @@ import (
 	"github.com/devopsellence/cli/internal/direct"
 	"github.com/devopsellence/cli/internal/direct/providers"
 	"github.com/devopsellence/cli/internal/discovery"
+	"github.com/devopsellence/cli/internal/ui"
 )
 
 type DirectDeployOptions struct {
@@ -63,7 +64,7 @@ type DirectDoctorOptions struct {
 	Nodes []string
 }
 
-type DirectServerCreateOptions struct {
+type DirectNodeCreateOptions struct {
 	Name         string
 	Provider     string
 	Region       string
@@ -71,16 +72,102 @@ type DirectServerCreateOptions struct {
 	Image        string
 	Labels       string
 	SSHPublicKey string
-	Install      bool
+	NoInstall    bool
 	Deploy       bool
 }
 
-type DirectServerDeleteOptions struct {
+type DirectNodeRemoveOptions struct {
 	Name string
 	Yes  bool
 }
 
+type SharedNodeCreateOptions struct {
+	DirectNodeCreateOptions
+	NodeBootstrapOptions
+}
+
+type providerNodeCreateResult struct {
+	Node         config.DirectNode
+	Server       providers.Server
+	Labels       []string
+	ProviderSlug string
+}
+
 type DirectSetupOptions struct{}
+
+func (a *App) createProviderNode(ctx context.Context, opts DirectNodeCreateOptions, projectName string) (providerNodeCreateResult, error) {
+	if opts.Name == "" {
+		return providerNodeCreateResult{}, fmt.Errorf("node name is required")
+	}
+	labels, err := parseDirectLabels(firstNonEmpty(opts.Labels, strings.Join(config.DirectDefaultLabels, ",")))
+	if err != nil {
+		return providerNodeCreateResult{}, err
+	}
+	providerSlug := firstNonEmpty(opts.Provider, "hetzner")
+	if opts.Region == "" {
+		opts.Region = "ash"
+	}
+	if opts.Size == "" {
+		opts.Size = "cx22"
+	}
+	provider, err := a.resolveDirectProvider(providerSlug)
+	if err != nil {
+		return providerNodeCreateResult{}, err
+	}
+	sshPublicKey, sshPublicKeyPath, err := readDirectSSHPublicKey(opts.SSHPublicKey)
+	if err != nil {
+		return providerNodeCreateResult{}, err
+	}
+	if !a.Printer.JSON {
+		a.Printer.Println("Creating " + providerSlug + " server " + opts.Name + "...")
+	}
+	providerLabels := map[string]string{}
+	if strings.TrimSpace(projectName) != "" {
+		providerLabels["devopsellence_project"] = discovery.Slugify(projectName)
+	}
+	server, err := provider.CreateServer(ctx, providers.CreateServerInput{
+		Name:         opts.Name,
+		Region:       opts.Region,
+		Size:         opts.Size,
+		Image:        opts.Image,
+		SSHPublicKey: sshPublicKey,
+		Labels:       providerLabels,
+	})
+	if err != nil {
+		return providerNodeCreateResult{}, err
+	}
+	server, err = waitForDirectProviderServer(ctx, provider, server)
+	if err != nil {
+		return providerNodeCreateResult{}, err
+	}
+	if server.PublicIP == "" {
+		return providerNodeCreateResult{}, fmt.Errorf("created server %s but provider did not return a public IPv4 address", server.ID)
+	}
+	node := config.DirectNode{
+		Host:             server.PublicIP,
+		User:             "root",
+		Port:             22,
+		AgentStateDir:    "/var/lib/devopsellence",
+		Labels:           labels,
+		Provider:         providerSlug,
+		ProviderServerID: server.ID,
+		ProviderRegion:   opts.Region,
+		ProviderSize:     opts.Size,
+		ProviderImage:    opts.Image,
+	}
+	if strings.TrimSpace(sshPublicKeyPath) != "" {
+		node.SSHKey = strings.TrimSuffix(sshPublicKeyPath, ".pub")
+		if _, err := os.Stat(node.SSHKey); err != nil {
+			node.SSHKey = ""
+		}
+	}
+	return providerNodeCreateResult{
+		Node:         node,
+		Server:       server,
+		Labels:       labels,
+		ProviderSlug: providerSlug,
+	}, nil
+}
 
 func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error {
 	cfg, workspaceRoot, err := a.loadDirectConfig()
@@ -622,90 +709,37 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) DirectServerCreate(ctx context.Context, opts DirectServerCreateOptions) error {
+func (a *App) DirectNodeCreate(ctx context.Context, opts DirectNodeCreateOptions) error {
 	cfg, workspaceRoot, err := a.loadProjectConfigForDirectUpdate()
 	if err != nil {
 		return err
 	}
 	if opts.Name == "" {
-		return fmt.Errorf("server name is required")
+		return fmt.Errorf("node name is required")
 	}
 	if opts.Deploy && a.Printer.JSON {
-		return fmt.Errorf("direct server create --deploy is not supported with --json")
+		return fmt.Errorf("node create --deploy is not supported with --json")
 	}
 	if cfg.Direct != nil {
 		if _, ok := cfg.Direct.Nodes[opts.Name]; ok {
 			return fmt.Errorf("direct node %q already exists", opts.Name)
 		}
 	}
-	labels, err := parseDirectLabels(firstNonEmpty(opts.Labels, strings.Join(config.DirectDefaultLabels, ",")))
+	created, err := a.createProviderNode(ctx, opts, cfg.Project)
 	if err != nil {
 		return err
 	}
-	providerSlug := firstNonEmpty(opts.Provider, "hetzner")
-	if opts.Region == "" {
-		opts.Region = "ash"
-	}
-	if opts.Size == "" {
-		opts.Size = "cx22"
-	}
-	provider, err := providers.Resolve(providerSlug)
-	if err != nil {
+	if err := a.writeDirectNode(workspaceRoot, cfg, opts.Name, created.Node); err != nil {
 		return err
 	}
-	sshPublicKey, sshPublicKeyPath, err := readDirectSSHPublicKey(opts.SSHPublicKey)
-	if err != nil {
-		return err
-	}
-	if !a.Printer.JSON {
-		a.Printer.Println("Creating " + providerSlug + " server " + opts.Name + "...")
-	}
-	server, err := provider.CreateServer(ctx, providers.CreateServerInput{
-		Name:         opts.Name,
-		Region:       opts.Region,
-		Size:         opts.Size,
-		Image:        opts.Image,
-		SSHPublicKey: sshPublicKey,
-	})
-	if err != nil {
-		return err
-	}
-	server, err = waitForDirectProviderServer(ctx, provider, server)
-	if err != nil {
-		return err
-	}
-	if server.PublicIP == "" {
-		return fmt.Errorf("created server %s but provider did not return a public IPv4 address", server.ID)
-	}
-	node := config.DirectNode{
-		Host:             server.PublicIP,
-		User:             "root",
-		Port:             22,
-		AgentStateDir:    "/var/lib/devopsellence",
-		Labels:           labels,
-		Provider:         providerSlug,
-		ProviderServerID: server.ID,
-		ProviderRegion:   opts.Region,
-		ProviderSize:     opts.Size,
-		ProviderImage:    opts.Image,
-	}
-	if strings.TrimSpace(sshPublicKeyPath) != "" {
-		node.SSHKey = strings.TrimSuffix(sshPublicKeyPath, ".pub")
-		if _, err := os.Stat(node.SSHKey); err != nil {
-			node.SSHKey = ""
-		}
-	}
-	if err := a.writeDirectNode(workspaceRoot, cfg, opts.Name, node); err != nil {
-		return err
-	}
-	if opts.Install || opts.Deploy {
+	if !opts.NoInstall || opts.Deploy {
 		if !a.Printer.JSON {
 			a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
 		}
-		if err := waitForDirectSSH(ctx, node, 3*time.Minute); err != nil {
+		if err := waitForDirectSSH(ctx, created.Node, 3*time.Minute); err != nil {
 			return err
 		}
-		if err := installDirectAgent(ctx, node, DirectAgentInstallOptions{}, a.directProgress(opts.Name)); err != nil {
+		if err := installDirectAgent(ctx, created.Node, DirectAgentInstallOptions{}, a.directProgress(opts.Name)); err != nil {
 			return err
 		}
 	}
@@ -717,20 +751,121 @@ func (a *App) DirectServerCreate(ctx context.Context, opts DirectServerCreateOpt
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"node":               opts.Name,
-			"host":               node.Host,
-			"labels":             labels,
-			"provider":           providerSlug,
-			"provider_server_id": server.ID,
+			"host":               created.Node.Host,
+			"labels":             created.Labels,
+			"provider":           created.ProviderSlug,
+			"provider_server_id": created.Server.ID,
 			"config_path":        a.ConfigStore.PathFor(workspaceRoot),
 		})
 	}
-	a.Printer.Println("Created direct node " + opts.Name + " at " + node.Host)
+	a.Printer.Println("Created solo node " + opts.Name + " at " + created.Node.Host)
 	return nil
 }
 
-func (a *App) DirectServerDelete(ctx context.Context, opts DirectServerDeleteOptions) error {
+func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions) error {
+	if opts.Name == "" {
+		return fmt.Errorf("node name is required")
+	}
+	if opts.Deploy {
+		return fmt.Errorf("node create --deploy is only available in solo mode")
+	}
+
+	var bootstrap nodeBootstrapToken
+	if !opts.NoInstall {
+		tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+		if err != nil {
+			return err
+		}
+		run := func(ctx context.Context, update, _ func(string)) error {
+			var err error
+			bootstrap, err = a.createNodeBootstrapToken(ctx, &tokens, opts.NodeBootstrapOptions, update)
+			return err
+		}
+		if !a.Printer.JSON && a.Printer.Interactive {
+			if err := ui.RunTask(ctx, a.Printer.Out, "Node Bootstrap", run); err != nil {
+				return err
+			}
+		} else {
+			if err := run(ctx, func(string) {}, func(string) {}); err != nil {
+				return err
+			}
+		}
+	}
+
+	projectName := opts.Project
+	if !opts.Unassigned && bootstrap.Workspace.Project.Name != "" {
+		projectName = bootstrap.Workspace.Project.Name
+	}
+	created, err := a.createProviderNode(ctx, opts.DirectNodeCreateOptions, projectName)
+	if err != nil {
+		return err
+	}
+	if opts.NoInstall {
+		if a.Printer.JSON {
+			return a.Printer.PrintJSON(map[string]any{
+				"schema_version":     outputSchemaVersion,
+				"node":               opts.Name,
+				"host":               created.Node.Host,
+				"labels":             created.Labels,
+				"provider":           created.ProviderSlug,
+				"provider_server_id": created.Server.ID,
+				"registered":         false,
+			})
+		}
+		a.Printer.Println("Created shared node " + opts.Name + " at " + created.Node.Host + " without installing the agent")
+		return nil
+	}
+
+	installCommand := strings.TrimSpace(stringFromMap(bootstrap.Result, "install_command"))
+	if installCommand == "" {
+		return fmt.Errorf("node bootstrap response did not include install_command")
+	}
+	if !a.Printer.JSON {
+		a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
+	}
+	if err := waitForDirectSSH(ctx, created.Node, 3*time.Minute); err != nil {
+		return err
+	}
+	if !a.Printer.JSON {
+		a.Printer.Println("Installing and registering devopsellence agent on " + opts.Name + "...")
+	}
+	stdout, stderr := a.Printer.Out, a.Printer.Err
+	if a.Printer.JSON {
+		stdout, stderr = io.Discard, io.Discard
+	}
+	if err := direct.RunSSHInteractive(ctx, created.Node, installCommand, stdout, stderr); err != nil {
+		return err
+	}
+
+	if a.Printer.JSON {
+		result := map[string]any{
+			"schema_version":     outputSchemaVersion,
+			"node":               opts.Name,
+			"host":               created.Node.Host,
+			"labels":             created.Labels,
+			"provider":           created.ProviderSlug,
+			"provider_server_id": created.Server.ID,
+			"organization_id":    bootstrap.Organization.ID,
+			"organization_name":  bootstrap.Organization.Name,
+			"registered":         true,
+		}
+		if opts.Unassigned {
+			result["assignment_mode"] = "unassigned"
+		} else {
+			result["assignment_mode"] = firstNonEmpty(stringFromMap(bootstrap.Result, "assignment_mode"), "environment")
+			result["project_name"] = bootstrap.Workspace.Project.Name
+			result["environment_id"] = bootstrap.Workspace.Environment.ID
+			result["environment_name"] = bootstrap.Workspace.Environment.Name
+		}
+		return a.Printer.PrintJSON(result)
+	}
+	a.Printer.Println("Created shared node " + opts.Name + " at " + created.Node.Host)
+	return nil
+}
+
+func (a *App) DirectNodeRemove(ctx context.Context, opts DirectNodeRemoveOptions) error {
 	if !opts.Yes {
-		return fmt.Errorf("direct server delete requires --yes")
+		return fmt.Errorf("node remove requires --yes")
 	}
 	cfg, workspaceRoot, err := a.loadDirectConfig()
 	if err != nil {
@@ -743,7 +878,7 @@ func (a *App) DirectServerDelete(ctx context.Context, opts DirectServerDeleteOpt
 	if node.Provider == "" || node.ProviderServerID == "" {
 		return fmt.Errorf("node %q does not have provider metadata; refusing provider delete", opts.Name)
 	}
-	provider, err := providers.Resolve(node.Provider)
+	provider, err := a.resolveDirectProvider(node.Provider)
 	if err != nil {
 		return err
 	}
@@ -757,15 +892,15 @@ func (a *App) DirectServerDelete(ctx context.Context, opts DirectServerDeleteOpt
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "deleted"})
 	}
-	a.Printer.Println("Deleted direct server " + opts.Name)
+	a.Printer.Println("Removed solo node " + opts.Name)
 	return nil
 }
 
 func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 	if !a.Printer.Interactive {
-		return fmt.Errorf("direct setup requires an interactive terminal; use direct server create or edit devopsellence.yml")
+		return fmt.Errorf("direct setup requires an interactive terminal; use node create or edit devopsellence.yml")
 	}
-	mode, err := a.promptLine("Server source (existing/hetzner)", "existing")
+	mode, err := a.promptLine("Node source (existing/hetzner)", "existing")
 	if err != nil {
 		return err
 	}
@@ -790,14 +925,13 @@ func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 		if err != nil {
 			return err
 		}
-		if err := a.DirectServerCreate(ctx, DirectServerCreateOptions{
+		if err := a.DirectNodeCreate(ctx, DirectNodeCreateOptions{
 			Name:         name,
 			Provider:     "hetzner",
 			Region:       region,
 			Size:         size,
 			Labels:       labels,
 			SSHPublicKey: sshPublicKey,
-			Install:      true,
 		}); err != nil {
 			return err
 		}

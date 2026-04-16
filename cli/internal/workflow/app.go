@@ -68,6 +68,7 @@ type App struct {
 	API                *api.Client
 	State              *state.Store
 	WorkspaceState     *state.Store
+	ProviderState      *state.Store
 	ConfigStore        config.Store
 	Docker             DockerClient
 	Git                git.Client
@@ -231,6 +232,13 @@ type NodeBootstrapOptions struct {
 	Unassigned   bool
 }
 
+type nodeBootstrapToken struct {
+	Organization api.Organization
+	Workspace    Workspace
+	Initialized  *initializedWorkspace
+	Result       map[string]any
+}
+
 type NodeListOptions struct {
 	Organization string
 }
@@ -329,6 +337,7 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 	loginBase := apiBase
 	store := state.New(state.DefaultPath(filepath.Join("devopsellence", "auth.json")))
 	workspaceStore := state.New(state.DefaultPath(filepath.Join("devopsellence", "workspace.json")))
+	providerStore := state.New(state.DefaultPath(filepath.Join("devopsellence", "providers.json")))
 	return &App{
 		In:                 in,
 		Printer:            output.New(out, err, jsonMode),
@@ -336,6 +345,7 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 		API:                api.New(apiBase),
 		State:              store,
 		WorkspaceState:     workspaceStore,
+		ProviderState:      providerStore,
 		ConfigStore:        config.NewStore(),
 		Docker:             docker.Runner{},
 		Git:                git.Client{},
@@ -1355,41 +1365,12 @@ func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) erro
 		return err
 	}
 
-	var workspace Workspace
-	var initialized *initializedWorkspace
-	var organization api.Organization
-	var result map[string]any
+	var bootstrap nodeBootstrapToken
 	run := func(ctx context.Context, update, _ func(string)) error {
 		var err error
-		if opts.Unassigned {
-			update("Resolving organization…")
-			organization, err = a.resolveNodeBootstrapOrganization(ctx, tokens.AccessToken, opts.Organization)
-			if err != nil {
-				return err
-			}
-		} else {
-			workspace, initialized, err = a.ensureNodeBootstrapWorkspace(ctx, &tokens.AccessToken, opts, update)
-			if err != nil {
-				return err
-			}
-			organization = workspace.Organization
-		}
-		if strings.TrimSpace(organization.PlanTier) == "trial" {
-			return ExitError{Code: 1, Err: errors.New("manual node management is unavailable for trial organizations; `devopsellence node register` is only available in paid organizations")}
-		}
-
-		update("Generating bootstrap token…")
-		environmentID := 0
-		if !opts.Unassigned {
-			environmentID = workspace.Environment.ID
-		}
-		err = a.callWithAuthRetry(ctx, &tokens.AccessToken, a.Printer.Interactive, update, func(accessToken string) error {
-			var callErr error
-			result, callErr = a.API.CreateNodeBootstrapToken(ctx, accessToken, organization.ID, environmentID)
-			return callErr
-		})
+		bootstrap, err = a.createNodeBootstrapToken(ctx, &tokens, opts, update)
 		if err != nil {
-			return wrapError(err)
+			return err
 		}
 		return nil
 	}
@@ -1404,6 +1385,9 @@ func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) erro
 		}
 	}
 
+	result := bootstrap.Result
+	organization := bootstrap.Organization
+	workspace := bootstrap.Workspace
 	result["schema_version"] = outputSchemaVersion
 	result["organization_id"] = organization.ID
 	result["organization_name"] = organization.Name
@@ -1422,7 +1406,7 @@ func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) erro
 	if !opts.Unassigned && workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
 		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
 	}
-	if initialized != nil {
+	if bootstrap.Initialized != nil {
 		a.Printer.Println(ui.DefaultRenderer().Muted("Initialized workspace config for this app automatically."))
 	}
 
@@ -1462,6 +1446,52 @@ func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) erro
 	a.Printer.Println(r.Muted("· Requires: Linux x86_64 or arm64, sudo access"))
 	a.Printer.Println("")
 	return nil
+}
+
+func (a *App) createNodeBootstrapToken(ctx context.Context, tokens *auth.Tokens, opts NodeBootstrapOptions, update func(string)) (nodeBootstrapToken, error) {
+	var (
+		workspace    Workspace
+		initialized  *initializedWorkspace
+		organization api.Organization
+		err          error
+	)
+	if opts.Unassigned {
+		update("Resolving organization...")
+		organization, err = a.resolveNodeBootstrapOrganization(ctx, tokens.AccessToken, opts.Organization)
+		if err != nil {
+			return nodeBootstrapToken{}, err
+		}
+	} else {
+		workspace, initialized, err = a.ensureNodeBootstrapWorkspace(ctx, &tokens.AccessToken, opts, update)
+		if err != nil {
+			return nodeBootstrapToken{}, err
+		}
+		organization = workspace.Organization
+	}
+	if strings.TrimSpace(organization.PlanTier) == "trial" {
+		return nodeBootstrapToken{}, ExitError{Code: 1, Err: errors.New("manual node management is unavailable for trial organizations; `devopsellence node register` is only available in paid organizations")}
+	}
+
+	update("Generating bootstrap token...")
+	environmentID := 0
+	if !opts.Unassigned {
+		environmentID = workspace.Environment.ID
+	}
+	var result map[string]any
+	err = a.callWithAuthRetry(ctx, &tokens.AccessToken, a.Printer.Interactive, update, func(accessToken string) error {
+		var callErr error
+		result, callErr = a.API.CreateNodeBootstrapToken(ctx, accessToken, organization.ID, environmentID)
+		return callErr
+	})
+	if err != nil {
+		return nodeBootstrapToken{}, wrapError(err)
+	}
+	return nodeBootstrapToken{
+		Organization: organization,
+		Workspace:    workspace,
+		Initialized:  initialized,
+		Result:       result,
+	}, nil
 }
 
 func (a *App) NodeList(ctx context.Context, opts NodeListOptions) error {

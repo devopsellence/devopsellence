@@ -87,6 +87,7 @@ func TestRootHelpShowsModeFirstFlows(t *testing.T) {
 		"context",
 		"mode",
 		"node",
+		"provider",
 		"secret",
 	} {
 		if !strings.Contains(text, snippet) {
@@ -99,6 +100,7 @@ func TestRootHelpShowsModeFirstFlows(t *testing.T) {
 		"project     ",
 		"org         ",
 		"env         ",
+		"server",
 	} {
 		if strings.Contains(text, hidden) {
 			t.Fatalf("help output unexpectedly showed legacy command %q: %q", hidden, text)
@@ -129,6 +131,27 @@ func TestNodeRegisterHelpSignalsTrialPolicy(t *testing.T) {
 	}
 }
 
+func TestNodeCreateRunsInSharedMode(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"--mode", "shared", "node", "create", "prod-1", "--deploy"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want shared node create to run")
+	}
+	if !strings.Contains(err.Error(), "only available in solo mode") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if strings.Contains(err.Error(), "not available in shared mode") {
+		t.Fatalf("Execute() still used old shared-mode guard: %v", err)
+	}
+}
+
 func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 	t.Parallel()
 
@@ -141,7 +164,7 @@ func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, snippet := range []string{"register", "attach", "detach", "remove", "logs"} {
+	for _, snippet := range []string{"register", "create", "attach", "detach", "remove", "logs"} {
 		if !strings.Contains(stdout.String(), snippet) {
 			t.Fatalf("help output = %q, want %q command", stdout.String(), snippet)
 		}

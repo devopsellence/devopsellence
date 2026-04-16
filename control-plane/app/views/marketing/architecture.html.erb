@@ -7,12 +7,49 @@
   </header>
 
   <section class="prose-section">
-    <h2>The split</h2>
-    <p>The control plane tracks organizations, environments, releases, and rollout state. Nodes pull their current target, verify signed desired state, and reconcile containers locally. The control plane decides. VM agents execute.</p>
+    <h2>Two modes, one agent</h2>
+    <p>devopsellence has two deployment modes. Both use the same agent and the same reconciliation loop. What changes is how desired state and images reach the agent.</p>
+    <div class="arch-layers">
+      <div class="arch-layer arch-layer--optional">
+        <strong>Control plane</strong>
+        <span>Shared mode only &mdash; tracks orgs, releases, HTTPS, rollout state</span>
+      </div>
+      <div class="arch-layer arch-layer--cli">
+        <strong>CLI</strong>
+        <span>Both modes &mdash; builds images, publishes releases or writes state over SSH</span>
+      </div>
+      <div class="arch-layer arch-layer--agent">
+        <strong>Agent</strong>
+        <span>Both modes &mdash; reconciles containers, runs health checks, manages Envoy</span>
+      </div>
+    </div>
+    <p>In <strong>solo mode</strong>, the CLI sends everything over SSH: images via <code>docker save/load</code>, desired state as a JSON file, secrets pre-resolved. No registry, no cloud services. In <strong>shared mode</strong>, the control plane coordinates: images go to a registry, desired state is signed and published, agents pull independently.</p>
   </section>
 
   <section class="prose-section">
-    <h2>Deploy flow</h2>
+    <h2>Solo deploy flow</h2>
+    <ol class="flow-list">
+      <li>
+        <strong>Build</strong>
+        <span>CLI builds the Docker image locally.</span>
+      </li>
+      <li>
+        <strong>Transfer</strong>
+        <span>Image streams over SSH via <code>docker save | gzip | ssh | docker load</code>. No registry, no intermediate files.</span>
+      </li>
+      <li>
+        <strong>Write state</strong>
+        <span>CLI writes desired-state JSON to the node filesystem over SSH. Secrets are pre-resolved and embedded.</span>
+      </li>
+      <li>
+        <strong>Reconcile</strong>
+        <span>The agent picks up the new file within 2 seconds, starts containers, runs health checks, and updates Envoy for zero-downtime traffic switching.</span>
+      </li>
+    </ol>
+  </section>
+
+  <section class="prose-section">
+    <h2>Shared deploy flow</h2>
     <ol class="flow-list">
       <li>
         <strong>Publish</strong>
@@ -36,6 +73,8 @@
   <section class="prose-section">
     <h2>Security</h2>
     <p>Security comes from machine boundaries and provider primitives, not from inventing a new platform layer.</p>
+    <p><strong>Solo mode</strong> relies on SSH security: SSH keys for access, secrets stored locally in a <code>.env</code> file, and no network services to attack.</p>
+    <p><strong>Shared mode</strong> adds infrastructure-level controls:</p>
     <ul>
       <li>Per-environment runtime access scoped through service accounts and IAM bindings.</li>
       <li>Workload Identity for short-lived token exchange instead of long-lived credentials.</li>
@@ -68,6 +107,6 @@
 
   <section class="prose-section">
     <h2>Where this is heading</h2>
-    <p>Two product tracks are emerging: managed control plane plus your servers, and a fully self-hosted standalone edition with no GCP dependency. Both keep VMs as the unit of execution. See the <%= link_to "roadmap", roadmap_path %>.</p>
+    <p>Three product tracks are emerging: solo mode for SSH-first workflows with no infrastructure overhead, managed control plane plus your servers for team workflows, and a fully self-hosted control plane with no GCP dependency. All three keep VMs as the unit of execution and share the same agent. See the <%= link_to "roadmap", roadmap_path %>.</p>
   </section>
 </main>

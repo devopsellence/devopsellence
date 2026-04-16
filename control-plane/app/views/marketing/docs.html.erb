@@ -10,6 +10,7 @@
     <div class="docs-toc-group">
       <h3>Get started</h3>
       <a href="#overview">Overview</a>
+      <a href="#compare-modes">Compare modes</a>
       <a href="#quick-start">Quick start</a>
       <a href="#connect-servers">Shared nodes</a>
       <a href="#solo-mode">Solo mode</a>
@@ -31,6 +32,7 @@
       <h3>Reference</h3>
       <a href="#cli-reference">CLI commands</a>
       <a href="#env-vars">Environment variables</a>
+      <a href="#migrating">Migrating solo &rarr; shared</a>
       <a href="#troubleshooting">Troubleshooting</a>
       <a href="#cleanup">Cleanup &amp; uninstall</a>
     </div>
@@ -40,15 +42,109 @@
 
   <section class="prose-section" id="overview">
     <h2>Overview</h2>
-    <p>devopsellence is a VM-native deployment toolkit for containerized applications. The agent is the core runtime component. The CLI and control plane are convenience layers around it.</p>
+    <p>devopsellence is a VM-native deployment toolkit for containerized applications. It has two modes: <strong>solo</strong> for SSH-first local workflows and <strong>shared</strong> for control-plane-backed team workflows. Both modes use the same agent and the same deploy verbs.</p>
     <p>The system has three parts:</p>
     <ul>
-      <li><strong>Control plane</strong> &mdash; coordination layer for releases, secrets, HTTPS certificates, and rollout state.</li>
-      <li><strong>CLI</strong> &mdash; runs on your workstation or CI. Builds images, publishes releases, manages secrets and nodes.</li>
-      <li><strong>Agent</strong> &mdash; runs on your servers. Pulls desired state periodically, verifies signed envelopes, and reconciles containers with zero-downtime rollouts via Envoy proxy.</li>
+      <li><strong>Agent</strong> &mdash; runs on your servers. Reconciles containers with zero-downtime rollouts via Envoy proxy. Used in both modes.</li>
+      <li><strong>CLI</strong> &mdash; runs on your workstation or CI. Builds images, manages secrets and nodes. Used in both modes.</li>
+      <li><strong>Control plane</strong> &mdash; coordination layer for releases, secrets, HTTPS certificates, and rollout state. Used in shared mode only.</li>
     </ul>
     <p>Any web app packaged as a Docker image can be deployed. The data hierarchy is: <strong>Organization &rarr; Project &rarr; Environment &rarr; Release &rarr; Nodes</strong>. An environment can have many nodes, but each node belongs to one environment at a time.</p>
     <p>devopsellence does not force a database, cache, queue, logging backend, metrics backend, or analytics product. Bring hosted services or self-host the rest of your stack.</p>
+  </section>
+
+  <%# ─── Compare modes ─── %>
+
+  <section class="prose-section" id="compare-modes">
+    <h2>Compare modes</h2>
+    <p>Both modes share the same CLI verbs, the same agent, and the same <code>devopsellence.yml</code> config. The mode decides how state and images reach the agent.</p>
+
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Solo</th>
+          <th>Shared</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Control plane</td>
+          <td>None</td>
+          <td>Managed or self-hosted</td>
+        </tr>
+        <tr>
+          <td>Transport</td>
+          <td>SSH</td>
+          <td>Agent pulls from control plane</td>
+        </tr>
+        <tr>
+          <td>Auth</td>
+          <td>SSH keys</td>
+          <td>Browser (GitHub / Google)</td>
+        </tr>
+        <tr>
+          <td>Image delivery</td>
+          <td>Streamed over SSH</td>
+          <td>Pushed to registry</td>
+        </tr>
+        <tr>
+          <td>Secrets</td>
+          <td>Local <code>.env</code> file</td>
+          <td>Encrypted server-side (Secret Manager or database)</td>
+        </tr>
+        <tr>
+          <td>HTTPS</td>
+          <td><span class="compare-na">Planned</span></td>
+          <td>Tunnel mode or Let's Encrypt</td>
+        </tr>
+        <tr>
+          <td>Team workflows</td>
+          <td>Single operator</td>
+          <td>Orgs, projects, environments</td>
+        </tr>
+        <tr>
+          <td>CI / GitHub Actions</td>
+          <td><span class="compare-na">Not yet</span></td>
+          <td>Deploy action with API tokens</td>
+        </tr>
+        <tr>
+          <td>Node provisioning</td>
+          <td>Hetzner from CLI</td>
+          <td>Hetzner from CLI + control plane registration</td>
+        </tr>
+        <tr>
+          <td>Zero-downtime deploys</td>
+          <td>Yes (Envoy)</td>
+          <td>Yes (Envoy)</td>
+        </tr>
+        <tr>
+          <td>Health checks</td>
+          <td>Yes</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>Release commands</td>
+          <td>Yes</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>Volumes</td>
+          <td>Yes</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>Worker services</td>
+          <td>Yes</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>Best for</td>
+          <td>Side projects, single-dev apps, staging</td>
+          <td>Teams, production, multi-environment</td>
+        </tr>
+      </tbody>
+    </table>
   </section>
 
   <%# ─── Quick start ─── %>
@@ -122,7 +218,7 @@
   <%# ─── Connect your servers ─── %>
 
   <section class="prose-section" id="connect-servers">
-    <h2>Shared nodes</h2>
+    <h2>Shared nodes <span class="mode-badge mode-badge--shared">shared</span></h2>
     <p>In shared mode, nodes are Linux servers or VMs running the devopsellence agent and attached to an organization. Manual node management is available in paid orgs; preview accounts start on managed capacity. Use <code>devopsellence node create</code> to provision a Hetzner node and register it, or <code>devopsellence node register</code> when the server already exists.</p>
 
     <h3>Provider create: auto-attach to the current environment</h3>
@@ -206,7 +302,7 @@
   <%# ─── Solo mode ─── %>
 
   <section class="prose-section" id="solo-mode">
-    <h2>Solo mode</h2>
+    <h2>Solo mode <span class="mode-badge mode-badge--solo">solo</span></h2>
     <p>Solo mode deploys over SSH without the control plane. The CLI builds the image locally, streams it to each configured node, writes desired state on the node, and the agent reconciles containers from local files.</p>
     <p>Today, solo mode exposes web traffic through Envoy on <code>http://&lt;node-host&gt;:8000</code>. Shared-style tunnel mode and automatic SSL for solo mode are planned, but not available yet.</p>
 
@@ -247,7 +343,7 @@
     <p>Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in <code>devopsellence.yml</code>. The provider API token and SSH private key value are not written to config.</p>
 
     <h3>Solo config</h3>
-    <p>Solo node inventory is part of <code>devopsellence.yml</code>, so it can be committed and used from CI. The current config schema stores this under the <code>direct</code> block. Keep private key material in your SSH agent, local filesystem, or CI secrets.</p>
+    <p>Solo node inventory is part of <code>devopsellence.yml</code>, so it can be committed and used from CI. The config schema stores this under the <code>direct</code> block (the internal name for solo mode). Keep private key material in your SSH agent, local filesystem, or CI secrets.</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -345,7 +441,7 @@
   <%# ─── Deploy from GitHub Actions ─── %>
 
   <section class="prose-section" id="deploy-github-actions">
-    <h2>Deploy from GitHub Actions</h2>
+    <h2>Deploy from GitHub Actions <span class="mode-badge mode-badge--shared">shared</span></h2>
     <p>Use the <a href="https://github.com/devopsellence/deploy-action" target="_blank" rel="noopener noreferrer">devopsellence/deploy-action</a> to deploy automatically on push.</p>
 
     <h3>1. Create a deploy token</h3>
@@ -582,11 +678,11 @@ release_command: bundle exec rails db:migrate</code></pre>
       </div>
       <div class="docs-field">
         <dt><code>direct.nodes</code></dt>
-        <dd>Direct-mode node inventory keyed by node name. Each node has <code>host</code>, <code>user</code>, optional <code>port</code>, optional <code>ssh_key</code>, optional <code>agent_state_dir</code>, and <code>labels</code>.</dd>
+        <dd>Solo mode node inventory keyed by node name. Each node has <code>host</code>, <code>user</code>, optional <code>port</code>, optional <code>ssh_key</code>, optional <code>agent_state_dir</code>, and <code>labels</code>. (The config key is <code>direct</code> for historical reasons; the user-facing mode name is <code>solo</code>.)</dd>
       </div>
       <div class="docs-field">
         <dt><code>direct.nodes.*.labels</code></dt>
-        <dd>Service placement labels for solo mode. Supported values are <code>web</code> and <code>worker</code>.</dd>
+        <dd>Service placement labels (solo mode). Supported values are <code>web</code> and <code>worker</code>.</dd>
       </div>
       <div class="docs-field">
         <dt><code>direct.nodes.*.provider</code></dt>
@@ -695,9 +791,8 @@ release_command: bundle exec rails db:migrate</code></pre>
   <%# ─── Ingress ─── %>
 
   <section class="prose-section" id="ingress">
-    <h2>Ingress &amp; HTTPS</h2>
-    <p>Today, the managed ingress modes below apply to shared mode. In solo mode today, the default path is direct HTTP on <code>http://&lt;node-host&gt;:8000</code>.</p>
-    <p>Shared-style tunnel mode and automatic SSL are planned for solo mode too, but have not shipped yet.</p>
+    <h2>Ingress &amp; HTTPS <span class="mode-badge mode-badge--shared">shared</span></h2>
+    <p>The managed ingress modes below apply to shared mode. In solo mode, the app is exposed via Envoy on <code>http://&lt;node-host&gt;:8000</code> (HTTP only). Tunnel mode and automatic SSL for solo mode are planned.</p>
 
     <h3>Tunnel mode (default)</h3>
     <p>The default for getting started quickly. A Cloudflare tunnel routes traffic from a <code>*.devopsellence.io</code> hostname to a single node. No DNS configuration or open ports required.</p>
@@ -993,6 +1088,30 @@ release_command: bundle exec rails db:migrate</code></pre>
         <dd>Alternative Hetzner API token variable used by the Hetzner CLI and supported by solo mode.</dd>
       </div>
     </dl>
+  </section>
+
+  <%# ─── Migrating solo → shared ─── %>
+
+  <section class="prose-section" id="migrating">
+    <h2>Migrating from solo to shared</h2>
+    <p>When you outgrow solo mode, switching to shared keeps most of your setup intact. The agent reconciliation loop, your <code>devopsellence.yml</code> config, your Dockerfile, and your deploy verbs all stay the same.</p>
+
+    <h3>What changes</h3>
+    <ul>
+      <li><strong>Mode</strong> &mdash; run <code>devopsellence mode use shared</code>, then <code>devopsellence setup</code> to sign in and create org/project/env context.</li>
+      <li><strong>Nodes</strong> &mdash; register your existing servers with <code>devopsellence node register</code> and run the install command on each server. The agent switches from file-watching to control-plane polling.</li>
+      <li><strong>Images</strong> &mdash; instead of streaming over SSH, images are pushed to a container registry. The control plane handles registry credentials.</li>
+      <li><strong>Secrets</strong> &mdash; re-create secrets with <code>devopsellence secret set &lt;name&gt; --service web --stdin</code>. They move from your local <code>.env</code> to encrypted server-side storage.</li>
+      <li><strong>Config</strong> &mdash; the <code>direct.nodes</code> block in <code>devopsellence.yml</code> is no longer used. You can remove it or leave it; the CLI ignores it in shared mode.</li>
+    </ul>
+
+    <h3>What stays the same</h3>
+    <ul>
+      <li>Your <code>devopsellence.yml</code> app config (build, web, worker, release_command, healthcheck, volumes).</li>
+      <li>Your Dockerfile and application code.</li>
+      <li>The agent's reconciliation loop, zero-downtime rollouts, health checks, and Envoy proxy.</li>
+      <li>CLI verbs: <code>deploy</code>, <code>status</code>, <code>secret</code>, <code>doctor</code>.</li>
+    </ul>
   </section>
 
   <%# ─── Troubleshooting ─── %>

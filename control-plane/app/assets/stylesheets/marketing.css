@@ -1729,6 +1729,204 @@ details[open] > .blog-series-summary::before {
   white-space: pre;
 }
 
+/* ── Mode comparison (homepage) ── */
+
+.mode-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  padding: 0;
+}
+
+.mode-card {
+  padding: 28px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fafafa;
+}
+
+.mode-card h3 {
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.mode-card .mode-tagline {
+  margin: 0 0 20px;
+  font-size: 0.88rem;
+  color: #666;
+  line-height: 1.6;
+}
+
+.mode-card dl {
+  margin: 0;
+}
+
+.mode-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 0.86rem;
+  align-items: baseline;
+}
+
+.mode-row:last-child {
+  border-bottom: none;
+}
+
+.mode-row dt {
+  color: #999;
+  font-weight: 500;
+}
+
+.mode-row dd {
+  margin: 0;
+  color: #333;
+}
+
+.mode-lead {
+  margin-top: 12px;
+  font-size: 0.92rem;
+  color: #555;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* ── Mode badge (docs section headers) ── */
+
+.mode-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  vertical-align: middle;
+  margin-left: 8px;
+}
+
+.mode-badge--both {
+  background: #f3f4f6;
+  color: #888;
+}
+
+.mode-badge--solo {
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.mode-badge--shared {
+  background: #f0fdf4;
+  color: #166534;
+}
+
+/* ── Compare table (docs feature matrix) ── */
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: 0.88rem;
+}
+
+.compare-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  font-size: 0.84rem;
+  color: #111;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.compare-table th:first-child {
+  color: #999;
+  font-weight: 500;
+}
+
+.compare-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid #f5f5f5;
+  color: #444;
+  line-height: 1.5;
+}
+
+.compare-table td:first-child {
+  font-weight: 500;
+  color: #333;
+}
+
+.compare-table tr:last-child td {
+  border-bottom: none;
+}
+
+.compare-table .compare-na {
+  color: #ccc;
+  font-style: italic;
+}
+
+/* ── Architecture layers diagram ── */
+
+.arch-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 20px 0;
+}
+
+.arch-layer {
+  padding: 16px 20px;
+  border: 1px solid;
+  text-align: center;
+}
+
+.arch-layer:first-child {
+  border-radius: 8px 8px 0 0;
+}
+
+.arch-layer:last-child {
+  border-radius: 0 0 8px 8px;
+}
+
+.arch-layer strong {
+  display: block;
+  font-size: 0.92rem;
+  margin-bottom: 2px;
+}
+
+.arch-layer span {
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.arch-layer--optional {
+  background: #f9fafb;
+  border-color: #e5e7eb;
+  border-style: dashed;
+}
+
+.arch-layer--optional strong { color: #666; }
+.arch-layer--optional span { color: #999; }
+
+.arch-layer--cli {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.arch-layer--cli strong { color: #1e40af; }
+.arch-layer--cli span { color: #555; }
+
+.arch-layer--agent {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.arch-layer--agent strong { color: #166534; }
+.arch-layer--agent span { color: #555; }
+
 /* ── Responsive ── */
 
 @media (max-width: 768px) {
@@ -1843,6 +2041,12 @@ details[open] > .blog-series-summary::before {
     overflow-x: auto;
     text-overflow: clip;
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* Mode comparison */
+  .mode-compare {
+    grid-template-columns: 1fr;
+    gap: 24px;
   }
 
   /* Split sections */

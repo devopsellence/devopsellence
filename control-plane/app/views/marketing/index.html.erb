@@ -3,7 +3,7 @@
 <main class="page">
   <section class="hero">
     <h1 class="hero-title">VMs are enough.</h1>
-    <p class="hero-sub">devopsellence is a toolkit for deploying and running containerized apps.<br>No PaaS. No platform. No extra abstraction layer.</p>
+    <p class="hero-sub">devopsellence is a toolkit for deploying and running containerized apps.<br>No PaaS. No platform. No extra abstraction layer.<br>Start with SSH. Add a control plane when you need one.</p>
 
     <div class="install-pill">
       <code id="install-cmd"><%= @cli_install_command %></code>
@@ -36,6 +36,38 @@
           <div class="tl tl-muted">Transferring image...</div>
           <div class="tl tl-ok">Deployed revision abc1234 to 1 node(s)</div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2 class="section-center" style="text-align:center;margin:0 auto 8px;font-size:2rem;font-weight:700;letter-spacing:-0.03em;">Two modes. Same deploy verbs.</h2>
+    <p class="mode-lead">Pick the mode that fits today. Switch when your needs change.</p>
+
+    <div class="mode-compare" style="margin-top:32px;">
+      <div class="mode-card">
+        <h3>Solo</h3>
+        <p class="mode-tagline">SSH-first. No control plane. Deploy from your terminal to any Linux server.</p>
+        <dl>
+          <div class="mode-row"><dt>Transport</dt><dd>SSH</dd></div>
+          <div class="mode-row"><dt>Auth</dt><dd>SSH keys</dd></div>
+          <div class="mode-row"><dt>Secrets</dt><dd>Local <code>.env</code> file</dd></div>
+          <div class="mode-row"><dt>Images</dt><dd>Streamed over SSH</dd></div>
+          <div class="mode-row"><dt>HTTPS</dt><dd>Coming soon</dd></div>
+          <div class="mode-row"><dt>Best for</dt><dd>Side projects, single-dev apps, staging</dd></div>
+        </dl>
+      </div>
+      <div class="mode-card">
+        <h3>Shared</h3>
+        <p class="mode-tagline">Control-plane-backed. Team auth, managed HTTPS, org/project/env hierarchy.</p>
+        <dl>
+          <div class="mode-row"><dt>Transport</dt><dd>Agent pulls from control plane</dd></div>
+          <div class="mode-row"><dt>Auth</dt><dd>Browser (GitHub / Google)</dd></div>
+          <div class="mode-row"><dt>Secrets</dt><dd>Encrypted server-side</dd></div>
+          <div class="mode-row"><dt>Images</dt><dd>Pushed to registry</dd></div>
+          <div class="mode-row"><dt>HTTPS</dt><dd>Built-in (tunnel or Let's Encrypt)</dd></div>
+          <div class="mode-row"><dt>Best for</dt><dd>Teams, production, multi-environment</dd></div>
+        </dl>
       </div>
     </div>
   </section>

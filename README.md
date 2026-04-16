@@ -9,6 +9,16 @@ Pick a workspace mode.
 - `solo` keeps the loop local: your app, your VM, SSH, Docker, and the `devopsellence` CLI.
 - `shared` keeps the same app model but adds sign-in, org/project/env context, hosted APIs, and team workflows.
 
+|  | Solo | Shared |
+|---|---|---|
+| Infrastructure | SSH + your VMs | Control plane + your VMs |
+| Auth | SSH keys | Browser (GitHub / Google) |
+| Secrets | Local `.env` file | Encrypted server-side |
+| Images | Streamed over SSH | Pushed to registry |
+| HTTPS | Coming soon | Built-in (tunnel or Let's Encrypt) |
+| Team workflows | Single operator | Orgs, projects, environments |
+| Best for | Side projects, single-dev apps | Teams, production, multi-env |
+
 ## Start Here: solo mode
 
 Install the CLI:
@@ -122,6 +132,8 @@ The product layering is deliberate:
 - solo mode first.
 - shared mode when coordination matters.
 - hosted or self-hosted depending on how much convenience you want.
+
+When you outgrow solo, `devopsellence mode use shared` switches to control-plane workflows. Same config, same agent, same deploy verbs.
 
 The design rationale lives in [`docs/vision.md`](docs/vision.md).
 

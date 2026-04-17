@@ -204,7 +204,12 @@ func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
 		},
 	}
 
-	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWeb}, true, false, []string{"203.0.113.11"})
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWeb}, true, false, []NodePeer{{
+		Name:          "web-b",
+		Roles:         []string{config.NodeRoleWeb},
+		Public:        true,
+		PublicAddress: "203.0.113.11",
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +226,8 @@ func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
 	if ds.Ingress.Mode != "public" || ds.Ingress.TLS.Mode != "auto" || ds.Ingress.TLS.Email != "ops@example.com" || !ds.Ingress.RedirectHTTP {
 		t.Fatalf("ingress = %#v", ds.Ingress)
 	}
-	if strings.Join(ds.Ingress.HTTP01Peers, ",") != "203.0.113.11" {
-		t.Fatalf("http01 peers = %#v", ds.Ingress.HTTP01Peers)
+	if len(ds.NodePeers) != 1 || ds.NodePeers[0].Name != "web-b" || ds.NodePeers[0].PublicAddress != "203.0.113.11" || !ds.NodePeers[0].Public {
+		t.Fatalf("node peers = %#v", ds.NodePeers)
 	}
 }
 

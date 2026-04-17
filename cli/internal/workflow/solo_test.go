@@ -11,6 +11,7 @@ import (
 
 	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
+	"github.com/devopsellence/cli/internal/solo"
 )
 
 func TestSoloImageTagSlugifiesProjectName(t *testing.T) {
@@ -91,7 +92,7 @@ func TestParseSoloRoles(t *testing.T) {
 	}
 }
 
-func TestSoloHTTP01PeersUsesOtherPublicWebNodes(t *testing.T) {
+func TestSoloNodePeersUsesOtherConfiguredNodes(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Nodes: map[string]config.NodeConfig{
 			"web-a":    {Roles: []string{config.NodeRoleWeb}, Public: true},
@@ -107,8 +108,12 @@ func TestSoloHTTP01PeersUsesOtherPublicWebNodes(t *testing.T) {
 		}},
 	}
 
-	got := soloHTTP01Peers(cfg, "web-a")
-	want := []string{"203.0.113.11"}
+	got := soloNodePeers(cfg, "web-a")
+	want := []solo.NodePeer{
+		{Name: "private", Roles: []string{config.NodeRoleWeb}, PublicAddress: "203.0.113.13"},
+		{Name: "web-b", Roles: []string{config.NodeRoleWeb}, Public: true, PublicAddress: "203.0.113.11"},
+		{Name: "worker-a", Roles: []string{config.NodeRoleWorker}, Public: true, PublicAddress: "203.0.113.12"},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("peers = %#v, want %#v", got, want)
 	}

@@ -204,6 +204,12 @@ func TestReconcileEnsuresIngressCertificateForDirectDNSIngress(t *testing.T) {
 			Mode:     "direct_dns",
 			Hostname: "abc123.devopsellence.io",
 		},
+		NodePeers: []*desiredstatepb.NodePeer{{
+			Name:          "node-b",
+			Roles:         []string{"web"},
+			Public:        true,
+			PublicAddress: "198.51.100.11",
+		}},
 		Containers: []*desiredstatepb.Container{{
 			ServiceName: "web",
 			Image:       "busybox",
@@ -217,6 +223,9 @@ func TestReconcileEnsuresIngressCertificateForDirectDNSIngress(t *testing.T) {
 	}
 	if ingressCertManager.calls != 1 {
 		t.Fatalf("expected ingress cert ensure call, got %d", ingressCertManager.calls)
+	}
+	if len(ingressCertManager.nodePeers) != 1 || ingressCertManager.nodePeers[0].GetPublicAddress() != "198.51.100.11" {
+		t.Fatalf("node peers = %#v", ingressCertManager.nodePeers)
 	}
 }
 
@@ -241,12 +250,14 @@ func (f *fakeImagePullAuth) AuthForImage(ctx context.Context, image string) (*en
 type fakeIngressCertManager struct {
 	calls     int
 	ingress   *desiredstatepb.Ingress
+	nodePeers []*desiredstatepb.NodePeer
 	ensureErr error
 }
 
-func (f *fakeIngressCertManager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error {
+func (f *fakeIngressCertManager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer) error {
 	f.calls++
 	f.ingress = ingress
+	f.nodePeers = nodePeers
 	return f.ensureErr
 }
 

@@ -25,6 +25,7 @@ module NodeDesiredState
         },
         containers: release.scheduled_containers_for(node: node),
         ingress: ingress,
+        node_peers: node_peers_payload(environment:, node:),
         published_at: Time.current.utc.iso8601,
         organization_bundle_token: bundle&.organization_bundle&.token.to_s,
         environment_bundle_token: bundle&.environment_bundle&.token.to_s,
@@ -38,6 +39,10 @@ module NodeDesiredState
 
     def ingress_payload(environment:, node:)
       IngressPayload.build(node:, environment:, release:)
+    end
+
+    def node_peers_payload(environment:, node:)
+      NodePeersPayload.build(node:, environment:)
     end
   end
 end

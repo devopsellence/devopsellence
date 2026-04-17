@@ -30,23 +30,9 @@ module NodeDesiredState
           tls: {
             mode: "auto"
           },
-          redirect_http: true,
-          http01_peers: http01_peers_for(node:, environment:)
+          redirect_http: true
         }
       end
-    end
-
-    def self.http01_peers_for(node:, environment:)
-      environment.nodes
-        .select { |peer| public_web_peer?(peer) && peer.id != node.id }
-        .filter_map { |peer| peer.public_ip.to_s.strip.presence }
-        .uniq
-        .sort
-    end
-
-    def self.public_web_peer?(node)
-      node.labeled?(Node::LABEL_WEB) &&
-        node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
     end
   end
 end

@@ -32,7 +32,7 @@ import (
 const (
 	defaultDirectoryURL = lego.LEDirectoryProduction
 	defaultBindAddress  = "0.0.0.0:15980"
-	peerHeader          = "x-devopsellence-acme-peer"
+	nodePeerHeader      = "devopsellence-node-peer"
 )
 
 type Config struct {
@@ -75,7 +75,7 @@ func New(cfg Config) *Manager {
 	}
 }
 
-func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error {
+func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer) error {
 	if !needsAutoTLS(ingress) {
 		return nil
 	}
@@ -92,7 +92,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 	if err := m.startHTTP01Server(); err != nil {
 		return err
 	}
-	m.provider.SetPeers(http01Peers(ingress))
+	m.provider.SetPeers(nodePeerPublicWebAddresses(nodePeers))
 
 	user, err := m.loadOrCreateUser(ingress)
 	if err != nil {
@@ -230,7 +230,7 @@ func NewHTTP01Provider() *HTTP01Provider {
 }
 
 func (p *HTTP01Provider) SetPeers(peers []string) {
-	normalized := normalizeHTTP01Peers(peers)
+	normalized := normalizeNodePeerAddresses(peers)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.peers = normalized
@@ -261,7 +261,7 @@ func (p *HTTP01Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	value, ok := p.values[token]
 	p.mu.RUnlock()
 	if !ok {
-		if r.Header.Get(peerHeader) != "1" {
+		if r.Header.Get(nodePeerHeader) != "1" {
 			if value, ok := p.fetchPeerChallenge(r.Context(), r.URL.Path); ok {
 				w.Header().Set("content-type", "text/plain")
 				_, _ = w.Write([]byte(value))
@@ -290,7 +290,7 @@ func (p *HTTP01Provider) fetchPeerChallenge(ctx context.Context, path string) (s
 		if err != nil {
 			continue
 		}
-		req.Header.Set(peerHeader, "1")
+		req.Header.Set(nodePeerHeader, "1")
 		resp, err := client.Do(req)
 		if err != nil {
 			continue
@@ -360,14 +360,18 @@ func ingressCADirectoryURL(ingress *desiredstatepb.Ingress) string {
 	return strings.TrimSpace(ingress.GetTls().GetCaDirectoryUrl())
 }
 
-func http01Peers(ingress *desiredstatepb.Ingress) []string {
-	if ingress == nil {
-		return nil
+func nodePeerPublicWebAddresses(peers []*desiredstatepb.NodePeer) []string {
+	normalized := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		if peer == nil || !peer.GetPublic() || !nodePeerHasRole(peer, "web") {
+			continue
+		}
+		normalized = append(normalized, peer.GetPublicAddress())
 	}
-	return normalizeHTTP01Peers(ingress.GetHttp01Peers())
+	return normalizeNodePeerAddresses(normalized)
 }
 
-func normalizeHTTP01Peers(peers []string) []string {
+func normalizeNodePeerAddresses(peers []string) []string {
 	seen := map[string]bool{}
 	normalized := make([]string, 0, len(peers))
 	for _, peer := range peers {
@@ -380,6 +384,15 @@ func normalizeHTTP01Peers(peers []string) []string {
 	}
 	sort.Strings(normalized)
 	return normalized
+}
+
+func nodePeerHasRole(peer *desiredstatepb.NodePeer, want string) bool {
+	for _, role := range peer.GetRoles() {
+		if strings.TrimSpace(role) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func ingressHosts(ingress *desiredstatepb.Ingress) []string {

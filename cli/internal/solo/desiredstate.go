@@ -16,6 +16,7 @@ type desiredStateJSON struct {
 	Containers     []containerJSON `json:"containers,omitempty"`
 	Ingress        *ingressJSON    `json:"ingress,omitempty"`
 	ReleaseCommand *taskJSON       `json:"releaseCommand,omitempty"`
+	NodePeers      []nodePeerJSON  `json:"nodePeers,omitempty"`
 }
 
 type containerJSON struct {
@@ -56,13 +57,26 @@ type ingressJSON struct {
 	Mode         string         `json:"mode,omitempty"`
 	TLS          ingressTLSJSON `json:"tls,omitempty"`
 	RedirectHTTP bool           `json:"redirectHttp,omitempty"`
-	HTTP01Peers  []string       `json:"http01Peers,omitempty"`
 }
 
 type ingressTLSJSON struct {
 	Mode           string `json:"mode,omitempty"`
 	Email          string `json:"email,omitempty"`
 	CADirectoryURL string `json:"caDirectoryUrl,omitempty"`
+}
+
+type NodePeer struct {
+	Name          string
+	Roles         []string
+	PublicAddress string
+	Public        bool
+}
+
+type nodePeerJSON struct {
+	Name          string   `json:"name,omitempty"`
+	Roles         []string `json:"roles,omitempty"`
+	PublicAddress string   `json:"publicAddress,omitempty"`
+	Public        bool     `json:"public,omitempty"`
 }
 
 // BuildDesiredState produces desired-state JSON from a ProjectConfig, image tag,
@@ -81,9 +95,12 @@ func BuildDesiredStateForRoles(cfg *config.ProjectConfig, imageTag, revision str
 
 // BuildDesiredStateForNode produces desired-state JSON for one node, including
 // public ingress only when the node is a public web node.
-func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, roles []string, publicWebNode bool, includeReleaseCommand bool, http01Peers ...[]string) ([]byte, error) {
+func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, roles []string, publicWebNode bool, includeReleaseCommand bool, nodePeers ...[]NodePeer) ([]byte, error) {
 	ds := desiredStateJSON{
 		Revision: revision,
+	}
+	if len(nodePeers) > 0 {
+		ds.NodePeers = buildNodePeers(nodePeers[0])
 	}
 
 	if roles == nil || hasRole(roles, config.NodeRoleWeb) {
@@ -95,11 +112,7 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	}
 
 	if publicWebNode && cfg.Ingress != nil && (roles == nil || hasRole(roles, config.NodeRoleWeb)) {
-		peers := []string(nil)
-		if len(http01Peers) > 0 {
-			peers = http01Peers[0]
-		}
-		ds.Ingress = buildIngress(cfg.Ingress, peers)
+		ds.Ingress = buildIngress(cfg.Ingress)
 	}
 
 	if cfg.Worker != nil && (roles == nil || hasRole(roles, config.NodeRoleWorker)) {
@@ -135,7 +148,7 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	return data, nil
 }
 
-func buildIngress(ingress *config.IngressConfig, http01Peers []string) *ingressJSON {
+func buildIngress(ingress *config.IngressConfig) *ingressJSON {
 	if ingress == nil || len(ingress.Hosts) == 0 {
 		return nil
 	}
@@ -152,8 +165,40 @@ func buildIngress(ingress *config.IngressConfig, http01Peers []string) *ingressJ
 			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
 		},
 		RedirectHTTP: ingress.RedirectHTTP,
-		HTTP01Peers:  append([]string(nil), http01Peers...),
 	}
+}
+
+func buildNodePeers(peers []NodePeer) []nodePeerJSON {
+	out := make([]nodePeerJSON, 0, len(peers))
+	for _, peer := range peers {
+		name := strings.TrimSpace(peer.Name)
+		address := strings.TrimSpace(peer.PublicAddress)
+		roles := normalizedRoles(peer.Roles)
+		if name == "" && address == "" && len(roles) == 0 {
+			continue
+		}
+		out = append(out, nodePeerJSON{
+			Name:          name,
+			Roles:         roles,
+			PublicAddress: address,
+			Public:        peer.Public,
+		})
+	}
+	return out
+}
+
+func normalizedRoles(roles []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, role := range roles {
+		role = strings.TrimSpace(role)
+		if role == "" || seen[role] {
+			continue
+		}
+		seen[role] = true
+		out = append(out, role)
+	}
+	return out
 }
 
 func hasRole(roles []string, want string) bool {

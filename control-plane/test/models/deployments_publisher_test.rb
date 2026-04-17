@@ -706,7 +706,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal "assigned web nodes do not support direct_dns ingress: node-a", error.message
   end
 
-  test "direct_dns desired state includes acme peers for other public web nodes" do
+  test "direct_dns desired state includes other node peers" do
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     ensure_test_organization_runtime!(organization)
     project = organization.projects.create!(name: "Project A")
@@ -756,8 +756,14 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     state_a = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_a.reload.desired_state_object_path)
     state_b = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_b.reload.desired_state_object_path)
     assert_equal [ hostname ], state_a.dig("ingress", "hosts")
-    assert_equal [ "198.51.100.11" ], state_a.dig("ingress", "http01_peers")
-    assert_equal [ "198.51.100.10" ], state_b.dig("ingress", "http01_peers")
+
+    assert_equal [ "node-b", "worker-a" ], state_a.fetch("node_peers").map { |peer| peer.fetch("name") }
+    node_b_peer = state_a.fetch("node_peers").find { |peer| peer.fetch("name") == "node-b" }
+    assert_equal [ Node::LABEL_WEB ], node_b_peer.fetch("roles")
+    assert_equal true, node_b_peer.fetch("public")
+    assert_equal "198.51.100.11", node_b_peer.fetch("public_address")
+
+    assert_equal [ "198.51.100.10" ], state_b.fetch("node_peers").select { |peer| peer.fetch("roles").include?(Node::LABEL_WEB) }.map { |peer| peer.fetch("public_address") }
   end
 
   test "managed deploy claims a node bundle for a new environment" do

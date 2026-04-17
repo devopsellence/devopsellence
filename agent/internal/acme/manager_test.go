@@ -47,10 +47,10 @@ func TestHTTP01ProviderDoesNotForwardPeerRequests(t *testing.T) {
 
 func TestNodePeerPublicWebAddresses(t *testing.T) {
 	got := nodePeerPublicWebAddresses([]*desiredstatepb.NodePeer{
-		{Name: "web-a", Roles: []string{"web"}, Public: true, PublicAddress: "203.0.113.10"},
-		{Name: "web-b", Roles: []string{"web"}, Public: true, PublicAddress: "203.0.113.10"},
-		{Name: "worker-a", Roles: []string{"worker"}, Public: true, PublicAddress: "203.0.113.11"},
-		{Name: "private", Roles: []string{"web"}, Public: false, PublicAddress: "203.0.113.12"},
+		{Name: "web-a", Labels: []string{"web"}, PublicAddress: "203.0.113.10"},
+		{Name: "web-b", Labels: []string{"web"}, PublicAddress: "203.0.113.10"},
+		{Name: "worker-a", Labels: []string{"worker"}, PublicAddress: "203.0.113.11"},
+		{Name: "unlabeled", PublicAddress: "203.0.113.12"},
 	})
 	if len(got) != 1 || got[0] != "203.0.113.10" {
 		t.Fatalf("addresses = %#v, want 203.0.113.10", got)

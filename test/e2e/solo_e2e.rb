@@ -289,15 +289,10 @@ class SoloE2E
           { "name" => SECRET_VALUE_NAME, "secret" => "projects/x/secrets/e2e" }
         ]
       },
-      "nodes" => {
-        "node-1" => {
-          "roles" => ["web"],
-          "public" => true
-        }
-      },
       "solo" => {
         "nodes" => {
           "node-1" => {
+            "labels" => ["web"],
             "host" => "127.0.0.1",
             "user" => "root",
             "port" => @ssh_port,

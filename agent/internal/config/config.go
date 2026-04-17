@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	ModeNormal = "normal"
+	ModeShared = "shared"
 	ModeSolo   = "solo"
 )
 
@@ -108,7 +108,7 @@ func Load(args []string) (*Config, error) {
 		defaultNodeName = "devopsellence-node"
 	}
 
-	fs.StringVar(&mode, "mode", ModeNormal, "agent mode: normal or solo (solo skips control plane and GCP)")
+	fs.StringVar(&mode, "mode", ModeShared, "agent mode: shared or solo (solo skips control plane and GCP)")
 	fs.BoolVar(&showVersion, "version", false, "print build version and exit")
 	fs.StringVar(&metricsAddr, "metrics-addr", "127.0.0.1:9102", "metrics listen address")
 	fs.StringVar(&dockerSock, "docker-sock", "/var/run/docker.sock", "docker socket path")
@@ -128,7 +128,7 @@ func Load(args []string) (*Config, error) {
 	fs.IntVar(&envoyGID, "envoy-gid", 101, "numeric gid used by the envoy container process")
 	fs.StringVar(&envoyTLSCertPath, "envoy-tls-cert-path", "", "path to PEM certificate chain for the public HTTPS listener")
 	fs.StringVar(&envoyTLSKeyPath, "envoy-tls-key-path", "", "path to PEM private key for the public HTTPS listener")
-	fs.DurationVar(&ingressCertRenewBefore, "ingress-cert-renew-before", 30*24*time.Hour, "renew direct_dns TLS certificates before expiry by this duration")
+	fs.DurationVar(&ingressCertRenewBefore, "ingress-cert-renew-before", 30*24*time.Hour, "renew public TLS certificates before expiry by this duration")
 	fs.StringVar(&envoyRestartPolicy, "envoy-restart-policy", "unless-stopped", "envoy restart policy: no, always, unless-stopped, on-failure")
 	fs.UintVar(&webPort, "web-port", 3000, "web service port inside container")
 	fs.StringVar(&cloudflareTunnelTokenFile, "cloudflare-tunnel-token-file", "", "path to file containing cloudflared tunnel token")
@@ -198,8 +198,8 @@ func Load(args []string) (*Config, error) {
 		return cfg, nil
 	}
 
-	if cfg.Mode != ModeNormal && cfg.Mode != ModeSolo {
-		return nil, fmt.Errorf("--mode must be %q or %q", ModeNormal, ModeSolo)
+	if cfg.Mode != ModeShared && cfg.Mode != ModeSolo {
+		return nil, fmt.Errorf("--mode must be %q or %q", ModeShared, ModeSolo)
 	}
 
 	if cfg.AuthStatePath == "" {

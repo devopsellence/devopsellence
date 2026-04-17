@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 	"github.com/devopsellence/devopsellence/agent/internal/engine"
-	cerrdefs "github.com/containerd/errdefs"
 )
 
 type fakeEngine struct {
@@ -113,7 +113,7 @@ func TestReconcileCreatesCloudflaredWithIngressToken(t *testing.T) {
 	}, logger)
 
 	if err := mgr.Reconcile(context.Background(), &desiredstatepb.Ingress{
-		Hostname:    "abc123.devopsellence.io",
+		Hosts:       []string{"abc123.devopsellence.io"},
 		TunnelToken: "tok",
 	}); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -151,7 +151,7 @@ func TestReconcilePullsCloudflaredImageWhenMissing(t *testing.T) {
 	}, logger)
 
 	if err := mgr.Reconcile(context.Background(), &desiredstatepb.Ingress{
-		Hostname:    "abc123.devopsellence.io",
+		Hosts:       []string{"abc123.devopsellence.io"},
 		TunnelToken: "tok",
 	}); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -176,12 +176,12 @@ func TestReconcileNoopWhenRunningSameIngress(t *testing.T) {
 		NetworkName: "devopsellence",
 	}, logger)
 	mgr.lastAppliedFingerprint = ingressFingerprint(&desiredstatepb.Ingress{
-		Hostname:    "abc123.devopsellence.io",
+		Hosts:       []string{"abc123.devopsellence.io"},
 		TunnelToken: "tok",
 	})
 
 	if err := mgr.Reconcile(context.Background(), &desiredstatepb.Ingress{
-		Hostname:    "abc123.devopsellence.io",
+		Hosts:       []string{"abc123.devopsellence.io"},
 		TunnelToken: "tok",
 	}); err != nil {
 		t.Fatalf("reconcile: %v", err)

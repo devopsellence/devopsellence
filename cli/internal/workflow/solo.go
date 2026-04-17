@@ -92,7 +92,7 @@ type SharedNodeCreateOptions struct {
 type providerNodeCreateResult struct {
 	Node         config.SoloNode
 	Server       providers.Server
-	Roles        []string
+	Labels       []string
 	ProviderSlug string
 }
 
@@ -115,7 +115,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if opts.Name == "" {
 		return providerNodeCreateResult{}, fmt.Errorf("node name is required")
 	}
-	roles, err := parseSoloRoles(firstNonEmpty(opts.Labels, strings.Join(config.SoloDefaultRoles, ",")))
+	labels, err := parseSoloLabels(firstNonEmpty(opts.Labels, strings.Join(config.SoloDefaultLabels, ",")))
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
@@ -164,7 +164,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 		User:             "root",
 		Port:             22,
 		AgentStateDir:    "/var/lib/devopsellence",
-		Roles:            roles,
+		Labels:           labels,
 		Provider:         providerSlug,
 		ProviderServerID: server.ID,
 		ProviderRegion:   opts.Region,
@@ -180,7 +180,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	return providerNodeCreateResult{
 		Node:         node,
 		Server:       server,
-		Roles:        roles,
+		Labels:       labels,
 		ProviderSlug: providerSlug,
 	}, nil
 }
@@ -248,7 +248,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		wg.Add(1)
 		go func(name string, node config.SoloNode) {
 			defer wg.Done()
-			desiredStateJSON, err := solo.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Roles, soloNodePublic(cfg, name), name == releaseNode, soloNodePeers(cfg, name))
+			desiredStateJSON, err := solo.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Labels, hasSoloLabel(node.Labels, config.NodeLabelWeb), name == releaseNode, soloNodePeers(cfg, name))
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
@@ -307,18 +307,18 @@ func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config
 	workerNode := ""
 	for _, name := range sortedSoloNodeNames(nodes) {
 		node := nodes[name]
-		if webNode == "" && soloNodeCanRun(node, config.NodeRoleWeb) {
+		if webNode == "" && soloNodeCanRun(node, config.NodeLabelWeb) {
 			webNode = name
 		}
-		if workerNode == "" && soloNodeCanRun(node, config.NodeRoleWorker) {
+		if workerNode == "" && soloNodeCanRun(node, config.NodeLabelWorker) {
 			workerNode = name
 		}
 	}
 	if webNode == "" {
-		return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q", config.NodeRoleWeb)
+		return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q", config.NodeLabelWeb)
 	}
 	if cfg.Worker != nil && workerNode == "" {
-		return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q because worker is configured", config.NodeRoleWorker)
+		return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q because worker is configured", config.NodeLabelWorker)
 	}
 	if cfg.ReleaseCommand == "" {
 		return "", nil
@@ -327,11 +327,11 @@ func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config
 }
 
 func soloNodeCanRun(node config.SoloNode, label string) bool {
-	if node.Roles == nil {
+	if node.Labels == nil {
 		return true
 	}
-	for _, nodeRole := range node.Roles {
-		if strings.TrimSpace(nodeRole) == label {
+	for _, nodeLabel := range node.Labels {
+		if strings.TrimSpace(nodeLabel) == label {
 			return true
 		}
 	}
@@ -490,7 +490,7 @@ func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {
 	}
 	for _, name := range names {
 		node := cfg.Solo.Nodes[name]
-		a.Printer.Println(fmt.Sprintf("%s  host=%s  roles=%s public=%t", name, node.Host, strings.Join(node.Roles, ","), soloNodePublic(cfg, name)))
+		a.Printer.Println(fmt.Sprintf("%s  host=%s  labels=%s", name, node.Host, strings.Join(node.Labels, ",")))
 	}
 	return nil
 }
@@ -545,27 +545,23 @@ func (a *App) SoloNodeLabelSet(_ context.Context, opts SoloNodeLabelSetOptions) 
 		return fmt.Errorf("node %q not found in config", opts.Node)
 	}
 	node := soloNodeFromConfig(soloNode)
-	roles, err := parseSoloRoles(opts.Labels)
+	labels, err := parseSoloLabels(opts.Labels)
 	if err != nil {
 		return err
 	}
-	node.Roles = roles
+	node.Labels = labels
 	cfg.Solo.Nodes[opts.Node] = config.SoloNode(node)
-	if cfg.Nodes == nil {
-		cfg.Nodes = map[string]config.NodeConfig{}
-	}
-	cfg.Nodes[opts.Node] = config.NodeConfig{Roles: roles, Public: hasSoloRole(roles, config.NodeRoleWeb)}
 	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"node":        opts.Node,
-			"roles":       roles,
+			"labels":      labels,
 			"config_path": a.ConfigStore.PathFor(workspaceRoot),
 		})
 	}
-	a.Printer.Println("Updated solo node " + opts.Node + " roles: " + strings.Join(roles, ","))
+	a.Printer.Println("Updated solo node " + opts.Node + " labels: " + strings.Join(labels, ","))
 	return nil
 }
 
@@ -778,7 +774,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 		return a.Printer.PrintJSON(map[string]any{
 			"node":               opts.Name,
 			"host":               created.Node.Host,
-			"roles":              created.Roles,
+			"labels":             created.Labels,
 			"provider":           created.ProviderSlug,
 			"provider_server_id": created.Server.ID,
 			"config_path":        a.ConfigStore.PathFor(workspaceRoot),
@@ -832,7 +828,7 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 				"schema_version":     outputSchemaVersion,
 				"node":               opts.Name,
 				"host":               created.Node.Host,
-				"roles":              created.Roles,
+				"labels":             created.Labels,
 				"provider":           created.ProviderSlug,
 				"provider_server_id": created.Server.ID,
 				"registered":         false,
@@ -868,7 +864,7 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 			"schema_version":     outputSchemaVersion,
 			"node":               opts.Name,
 			"host":               created.Node.Host,
-			"roles":              created.Roles,
+			"labels":             created.Labels,
 			"provider":           created.ProviderSlug,
 			"provider_server_id": created.Server.ID,
 			"organization_id":    bootstrap.Organization.ID,
@@ -913,7 +909,6 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		return err
 	}
 	delete(cfg.Solo.Nodes, opts.Name)
-	delete(cfg.Nodes, opts.Name)
 	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 		return err
 	}
@@ -936,7 +931,7 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if err != nil {
 		return err
 	}
-	roles, err := a.promptLine("Labels", strings.Join(config.SoloDefaultRoles, ","))
+	labels, err := a.promptLine("Labels", strings.Join(config.SoloDefaultLabels, ","))
 	if err != nil {
 		return err
 	}
@@ -958,7 +953,7 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 			Provider:     "hetzner",
 			Region:       region,
 			Size:         size,
-			Labels:       roles,
+			Labels:       labels,
 			SSHPublicKey: sshPublicKey,
 		}); err != nil {
 			return err
@@ -981,7 +976,7 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if err != nil {
 		return err
 	}
-	parsedLabels, err := parseSoloRoles(roles)
+	parsedLabels, err := parseSoloLabels(labels)
 	if err != nil {
 		return err
 	}
@@ -991,7 +986,7 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 		SSHKey:        strings.TrimSpace(sshKey),
 		Port:          22,
 		AgentStateDir: "/var/lib/devopsellence",
-		Roles:         parsedLabels,
+		Labels:        parsedLabels,
 	}
 	if err := a.writeSoloNode(workspaceRoot, cfg, name, node); err != nil {
 		return err
@@ -1146,9 +1141,9 @@ func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig
 }
 
 func (a *App) writeSoloNode(workspaceRoot string, cfg *config.ProjectConfig, name string, node config.SoloNode) error {
-	roles := node.Roles
-	if len(roles) == 0 {
-		roles = append([]string(nil), config.SoloDefaultRoles...)
+	labels := node.Labels
+	if len(labels) == 0 {
+		labels = append([]string(nil), config.SoloDefaultLabels...)
 	}
 	if cfg.Solo == nil {
 		cfg.Solo = &config.SoloConfig{Nodes: map[string]config.SoloNode{}}
@@ -1156,12 +1151,8 @@ func (a *App) writeSoloNode(workspaceRoot string, cfg *config.ProjectConfig, nam
 	if cfg.Solo.Nodes == nil {
 		cfg.Solo.Nodes = map[string]config.SoloNode{}
 	}
-	node.Roles = roles
+	node.Labels = labels
 	cfg.Solo.Nodes[name] = config.SoloNode(node)
-	if cfg.Nodes == nil {
-		cfg.Nodes = map[string]config.NodeConfig{}
-	}
-	cfg.Nodes[name] = config.NodeConfig{Roles: roles, Public: hasSoloRole(roles, config.NodeRoleWeb)}
 	_, err := a.ConfigStore.Write(workspaceRoot, *cfg)
 	return err
 }
@@ -1199,20 +1190,13 @@ func soloNodeFromConfig(node config.SoloNode) config.SoloNode {
 	return config.SoloNode(node)
 }
 
-func hasSoloRole(roles []string, want string) bool {
-	for _, label := range roles {
+func hasSoloLabel(labels []string, want string) bool {
+	for _, label := range labels {
 		if strings.TrimSpace(label) == want {
 			return true
 		}
 	}
 	return false
-}
-
-func soloNodePublic(cfg *config.ProjectConfig, name string) bool {
-	if cfg == nil || cfg.Nodes == nil {
-		return false
-	}
-	return cfg.Nodes[name].Public
 }
 
 type ingressDNSReportResult struct {
@@ -1255,9 +1239,9 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 	if len(hosts) == 0 {
 		return ingressDNSReportResult{}, fmt.Errorf("ingress.hosts is not configured")
 	}
-	expected := publicWebNodeIPs(cfg, selected)
+	expected := webNodeIPs(cfg, selected)
 	if len(expected) == 0 {
-		return ingressDNSReportResult{}, fmt.Errorf("no public web nodes configured")
+		return ingressDNSReportResult{}, fmt.Errorf("no web nodes configured")
 	}
 	report := ingressDNSReportResult{
 		SchemaVersion: outputSchemaVersion,
@@ -1303,7 +1287,7 @@ func printIngressDNSReport(printer output.Printer, report ingressDNSReportResult
 	}
 }
 
-func publicWebNodeIPs(cfg *config.ProjectConfig, selected map[string]config.SoloNode) []string {
+func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.SoloNode) []string {
 	if cfg == nil || cfg.Solo == nil {
 		return nil
 	}
@@ -1315,11 +1299,11 @@ func publicWebNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Solo
 				continue
 			}
 		}
-		meta := cfg.Nodes[name]
-		if !meta.Public || !hasSoloRole(meta.Roles, config.NodeRoleWeb) {
+		node := cfg.Solo.Nodes[name]
+		if !hasSoloLabel(node.Labels, config.NodeLabelWeb) {
 			continue
 		}
-		host := strings.TrimSpace(cfg.Solo.Nodes[name].Host)
+		host := strings.TrimSpace(node.Host)
 		if host == "" || seen[host] {
 			continue
 		}
@@ -1339,15 +1323,14 @@ func soloNodePeers(cfg *config.ProjectConfig, currentNode string) []solo.NodePee
 		if name == currentNode {
 			continue
 		}
-		meta := cfg.Nodes[name]
-		host := strings.TrimSpace(cfg.Solo.Nodes[name].Host)
+		node := cfg.Solo.Nodes[name]
+		host := strings.TrimSpace(node.Host)
 		if host == "" {
 			continue
 		}
 		peers = append(peers, solo.NodePeer{
 			Name:          name,
-			Roles:         append([]string(nil), meta.Roles...),
-			Public:        meta.Public,
+			Labels:        append([]string(nil), node.Labels...),
 			PublicAddress: host,
 		})
 	}
@@ -1390,29 +1373,29 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func parseSoloRoles(value string) ([]string, error) {
+func parseSoloLabels(value string) ([]string, error) {
 	parts := strings.FieldsFunc(value, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\t' || r == '\n'
 	})
 	seen := map[string]bool{}
-	roles := make([]string, 0, len(parts))
+	labels := make([]string, 0, len(parts))
 	for _, part := range parts {
 		label := strings.TrimSpace(part)
 		if label == "" || seen[label] {
 			continue
 		}
 		switch label {
-		case config.NodeRoleWeb, config.NodeRoleWorker:
+		case config.NodeLabelWeb, config.NodeLabelWorker:
 		default:
-			return nil, fmt.Errorf("unsupported solo node role %q: use web or worker", label)
+			return nil, fmt.Errorf("unsupported solo node label %q: use web or worker", label)
 		}
 		seen[label] = true
-		roles = append(roles, label)
+		labels = append(labels, label)
 	}
-	if len(roles) == 0 {
-		return nil, fmt.Errorf("at least one solo node role is required")
+	if len(labels) == 0 {
+		return nil, fmt.Errorf("at least one solo node label is required")
 	}
-	return roles, nil
+	return labels, nil
 }
 
 func applySoloRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, secrets map[string]string) (string, error) {

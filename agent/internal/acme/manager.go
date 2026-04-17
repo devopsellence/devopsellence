@@ -334,7 +334,7 @@ func needsAutoTLS(ingress *desiredstatepb.Ingress) bool {
 		return false
 	}
 	switch strings.TrimSpace(ingress.Mode) {
-	case "public", "direct_dns":
+	case "public":
 	default:
 		return false
 	}
@@ -363,7 +363,7 @@ func ingressCADirectoryURL(ingress *desiredstatepb.Ingress) string {
 func nodePeerPublicWebAddresses(peers []*desiredstatepb.NodePeer) []string {
 	normalized := make([]string, 0, len(peers))
 	for _, peer := range peers {
-		if peer == nil || !peer.GetPublic() || !nodePeerHasRole(peer, "web") {
+		if peer == nil || !nodePeerHasLabel(peer, "web") {
 			continue
 		}
 		normalized = append(normalized, peer.GetPublicAddress())
@@ -386,9 +386,9 @@ func normalizeNodePeerAddresses(peers []string) []string {
 	return normalized
 }
 
-func nodePeerHasRole(peer *desiredstatepb.NodePeer, want string) bool {
-	for _, role := range peer.GetRoles() {
-		if strings.TrimSpace(role) == want {
+func nodePeerHasLabel(peer *desiredstatepb.NodePeer, want string) bool {
+	for _, label := range peer.GetLabels() {
+		if strings.TrimSpace(label) == want {
 			return true
 		}
 	}
@@ -405,9 +405,6 @@ func ingressHosts(ingress *desiredstatepb.Ingress) []string {
 		}
 		seen[host] = true
 		hosts = append(hosts, host)
-	}
-	if legacy := strings.TrimSpace(ingress.GetHostname()); legacy != "" && !seen[legacy] {
-		hosts = append(hosts, legacy)
 	}
 	sort.Strings(hosts)
 	return hosts

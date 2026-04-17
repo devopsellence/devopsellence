@@ -25,10 +25,10 @@ const acmeChallengeClusterName = "devopsellence_acme_http01"
 
 // snapshotParams holds the full desired configuration for an xDS snapshot.
 type snapshotParams struct {
-	port        uint16
-	clusterName string
-	directDNS   *directDNSListenerConfig // nil when not in direct_dns mode
-	endpoint    *endpointState           // nil when no upstream is assigned yet
+	port          uint16
+	clusterName   string
+	publicIngress *publicIngressListenerConfig // nil when not in public mode
+	endpoint      *endpointState               // nil when no upstream is assigned yet
 }
 
 type endpointState struct {
@@ -46,8 +46,8 @@ func buildSnapshot(version string, p snapshotParams) (*cachev3.Snapshot, error) 
 		return nil, fmt.Errorf("build cluster: %w", err)
 	}
 	clusters := []cachetypes.Resource{cluster}
-	if p.directDNS != nil && p.directDNS.ChallengeEnabled {
-		challengeCluster, err := buildStaticCluster(acmeChallengeClusterName, p.directDNS.ChallengeHost, p.directDNS.ChallengePort)
+	if p.publicIngress != nil && p.publicIngress.ChallengeEnabled {
+		challengeCluster, err := buildStaticCluster(acmeChallengeClusterName, p.publicIngress.ChallengeHost, p.publicIngress.ChallengePort)
 		if err != nil {
 			return nil, fmt.Errorf("build acme challenge cluster: %w", err)
 		}
@@ -73,19 +73,19 @@ func buildListeners(p snapshotParams) ([]cachetypes.Resource, error) {
 		return nil, err
 	}
 	listeners := []cachetypes.Resource{httpListener}
-	if p.directDNS != nil {
+	if p.publicIngress != nil {
 		var publicHTTP *listenerv3.Listener
-		if p.directDNS.RedirectHTTP {
-			publicHTTP, err = buildHTTPRedirectListener(p.directDNS.HTTPPort, p.directDNS.Hosts, p.directDNS.ChallengeEnabled)
+		if p.publicIngress.RedirectHTTP {
+			publicHTTP, err = buildHTTPRedirectListener(p.publicIngress.HTTPPort, p.publicIngress.Hosts, p.publicIngress.ChallengeEnabled)
 		} else {
-			publicHTTP, err = buildPublicHTTPListener(p.directDNS.HTTPPort, p.clusterName, p.directDNS.Hosts, p.directDNS.ChallengeEnabled)
+			publicHTTP, err = buildPublicHTTPListener(p.publicIngress.HTTPPort, p.clusterName, p.publicIngress.Hosts, p.publicIngress.ChallengeEnabled)
 		}
 		if err != nil {
 			return nil, err
 		}
 		listeners = append(listeners, publicHTTP)
-		if p.directDNS.TLSEnabled {
-			httpsListener, err := buildHTTPSListener(p.directDNS, p.clusterName)
+		if p.publicIngress.TLSEnabled {
+			httpsListener, err := buildHTTPSListener(p.publicIngress, p.clusterName)
 			if err != nil {
 				return nil, err
 			}
@@ -137,7 +137,7 @@ func buildHTTPRedirectListener(port uint16, domains []string, challenge bool) (*
 	}, nil
 }
 
-func buildHTTPSListener(listener *directDNSListenerConfig, clusterName string) (*listenerv3.Listener, error) {
+func buildHTTPSListener(listener *publicIngressListenerConfig, clusterName string) (*listenerv3.Listener, error) {
 	hcmAny, err := buildHCMAnyWithDomains(
 		"ingress_public_https",
 		"public_route_https",

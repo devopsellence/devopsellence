@@ -20,9 +20,8 @@ import (
 )
 
 const (
-	ingressModeTunnel    = "tunnel"
-	ingressModeDirectDNS = "direct_dns"
-	ingressModePublic    = "public"
+	ingressModeTunnel = "tunnel"
+	ingressModePublic = "public"
 )
 
 type Config struct {
@@ -102,7 +101,7 @@ func New(engine engine.Engine, config Config, logger *slog.Logger) *Manager {
 }
 
 func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error {
-	directDNSListener, err := m.directDNSListenerConfig(ingress)
+	publicIngressListener, err := m.publicIngressListenerConfig(ingress)
 	if err != nil {
 		return err
 	}
@@ -116,7 +115,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 	// Push current snapshot so Envoy gets config immediately on connect.
 	// If lastEndpoint is nil (no web service yet), Envoy will get an empty EDS;
 	// UpdateEDS will push the full snapshot once the web container becomes healthy.
-	if err := m.applySnapshot(directDNSListener); err != nil {
+	if err := m.applySnapshot(publicIngressListener); err != nil {
 		return err
 	}
 
@@ -195,11 +194,11 @@ func (m *Manager) ensureImage(ctx context.Context) error {
 // UpdateEDS pushes a new xDS snapshot that routes traffic to the given endpoint.
 func (m *Manager) UpdateEDS(ctx context.Context, address string, port uint16) error {
 	m.lastEndpoint = &endpointState{address: address, port: port}
-	directDNSListener, err := m.directDNSListenerConfig(m.lastIngress)
+	publicIngressListener, err := m.publicIngressListenerConfig(m.lastIngress)
 	if err != nil {
 		return err
 	}
-	return m.applySnapshot(directDNSListener)
+	return m.applySnapshot(publicIngressListener)
 }
 
 func (m *Manager) WaitForRoute(ctx context.Context, path string) error {
@@ -217,13 +216,13 @@ func (m *Manager) WaitForRoute(ctx context.Context, path string) error {
 	}
 }
 
-func (m *Manager) applySnapshot(directDNS *directDNSListenerConfig) error {
+func (m *Manager) applySnapshot(publicIngress *publicIngressListenerConfig) error {
 	version := fmt.Sprintf("%d", m.snapshotVersion.Add(1))
 	snap, err := buildSnapshot(version, snapshotParams{
-		port:        m.config.Port,
-		clusterName: m.config.ClusterName,
-		directDNS:   directDNS,
-		endpoint:    m.lastEndpoint,
+		port:          m.config.Port,
+		clusterName:   m.config.ClusterName,
+		publicIngress: publicIngress,
+		endpoint:      m.lastEndpoint,
 	})
 	if err != nil {
 		return fmt.Errorf("build xds snapshot: %w", err)
@@ -260,7 +259,7 @@ func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingre
 		Health:  m.config.Healthcheck,
 		Restart: engine.RestartPolicyFromString(m.config.RestartPolicy),
 	}
-	if directDNSListenerConfigEnabled(ingress) {
+	if publicIngressListenerConfigEnabled(ingress) {
 		spec.ExtraHosts = []string{"host.docker.internal:host-gateway"}
 	}
 	spec.Ports = portBindingsForIngress(m.config.Port, ingress)
@@ -272,9 +271,9 @@ func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingre
 	return nil
 }
 
-func directDNSListenerConfigEnabled(ingress *desiredstatepb.Ingress) bool {
+func publicIngressListenerConfigEnabled(ingress *desiredstatepb.Ingress) bool {
 	switch normalizedIngressMode(ingress) {
-	case ingressModeDirectDNS, ingressModePublic:
+	case ingressModePublic:
 		return true
 	default:
 		return false
@@ -382,9 +381,9 @@ func normalizedRoutePath(path string) string {
 	return "/" + trimmed
 }
 
-func (m *Manager) directDNSListenerConfig(ingress *desiredstatepb.Ingress) (*directDNSListenerConfig, error) {
+func (m *Manager) publicIngressListenerConfig(ingress *desiredstatepb.Ingress) (*publicIngressListenerConfig, error) {
 	switch normalizedIngressMode(ingress) {
-	case ingressModeDirectDNS, ingressModePublic:
+	case ingressModePublic:
 	default:
 		return nil, nil
 	}
@@ -405,7 +404,7 @@ func (m *Manager) directDNSListenerConfig(ingress *desiredstatepb.Ingress) (*dir
 		certificatePEM, err = os.ReadFile(m.config.TLSCertPath)
 		if err != nil {
 			if tlsMode == "auto" && os.IsNotExist(err) {
-				return &directDNSListenerConfig{
+				return &publicIngressListenerConfig{
 					HTTPPort:         m.config.PublicHTTPPort,
 					HTTPSPort:        m.config.PublicHTTPSPort,
 					Hosts:            ingressHosts(ingress),
@@ -421,7 +420,7 @@ func (m *Manager) directDNSListenerConfig(ingress *desiredstatepb.Ingress) (*dir
 		privateKeyPEM, err = os.ReadFile(m.config.TLSKeyPath)
 		if err != nil {
 			if tlsMode == "auto" && os.IsNotExist(err) {
-				return &directDNSListenerConfig{
+				return &publicIngressListenerConfig{
 					HTTPPort:         m.config.PublicHTTPPort,
 					HTTPSPort:        m.config.PublicHTTPSPort,
 					Hosts:            ingressHosts(ingress),
@@ -437,7 +436,7 @@ func (m *Manager) directDNSListenerConfig(ingress *desiredstatepb.Ingress) (*dir
 		tlsEnabled = true
 	}
 
-	return &directDNSListenerConfig{
+	return &publicIngressListenerConfig{
 		HTTPPort:         m.config.PublicHTTPPort,
 		HTTPSPort:        m.config.PublicHTTPSPort,
 		Hosts:            ingressHosts(ingress),
@@ -457,7 +456,7 @@ func publishHostPortForIngress(ingress *desiredstatepb.Ingress) bool {
 
 func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress) []engine.PortBinding {
 	switch normalizedIngressMode(ingress) {
-	case ingressModeDirectDNS, ingressModePublic:
+	case ingressModePublic:
 		ports := []engine.PortBinding{{
 			ContainerPort: 8080,
 			HostPort:      80,
@@ -550,9 +549,6 @@ func ingressHosts(ingress *desiredstatepb.Ingress) []string {
 		}
 		seen[host] = true
 		hosts = append(hosts, host)
-	}
-	if legacy := strings.TrimSpace(ingress.Hostname); legacy != "" && !seen[legacy] {
-		hosts = append(hosts, legacy)
 	}
 	return hosts
 }

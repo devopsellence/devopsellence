@@ -71,7 +71,7 @@ func newFakeRemoteServer() *fakeRemoteServer {
 		desiredPayload: []byte(`{
   "revision": "rev-1",
   "ingress": {
-    "hostname": "abc123.devopsellence.io",
+    "hosts": ["abc123.devopsellence.io"],
     "tunnel_token_secret_ref": "gsm://projects/test-project/secrets/API_KEY/versions/7"
   },
   "containers": [
@@ -390,7 +390,7 @@ func TestFetchReadsDesiredStateOverControlPlaneHTTPAndCachesETag(t *testing.T) {
 	serverState.desiredPayload = []byte(fmt.Sprintf(`{
   "revision": "rev-http",
   "ingress": {
-    "hostname": "abc123.devopsellence.io",
+    "hosts": ["abc123.devopsellence.io"],
     "tunnel_token_secret_ref": "%s/api/v1/agent/secrets/environment_bundles/1/tunnel_token"
   },
   "containers": [

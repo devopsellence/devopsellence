@@ -123,7 +123,7 @@ func TestBuildDesiredState_WithWorkerAndReleaseCommand(t *testing.T) {
 	}
 }
 
-func TestBuildDesiredStateForRolesFiltersServices(t *testing.T) {
+func TestBuildDesiredStateForLabelsFiltersServices(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: "myapp",
 		Web: config.ServiceConfig{
@@ -140,7 +140,7 @@ func TestBuildDesiredStateForRolesFiltersServices(t *testing.T) {
 		ReleaseCommand: "rails db:migrate",
 	}
 
-	data, err := BuildDesiredStateForRoles(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWorker}, false)
+	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWorker}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestBuildDesiredStateForRolesFiltersServices(t *testing.T) {
 	}
 }
 
-func TestBuildDesiredStateForRolesIncludesReleaseWhenSelected(t *testing.T) {
+func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: "myapp",
 		Web: config.ServiceConfig{
@@ -168,7 +168,7 @@ func TestBuildDesiredStateForRolesIncludesReleaseWhenSelected(t *testing.T) {
 		ReleaseCommand: "rails db:migrate",
 	}
 
-	data, err := BuildDesiredStateForRoles(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWeb}, true)
+	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWeb}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,10 +204,9 @@ func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
 		},
 	}
 
-	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWeb}, true, false, []NodePeer{{
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWeb}, true, false, []NodePeer{{
 		Name:          "web-b",
-		Roles:         []string{config.NodeRoleWeb},
-		Public:        true,
+		Labels:        []string{config.NodeLabelWeb},
 		PublicAddress: "203.0.113.11",
 	}})
 	if err != nil {
@@ -226,7 +225,7 @@ func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
 	if ds.Ingress.Mode != "public" || ds.Ingress.TLS.Mode != "auto" || ds.Ingress.TLS.Email != "ops@example.com" || !ds.Ingress.RedirectHTTP {
 		t.Fatalf("ingress = %#v", ds.Ingress)
 	}
-	if len(ds.NodePeers) != 1 || ds.NodePeers[0].Name != "web-b" || ds.NodePeers[0].PublicAddress != "203.0.113.11" || !ds.NodePeers[0].Public {
+	if len(ds.NodePeers) != 1 || ds.NodePeers[0].Name != "web-b" || ds.NodePeers[0].PublicAddress != "203.0.113.11" {
 		t.Fatalf("node peers = %#v", ds.NodePeers)
 	}
 }
@@ -244,7 +243,7 @@ func TestBuildDesiredStateForNodeOmitsIngressForWorkerNode(t *testing.T) {
 		Ingress: &config.IngressConfig{Hosts: []string{"app.example.com"}},
 	}
 
-	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeRoleWorker}, true, false)
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWorker}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

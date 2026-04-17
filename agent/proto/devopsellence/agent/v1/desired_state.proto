@@ -59,7 +59,6 @@ message Ingress {
   bool redirect_http = 4;
   string tunnel_token = 5;
   string tunnel_token_secret_ref = 6;
-  string hostname = 7 [deprecated = true];
 }
 
 message IngressTLS {
@@ -70,7 +69,6 @@ message IngressTLS {
 
 message NodePeer {
   string name = 1;
-  repeated string roles = 2;
+  repeated string labels = 2;
   string public_address = 3;
-  bool public = 4;
 }

@@ -15,7 +15,7 @@ type originListenerConfig struct {
 	KeyPath  string
 }
 
-type directDNSListenerConfig struct {
+type publicIngressListenerConfig struct {
 	HTTPPort         uint16
 	HTTPSPort        uint16
 	Hosts            []string

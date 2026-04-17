@@ -80,7 +80,7 @@ func main() {
 	if cfg.Mode == config.ModeSolo {
 		runSolo(ctx, cfg, eng, logger, metrics)
 	} else {
-		runNormal(ctx, cfg, eng, logger, registry, metrics)
+		runShared(ctx, cfg, eng, logger, registry, metrics)
 	}
 }
 
@@ -107,6 +107,14 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 		TunnelToken:    cfg.CloudflareTunnelToken,
 		StartupTimeout: cfg.StopTimeout,
 	}, logger)
+	ingressCertManager := acme.New(acme.Config{
+		CertPath:    cfg.EnvoyTLSCertPath,
+		KeyPath:     cfg.EnvoyTLSKeyPath,
+		FileUID:     cfg.EnvoyUID,
+		FileGID:     cfg.EnvoyGID,
+		RenewBefore: cfg.IngressCertRenewBefore,
+		Logger:      logger,
+	})
 
 	reconciler := reconcile.New(eng, reconcile.Options{
 		Network:     cfg.NetworkName,
@@ -115,6 +123,7 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 		WebPort:     cfg.WebPort,
 		Envoy:       envoyManager,
 		Cloudflared: cloudflaredManager,
+		IngressCert: ingressCertManager,
 		Logger:      logger,
 	})
 
@@ -136,7 +145,7 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 	}
 }
 
-func runNormal(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, _ *prometheus.Registry, metrics *observability.Metrics) {
+func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, _ *prometheus.Registry, metrics *observability.Metrics) {
 	var systemImagePrefetcher *systemimages.Prefetcher
 	var prefetchOnce sync.Once
 	triggerSystemImagePrefetch := func() {

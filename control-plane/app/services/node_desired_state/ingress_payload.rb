@@ -14,9 +14,8 @@ module NodeDesiredState
         return nil unless ingress.status == EnvironmentIngress::STATUS_READY
 
         {
-          hostname: ingress.hostname,
+          hosts: [ ingress.hostname ],
           mode: Environment::INGRESS_STRATEGY_TUNNEL,
-          public_url: ingress.public_url,
           tunnel_token_secret_ref: ingress.tunnel_token_secret_ref
         }
       else
@@ -24,9 +23,7 @@ module NodeDesiredState
 
         {
           hosts: [ ingress.hostname ],
-          hostname: ingress.hostname,
           mode: "public",
-          public_url: ingress.public_url,
           tls: {
             mode: "auto"
           },

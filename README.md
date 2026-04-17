@@ -59,7 +59,7 @@ devopsellence deploy
 devopsellence status
 ```
 
-Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each public web node, then configure hostnames:
+Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each web node, then configure hostnames:
 
 ```bash
 devopsellence ingress set --host app.example.com --tls-email ops@example.com
@@ -122,17 +122,14 @@ ingress:
     mode: auto
     email: ops@example.com
   redirect_http: true
-nodes:
-  prod-1:
-    roles:
-      - web
-    public: true
 solo:
   nodes:
     prod-1:
       host: 203.0.113.10
       user: root
       ssh_key: ~/.ssh/id_ed25519
+      labels:
+        - web
 ```
 
 ## Need more than solo mode?

@@ -83,7 +83,7 @@ func TestFetchReadsStandaloneHTTPDesiredStateIngressSecret(t *testing.T) {
 	serverState.desiredPayload = []byte(`{
   "revision": "rev-http",
   "ingress": {
-    "hostname": "abc123.devopsellence.io",
+    "hosts": ["abc123.devopsellence.io"],
     "tunnel_token_secret_ref": "` + server.URL + `/api/v1/agent/secrets/environment_secrets/1"
   },
   "containers": []

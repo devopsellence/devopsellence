@@ -118,7 +118,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal release.image_reference_for(organization), desired_state.dig("containers", 0, "image")
     assert_equal 3000, desired_state.dig("containers", 0, "port")
     assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, desired_state.dig("containers", 0, "secretRefs"))
-    assert_equal hostname, desired_state.dig("ingress", "hostname")
+    assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
     assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnel_token_secret_ref")
     assert_equal "/up", desired_state.dig("containers", 0, "healthcheck", "path")
     assert_equal 3000, desired_state.dig("containers", 0, "healthcheck", "port")
@@ -342,7 +342,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
     assert_equal %w[web worker], desired_state.fetch("containers").map { |entry| entry.fetch("serviceName") }
     assert_equal "./bin/jobs", desired_state.dig("containers", 1, "command", 0)
-    assert_equal hostname, desired_state.dig("ingress", "hostname")
+    assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
   end
 
   test "renders environment-scoped volume names in desired state" do
@@ -461,7 +461,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       },
       desired_state.dig("containers", 0, "secretRefs")
     )
-    assert_equal hostname, desired_state.dig("ingress", "hostname")
+    assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
   end
 
   test "provisions ingress before publishing web releases" do
@@ -558,7 +558,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal hostname, desired_state.dig("ingress", "hostname")
+    assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
     assert_equal Environment::INGRESS_STRATEGY_TUNNEL, desired_state.dig("ingress", "mode")
   end
 
@@ -759,11 +759,10 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
     assert_equal [ "node-b", "worker-a" ], state_a.fetch("node_peers").map { |peer| peer.fetch("name") }
     node_b_peer = state_a.fetch("node_peers").find { |peer| peer.fetch("name") == "node-b" }
-    assert_equal [ Node::LABEL_WEB ], node_b_peer.fetch("roles")
-    assert_equal true, node_b_peer.fetch("public")
+    assert_equal [ Node::LABEL_WEB ], node_b_peer.fetch("labels")
     assert_equal "198.51.100.11", node_b_peer.fetch("public_address")
 
-    assert_equal [ "198.51.100.10" ], state_b.fetch("node_peers").select { |peer| peer.fetch("roles").include?(Node::LABEL_WEB) }.map { |peer| peer.fetch("public_address") }
+    assert_equal [ "198.51.100.10" ], state_b.fetch("node_peers").select { |peer| peer.fetch("labels").include?(Node::LABEL_WEB) }.map { |peer| peer.fetch("public_address") }
   end
 
   test "managed deploy claims a node bundle for a new environment" do

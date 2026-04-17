@@ -21,12 +21,12 @@ const (
 	DefaultWebPort         = 3000
 	AppTypeRails           = "rails"
 	AppTypeGeneric         = "generic"
-	NodeRoleWeb            = "web"
-	NodeRoleWorker         = "worker"
+	NodeLabelWeb           = "web"
+	NodeLabelWorker        = "worker"
 )
 
 var DefaultBuildPlatforms = []string{"linux/amd64"}
-var SoloDefaultRoles = []string{NodeRoleWeb}
+var SoloDefaultLabels = []string{NodeLabelWeb}
 
 type Volume struct {
 	Source string `yaml:"source" json:"source"`
@@ -65,11 +65,6 @@ type AppConfig struct {
 	Type string `yaml:"type,omitempty" json:"type,omitempty"`
 }
 
-type NodeConfig struct {
-	Roles  []string `yaml:"roles,omitempty" json:"roles,omitempty"`
-	Public bool     `yaml:"public,omitempty" json:"public,omitempty"`
-}
-
 type IngressTLSConfig struct {
 	Mode           string `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Email          string `yaml:"email,omitempty" json:"email,omitempty"`
@@ -88,7 +83,7 @@ type SoloNode struct {
 	Port             int      `yaml:"port,omitempty" json:"port,omitempty"`
 	SSHKey           string   `yaml:"ssh_key,omitempty" json:"ssh_key,omitempty"`
 	AgentStateDir    string   `yaml:"agent_state_dir,omitempty" json:"agent_state_dir,omitempty"`
-	Roles            []string `yaml:"-" json:"-"` // runtime copy from top-level nodes.<name>.roles
+	Labels           []string `yaml:"labels,omitempty" json:"labels,omitempty"`
 	Provider         string   `yaml:"provider,omitempty" json:"provider,omitempty"`
 	ProviderServerID string   `yaml:"provider_server_id,omitempty" json:"provider_server_id,omitempty"`
 	ProviderRegion   string   `yaml:"provider_region,omitempty" json:"provider_region,omitempty"`
@@ -119,19 +114,18 @@ type LegacyDirectConfig struct {
 }
 
 type ProjectConfig struct {
-	SchemaVersion      int                   `yaml:"schema_version" json:"schema_version"`
-	App                AppConfig             `yaml:"app,omitempty" json:"app,omitempty"`
-	Organization       string                `yaml:"organization" json:"organization"`
-	Project            string                `yaml:"project" json:"project"`
-	DefaultEnvironment string                `yaml:"default_environment" json:"default_environment"`
-	Build              BuildConfig           `yaml:"build" json:"build"`
-	Web                ServiceConfig         `yaml:"web" json:"web"`
-	Worker             *ServiceConfig        `yaml:"worker,omitempty" json:"worker,omitempty"`
-	ReleaseCommand     string                `yaml:"release_command,omitempty" json:"release_command,omitempty"`
-	Ingress            *IngressConfig        `yaml:"ingress,omitempty" json:"ingress,omitempty"`
-	Nodes              map[string]NodeConfig `yaml:"nodes,omitempty" json:"nodes,omitempty"`
-	Solo               *SoloConfig           `yaml:"solo,omitempty" json:"solo,omitempty"`
-	LegacyDirect       *LegacyDirectConfig   `yaml:"direct,omitempty" json:"direct,omitempty"` // legacy schema v3 migration input only
+	SchemaVersion      int                 `yaml:"schema_version" json:"schema_version"`
+	App                AppConfig           `yaml:"app,omitempty" json:"app,omitempty"`
+	Organization       string              `yaml:"organization" json:"organization"`
+	Project            string              `yaml:"project" json:"project"`
+	DefaultEnvironment string              `yaml:"default_environment" json:"default_environment"`
+	Build              BuildConfig         `yaml:"build" json:"build"`
+	Web                ServiceConfig       `yaml:"web" json:"web"`
+	Worker             *ServiceConfig      `yaml:"worker,omitempty" json:"worker,omitempty"`
+	ReleaseCommand     string              `yaml:"release_command,omitempty" json:"release_command,omitempty"`
+	Ingress            *IngressConfig      `yaml:"ingress,omitempty" json:"ingress,omitempty"`
+	Solo               *SoloConfig         `yaml:"solo,omitempty" json:"solo,omitempty"`
+	LegacyDirect       *LegacyDirectConfig `yaml:"direct,omitempty" json:"direct,omitempty"` // legacy schema v3 migration input only
 }
 
 type Project = ProjectConfig
@@ -362,25 +356,6 @@ func Validate(cfg *ProjectConfig) error {
 			return fmt.Errorf("ingress.tls.mode must be auto, off, or manual")
 		}
 	}
-	if cfg.Nodes != nil {
-		for name, node := range cfg.Nodes {
-			if strings.TrimSpace(name) == "" {
-				return errors.New("nodes keys must be present")
-			}
-			if len(node.Roles) == 0 {
-				return fmt.Errorf("nodes.%s.roles must include at least one role", name)
-			}
-			for _, role := range node.Roles {
-				switch strings.TrimSpace(role) {
-				case NodeRoleWeb, NodeRoleWorker:
-				case "":
-					return fmt.Errorf("nodes.%s.roles entries must be present", name)
-				default:
-					return fmt.Errorf("nodes.%s.roles contains unsupported role %q", name, role)
-				}
-			}
-		}
-	}
 	if cfg.Solo != nil {
 		for name, node := range cfg.Solo.Nodes {
 			if strings.TrimSpace(name) == "" {
@@ -392,10 +367,22 @@ func Validate(cfg *ProjectConfig) error {
 			if strings.TrimSpace(node.User) == "" {
 				return fmt.Errorf("solo.nodes.%s.user is required", name)
 			}
+			if len(node.Labels) == 0 {
+				return fmt.Errorf("solo.nodes.%s.labels must include at least one label", name)
+			}
+			for _, label := range node.Labels {
+				switch strings.TrimSpace(label) {
+				case NodeLabelWeb, NodeLabelWorker:
+				case "":
+					return fmt.Errorf("solo.nodes.%s.labels entries must be present", name)
+				default:
+					return fmt.Errorf("solo.nodes.%s.labels contains unsupported label %q", name, label)
+				}
+			}
 		}
 	}
 	if cfg.LegacyDirect != nil {
-		return errors.New("direct.nodes has been replaced by solo.nodes and top-level nodes; re-run `devopsellence setup`")
+		return errors.New("direct.nodes has been replaced by solo.nodes; re-run `devopsellence setup`")
 	}
 	return nil
 }
@@ -467,19 +454,9 @@ func applyDefaults(cfg *ProjectConfig) {
 			cfg.Ingress.RedirectHTTP = true
 		}
 	}
-	for name, node := range cfg.Nodes {
-		node.Roles = normalizeNodeRoles(node.Roles)
-		if len(node.Roles) == 0 {
-			node.Roles = append([]string(nil), SoloDefaultRoles...)
-		}
-		cfg.Nodes[name] = node
-	}
 	if cfg.Solo != nil {
 		if cfg.Solo.Nodes == nil {
 			cfg.Solo.Nodes = map[string]SoloNode{}
-		}
-		if cfg.Nodes == nil && len(cfg.Solo.Nodes) > 0 {
-			cfg.Nodes = map[string]NodeConfig{}
 		}
 		for name, node := range cfg.Solo.Nodes {
 			if node.Port == 0 {
@@ -488,20 +465,11 @@ func applyDefaults(cfg *ProjectConfig) {
 			if node.AgentStateDir == "" {
 				node.AgentStateDir = "/var/lib/devopsellence"
 			}
-			meta := cfg.Nodes[name]
-			roles := normalizeNodeRoles(meta.Roles)
-			if len(roles) == 0 {
-				roles = normalizeNodeRoles(node.Roles)
+			labels := normalizeNodeLabels(node.Labels)
+			if len(labels) == 0 {
+				labels = append([]string(nil), SoloDefaultLabels...)
 			}
-			if len(roles) == 0 {
-				roles = append([]string(nil), SoloDefaultRoles...)
-			}
-			meta.Roles = roles
-			if !meta.Public && hasRole(roles, NodeRoleWeb) {
-				meta.Public = true
-			}
-			cfg.Nodes[name] = meta
-			node.Roles = append([]string(nil), roles...)
+			node.Labels = append([]string(nil), labels...)
 			cfg.Solo.Nodes[name] = node
 		}
 	}
@@ -525,19 +493,19 @@ func normalizeLegacyDirectLabels(labels []string) []string {
 	return normalized
 }
 
-func normalizeNodeRoles(roles []string) []string {
-	if roles == nil {
+func normalizeNodeLabels(labels []string) []string {
+	if labels == nil {
 		return nil
 	}
-	seen := make(map[string]bool, len(roles))
-	normalized := make([]string, 0, len(roles))
-	for _, role := range roles {
-		role = strings.TrimSpace(role)
-		if role == "" || seen[role] {
+	seen := make(map[string]bool, len(labels))
+	normalized := make([]string, 0, len(labels))
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label == "" || seen[label] {
 			continue
 		}
-		seen[role] = true
-		normalized = append(normalized, role)
+		seen[label] = true
+		normalized = append(normalized, label)
 	}
 	return normalized
 }
@@ -566,19 +534,9 @@ func migrateLegacySoloConfig(cfg *ProjectConfig) {
 	if cfg.Solo.Nodes == nil {
 		cfg.Solo.Nodes = map[string]SoloNode{}
 	}
-	if cfg.Nodes == nil {
-		cfg.Nodes = map[string]NodeConfig{}
-	}
 	for name, node := range cfg.LegacyDirect.Nodes {
 		if _, ok := cfg.Solo.Nodes[name]; !ok {
 			cfg.Solo.Nodes[name] = soloNodeFromLegacyDirectNode(node)
-		}
-		if _, ok := cfg.Nodes[name]; !ok {
-			roles := normalizeNodeRoles(node.Labels)
-			if roles == nil {
-				roles = []string{NodeRoleWeb, NodeRoleWorker}
-			}
-			cfg.Nodes[name] = NodeConfig{Roles: roles, Public: hasRole(roles, NodeRoleWeb)}
 		}
 	}
 	cfg.LegacyDirect = nil
@@ -586,28 +544,23 @@ func migrateLegacySoloConfig(cfg *ProjectConfig) {
 }
 
 func soloNodeFromLegacyDirectNode(node LegacyDirectNode) SoloNode {
+	labels := normalizeLegacyDirectLabels(node.Labels)
+	if labels == nil {
+		labels = []string{NodeLabelWeb, NodeLabelWorker}
+	}
 	return SoloNode{
 		Host:             node.Host,
 		User:             node.User,
 		Port:             node.Port,
 		SSHKey:           node.SSHKey,
 		AgentStateDir:    node.AgentStateDir,
-		Roles:            normalizeLegacyDirectLabels(node.Labels),
+		Labels:           labels,
 		Provider:         node.Provider,
 		ProviderServerID: node.ProviderServerID,
 		ProviderRegion:   node.ProviderRegion,
 		ProviderSize:     node.ProviderSize,
 		ProviderImage:    node.ProviderImage,
 	}
-}
-
-func hasRole(roles []string, want string) bool {
-	for _, role := range roles {
-		if strings.TrimSpace(role) == want {
-			return true
-		}
-	}
-	return false
 }
 
 func validateService(name string, service ServiceConfig, allowHealthcheck bool) error {

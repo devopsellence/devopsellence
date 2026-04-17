@@ -13,8 +13,7 @@ module NodeDesiredState
       public_address = node.public_ip.to_s.strip
       {
         name: node.name.to_s,
-        roles: node.labels,
-        public: public_address.present?,
+        labels: node.labels,
         public_address: public_address.presence
       }.compact
     end

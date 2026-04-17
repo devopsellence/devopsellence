@@ -67,35 +67,33 @@ type ingressTLSJSON struct {
 
 type NodePeer struct {
 	Name          string
-	Roles         []string
+	Labels        []string
 	PublicAddress string
-	Public        bool
 }
 
 type nodePeerJSON struct {
 	Name          string   `json:"name,omitempty"`
-	Roles         []string `json:"roles,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
 	PublicAddress string   `json:"publicAddress,omitempty"`
-	Public        bool     `json:"public,omitempty"`
 }
 
 // BuildDesiredState produces desired-state JSON from a ProjectConfig, image tag,
 // git revision, and pre-resolved secrets. Secrets are merged into env vars;
 // no secret_refs appear in the output.
 func BuildDesiredState(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string) ([]byte, error) {
-	return BuildDesiredStateForRoles(cfg, imageTag, revision, secrets, nil, cfg.ReleaseCommand != "")
+	return BuildDesiredStateForLabels(cfg, imageTag, revision, secrets, nil, cfg.ReleaseCommand != "")
 }
 
-// BuildDesiredStateForRoles produces desired-state JSON for one solo node.
-// A nil roles slice preserves the legacy solo behavior: run all configured
-// services. A non-nil roles slice schedules only matching services.
-func BuildDesiredStateForRoles(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, roles []string, includeReleaseCommand bool) ([]byte, error) {
-	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, roles, false, includeReleaseCommand)
+// BuildDesiredStateForLabels produces desired-state JSON for one solo node.
+// A nil labels slice preserves the legacy solo behavior: run all configured
+// services. A non-nil labels slice schedules only matching services.
+func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseCommand bool) ([]byte, error) {
+	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseCommand)
 }
 
 // BuildDesiredStateForNode produces desired-state JSON for one node, including
-// public ingress only when the node is a public web node.
-func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, roles []string, publicWebNode bool, includeReleaseCommand bool, nodePeers ...[]NodePeer) ([]byte, error) {
+// public ingress only when the node has the web label.
+func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, webNode bool, includeReleaseCommand bool, nodePeers ...[]NodePeer) ([]byte, error) {
 	ds := desiredStateJSON{
 		Revision: revision,
 	}
@@ -103,7 +101,7 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 		ds.NodePeers = buildNodePeers(nodePeers[0])
 	}
 
-	if roles == nil || hasRole(roles, config.NodeRoleWeb) {
+	if labels == nil || hasLabel(labels, config.NodeLabelWeb) {
 		webContainer, err := buildContainer("web", cfg.Web, imageTag, secrets)
 		if err != nil {
 			return nil, fmt.Errorf("build web container: %w", err)
@@ -111,11 +109,11 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 		ds.Containers = append(ds.Containers, webContainer)
 	}
 
-	if publicWebNode && cfg.Ingress != nil && (roles == nil || hasRole(roles, config.NodeRoleWeb)) {
+	if webNode && cfg.Ingress != nil && (labels == nil || hasLabel(labels, config.NodeLabelWeb)) {
 		ds.Ingress = buildIngress(cfg.Ingress)
 	}
 
-	if cfg.Worker != nil && (roles == nil || hasRole(roles, config.NodeRoleWorker)) {
+	if cfg.Worker != nil && (labels == nil || hasLabel(labels, config.NodeLabelWorker)) {
 		workerContainer, err := buildContainer("worker", *cfg.Worker, imageTag, secrets)
 		if err != nil {
 			return nil, fmt.Errorf("build worker container: %w", err)
@@ -173,37 +171,36 @@ func buildNodePeers(peers []NodePeer) []nodePeerJSON {
 	for _, peer := range peers {
 		name := strings.TrimSpace(peer.Name)
 		address := strings.TrimSpace(peer.PublicAddress)
-		roles := normalizedRoles(peer.Roles)
-		if name == "" && address == "" && len(roles) == 0 {
+		labels := normalizedLabels(peer.Labels)
+		if name == "" && address == "" && len(labels) == 0 {
 			continue
 		}
 		out = append(out, nodePeerJSON{
 			Name:          name,
-			Roles:         roles,
+			Labels:        labels,
 			PublicAddress: address,
-			Public:        peer.Public,
 		})
 	}
 	return out
 }
 
-func normalizedRoles(roles []string) []string {
+func normalizedLabels(labels []string) []string {
 	seen := map[string]bool{}
 	out := []string{}
-	for _, role := range roles {
-		role = strings.TrimSpace(role)
-		if role == "" || seen[role] {
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label == "" || seen[label] {
 			continue
 		}
-		seen[role] = true
-		out = append(out, role)
+		seen[label] = true
+		out = append(out, label)
 	}
 	return out
 }
 
-func hasRole(roles []string, want string) bool {
-	for _, role := range roles {
-		if strings.TrimSpace(role) == want {
+func hasLabel(labels []string, want string) bool {
+	for _, label := range labels {
+		if strings.TrimSpace(label) == want {
 			return true
 		}
 	}

@@ -48,9 +48,9 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 		ReleaseCommand: "rails db:migrate",
 	}
 	nodes := map[string]config.SoloNode{
-		"worker-a": {Roles: []string{config.NodeRoleWorker}},
-		"web-a":    {Roles: []string{config.NodeRoleWeb}},
-		"web-b":    {Roles: []string{config.NodeRoleWeb}},
+		"worker-a": {Labels: []string{config.NodeLabelWorker}},
+		"web-a":    {Labels: []string{config.NodeLabelWeb}},
+		"web-b":    {Labels: []string{config.NodeLabelWeb}},
 	}
 	got, err := validateSoloNodeSchedule(cfg, nodes)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 		Worker: &config.ServiceConfig{Command: "sidekiq"},
 	}
 	_, err := validateSoloNodeSchedule(cfg, map[string]config.SoloNode{
-		"web-a": {Roles: []string{config.NodeRoleWeb}},
+		"web-a": {Labels: []string{config.NodeLabelWeb}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "worker") {
 		t.Fatalf("expected missing worker error, got %v", err)
@@ -76,43 +76,37 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 
 func TestSoloNodeCanRunLegacyUnlabeledNode(t *testing.T) {
 	node := config.SoloNode{}
-	if !soloNodeCanRun(node, config.NodeRoleWeb) || !soloNodeCanRun(node, config.NodeRoleWorker) {
-		t.Fatal("legacy unlabeled node should run all roles")
+	if !soloNodeCanRun(node, config.NodeLabelWeb) || !soloNodeCanRun(node, config.NodeLabelWorker) {
+		t.Fatal("legacy unlabeled node should run all labels")
 	}
 }
 
-func TestParseSoloRoles(t *testing.T) {
-	got, err := parseSoloRoles("web,worker web")
+func TestParseSoloLabels(t *testing.T) {
+	got, err := parseSoloLabels("web,worker web")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{config.NodeRoleWeb, config.NodeRoleWorker}
+	want := []string{config.NodeLabelWeb, config.NodeLabelWorker}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("roles = %#v, want %#v", got, want)
+		t.Fatalf("labels = %#v, want %#v", got, want)
 	}
 }
 
 func TestSoloNodePeersUsesOtherConfiguredNodes(t *testing.T) {
 	cfg := &config.ProjectConfig{
-		Nodes: map[string]config.NodeConfig{
-			"web-a":    {Roles: []string{config.NodeRoleWeb}, Public: true},
-			"web-b":    {Roles: []string{config.NodeRoleWeb}, Public: true},
-			"worker-a": {Roles: []string{config.NodeRoleWorker}, Public: true},
-			"private":  {Roles: []string{config.NodeRoleWeb}, Public: false},
-		},
 		Solo: &config.SoloConfig{Nodes: map[string]config.SoloNode{
-			"web-a":    {Host: "203.0.113.10"},
-			"web-b":    {Host: "203.0.113.11"},
-			"worker-a": {Host: "203.0.113.12"},
-			"private":  {Host: "203.0.113.13"},
+			"web-a":    {Host: "203.0.113.10", Labels: []string{config.NodeLabelWeb}},
+			"web-b":    {Host: "203.0.113.11", Labels: []string{config.NodeLabelWeb}},
+			"worker-a": {Host: "203.0.113.12", Labels: []string{config.NodeLabelWorker}},
+			"private":  {Host: "203.0.113.13", Labels: []string{config.NodeLabelWeb}},
 		}},
 	}
 
 	got := soloNodePeers(cfg, "web-a")
 	want := []solo.NodePeer{
-		{Name: "private", Roles: []string{config.NodeRoleWeb}, PublicAddress: "203.0.113.13"},
-		{Name: "web-b", Roles: []string{config.NodeRoleWeb}, Public: true, PublicAddress: "203.0.113.11"},
-		{Name: "worker-a", Roles: []string{config.NodeRoleWorker}, Public: true, PublicAddress: "203.0.113.12"},
+		{Name: "private", Labels: []string{config.NodeLabelWeb}, PublicAddress: "203.0.113.13"},
+		{Name: "web-b", Labels: []string{config.NodeLabelWeb}, PublicAddress: "203.0.113.11"},
+		{Name: "worker-a", Labels: []string{config.NodeLabelWorker}, PublicAddress: "203.0.113.12"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("peers = %#v, want %#v", got, want)

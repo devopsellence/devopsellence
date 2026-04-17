@@ -8,9 +8,9 @@ import (
 
 	"log/slog"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 	"github.com/devopsellence/devopsellence/agent/internal/engine"
-	cerrdefs "github.com/containerd/errdefs"
 )
 
 type Config struct {
@@ -184,5 +184,12 @@ func ingressFingerprint(ingress *desiredstatepb.Ingress) string {
 	if ingress == nil {
 		return ""
 	}
-	return strings.TrimSpace(ingress.Hostname) + "|" + strings.TrimSpace(ingress.TunnelToken)
+	hosts := make([]string, 0, len(ingress.GetHosts()))
+	for _, host := range ingress.GetHosts() {
+		host = strings.TrimSpace(host)
+		if host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return strings.Join(hosts, ",") + "|" + strings.TrimSpace(ingress.TunnelToken)
 }

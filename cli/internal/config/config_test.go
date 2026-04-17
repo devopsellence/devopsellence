@@ -237,6 +237,61 @@ func TestValidateRejectsUnknownNodeRole(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsSoloAutoTLSForMultiplePublicWebNodes(t *testing.T) {
+	t.Parallel()
+
+	project := DefaultProjectConfig("acme", "ShopApp", "production")
+	project.Ingress = &IngressConfig{
+		Hosts: []string{"app.example.com"},
+		TLS: IngressTLSConfig{
+			Mode:  "auto",
+			Email: "ops@example.com",
+		},
+	}
+	project.Nodes = map[string]NodeConfig{
+		"web-a": {Roles: []string{NodeRoleWeb}, Public: true},
+		"web-b": {Roles: []string{NodeRoleWeb}, Public: true},
+	}
+	project.Solo = &SoloConfig{
+		Nodes: map[string]SoloNode{
+			"web-a": {Host: "203.0.113.10", User: "root"},
+			"web-b": {Host: "203.0.113.11", User: "root"},
+		},
+	}
+
+	err := Validate(&project)
+	if err == nil || !strings.Contains(err.Error(), "Automatic TLS in solo mode is supported only when exactly one web node serves the configured domains") {
+		t.Fatalf("expected solo auto TLS multi-node validation error, got %v", err)
+	}
+}
+
+func TestValidateAllowsSoloAutoTLSForSinglePublicWebNode(t *testing.T) {
+	t.Parallel()
+
+	project := DefaultProjectConfig("acme", "ShopApp", "production")
+	project.Ingress = &IngressConfig{
+		Hosts: []string{"app.example.com"},
+		TLS: IngressTLSConfig{
+			Mode:  "auto",
+			Email: "ops@example.com",
+		},
+	}
+	project.Nodes = map[string]NodeConfig{
+		"web-a": {Roles: []string{NodeRoleWeb}, Public: true},
+		"job-a": {Roles: []string{NodeRoleWorker}},
+	}
+	project.Solo = &SoloConfig{
+		Nodes: map[string]SoloNode{
+			"web-a": {Host: "203.0.113.10", User: "root"},
+			"job-a": {Host: "203.0.113.11", User: "root"},
+		},
+	}
+
+	if err := Validate(&project); err != nil {
+		t.Fatalf("expected validation success for single public web node, got %v", err)
+	}
+}
+
 func TestValidateRejectsBlankBuildPlatform(t *testing.T) {
 	t.Parallel()
 

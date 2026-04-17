@@ -361,6 +361,9 @@ func Validate(cfg *ProjectConfig) error {
 		default:
 			return fmt.Errorf("ingress.tls.mode must be auto, off, or manual")
 		}
+		if cfg.Solo != nil && strings.TrimSpace(cfg.Ingress.TLS.Mode) == "auto" && publicWebNodeCount(cfg) > 1 {
+			return errors.New("Automatic TLS in solo mode is supported only when exactly one web node serves the configured domains. For multi-node TLS, use shared mode or configure certificate management yourself")
+		}
 	}
 	if cfg.Nodes != nil {
 		for name, node := range cfg.Nodes {
@@ -398,6 +401,20 @@ func Validate(cfg *ProjectConfig) error {
 		return errors.New("direct.nodes has been replaced by solo.nodes and top-level nodes; re-run `devopsellence setup`")
 	}
 	return nil
+}
+
+func publicWebNodeCount(cfg *ProjectConfig) int {
+	if cfg == nil || cfg.Nodes == nil {
+		return 0
+	}
+
+	count := 0
+	for _, node := range cfg.Nodes {
+		if node.Public && hasRole(node.Roles, NodeRoleWeb) {
+			count++
+		}
+	}
+	return count
 }
 
 func applyDefaults(cfg *ProjectConfig) {

@@ -59,7 +59,7 @@ devopsellence deploy
 devopsellence status
 ```
 
-Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each public web node, then configure hostnames:
+Public ingress is Envoy in both modes. In solo mode, automatic TLS is supported only when exactly one public web node serves the configured hostnames. For multi-node solo ingress, use shared mode or bring your own TLS management. For single-node solo HTTPS, point DNS at that public web node, then configure hostnames:
 
 ```bash
 devopsellence ingress set --host app.example.com --tls-email ops@example.com

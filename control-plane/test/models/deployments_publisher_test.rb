@@ -706,6 +706,60 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal "assigned web nodes do not support direct_dns ingress: node-a", error.message
   end
 
+  test "direct_dns desired state includes acme peers for other public web nodes" do
+    organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+    ensure_test_organization_runtime!(organization)
+    project = organization.projects.create!(name: "Project A")
+    environment = project.environments.create!(
+      name: "Production",
+      gcp_project_id: "gcp-proj-a",
+      gcp_project_number: "123456789",
+      service_account_email: "svc-a@gcp-proj-a.iam.gserviceaccount.com",
+      workload_identity_pool: "pool-a",
+      workload_identity_provider: "provider-a",
+      runtime_kind: Environment::RUNTIME_CUSTOMER_NODES,
+      ingress_strategy: Environment::INGRESS_STRATEGY_DIRECT_DNS
+    )
+    hostname = random_ingress_hostname
+    environment.create_environment_ingress!(
+      hostname: hostname,
+      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
+      status: EnvironmentIngress::STATUS_READY,
+      provisioned_at: Time.current
+    )
+    release = project.releases.create!(
+      git_sha: "abcd1234",
+      image_digest: "sha256:abc",
+      image_repository: "api",
+      web_json: {
+        port: 80,
+        healthcheck: { path: "/up", port: 80 }
+      }.to_json,
+      revision: "rel-1"
+    )
+    node_a, = issue_test_node!(organization: organization, name: "node-a", labels: [Node::LABEL_WEB], public_ip: "198.51.100.10")
+    node_b, = issue_test_node!(organization: organization, name: "node-b", labels: [Node::LABEL_WEB], public_ip: "198.51.100.11")
+    worker, = issue_test_node!(organization: organization, name: "worker-a", labels: [Node::LABEL_WORKER], public_ip: "198.51.100.12")
+    [ node_a, node_b, worker ].each do |node|
+      node.capabilities = [ Node::CAPABILITY_DIRECT_DNS_INGRESS ]
+      node.update!(environment: environment)
+    end
+
+    Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
+      Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
+    )
+    EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
+
+    store = FakeObjectStore.new
+    Deployments::Publisher.new(environment: environment, release: release, store: store).call
+
+    state_a = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_a.reload.desired_state_object_path)
+    state_b = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_b.reload.desired_state_object_path)
+    assert_equal [ hostname ], state_a.dig("ingress", "hosts")
+    assert_equal [ "198.51.100.11" ], state_a.dig("ingress", "http01_peers")
+    assert_equal [ "198.51.100.10" ], state_b.dig("ingress", "http01_peers")
+  end
+
   test "managed deploy claims a node bundle for a new environment" do
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     ensure_test_organization_runtime!(organization)

@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +32,7 @@ import (
 const (
 	defaultDirectoryURL = lego.LEDirectoryProduction
 	defaultBindAddress  = "0.0.0.0:15980"
+	peerHeader          = "x-devopsellence-acme-peer"
 )
 
 type Config struct {
@@ -89,6 +92,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 	if err := m.startHTTP01Server(); err != nil {
 		return err
 	}
+	m.provider.SetPeers(http01Peers(ingress))
 
 	user, err := m.loadOrCreateUser(ingress)
 	if err != nil {
@@ -214,10 +218,22 @@ type storedAccount struct {
 type HTTP01Provider struct {
 	mu     sync.RWMutex
 	values map[string]string
+	peers  []string
+	client *http.Client
 }
 
 func NewHTTP01Provider() *HTTP01Provider {
-	return &HTTP01Provider{values: map[string]string{}}
+	return &HTTP01Provider{
+		values: map[string]string{},
+		client: &http.Client{Timeout: 2 * time.Second},
+	}
+}
+
+func (p *HTTP01Provider) SetPeers(peers []string) {
+	normalized := normalizeHTTP01Peers(peers)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.peers = normalized
 }
 
 func (p *HTTP01Provider) Present(_ string, token string, keyAuth string) error {
@@ -245,11 +261,72 @@ func (p *HTTP01Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	value, ok := p.values[token]
 	p.mu.RUnlock()
 	if !ok {
+		if r.Header.Get(peerHeader) != "1" {
+			if value, ok := p.fetchPeerChallenge(r.Context(), r.URL.Path); ok {
+				w.Header().Set("content-type", "text/plain")
+				_, _ = w.Write([]byte(value))
+				return
+			}
+		}
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("content-type", "text/plain")
 	_, _ = w.Write([]byte(value))
+}
+
+func (p *HTTP01Provider) fetchPeerChallenge(ctx context.Context, path string) (string, bool) {
+	p.mu.RLock()
+	peers := append([]string(nil), p.peers...)
+	client := p.client
+	p.mu.RUnlock()
+
+	for _, peer := range peers {
+		target := peerChallengeURL(peer, path)
+		if target == "" {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set(peerHeader, "1")
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+		value := strings.TrimSpace(string(body))
+		if value != "" {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func peerChallengeURL(peer, path string) string {
+	peer = strings.TrimSpace(peer)
+	if peer == "" {
+		return ""
+	}
+	if !strings.Contains(peer, "://") {
+		if strings.Count(peer, ":") > 1 && !strings.HasPrefix(peer, "[") {
+			peer = "[" + peer + "]"
+		}
+		peer = "http://" + peer
+	}
+	u, err := url.Parse(peer)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	u.Path = path
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 func needsAutoTLS(ingress *desiredstatepb.Ingress) bool {
@@ -281,6 +358,28 @@ func ingressCADirectoryURL(ingress *desiredstatepb.Ingress) string {
 		return ""
 	}
 	return strings.TrimSpace(ingress.GetTls().GetCaDirectoryUrl())
+}
+
+func http01Peers(ingress *desiredstatepb.Ingress) []string {
+	if ingress == nil {
+		return nil
+	}
+	return normalizeHTTP01Peers(ingress.GetHttp01Peers())
+}
+
+func normalizeHTTP01Peers(peers []string) []string {
+	seen := map[string]bool{}
+	normalized := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		peer = strings.TrimSpace(peer)
+		if peer == "" || seen[peer] {
+			continue
+		}
+		seen[peer] = true
+		normalized = append(normalized, peer)
+	}
+	sort.Strings(normalized)
+	return normalized
 }
 
 func ingressHosts(ingress *desiredstatepb.Ingress) []string {

@@ -248,7 +248,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		wg.Add(1)
 		go func(name string, node config.SoloNode) {
 			defer wg.Done()
-			desiredStateJSON, err := solo.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Roles, soloNodePublic(cfg, name), name == releaseNode)
+			desiredStateJSON, err := solo.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Roles, soloNodePublic(cfg, name), name == releaseNode, soloHTTP01Peers(cfg, name))
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
@@ -1328,6 +1328,31 @@ func publicWebNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Solo
 	}
 	sort.Strings(ips)
 	return ips
+}
+
+func soloHTTP01Peers(cfg *config.ProjectConfig, currentNode string) []string {
+	if cfg == nil || cfg.Solo == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	peers := []string{}
+	for _, name := range sortedSoloNodeNames(cfg.Solo.Nodes) {
+		if name == currentNode {
+			continue
+		}
+		meta := cfg.Nodes[name]
+		if !meta.Public || !hasSoloRole(meta.Roles, config.NodeRoleWeb) {
+			continue
+		}
+		host := strings.TrimSpace(cfg.Solo.Nodes[name].Host)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		peers = append(peers, host)
+	}
+	sort.Strings(peers)
+	return peers
 }
 
 func normalizeIngressHosts(values []string) []string {

@@ -56,6 +56,7 @@ type ingressJSON struct {
 	Mode         string         `json:"mode,omitempty"`
 	TLS          ingressTLSJSON `json:"tls,omitempty"`
 	RedirectHTTP bool           `json:"redirectHttp,omitempty"`
+	HTTP01Peers  []string       `json:"http01Peers,omitempty"`
 }
 
 type ingressTLSJSON struct {
@@ -80,7 +81,7 @@ func BuildDesiredStateForRoles(cfg *config.ProjectConfig, imageTag, revision str
 
 // BuildDesiredStateForNode produces desired-state JSON for one node, including
 // public ingress only when the node is a public web node.
-func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, roles []string, publicWebNode bool, includeReleaseCommand bool) ([]byte, error) {
+func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, roles []string, publicWebNode bool, includeReleaseCommand bool, http01Peers ...[]string) ([]byte, error) {
 	ds := desiredStateJSON{
 		Revision: revision,
 	}
@@ -94,7 +95,11 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	}
 
 	if publicWebNode && cfg.Ingress != nil && (roles == nil || hasRole(roles, config.NodeRoleWeb)) {
-		ds.Ingress = buildIngress(cfg.Ingress)
+		peers := []string(nil)
+		if len(http01Peers) > 0 {
+			peers = http01Peers[0]
+		}
+		ds.Ingress = buildIngress(cfg.Ingress, peers)
 	}
 
 	if cfg.Worker != nil && (roles == nil || hasRole(roles, config.NodeRoleWorker)) {
@@ -130,7 +135,7 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	return data, nil
 }
 
-func buildIngress(ingress *config.IngressConfig) *ingressJSON {
+func buildIngress(ingress *config.IngressConfig, http01Peers []string) *ingressJSON {
 	if ingress == nil || len(ingress.Hosts) == 0 {
 		return nil
 	}
@@ -147,6 +152,7 @@ func buildIngress(ingress *config.IngressConfig) *ingressJSON {
 			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
 		},
 		RedirectHTTP: ingress.RedirectHTTP,
+		HTTP01Peers:  append([]string(nil), http01Peers...),
 	}
 }
 

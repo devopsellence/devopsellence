@@ -91,6 +91,29 @@ func TestParseSoloRoles(t *testing.T) {
 	}
 }
 
+func TestSoloHTTP01PeersUsesOtherPublicWebNodes(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Nodes: map[string]config.NodeConfig{
+			"web-a":    {Roles: []string{config.NodeRoleWeb}, Public: true},
+			"web-b":    {Roles: []string{config.NodeRoleWeb}, Public: true},
+			"worker-a": {Roles: []string{config.NodeRoleWorker}, Public: true},
+			"private":  {Roles: []string{config.NodeRoleWeb}, Public: false},
+		},
+		Solo: &config.SoloConfig{Nodes: map[string]config.SoloNode{
+			"web-a":    {Host: "203.0.113.10"},
+			"web-b":    {Host: "203.0.113.11"},
+			"worker-a": {Host: "203.0.113.12"},
+			"private":  {Host: "203.0.113.13"},
+		}},
+	}
+
+	got := soloHTTP01Peers(cfg, "web-a")
+	want := []string{"203.0.113.11"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("peers = %#v, want %#v", got, want)
+	}
+}
+
 func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{

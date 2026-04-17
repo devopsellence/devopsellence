@@ -59,6 +59,7 @@ message Ingress {
   string tunnel_token = 5;
   string tunnel_token_secret_ref = 6;
   string hostname = 7 [deprecated = true];
+  repeated string http01_peers = 8;
 }
 
 message IngressTLS {

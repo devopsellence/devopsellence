@@ -56,6 +56,31 @@ func TestValidateDuplicateServiceName(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsSanitizedEnvironmentCollision(t *testing.T) {
+	state := desiredState(workerService("worker"))
+	state.Environments = []*desiredstatepb.Environment{
+		{Name: "Prod API", Revision: "rev-1", Services: []*desiredstatepb.Service{workerService("worker")}},
+		{Name: "prod-api", Revision: "rev-1", Services: []*desiredstatepb.Service{workerService("jobs")}},
+	}
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestValidateRejectsSanitizedServiceCollision(t *testing.T) {
+	state := desiredState(workerService("web api"), workerService("web-api"))
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestValidateRejectsEmptySanitizedServiceName(t *testing.T) {
+	state := desiredState(workerService("!!!"))
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestValidateEmptyEnvKey(t *testing.T) {
 	service := workerService("worker")
 	service.Env = map[string]string{"": "x"}
@@ -174,6 +199,50 @@ func TestValidateIngressRouteTarget(t *testing.T) {
 	}
 	if err := Validate(state); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateIngressRoutesRequireHosts(t *testing.T) {
+	state := desiredState(webService())
+	state.Ingress = &desiredstatepb.Ingress{
+		Mode:   "public",
+		Routes: []*desiredstatepb.IngressRoute{route("app.example.com", "production", "web", "http")},
+	}
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestValidateIngressRouteHostnameMustExistInHosts(t *testing.T) {
+	state := desiredState(webService())
+	state.Ingress = &desiredstatepb.Ingress{
+		Mode:   "public",
+		Hosts:  []string{"other.example.com"},
+		Routes: []*desiredstatepb.IngressRoute{route("app.example.com", "production", "web", "http")},
+	}
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestValidateRejectsSanitizedPortCollision(t *testing.T) {
+	service := webService()
+	service.Ports = []*desiredstatepb.ServicePort{
+		{Name: "http api", Port: 3000},
+		{Name: "http-api", Port: 3001},
+	}
+	state := desiredState(service)
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestValidateRejectsUnnamedPort(t *testing.T) {
+	service := webService()
+	service.Ports = []*desiredstatepb.ServicePort{{Port: 3000}}
+	state := desiredState(service)
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
 	}
 }
 

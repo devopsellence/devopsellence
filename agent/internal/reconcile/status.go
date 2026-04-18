@@ -52,7 +52,7 @@ func (r *Reconciler) CurrentStatus(ctx context.Context, desired *desiredstatepb.
 			if serviceStatus.Phase == report.PhaseError {
 				summary.UnhealthyServices++
 			}
-			if serviceStatus.Phase != report.PhaseSettled && envStatus.Phase == report.PhaseSettled {
+			if phaseSeverity(serviceStatus.Phase) > phaseSeverity(envStatus.Phase) {
 				envStatus.Phase = serviceStatus.Phase
 			}
 			envStatus.Services = append(envStatus.Services, serviceStatus)
@@ -134,4 +134,15 @@ func pickCurrentContainer(containers []engine.ContainerState) *engine.ContainerS
 		}
 	}
 	return best
+}
+
+func phaseSeverity(phase report.Phase) int {
+	switch phase {
+	case report.PhaseError:
+		return 2
+	case report.PhaseReconciling:
+		return 1
+	default:
+		return 0
+	}
 }

@@ -37,6 +37,7 @@ func Validate(state *desiredstatepb.DesiredState) error {
 
 func validateEnvironments(state *desiredstatepb.DesiredState) error {
 	seenEnvironments := map[string]struct{}{}
+	seenSanitizedEnvironments := map[string]string{}
 	for i, env := range state.Environments {
 		if env == nil {
 			return fmt.Errorf("environment[%d]: required", i)
@@ -45,20 +46,37 @@ func validateEnvironments(state *desiredstatepb.DesiredState) error {
 		if name == "" {
 			return fmt.Errorf("environment[%d]: name required", i)
 		}
+		sanitizedName, err := validateSanitizedName(fmt.Sprintf("environment[%s]", name), "name", name)
+		if err != nil {
+			return err
+		}
 		if _, ok := seenEnvironments[name]; ok {
 			return fmt.Errorf("environment[%s]: duplicate name", name)
 		}
+		if existing, ok := seenSanitizedEnvironments[sanitizedName]; ok {
+			return fmt.Errorf("environment[%s]: sanitized name collides with environment[%s]", name, existing)
+		}
 		seenEnvironments[name] = struct{}{}
+		seenSanitizedEnvironments[sanitizedName] = name
 		seenServices := map[string]struct{}{}
+		seenSanitizedServices := map[string]string{}
 		for j, service := range env.Services {
 			if err := validateService(name, j, service); err != nil {
 				return err
 			}
 			serviceName := strings.TrimSpace(service.Name)
+			sanitizedServiceName, err := validateSanitizedName(fmt.Sprintf("environment[%s].service[%s]", name, serviceName), "name", serviceName)
+			if err != nil {
+				return err
+			}
 			if _, ok := seenServices[serviceName]; ok {
 				return fmt.Errorf("environment[%s].service[%s]: duplicate name", name, serviceName)
 			}
+			if existing, ok := seenSanitizedServices[sanitizedServiceName]; ok {
+				return fmt.Errorf("environment[%s].service[%s]: sanitized name collides with service[%s]", name, serviceName, existing)
+			}
 			seenServices[serviceName] = struct{}{}
+			seenSanitizedServices[sanitizedServiceName] = serviceName
 		}
 		for _, task := range env.Tasks {
 			if err := validateTask("environment["+name+"].task", task); err != nil {
@@ -79,6 +97,9 @@ func validateService(environmentName string, index int, service *desiredstatepb.
 		return fmt.Errorf("%s.name required", prefix)
 	}
 	prefix = fmt.Sprintf("environment[%s].service[%s]", environmentName, name)
+	if _, err := validateSanitizedName(prefix, "name", name); err != nil {
+		return err
+	}
 	if service.Image == "" {
 		return fmt.Errorf("%s.image required", prefix)
 	}
@@ -118,9 +139,19 @@ func validateService(environmentName string, index int, service *desiredstatepb.
 		if port == nil {
 			continue
 		}
+		portName := strings.TrimSpace(port.Name)
+		if portName == "" {
+			return fmt.Errorf("%s.ports: name required", prefix)
+		}
+		if _, err := validateSanitizedName(fmt.Sprintf("%s.ports[%s]", prefix, portName), "name", portName); err != nil {
+			return err
+		}
 		if port.Port == 0 {
 			return fmt.Errorf("%s.ports[%s].port required", prefix, port.Name)
 		}
+	}
+	if err := validateUniquePortNames(prefix, service.Ports); err != nil {
+		return err
 	}
 	if normalizedServiceKind(service) == ServiceKindWeb {
 		if ServiceHTTPPort(service, 0) == 0 {
@@ -140,12 +171,13 @@ func validateService(environmentName string, index int, service *desiredstatepb.
 }
 
 func validateIngress(state *desiredstatepb.DesiredState) error {
+	if len(ingressHosts(state.Ingress)) == 0 {
+		return fmt.Errorf("ingress: hosts required")
+	}
 	if len(state.Ingress.Routes) > 0 {
 		if err := validateIngressRoutes(state); err != nil {
 			return err
 		}
-	} else if len(ingressHosts(state.Ingress)) == 0 {
-		return fmt.Errorf("ingress: hosts required")
 	} else if !hasWebService(state) {
 		return fmt.Errorf("ingress requires web service")
 	}
@@ -170,6 +202,10 @@ func validateIngress(state *desiredstatepb.DesiredState) error {
 
 func validateIngressRoutes(state *desiredstatepb.DesiredState) error {
 	targets := map[string]*desiredstatepb.Service{}
+	hosts := map[string]struct{}{}
+	for _, host := range ingressHosts(state.Ingress) {
+		hosts[host] = struct{}{}
+	}
 	for _, service := range RuntimeServices(state) {
 		targets[ScopedKey(service.EnvironmentName, service.ServiceName)] = service.Service
 	}
@@ -184,6 +220,9 @@ func validateIngressRoutes(state *desiredstatepb.DesiredState) error {
 		hostname := strings.TrimSpace(route.Match.Hostname)
 		if hostname == "" {
 			return fmt.Errorf("ingress.routes[%d].match.hostname required", i)
+		}
+		if _, ok := hosts[hostname]; !ok {
+			return fmt.Errorf("ingress.routes[%d].match.hostname %q missing from ingress.hosts", i, hostname)
 		}
 		pathPrefix := strings.TrimSpace(route.Match.PathPrefix)
 		if pathPrefix == "" {
@@ -317,4 +356,36 @@ func ingressHosts(ingress *desiredstatepb.Ingress) []string {
 		}
 	}
 	return hosts
+}
+
+func validateUniquePortNames(prefix string, ports []*desiredstatepb.ServicePort) error {
+	seen := map[string]struct{}{}
+	seenSanitized := map[string]string{}
+	for _, port := range ports {
+		if port == nil {
+			continue
+		}
+		name := strings.TrimSpace(port.Name)
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("%s.ports[%s]: duplicate name", prefix, name)
+		}
+		sanitizedName, err := validateSanitizedName(fmt.Sprintf("%s.ports[%s]", prefix, name), "name", name)
+		if err != nil {
+			return err
+		}
+		if existing, ok := seenSanitized[sanitizedName]; ok {
+			return fmt.Errorf("%s.ports[%s]: sanitized name collides with port[%s]", prefix, name, existing)
+		}
+		seen[name] = struct{}{}
+		seenSanitized[sanitizedName] = name
+	}
+	return nil
+}
+
+func validateSanitizedName(prefix, field, value string) (string, error) {
+	sanitizedValue := sanitize(value)
+	if sanitizedValue == "" {
+		return "", fmt.Errorf("%s.%s sanitizes to empty", prefix, field)
+	}
+	return sanitizedValue, nil
 }

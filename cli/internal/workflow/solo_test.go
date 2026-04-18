@@ -103,7 +103,7 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 
 func TestSoloNodeCanRunUnlabeledNode(t *testing.T) {
 	node := config.SoloNode{}
-	if !soloNodeCanRunKind(node, config.DefaultWebRole) || !soloNodeCanRunKind(node, config.DefaultWorkerRole) {
+	if !soloNodeCanRunKind(node, config.ServiceKindWeb) || !soloNodeCanRunKind(node, config.ServiceKindWorker) {
 		t.Fatal("unlabeled node should run all labels")
 	}
 }

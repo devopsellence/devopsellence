@@ -93,7 +93,7 @@ module Deployments
         next if nodes.any? { |node| release.service_scheduled_on?(service_name, node) }
 
         label = release.service_label_for(service_name)
-        raise SchedulingError, "at least one assigned node must match label #{label} for service #{service_name}"
+        raise SchedulingError, "at least one assigned node must match label #{label.inspect} for service #{service_name}"
       end
 
       if environment.direct_dns_ingress? && release.ingress_service_name.present?

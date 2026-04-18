@@ -352,15 +352,7 @@
         <span class="terminal-bar-title">devopsellence.yml</span>
       </div>
   <div class="terminal-body">
-        <pre class="config-pre"><code>nodes:
-  prod-1:
-    labels:
-      - web
-  worker-1:
-    labels:
-      - worker
-
-solo:
+        <pre class="config-pre"><code>solo:
   nodes:
     prod-1:
       host: 203.0.113.10
@@ -368,9 +360,13 @@ solo:
       port: 22
       ssh_key: ~/.ssh/id_ed25519
       agent_state_dir: /var/lib/devopsellence
+      labels:
+        - web
     worker-1:
       host: 203.0.113.11
-      user: ubuntu</code></pre>
+      user: ubuntu
+      labels:
+        - worker</code></pre>
       </div>
     </div>
     <p>Labels control placement in solo mode too. <code>web</code> nodes run web services. <code>worker</code> nodes run worker services. A node can have both labels. <code>tasks.release</code> runs once on one node labeled for its configured service.</p>
@@ -682,7 +678,7 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>solo.nodes.*.labels</code></dt>
-        <dd>Service placement labels for solo and shared mode. Use labels matching your services' kinds.</dd>
+        <dd>Service placement labels for solo mode. Use labels matching your services' kinds.</dd>
       </div>
       <div class="docs-field">
         <dt><code>solo.nodes.*.provider</code></dt>

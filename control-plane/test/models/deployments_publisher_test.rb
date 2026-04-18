@@ -125,7 +125,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal 3000, service.dig("ports", 0, "port")
     assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, service.fetch("secretRefs"))
     assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
-    assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnel_token_secret_ref")
+    assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnelTokenSecretRef")
     assert_equal "Production", desired_state.dig("ingress", "routes", 0, "target", "environment")
     assert_equal "/up", service.dig("healthcheck", "path")
     assert_equal 3000, service.dig("healthcheck", "port")

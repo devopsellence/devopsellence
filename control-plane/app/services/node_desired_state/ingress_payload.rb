@@ -16,7 +16,7 @@ module NodeDesiredState
         {
           hosts: [ ingress.hostname ],
           mode: Environment::INGRESS_STRATEGY_TUNNEL,
-          tunnel_token_secret_ref: ingress.tunnel_token_secret_ref,
+          tunnelTokenSecretRef: ingress.tunnel_token_secret_ref,
           routes: routes_for(environment:, ingress:)
         }
       else
@@ -28,7 +28,7 @@ module NodeDesiredState
           tls: {
             mode: "auto"
           },
-          redirect_http: true,
+          redirectHttp: true,
           routes: routes_for(environment:, ingress:)
         }
       end

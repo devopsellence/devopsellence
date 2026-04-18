@@ -205,12 +205,21 @@ func (m *Manager) UpdateClusterEDS(ctx context.Context, clusterName string, addr
 	endpoint := &endpointState{address: address, port: port}
 	m.lastEndpoint = endpoint
 	m.lastEndpoints[clusterName] = endpoint
-	m.lastEndpoints[m.config.ClusterName] = endpoint
+	if m.shouldMirrorToDefaultCluster(clusterName) {
+		m.lastEndpoints[m.config.ClusterName] = endpoint
+	}
 	publicIngressListener, err := m.publicIngressListenerConfig(m.lastIngress)
 	if err != nil {
 		return err
 	}
 	return m.applySnapshot(publicIngressListener)
+}
+
+func (m *Manager) shouldMirrorToDefaultCluster(clusterName string) bool {
+	if clusterName == m.config.ClusterName {
+		return true
+	}
+	return m.lastIngress == nil || len(m.lastIngress.Routes) == 0
 }
 
 func (m *Manager) WaitForRoute(ctx context.Context, path string) error {

@@ -9,14 +9,14 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/report"
 )
 
-func (r *Reconciler) CurrentStatus(ctx context.Context, desired *desiredstatepb.DesiredState) (*report.Summary, []report.EnvironmentStatus, []report.ContainerStatus, error) {
+func (r *Reconciler) CurrentStatus(ctx context.Context, desired *desiredstatepb.DesiredState) (*report.Summary, []report.EnvironmentStatus, error) {
 	if desired == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil
 	}
 
 	existing, err := r.engine.ListManaged(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	existingByService := map[string][]engine.ContainerState{}
@@ -29,8 +29,6 @@ func (r *Reconciler) CurrentStatus(ctx context.Context, desired *desiredstatepb.
 
 	summary := &report.Summary{}
 	environments := make([]report.EnvironmentStatus, 0, len(desired.Environments))
-	containers := []report.ContainerStatus{}
-	multiEnvironment := countDesiredEnvironments(desired) > 1
 
 	for _, environment := range desired.Environments {
 		if environment == nil {
@@ -50,7 +48,7 @@ func (r *Reconciler) CurrentStatus(ctx context.Context, desired *desiredstatepb.
 			}
 			summary.Services++
 			current := pickCurrentContainer(existingByService[runtimeServiceKey(environment.GetName(), service.GetName())])
-			serviceStatus, containerStatus := r.serviceStatus(ctx, multiEnvironment, environment.GetName(), service, current)
+			serviceStatus := r.serviceStatus(ctx, service, current)
 			if serviceStatus.Phase == report.PhaseError {
 				summary.UnhealthyServices++
 			}
@@ -58,50 +56,41 @@ func (r *Reconciler) CurrentStatus(ctx context.Context, desired *desiredstatepb.
 				envStatus.Phase = serviceStatus.Phase
 			}
 			envStatus.Services = append(envStatus.Services, serviceStatus)
-			containers = append(containers, containerStatus)
 		}
 
 		environments = append(environments, envStatus)
 	}
 
-	return summary, environments, containers, nil
+	return summary, environments, nil
 }
 
-func (r *Reconciler) serviceStatus(ctx context.Context, multiEnvironment bool, environmentName string, service *desiredstatepb.Service, current *engine.ContainerState) (report.ServiceStatus, report.ContainerStatus) {
-	serviceName := service.GetName()
+func (r *Reconciler) serviceStatus(ctx context.Context, service *desiredstatepb.Service, current *engine.ContainerState) report.ServiceStatus {
 	serviceStatus := report.ServiceStatus{
-		Name:  serviceName,
+		Name:  service.GetName(),
 		Kind:  desiredstate.ServiceKind(service),
 		Phase: report.PhaseReconciling,
 		State: "missing",
 	}
-	containerStatus := report.ContainerStatus{
-		Name:  legacyContainerStatusName(multiEnvironment, environmentName, serviceName),
-		State: "missing",
-	}
 
 	if current == nil {
-		return serviceStatus, containerStatus
+		return serviceStatus
 	}
 
 	serviceStatus.Container = current.Name
 	serviceStatus.Hash = current.Hash
-	containerStatus.Hash = current.Hash
 
 	if !current.Running {
 		serviceStatus.State = "stopped"
 		serviceStatus.Phase = report.PhaseError
-		containerStatus.State = "stopped"
-		return serviceStatus, containerStatus
+		return serviceStatus
 	}
 
 	serviceStatus.State = "running"
 	serviceStatus.Phase = report.PhaseSettled
-	containerStatus.State = "running"
 
 	info, err := r.engine.Inspect(ctx, current.Name)
 	if err != nil {
-		return serviceStatus, containerStatus
+		return serviceStatus
 	}
 
 	if info.Health != "" {
@@ -111,15 +100,13 @@ func (r *Reconciler) serviceStatus(ctx context.Context, multiEnvironment bool, e
 		case "starting":
 			serviceStatus.State = "starting"
 			serviceStatus.Phase = report.PhaseReconciling
-			containerStatus.State = "starting"
 		case "unhealthy":
 			serviceStatus.State = "unhealthy"
 			serviceStatus.Phase = report.PhaseError
-			containerStatus.State = "unhealthy"
 		}
 	}
 
-	return serviceStatus, containerStatus
+	return serviceStatus
 }
 
 func environmentRevision(desired *desiredstatepb.DesiredState, environment *desiredstatepb.Environment) string {
@@ -135,19 +122,6 @@ func environmentRevision(desired *desiredstatepb.DesiredState, environment *desi
 	return desired.GetRevision()
 }
 
-func countDesiredEnvironments(desired *desiredstatepb.DesiredState) int {
-	if desired == nil {
-		return 0
-	}
-	count := 0
-	for _, environment := range desired.Environments {
-		if environment != nil {
-			count++
-		}
-	}
-	return count
-}
-
 func pickCurrentContainer(containers []engine.ContainerState) *engine.ContainerState {
 	if len(containers) == 0 {
 		return nil
@@ -160,11 +134,4 @@ func pickCurrentContainer(containers []engine.ContainerState) *engine.ContainerS
 		}
 	}
 	return best
-}
-
-func legacyContainerStatusName(multiEnvironment bool, environmentName, serviceName string) string {
-	if !multiEnvironment {
-		return serviceName
-	}
-	return environmentName + "/" + serviceName
 }

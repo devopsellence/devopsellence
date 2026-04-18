@@ -47,9 +47,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_04_010000) do
   end
 
   create_table "deployment_node_statuses", force: :cascade do |t|
-    t.text "containers_json"
     t.datetime "created_at", null: false
     t.integer "deployment_id", null: false
+    t.text "environments_json"
     t.text "error_message"
     t.text "message"
     t.integer "node_id", null: false

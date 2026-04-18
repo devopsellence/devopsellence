@@ -54,7 +54,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     task = desired_state_tasks(desired_state).first
     assert_equal "release_command", task.fetch("name")
     assert_equal release.image_reference_for(organization), task.fetch("image")
-    assert_nil desired_state["containers"]
     assert_equal 1, deployment_statuses_for(environment).size
     assert_equal "waiting to run release command", deployment_statuses_for(environment).first.message
   end
@@ -77,10 +76,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      env_json: { "RAILS_ENV" => "production" }.to_json,
-      secret_refs_json: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ].to_json,
-      healthcheck_path: "/up",
-      healthcheck_port: 3000,
+      web_json: {
+        env: { "RAILS_ENV" => "production" },
+        secret_refs: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ],
+        port: 3000,
+        healthcheck: { path: "/up", port: 3000 }
+      }.to_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -132,7 +133,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal 3, service.dig("healthcheck", "retries")
   end
 
-  test "publishes immutable desired state object plus pointer while keeping legacy desired state path" do
+  test "publishes immutable desired state object plus pointer and direct desired state path" do
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     ensure_test_organization_runtime!(organization)
     project = organization.projects.create!(name: "Project A")
@@ -273,10 +274,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      env_json: { "RAILS_ENV" => "production" }.to_json,
-      secret_refs_json: [].to_json,
-      healthcheck_path: "/up",
-      healthcheck_port: 3000,
+      web_json: {
+        env: { "RAILS_ENV" => "production" },
+        secret_refs: [],
+        port: 3000,
+        healthcheck: { path: "/up", port: 3000 }
+      }.to_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -1009,8 +1012,11 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       revision: "r-fast",
       image_repository: "fast-app",
       image_digest: "sha256:#{"b" * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
-      secret_refs_json: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ].to_json
+      web_json: {
+        port: 3000,
+        healthcheck: { path: "/up", port: 3000 },
+        secret_refs: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ]
+      }.to_json
     )
     node, = issue_test_node!(organization: organization, name: "fast-node")
     node.update!(environment: environment)

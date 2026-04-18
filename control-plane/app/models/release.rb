@@ -18,8 +18,6 @@ class Release < ApplicationRecord
   validates :status, inclusion: { in: STATUSES }
   validates :healthcheck_interval_seconds, numericality: { greater_than: 0 }, allow_nil: true
   validates :healthcheck_timeout_seconds, numericality: { greater_than: 0 }, allow_nil: true
-  validate :env_json_is_object
-  validate :secret_refs_json_is_array
   validate :web_json_is_object
   validate :worker_json_is_object
   validate :service_configs_are_valid
@@ -27,47 +25,10 @@ class Release < ApplicationRecord
 
   before_validation :normalize_revision
 
-  def env_vars
-    parse_json_object(env_json, {})
-  end
-
-  def secret_refs
-    parse_json_array(secret_refs_json, [])
-  end
-
-  def secret_refs_for_agent
-    secret_refs.each_with_object({}) do |entry, result|
-      next unless entry.is_a?(Hash)
-
-      name = entry["name"].presence || entry[:name].presence
-      secret = entry["secret"].presence || entry[:secret].presence
-      next if name.blank? || secret.blank?
-
-      result[name] = secret
-    end
-  end
-
-  def healthcheck
-    return nil if healthcheck_path.blank?
-
-    {
-      path: healthcheck_path,
-      port: service_port,
-      intervalSeconds: healthcheck_interval_seconds,
-      timeoutSeconds: healthcheck_timeout_seconds,
-      retries: 3,
-      startPeriodSeconds: 1
-    }
-  end
-
   def image_reference_for(organization)
     return "#{image_repository}@#{image_digest}" if external_image_reference?
 
     "#{organization.gar_repository_path}/#{image_repository}@#{image_digest}"
-  end
-
-  def service_port
-    healthcheck_port || 3000
   end
 
   def external_image_reference?
@@ -79,10 +40,7 @@ class Release < ApplicationRecord
   end
 
   def web_service
-    service = parse_service_config(web_json, fallback: {})
-    return service if service.present?
-
-    legacy_service_config
+    parse_service_config(web_json, fallback: {})
   end
 
   def worker_service
@@ -144,22 +102,6 @@ class Release < ApplicationRecord
 
   def normalize_revision
     self.revision = git_sha if revision.blank? && git_sha.present?
-  end
-
-  def env_json_is_object
-    parse_json_object(env_json)
-  rescue JSON::ParserError
-    errors.add(:env_json, "must be valid JSON")
-  rescue TypeError
-    errors.add(:env_json, "must decode to an object")
-  end
-
-  def secret_refs_json_is_array
-    parse_json_array(secret_refs_json)
-  rescue JSON::ParserError
-    errors.add(:secret_refs_json, "must be valid JSON")
-  rescue TypeError
-    errors.add(:secret_refs_json, "must decode to an array")
   end
 
   def web_json_is_object
@@ -338,17 +280,6 @@ class Release < ApplicationRecord
     Shellwords.split(text)
   end
 
-  def legacy_service_config
-    stringify_service_config({
-      "entrypoint" => entrypoint,
-      "command" => command,
-      "env" => env_vars.presence,
-      "secret_refs" => secret_refs.presence,
-      "port" => healthcheck.present? ? service_port : nil,
-      "healthcheck" => healthcheck
-    }.compact)
-  end
-
   def parse_service_config(value, fallback:)
     parsed = parse_json_object(value, fallback)
     stringify_service_config(parsed)
@@ -417,14 +348,4 @@ class Release < ApplicationRecord
     raise
   end
 
-  def parse_json_array(value, fallback = nil)
-    parsed = JSON.parse(value.presence || "[]")
-    raise TypeError unless parsed.is_a?(Array)
-
-    parsed
-  rescue JSON::ParserError, TypeError
-    return fallback unless fallback.nil?
-
-    raise
-  end
 end

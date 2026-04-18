@@ -256,16 +256,16 @@ class DashboardController < ApplicationController
         image_repository: params[:image_repository],
         image_digest: params[:image_digest],
         revision: params[:revision],
-        web: params[:web],
+        web: params[:web] || {
+          entrypoint: params[:entrypoint],
+          command: params[:command],
+          env: params[:env_json],
+          secret_refs: params[:secret_refs_json],
+          port: params[:port],
+          healthcheck: params[:healthcheck]
+        },
         worker: params[:worker],
-        init: params[:init],
         release_command: params[:release_command],
-        entrypoint: params[:entrypoint],
-        command: params[:command],
-        env_vars: params[:env_json],
-        secret_refs: params[:secret_refs_json],
-        port: params[:port],
-        healthcheck: params[:healthcheck],
         healthcheck_interval_seconds: params[:healthcheck_interval_seconds],
         healthcheck_timeout_seconds: params[:healthcheck_timeout_seconds]
       }

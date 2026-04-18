@@ -250,9 +250,6 @@ func TestAgentReconcileE2E(t *testing.T) {
 	if len(status.Environments[0].Services) != 1 || status.Environments[0].Services[0].Name != "web" || status.Environments[0].Services[0].State != "running" {
 		t.Fatalf("unexpected services: %#v", status.Environments[0].Services)
 	}
-	if len(status.Containers) != 1 || status.Containers[0].Name != "web" || status.Containers[0].State != "running" {
-		t.Fatalf("unexpected legacy containers: %#v", status.Containers)
-	}
 	if !envoyManager.updated {
 		t.Fatal("expected envoy EDS update")
 	}

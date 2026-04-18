@@ -19,7 +19,6 @@ type Status struct {
 	Summary      *Summary            `json:"summary,omitempty"`
 	Task         *TaskStatus         `json:"task,omitempty"`
 	Environments []EnvironmentStatus `json:"environments,omitempty"`
-	Containers   []ContainerStatus   `json:"containers,omitempty"`
 }
 
 type Summary struct {
@@ -51,10 +50,4 @@ type TaskStatus struct {
 	Message  string `json:"message,omitempty"`
 	Error    string `json:"error,omitempty"`
 	ExitCode int64  `json:"exit_code,omitempty"`
-}
-
-type ContainerStatus struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
-	Hash  string `json:"hash,omitempty"`
 }

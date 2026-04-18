@@ -87,7 +87,7 @@ module Deployments
         phase: phase,
         message: status[:message].presence,
         error_message: status[:error].presence,
-        containers: normalized_containers,
+        environments: normalized_environments,
         reported_at: reported_at_for(deployment_node_status, phase)
       }
     end
@@ -96,7 +96,7 @@ module Deployments
       deployment_node_status.phase != attributes[:phase] ||
         deployment_node_status.message != attributes[:message] ||
         deployment_node_status.error_message != attributes[:error_message] ||
-        deployment_node_status.containers != attributes[:containers]
+        deployment_node_status.environments != attributes[:environments]
     end
 
     def reported_at_for(deployment_node_status, phase)
@@ -230,29 +230,10 @@ module Deployments
       EnvironmentIngresses::ReconcileJob.perform_later(node.environment_id)
     end
 
-    def normalized_containers
-      containers = Array(status[:containers]).map(&:to_h)
-      return containers if containers.any?
-
-      Array(status[:environments]).flat_map do |environment|
-        environment = environment.to_h
-        environment_name = environment[:name].to_s
-        Array(environment[:services]).map do |service|
-          service = service.to_h
-          {
-            name: legacy_container_name(environment_name, service[:name].to_s),
-            state: service[:state].presence || service[:phase].presence || DeploymentNodeStatus::PHASE_RECONCILING,
-            hash: service[:hash].presence
-          }.compact
-        end
+    def normalized_environments
+      Array(status[:environments]).map do |environment|
+        environment.to_h.deep_stringify_keys
       end
-    end
-
-    def legacy_container_name(environment_name, service_name)
-      environments = Array(status[:environments])
-      return service_name if environments.length <= 1
-
-      "#{environment_name}/#{service_name}"
     end
 
     def parse_time(value)

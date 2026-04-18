@@ -78,13 +78,13 @@ module Api
                 id: row.node_id,
                 name: row.node.name,
                 labels: row.node.labels,
-                phase: row.phase,
-                message: row.message,
-                error: row.error_message,
-                reported_at: row.reported_at&.utc&.iso8601,
-                containers: row.containers
-              }
-            end,
+              phase: row.phase,
+              message: row.message,
+              error: row.error_message,
+              reported_at: row.reported_at&.utc&.iso8601,
+              environments: row.environments
+            }
+          end,
             ingress: serialize_ingress(environment.environment_ingress)
           }
         end

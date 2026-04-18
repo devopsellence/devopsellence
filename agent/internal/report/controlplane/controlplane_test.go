@@ -84,9 +84,6 @@ func TestReporterPostsStatusToControlPlane(t *testing.T) {
 				Hash:  "hash-1",
 			}},
 		}},
-		Containers: []report.ContainerStatus{
-			{Name: "web", State: "starting", Hash: "hash-1"},
-		},
 	}
 	if err := reporter.Report(context.Background(), status); err != nil {
 		t.Fatalf("Report() error = %v", err)
@@ -97,9 +94,6 @@ func TestReporterPostsStatusToControlPlane(t *testing.T) {
 	}
 	if captured.Phase != status.Phase {
 		t.Fatalf("phase = %s, want %s", captured.Phase, status.Phase)
-	}
-	if len(captured.Containers) != 1 || captured.Containers[0].State != "starting" {
-		t.Fatalf("containers = %#v", captured.Containers)
 	}
 	if captured.Summary == nil || captured.Summary.Services != 1 {
 		t.Fatalf("summary = %#v", captured.Summary)

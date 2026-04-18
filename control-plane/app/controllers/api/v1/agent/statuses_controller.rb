@@ -34,7 +34,6 @@ module Api
               :phase,
               services: [ :name, :kind, :phase, :container, :state, :health, :hash ]
             ],
-            containers: [ :name, :state, :hash ],
             ingress: [ :tls_status, :tls_not_after, :tls_error ]
           )
           permitted.to_h.deep_symbolize_keys

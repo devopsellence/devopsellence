@@ -8,7 +8,7 @@ class CreateDeploymentNodeStatuses < ActiveRecord::Migration[8.1]
       t.string :phase, null: false, default: "pending"
       t.text :message
       t.text :error_message
-      t.text :containers_json
+      t.text :environments_json
       t.datetime :reported_at
 
       t.timestamps

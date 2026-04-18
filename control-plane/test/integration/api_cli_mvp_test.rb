@@ -1404,16 +1404,18 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
         git_sha: "a" * 40,
         image_repository: "shop-app",
         image_digest: "sha256:#{'b' * 64}",
-        secret_refs: [
-          {
-            name: "SECRET_KEY_BASE",
-            secret: "gsm://projects/runtime-dev-example/secrets/smoke-app-secret-key-base/versions/latest"
+        web: {
+          secret_refs: [
+            {
+              name: "SECRET_KEY_BASE",
+              secret: "gsm://projects/runtime-dev-example/secrets/smoke-app-secret-key-base/versions/latest"
+            }
+          ],
+          port: 80,
+          healthcheck: {
+            path: "/up",
+            port: 80
           }
-        ],
-        port: 80,
-        healthcheck: {
-          path: "/up",
-          port: 80
         }
       },
       headers: auth_headers_for(user),
@@ -1542,7 +1544,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_equal false, release.requires_label?(Node::LABEL_WORKER)
   end
 
-  test "rejects legacy init runtime config" do
+  test "rejects release create without web runtime config" do
     user = User.create!(email: "owner-#{SecureRandom.hex(4)}@example.com", confirmed_at: Time.current)
     organization = Organization.create!(name: "acme")
     OrganizationMembership.create!(organization: organization, user: user, role: OrganizationMembership::ROLE_OWNER)
@@ -1562,7 +1564,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
 
     assert_response :unprocessable_entity
     assert_equal "invalid_request", json_body.fetch("error")
-    assert_includes json_body.fetch("error_description"), "init has been removed"
+    assert_equal "web is required", json_body.fetch("error_description")
   end
 
   private

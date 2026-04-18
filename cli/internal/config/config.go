@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -91,41 +92,22 @@ type SoloNode struct {
 	ProviderImage    string   `yaml:"provider_image,omitempty" json:"provider_image,omitempty"`
 }
 
-type LegacyDirectNode struct {
-	Host             string   `yaml:"host" json:"host"`
-	User             string   `yaml:"user" json:"user"`
-	Port             int      `yaml:"port,omitempty" json:"port,omitempty"`
-	SSHKey           string   `yaml:"ssh_key,omitempty" json:"ssh_key,omitempty"`
-	AgentStateDir    string   `yaml:"agent_state_dir,omitempty" json:"agent_state_dir,omitempty"`
-	Labels           []string `yaml:"labels,omitempty" json:"labels,omitempty"`
-	Provider         string   `yaml:"provider,omitempty" json:"provider,omitempty"`
-	ProviderServerID string   `yaml:"provider_server_id,omitempty" json:"provider_server_id,omitempty"`
-	ProviderRegion   string   `yaml:"provider_region,omitempty" json:"provider_region,omitempty"`
-	ProviderSize     string   `yaml:"provider_size,omitempty" json:"provider_size,omitempty"`
-	ProviderImage    string   `yaml:"provider_image,omitempty" json:"provider_image,omitempty"`
-}
-
 type SoloConfig struct {
 	Nodes map[string]SoloNode `yaml:"nodes" json:"nodes"`
 }
 
-type LegacyDirectConfig struct {
-	Nodes map[string]LegacyDirectNode `yaml:"nodes" json:"nodes"`
-}
-
 type ProjectConfig struct {
-	SchemaVersion      int                 `yaml:"schema_version" json:"schema_version"`
-	App                AppConfig           `yaml:"app,omitempty" json:"app,omitempty"`
-	Organization       string              `yaml:"organization" json:"organization"`
-	Project            string              `yaml:"project" json:"project"`
-	DefaultEnvironment string              `yaml:"default_environment" json:"default_environment"`
-	Build              BuildConfig         `yaml:"build" json:"build"`
-	Web                ServiceConfig       `yaml:"web" json:"web"`
-	Worker             *ServiceConfig      `yaml:"worker,omitempty" json:"worker,omitempty"`
-	ReleaseCommand     string              `yaml:"release_command,omitempty" json:"release_command,omitempty"`
-	Ingress            *IngressConfig      `yaml:"ingress,omitempty" json:"ingress,omitempty"`
-	Solo               *SoloConfig         `yaml:"solo,omitempty" json:"solo,omitempty"`
-	LegacyDirect       *LegacyDirectConfig `yaml:"direct,omitempty" json:"direct,omitempty"` // legacy schema v3 migration input only
+	SchemaVersion      int            `yaml:"schema_version" json:"schema_version"`
+	App                AppConfig      `yaml:"app,omitempty" json:"app,omitempty"`
+	Organization       string         `yaml:"organization" json:"organization"`
+	Project            string         `yaml:"project" json:"project"`
+	DefaultEnvironment string         `yaml:"default_environment" json:"default_environment"`
+	Build              BuildConfig    `yaml:"build" json:"build"`
+	Web                ServiceConfig  `yaml:"web" json:"web"`
+	Worker             *ServiceConfig `yaml:"worker,omitempty" json:"worker,omitempty"`
+	ReleaseCommand     string         `yaml:"release_command,omitempty" json:"release_command,omitempty"`
+	Ingress            *IngressConfig `yaml:"ingress,omitempty" json:"ingress,omitempty"`
+	Solo               *SoloConfig    `yaml:"solo,omitempty" json:"solo,omitempty"`
 }
 
 type Project = ProjectConfig
@@ -159,12 +141,10 @@ func Load(path string) (*ProjectConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	if hasLegacyInitConfig(data) {
-		return nil, fmt.Errorf("invalid %s in %s: init has been removed; use release_command for release-wide work or entrypoint scripts for per-node prep", filepath.Base(path), path)
-	}
-
 	var cfg ProjectConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid %s: %w", filepath.Base(path), err)
 	}
 	if strings.TrimSpace(cfg.App.Type) == "" && filepath.Base(path) == GenericFilePath {
@@ -173,24 +153,11 @@ func Load(path string) (*ProjectConfig, error) {
 	if cfg.SchemaVersion == 0 {
 		return nil, fmt.Errorf("invalid %s in %s: schema_version must be %d; re-run `devopsellence setup`", filepath.Base(path), path, SchemaVersion)
 	}
-	migrateLegacySoloConfig(&cfg)
-	if cfg.SchemaVersion == 3 {
-		cfg.SchemaVersion = SchemaVersion
-	}
 	applyDefaults(&cfg)
 	if err := Validate(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid %s in %s: %w", filepath.Base(path), path, err)
 	}
 	return &cfg, nil
-}
-
-func hasLegacyInitConfig(data []byte) bool {
-	var raw map[string]any
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return false
-	}
-	_, ok := raw["init"]
-	return ok
 }
 
 func ExistingPath(workspaceRoot string) (string, bool) {
@@ -236,10 +203,6 @@ func Write(workspaceRoot string, cfg ProjectConfig) (ProjectConfig, error) {
 	if cfg.SchemaVersion == 0 {
 		cfg.SchemaVersion = SchemaVersion
 	}
-	if cfg.SchemaVersion == 3 {
-		cfg.SchemaVersion = SchemaVersion
-	}
-	migrateLegacySoloConfig(&cfg)
 	applyDefaults(&cfg)
 	if err := Validate(&cfg); err != nil {
 		return ProjectConfig{}, err
@@ -381,9 +344,6 @@ func Validate(cfg *ProjectConfig) error {
 			}
 		}
 	}
-	if cfg.LegacyDirect != nil {
-		return errors.New("direct.nodes has been replaced by solo.nodes; re-run `devopsellence setup`")
-	}
 	return nil
 }
 
@@ -473,24 +433,6 @@ func applyDefaults(cfg *ProjectConfig) {
 			cfg.Solo.Nodes[name] = node
 		}
 	}
-	cfg.LegacyDirect = nil
-}
-
-func normalizeLegacyDirectLabels(labels []string) []string {
-	if labels == nil {
-		return nil
-	}
-	seen := make(map[string]bool, len(labels))
-	normalized := make([]string, 0, len(labels))
-	for _, label := range labels {
-		label = strings.TrimSpace(label)
-		if label == "" || seen[label] {
-			continue
-		}
-		seen[label] = true
-		normalized = append(normalized, label)
-	}
-	return normalized
 }
 
 func normalizeNodeLabels(labels []string) []string {
@@ -522,45 +464,6 @@ func normalizeStringList(values []string) []string {
 		normalized = append(normalized, value)
 	}
 	return normalized
-}
-
-func migrateLegacySoloConfig(cfg *ProjectConfig) {
-	if cfg == nil || cfg.LegacyDirect == nil {
-		return
-	}
-	if cfg.Solo == nil {
-		cfg.Solo = &SoloConfig{Nodes: map[string]SoloNode{}}
-	}
-	if cfg.Solo.Nodes == nil {
-		cfg.Solo.Nodes = map[string]SoloNode{}
-	}
-	for name, node := range cfg.LegacyDirect.Nodes {
-		if _, ok := cfg.Solo.Nodes[name]; !ok {
-			cfg.Solo.Nodes[name] = soloNodeFromLegacyDirectNode(node)
-		}
-	}
-	cfg.LegacyDirect = nil
-	cfg.SchemaVersion = SchemaVersion
-}
-
-func soloNodeFromLegacyDirectNode(node LegacyDirectNode) SoloNode {
-	labels := normalizeLegacyDirectLabels(node.Labels)
-	if labels == nil {
-		labels = []string{NodeLabelWeb, NodeLabelWorker}
-	}
-	return SoloNode{
-		Host:             node.Host,
-		User:             node.User,
-		Port:             node.Port,
-		SSHKey:           node.SSHKey,
-		AgentStateDir:    node.AgentStateDir,
-		Labels:           labels,
-		Provider:         node.Provider,
-		ProviderServerID: node.ProviderServerID,
-		ProviderRegion:   node.ProviderRegion,
-		ProviderSize:     node.ProviderSize,
-		ProviderImage:    node.ProviderImage,
-	}
 }
 
 func validateService(name string, service ServiceConfig, allowHealthcheck bool) error {

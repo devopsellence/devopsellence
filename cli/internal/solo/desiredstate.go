@@ -116,8 +116,8 @@ func BuildDesiredState(cfg *config.ProjectConfig, imageTag, revision string, sec
 }
 
 // BuildDesiredStateForLabels produces desired-state JSON for one solo node.
-// A nil labels slice preserves the legacy solo behavior: run all configured
-// services. A non-nil labels slice schedules only matching services.
+// A nil labels slice runs all configured services. A non-nil labels slice
+// schedules only matching services.
 func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseCommand bool) ([]byte, error) {
 	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseCommand)
 }

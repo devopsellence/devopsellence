@@ -34,10 +34,104 @@ description = "Build agent"
 dir = "agent"
 run = "mise run build"
 
+[tasks."release:build:agent"]
+description = "Build multi-platform agent release artifacts"
+dir = "agent"
+run = '''
+set -euo pipefail
+
+version="${DEVOPSELLENCE_RELEASE_VERSION:?}"
+commit="${DEVOPSELLENCE_RELEASE_COMMIT:?}"
+build_time="${DEVOPSELLENCE_RELEASE_BUILD_TIME:?}"
+dist_dir="${DEVOPSELLENCE_RELEASE_DIST_DIR:?}"
+dist_root="$PWD/dist"
+module_path="github.com/devopsellence/devopsellence/agent/internal/version"
+build_time_field="BuildTime"
+
+case "$dist_dir" in
+  /*) ;;
+  *) dist_dir="$PWD/$dist_dir" ;;
+esac
+
+case "$dist_dir" in
+  "$dist_root"/*) ;;
+  *)
+    echo "DEVOPSELLENCE_RELEASE_DIST_DIR must be under $dist_root" >&2
+    exit 1
+    ;;
+esac
+
+mise install
+rm -rf "$dist_dir"
+mkdir -p "$dist_dir" "$PWD/.gocache"
+: > "$dist_dir/SHA256SUMS"
+
+for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+  goos="${target%/*}"
+  goarch="${target#*/}"
+  artifact="${goos}-${goarch}"
+  output="$dist_dir/$artifact"
+  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOCACHE="$PWD/.gocache" \
+    mise exec -- go build \
+      -trimpath \
+      -ldflags "-s -w -X ${module_path}.Version=${version} -X ${module_path}.Commit=${commit} -X ${module_path}.${build_time_field}=${build_time}" \
+      -o "$output" \
+      ./cmd/devopsellence
+  (cd "$dist_dir" && sha256sum "$artifact") >> "$dist_dir/SHA256SUMS"
+done
+'''
+
 [tasks."build:cli"]
 description = "Build CLI"
 dir = "cli"
 run = "mise run build"
+
+[tasks."release:build:cli"]
+description = "Build multi-platform CLI release artifacts"
+dir = "cli"
+run = '''
+set -euo pipefail
+
+version="${DEVOPSELLENCE_RELEASE_VERSION:?}"
+commit="${DEVOPSELLENCE_RELEASE_COMMIT:?}"
+build_time="${DEVOPSELLENCE_RELEASE_BUILD_TIME:?}"
+dist_dir="${DEVOPSELLENCE_RELEASE_DIST_DIR:?}"
+dist_root="$PWD/dist"
+module_path="github.com/devopsellence/cli/internal/version"
+build_time_field="Date"
+
+case "$dist_dir" in
+  /*) ;;
+  *) dist_dir="$PWD/$dist_dir" ;;
+esac
+
+case "$dist_dir" in
+  "$dist_root"/*) ;;
+  *)
+    echo "DEVOPSELLENCE_RELEASE_DIST_DIR must be under $dist_root" >&2
+    exit 1
+    ;;
+esac
+
+mise install
+rm -rf "$dist_dir"
+mkdir -p "$dist_dir" "$PWD/.gocache"
+: > "$dist_dir/SHA256SUMS"
+
+for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+  goos="${target%/*}"
+  goarch="${target#*/}"
+  artifact="${goos}-${goarch}"
+  output="$dist_dir/$artifact"
+  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOCACHE="$PWD/.gocache" \
+    mise exec -- go build \
+      -trimpath \
+      -ldflags "-s -w -X ${module_path}.Version=${version} -X ${module_path}.Commit=${commit} -X ${module_path}.${build_time_field}=${build_time}" \
+      -o "$output" \
+      ./cmd/devopsellence
+  (cd "$dist_dir" && sha256sum "$artifact") >> "$dist_dir/SHA256SUMS"
+done
+'''
 
 [tasks."fmt:agent"]
 description = "Format agent Go files"

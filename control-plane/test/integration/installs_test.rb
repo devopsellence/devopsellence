@@ -50,7 +50,8 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_equal "text/plain", response.media_type
-    assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-https://dev.devopsellence.com}"'
+    assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
+    assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
     assert_includes response.body, 'INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"'
     assert_includes response.body, 'if [[ "$OS" == "darwin" ]]; then'
     assert_includes response.body, 'INSTALL_DIR="$HOME/.local/bin"'
@@ -69,8 +70,36 @@ class InstallsTest < ActionDispatch::IntegrationTest
     end
 
     assert_response :success
-    assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-https://dev.devopsellence.com}"'
+    assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
+    assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
     refute_includes response.body, "https://app.devopsellence.com"
+  end
+
+  test "cli install script accepts version from the query string" do
+    get "/lfg.sh", params: { version: "v0.1.0-rc.1" }
+
+    assert_response :success
+    assert_includes response.body, 'CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-}"'
+    assert_includes response.body, "CLI_VERSION='v0.1.0-rc.1'"
+    assert_includes response.body, "missing --version (or use ?version=... or set DEVOPSELLENCE_CLI_VERSION)"
+    assert_includes response.body, 'validate_version "$CLI_VERSION"'
+  end
+
+  test "cli install script derives checksum url after parsing base url overrides" do
+    get "/lfg.sh"
+
+    assert_response :success
+    assert_includes response.body, 'CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"'
+    assert_includes response.body, 'CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"'
+    assert_operator response.body.index("while [[ $# -gt 0 ]]; do"), :<, response.body.index('CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"')
+  end
+
+  test "cli install script safely quotes query-string version" do
+    get "/lfg.sh", params: { version: "v0.1.0-rc.1$(touch /tmp/pwned)'oops" }
+
+    assert_response :success
+    assert_includes response.body, "CLI_VERSION='v0.1.0-rc.1$(touch /tmp/pwned)'\"'\"'oops'"
+    refute_includes response.body, 'CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-v0.1.0-rc.1$(touch /tmp/pwned)\'oops}"'
   end
 
   test "install script bootstraps docker on supported ubuntu releases" do
@@ -85,6 +114,24 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "/etc/apt/sources.list.d/docker.list"
     assert_includes response.body, "dpkg --print-architecture"
     assert_includes response.body, "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+  end
+
+  test "agent install script accepts version from the query string" do
+    get "/install.sh", params: { version: "v0.1.0-rc.1" }
+
+    assert_response :success
+    assert_includes response.body, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-}"'
+    assert_includes response.body, "AGENT_VERSION='v0.1.0-rc.1'"
+    assert_includes response.body, 'validate_version "$AGENT_VERSION"'
+    assert_includes response.body, "OS_RAW=\"$(uname -s | tr '[:upper:]' '[:lower:]')\""
+  end
+
+  test "agent install script safely quotes query-string version" do
+    get "/install.sh", params: { version: "v0.1.0-rc.1$(touch /tmp/pwned)'oops" }
+
+    assert_response :success
+    assert_includes response.body, "AGENT_VERSION='v0.1.0-rc.1$(touch /tmp/pwned)'\"'\"'oops'"
+    refute_includes response.body, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-v0.1.0-rc.1$(touch /tmp/pwned)\'oops}"'
   end
 
   test "install script waits for docker at service startup" do

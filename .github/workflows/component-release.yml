@@ -1,0 +1,210 @@
+name: Component Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "Which component to release"
+        required: true
+        type: choice
+        options:
+          - both
+          - agent
+          - cli
+        default: both
+      source_ref:
+        description: "Branch, tag, or commit SHA to build from"
+        required: true
+        type: string
+      version:
+        description: "Release version, e.g. v0.1.0 or v0.1.0-rc.1"
+        required: true
+        type: string
+      release_kind:
+        description: "Stable releases must not include a prerelease suffix"
+        required: true
+        type: choice
+        options:
+          - stable
+          - prerelease
+        default: prerelease
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+
+      - name: Validate inputs
+        env:
+          RELEASE_KIND_INPUT: ${{ inputs.release_kind }}
+          SOURCE_REF_INPUT: ${{ inputs.source_ref }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          version="$VERSION_INPUT"
+          release_kind="$RELEASE_KIND_INPUT"
+          source_ref="$SOURCE_REF_INPUT"
+
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "version must look like v0.1.0" >&2
+            exit 1
+          fi
+
+          if [[ ! "$source_ref" =~ ^([0-9a-f]{7,40}|[A-Za-z0-9._/-]+)$ ]] || \
+             [[ "$source_ref" == *..* ]] || \
+             [[ "$source_ref" == /* ]] || \
+             [[ "$source_ref" == */ ]]; then
+            echo "source_ref must be a branch, tag, or commit SHA" >&2
+            exit 1
+          fi
+
+          case "$release_kind" in
+            stable)
+              if [[ "$version" == *-* ]]; then
+                echo "stable releases must not include a prerelease suffix: $version" >&2
+                exit 1
+              fi
+              ;;
+            prerelease)
+              if [[ "$version" != *-* ]]; then
+                echo "prereleases must include a suffix like -rc.1 or -dev.1: $version" >&2
+                exit 1
+              fi
+              ;;
+          esac
+
+      - name: Run selected tests
+        env:
+          COMPONENT_INPUT: ${{ inputs.component }}
+        run: |
+          set -euo pipefail
+
+          case "$COMPONENT_INPUT" in
+            both)
+              mise run test:agent
+              mise run test:cli
+              ;;
+            agent)
+              mise run test:agent
+              ;;
+            cli)
+              mise run test:cli
+              ;;
+            *)
+              echo "unknown component: $COMPONENT_INPUT" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build and publish selected release(s)
+        env:
+          COMPONENT_INPUT: ${{ inputs.component }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_KIND_INPUT: ${{ inputs.release_kind }}
+          SOURCE_REF_INPUT: ${{ inputs.source_ref }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          component="$COMPONENT_INPUT"
+          version="$VERSION_INPUT"
+          release_kind="$RELEASE_KIND_INPUT"
+          source_ref="$SOURCE_REF_INPUT"
+          target_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          workspace_dir="$PWD"
+
+          prerelease_flag=()
+          if [[ "$release_kind" == "prerelease" ]]; then
+            prerelease_flag=(--prerelease)
+          fi
+
+          publish_component() {
+            local component="$1"
+            local working_dir release_label
+            case "$component" in
+              agent)
+                working_dir="agent"
+                release_label="Agent"
+                ;;
+              cli)
+                working_dir="cli"
+                release_label="CLI"
+                ;;
+              *)
+                echo "unknown component: $component" >&2
+                exit 1
+                ;;
+            esac
+
+            local tag_name="${component}-${version}"
+            local dist_dir="${workspace_dir}/${working_dir}/dist/${version}"
+            local release_notes="${release_label} binary release for ${version} from ${source_ref} at ${target_sha}"
+            local release_assets=(
+              "${dist_dir}/linux-amd64"
+              "${dist_dir}/linux-arm64"
+              "${dist_dir}/darwin-amd64"
+              "${dist_dir}/darwin-arm64"
+              "${dist_dir}/SHA256SUMS"
+            )
+
+            if git rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
+              tag_target="$(git rev-list -n 1 "$tag_name")"
+              if [[ "$tag_target" != "$target_sha" ]]; then
+                echo "tag already exists at a different commit: $tag_name ($tag_target != $target_sha)" >&2
+                exit 1
+              fi
+            fi
+
+            DEVOPSELLENCE_RELEASE_VERSION="$version" \
+              DEVOPSELLENCE_RELEASE_COMMIT="$short_sha" \
+              DEVOPSELLENCE_RELEASE_BUILD_TIME="$build_time" \
+              DEVOPSELLENCE_RELEASE_DIST_DIR="$dist_dir" \
+              mise run "release:build:${component}"
+
+            if gh release view "$tag_name" >/dev/null 2>&1; then
+              gh release edit "$tag_name" \
+                --title "${release_label} ${version}" \
+                --notes "$release_notes" \
+                "${prerelease_flag[@]}"
+              gh release upload "$tag_name" "${release_assets[@]}" --clobber
+              return
+            fi
+
+            gh release create "$tag_name" \
+              "${release_assets[@]}" \
+              --title "${release_label} ${version}" \
+              --notes "$release_notes" \
+              --target "$target_sha" \
+              "${prerelease_flag[@]}"
+          }
+
+          case "$component" in
+            both)
+              publish_component agent
+              publish_component cli
+              ;;
+            agent|cli)
+              publish_component "$component"
+              ;;
+            *)
+              echo "unknown component: $component" >&2
+              exit 1
+              ;;
+          esac

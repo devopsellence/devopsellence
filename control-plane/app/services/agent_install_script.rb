@@ -2,9 +2,9 @@
 
 class AgentInstallScript
   class << self
-    def render(base_url:, stable_version:)
-      default_base_url = shell_single_quote(base_url)
-      default_agent_version = shell_single_quote(stable_version)
+    def render(base_url:, default_version:)
+      default_base_url = ShellQuoting.single_quote(base_url)
+      default_agent_version = ShellQuoting.single_quote(default_version)
 
       <<~SH
         #!/usr/bin/env bash
@@ -59,7 +59,20 @@ class AgentInstallScript
           exit 1
         fi
 
-        OS_RAW="$(uname -s | tr [:upper:] [:lower:])"
+        validate_version() {
+          local version="$1"
+
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid version: $version" >&2
+            exit 1
+          fi
+        }
+
+        if [[ -n "$AGENT_VERSION" ]]; then
+          validate_version "$AGENT_VERSION"
+        fi
+
+        OS_RAW="$(uname -s | tr '[:upper:]' '[:lower:]')"
         ARCH_RAW="$(uname -m)"
 
         case "$OS_RAW" in
@@ -258,13 +271,6 @@ class AgentInstallScript
 
         echo "devopsellence agent installed and started."
       SH
-    end
-
-    private
-
-    def shell_single_quote(value)
-      escaped = value.to_s.gsub("'", %q('"'"'))
-      "'#{escaped}'"
     end
   end
 end

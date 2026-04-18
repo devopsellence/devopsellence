@@ -169,7 +169,7 @@ module Releases
       return default if value.blank?
 
       JSON.parse(value)
-    rescue JSON::ParserError
+    rescue JSON::ParserError, TypeError
       raise InvalidPayload, "#{field} must be valid JSON"
     end
 

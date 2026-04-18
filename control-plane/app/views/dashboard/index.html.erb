@@ -280,7 +280,12 @@
                   <%= form_with url: dashboard_environment_secrets_path(@selected_environment), method: :post, class: "space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3" do %>
                     <div>
                       <%= label_tag :service_name, "service", class: "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600" %>
-                      <%= select_tag :service_name, options_for_select([["web", "web"], ["worker", "worker"]]), class: "w-full rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag :service_name, nil, required: true, list: "environment-secret-service-names", placeholder: "web", class: "w-full rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <datalist id="environment-secret-service-names">
+                        <% @secret_service_names.each do |service_name| %>
+                          <option value="<%= service_name %>"></option>
+                        <% end %>
+                      </datalist>
                     </div>
                     <div>
                       <%= label_tag :name, "env var name", class: "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600" %>

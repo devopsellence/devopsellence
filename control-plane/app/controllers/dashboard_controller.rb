@@ -24,6 +24,7 @@ class DashboardController < ApplicationController
     @releases = @selected_project&.releases&.order(created_at: :desc) || []
     @deployments = @selected_environment&.deployments&.includes(:release)&.order(created_at: :desc) || []
     @environment_secrets = @selected_environment&.environment_secrets&.order(:service_name, :name) || []
+    @secret_service_names = secret_service_names(@selected_environment)
     @default_env_json = default_env_json
     @default_secret_refs_json = default_secret_refs_json
   end
@@ -282,6 +283,12 @@ class DashboardController < ApplicationController
         }
       ]
     )
+  end
+
+  def secret_service_names(environment)
+    names = Array(environment&.current_release&.service_names) +
+      Array(environment&.environment_secrets&.pluck(:service_name))
+    names.map(&:to_s).map(&:strip).reject(&:blank?).uniq.sort
   end
 
   def secret_dashboard_path(environment)

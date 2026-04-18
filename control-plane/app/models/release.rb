@@ -95,9 +95,11 @@ class Release < ApplicationRecord
     configured = runtime_payload["ingress_service"].to_s.strip
     return configured if configured.present?
 
-    return "web" if services_config["web"] && service_kind(services_config["web"]) == "web"
+    names = web_service_names
+    return "web" if names.include?("web")
+    return names.first if names.one?
 
-    web_service_names.first
+    nil
   end
 
   def scheduled_services_for(node:)
@@ -257,7 +259,9 @@ class Release < ApplicationRecord
       errors.add(:runtime_json, "tasks.release.service must reference an existing service")
       return
     end
-    if task["entrypoint"].to_s.strip.blank? && task["command"].to_s.strip.blank?
+    validate_release_task_string(task, "entrypoint")
+    validate_release_task_string(task, "command")
+    if !release_task_string_present?(task["entrypoint"]) && !release_task_string_present?(task["command"])
       errors.add(:runtime_json, "tasks.release must set entrypoint or command")
     end
     unless task["env"].nil? || task["env"].is_a?(Hash)
@@ -270,6 +274,10 @@ class Release < ApplicationRecord
 
   def validate_ingress_service
     name = ingress_service_name
+    if name.blank? && web_service_names.length > 1
+      errors.add(:runtime_json, "ingress_service is required when multiple web services are defined")
+      return
+    end
     return if name.blank?
 
     service = services_config[name]
@@ -280,6 +288,17 @@ class Release < ApplicationRecord
     if service_kind(service) != "web"
       errors.add(:runtime_json, "ingress_service must reference a web service")
     end
+  end
+
+  def validate_release_task_string(task, field)
+    value = task[field]
+    return if value.nil? || value.is_a?(String)
+
+    errors.add(:runtime_json, "tasks.release.#{field} must be a string")
+  end
+
+  def release_task_string_present?(value)
+    value.is_a?(String) && value.strip.present?
   end
 
   def service_payload(name, service, organization:, environment:)

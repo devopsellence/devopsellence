@@ -347,5 +347,4 @@ class Release < ApplicationRecord
 
     raise
   end
-
 end

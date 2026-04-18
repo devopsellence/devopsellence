@@ -37,7 +37,7 @@ class ApiAgentStandaloneRuntimeTest < ActionDispatch::IntegrationTest
 
       result = Nodes::DesiredStatePublisher.new(
         node: node,
-        payload: ->(sequence:) { { revision: "rev-#{sequence}", environments: [] } }
+        payload: ->(sequence:) { { schemaVersion: 2, revision: "rev-#{sequence}", environments: [] } }
       ).call
 
       assert_equal "https://control.example.test/api/v1/agent/desired_state", result.uri
@@ -53,6 +53,48 @@ class ApiAgentStandaloneRuntimeTest < ActionDispatch::IntegrationTest
         "If-None-Match" => etag
       }, as: :json
       assert_response :not_modified
+    end
+  end
+
+  test "custom standalone payloads are normalized to desired state v2" do
+    with_env(
+      "DEVOPSELLENCE_RUNTIME_BACKEND" => "standalone",
+      "DEVOPSELLENCE_PUBLIC_BASE_URL" => "https://control.example.test"
+    ) do
+      organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+      project = organization.projects.create!(name: "Project A")
+      environment = project.environments.create!(name: "production")
+      runtime = RuntimeProject.default!
+      organization_bundle = OrganizationBundle.create!(
+        runtime_project: runtime,
+        claimed_by_organization: organization,
+        status: OrganizationBundle::STATUS_CLAIMED
+      )
+      environment_bundle = EnvironmentBundle.create!(
+        runtime_project: runtime,
+        organization_bundle: organization_bundle,
+        claimed_by_environment: environment,
+        status: EnvironmentBundle::STATUS_CLAIMED
+      )
+      environment.update!(runtime_project: runtime, environment_bundle:, service_account_email: environment_bundle.service_account_email)
+      node_bundle = NodeBundle.create!(
+        runtime_project: runtime,
+        organization_bundle: organization_bundle,
+        environment_bundle: environment_bundle,
+        status: NodeBundle::STATUS_CLAIMED
+      )
+      node, = issue_test_node!(organization: organization, name: "node-a")
+      node.update!(environment:, node_bundle:)
+
+      result = Nodes::DesiredStatePublisher.new(
+        node: node,
+        payload: ->(sequence:) { { revision: "rev-#{sequence}" } }
+      ).call
+
+      payload = JSON.parse(result.payload.fetch(:payload_json))
+      assert_equal 2, payload.fetch("schemaVersion")
+      assert_equal [], payload.fetch("environments")
+      assert_equal "rev-1", payload.fetch("revision")
     end
   end
 
@@ -275,7 +317,7 @@ class ApiAgentStandaloneRuntimeTest < ActionDispatch::IntegrationTest
 
       publisher = Nodes::DesiredStatePublisher.new(
         node: node,
-        payload: ->(sequence:) { { revision: "rev-#{sequence}", environments: [] } }
+        payload: ->(sequence:) { { schemaVersion: 2, revision: "rev-#{sequence}", environments: [] } }
       )
 
       publisher.call

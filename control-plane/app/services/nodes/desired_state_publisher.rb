@@ -60,7 +60,7 @@ module Nodes
     attr_reader :node, :payload, :store
 
     def desired_state_payload(sequence:)
-      return payload.call(sequence:) if payload.respond_to?(:call)
+      return normalize_custom_payload(payload.call(sequence:)) if payload.respond_to?(:call)
       return self.class.unassigned_payload(node: node).merge(sequence: sequence) unless active_release
 
       NodeDesiredState::Builder.new(
@@ -77,6 +77,13 @@ module Nodes
 
     def next_sequence
       current_sequence + 1
+    end
+
+    def normalize_custom_payload(value)
+      payload_hash = value.to_h
+      payload_hash[:schemaVersion] = 2 unless payload_hash.key?(:schemaVersion) || payload_hash.key?("schemaVersion")
+      payload_hash[:environments] = [] unless payload_hash.key?(:environments) || payload_hash.key?("environments")
+      payload_hash
     end
 
     def persist_assignment_state!(sequence)

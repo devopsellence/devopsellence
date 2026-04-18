@@ -110,8 +110,8 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		return err
 	}
 
-	if desired.ReleaseCommand != nil {
-		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, desired.Revision, desired.ReleaseCommand, true); err != nil {
+	for _, task := range desiredstate.RuntimeTasks(desired) {
+		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, task.EnvironmentName, task.EnvironmentRevision, task.Task, true); err != nil {
 			a.metrics.ReconcileErrors.Inc()
 			return err
 		}
@@ -152,10 +152,10 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 }
 
 func (a *Agent) runTaskOnce(ctx context.Context, sequence int64, revision string, task *desiredstatepb.Task) error {
-	return a.ensureTaskSatisfied(ctx, sequence, revision, task, false)
+	return a.ensureTaskSatisfied(ctx, sequence, desiredstate.DefaultEnvironmentName, revision, task, false)
 }
 
-func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, revision string, task *desiredstatepb.Task, suppressSuccessReport bool) error {
+func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environmentName string, revision string, task *desiredstatepb.Task, suppressSuccessReport bool) error {
 	taskHash, err := desiredstate.HashTask(task)
 	if err != nil {
 		a.reportStatus(ctx, report.Status{
@@ -171,7 +171,8 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, revisio
 		}, sequence)
 		return err
 	}
-	if a.taskStore != nil && a.taskStore.Satisfied(task.GetName(), sequence, taskHash) {
+	storeName := taskStoreName(environmentName, task.GetName())
+	if a.taskStore != nil && a.taskStore.Satisfied(storeName, sequence, taskHash) {
 		return nil
 	}
 
@@ -205,7 +206,7 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, revisio
 		return err
 	}
 	if a.taskStore != nil {
-		if err := a.taskStore.MarkSatisfied(task.GetName(), sequence, taskHash); err != nil {
+		if err := a.taskStore.MarkSatisfied(storeName, sequence, taskHash); err != nil {
 			a.logger.Warn("persist lifecycle task state failed", "task", task.GetName(), "error", err)
 		}
 	}
@@ -226,6 +227,15 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, revisio
 		},
 	}, sequence)
 	return nil
+}
+
+func taskStoreName(environmentName, taskName string) string {
+	environmentName = strings.TrimSpace(environmentName)
+	taskName = strings.TrimSpace(taskName)
+	if environmentName == "" {
+		return taskName
+	}
+	return environmentName + "/" + taskName
 }
 
 func (a *Agent) reportStatus(ctx context.Context, status report.Status, sequence int64) {

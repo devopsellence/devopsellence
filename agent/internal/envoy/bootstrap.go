@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 )
 
 const DefaultBootstrapPath = "/etc/devopsellence/envoy/envoy.yaml"
@@ -26,6 +28,7 @@ type publicIngressListenerConfig struct {
 	ChallengePort    uint16
 	CertificatePEM   []byte
 	PrivateKeyPEM    []byte
+	Routes           []*desiredstatepb.IngressRoute
 }
 
 // xdsSocketName is the Unix socket filename placed alongside the bootstrap YAML.

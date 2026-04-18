@@ -14,8 +14,10 @@ module NodeDesiredState
       ingress = ingress_payload(environment:, node:)
 
       bundle = node.node_bundle
+      revision = release.revision.presence || "node-#{node.id}-seq-#{sequence}"
       {
-        revision: release.revision.presence || "node-#{node.id}-seq-#{sequence}",
+        schemaVersion: 2,
+        revision: revision,
         assignment_sequence: sequence,
         identity_version: environment.identity_version,
         image: {
@@ -23,7 +25,13 @@ module NodeDesiredState
           digest: release.image_digest,
           reference: release.image_reference_for(organization)
         },
-        containers: release.scheduled_containers_for(node: node),
+        environments: [
+          {
+            name: environment.name,
+            revision: revision,
+            services: release.scheduled_services_for(node: node)
+          }.compact
+        ],
         ingress: ingress,
         node_peers: node_peers_payload(environment:, node:),
         published_at: Time.current.utc.iso8601,

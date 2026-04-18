@@ -15,15 +15,17 @@ func TestFetchReadsDesiredStateFromControlPlaneHTTPAndUsesETag(t *testing.T) {
 	serverState.desiredETag = "standalone-etag-1"
 	serverState.desiredStateURI = ""
 	serverState.desiredPayload = []byte(`{
+  "schemaVersion": 2,
   "revision": "rev-http",
-  "containers": [
-    {
-      "service_name": "web",
+  "environments": [
+    {"name": "production", "services": [{
+      "name": "web",
+      "kind": "web",
       "image": "ghcr.io/acme/apps/web:rev-1",
-      "secret_refs": {
-        "API_KEY": "__CONTROL_PLANE_SECRET__"
-      }
-    }
+      "ports": [{"name": "http", "port": 3000}],
+      "healthcheck": {"path": "/up", "port": 3000},
+      "secretRefs": {"API_KEY": "__CONTROL_PLANE_SECRET__"}
+    }]}
   ]
 }`)
 	server := httptest.NewServer(serverState.handler())
@@ -31,15 +33,17 @@ func TestFetchReadsDesiredStateFromControlPlaneHTTPAndUsesETag(t *testing.T) {
 	serverState.mu.Lock()
 	serverState.desiredStateURI = server.URL + "/api/v1/agent/desired_state"
 	serverState.desiredPayload = []byte(`{
+  "schemaVersion": 2,
   "revision": "rev-http",
-  "containers": [
-    {
-      "service_name": "web",
+  "environments": [
+    {"name": "production", "services": [{
+      "name": "web",
+      "kind": "web",
       "image": "ghcr.io/acme/apps/web:rev-1",
-      "secret_refs": {
-        "API_KEY": "` + server.URL + `/api/v1/agent/secrets/environment_secrets/1"
-      }
-    }
+      "ports": [{"name": "http", "port": 3000}],
+      "healthcheck": {"path": "/up", "port": 3000},
+      "secretRefs": {"API_KEY": "` + server.URL + `/api/v1/agent/secrets/environment_secrets/1"}
+    }]}
   ]
 }`)
 	serverState.mu.Unlock()
@@ -55,7 +59,7 @@ func TestFetchReadsDesiredStateFromControlPlaneHTTPAndUsesETag(t *testing.T) {
 	if fetchResult.Sequence != serverState.desiredSequence {
 		t.Fatalf("unexpected fetch sequence: %d", fetchResult.Sequence)
 	}
-	if got := fetchResult.Desired.Containers[0].Env["API_KEY"]; got != "super-secret" {
+	if got := fetchResult.Desired.Environments[0].Services[0].Env["API_KEY"]; got != "super-secret" {
 		t.Fatalf("unexpected resolved secret: %q", got)
 	}
 	serverState.mu.Lock()
@@ -81,12 +85,13 @@ func TestFetchReadsStandaloneHTTPDesiredStateIngressSecret(t *testing.T) {
 	serverState.mu.Lock()
 	serverState.desiredStateURI = server.URL + "/api/v1/agent/desired_state"
 	serverState.desiredPayload = []byte(`{
+  "schemaVersion": 2,
   "revision": "rev-http",
   "ingress": {
     "hosts": ["abc123.devopsellence.io"],
-    "tunnel_token_secret_ref": "` + server.URL + `/api/v1/agent/secrets/environment_secrets/1"
+    "tunnelTokenSecretRef": "` + server.URL + `/api/v1/agent/secrets/environment_secrets/1"
   },
-  "containers": []
+  "environments": []
 }`)
 	serverState.mu.Unlock()
 
@@ -115,7 +120,7 @@ func TestFetchKeepsDesiredStateProtoShapeWithHTTPSource(t *testing.T) {
 	defer server.Close()
 	serverState.mu.Lock()
 	serverState.desiredStateURI = server.URL + "/api/v1/agent/desired_state"
-	serverState.desiredPayload = []byte(`{"revision":"rev-http","containers":[]}`)
+	serverState.desiredPayload = []byte(`{"schemaVersion":2,"revision":"rev-http","environments":[]}`)
 	serverState.mu.Unlock()
 
 	authManager := newRemoteAuthManager(t, server.URL)

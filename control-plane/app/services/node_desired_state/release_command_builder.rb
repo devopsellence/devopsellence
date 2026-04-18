@@ -11,11 +11,19 @@ module NodeDesiredState
 
     def call
       bundle = node.node_bundle
+      revision = release.revision.presence || "node-#{node.id}-seq-#{sequence}"
       {
-        revision: release.revision.presence || "node-#{node.id}-seq-#{sequence}",
+        schemaVersion: 2,
+        revision: revision,
         assignment_sequence: sequence,
         identity_version: environment.identity_version,
-        releaseCommand: release.release_command_task_for(node: node),
+        environments: [
+          {
+            name: environment.name,
+            revision: revision,
+            tasks: [ release.release_command_task_for(node: node) ].compact
+          }.compact
+        ],
         published_at: Time.current.utc.iso8601,
         organization_bundle_token: bundle&.organization_bundle&.token.to_s,
         environment_bundle_token: bundle&.environment_bundle&.token.to_s,

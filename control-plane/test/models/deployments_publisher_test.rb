@@ -51,8 +51,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal Release::STATUS_DRAFT, release.reload.status
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal "release_command", desired_state.dig("releaseCommand", "name")
-    assert_equal release.image_reference_for(organization), desired_state.dig("releaseCommand", "image")
+    task = desired_state_tasks(desired_state).first
+    assert_equal "release_command", task.fetch("name")
+    assert_equal release.image_reference_for(organization), task.fetch("image")
     assert_nil desired_state["containers"]
     assert_equal 1, deployment_statuses_for(environment).size
     assert_equal "waiting to run release command", deployment_statuses_for(environment).first.message
@@ -113,17 +114,22 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal DeploymentNodeStatus::PHASE_PENDING, deployment_statuses_for(environment).first.phase
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
+    service = desired_state_services(desired_state).first
     assert_equal true, desired_state["assigned"]
     assert_equal release.revision, desired_state["revision"]
-    assert_equal release.image_reference_for(organization), desired_state.dig("containers", 0, "image")
-    assert_equal 3000, desired_state.dig("containers", 0, "port")
-    assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, desired_state.dig("containers", 0, "secretRefs"))
+    assert_equal "Production", desired_state_environment(desired_state).fetch("name")
+    assert_equal "web", service.fetch("name")
+    assert_equal "web", service.fetch("kind")
+    assert_equal release.image_reference_for(organization), service.fetch("image")
+    assert_equal 3000, service.dig("ports", 0, "port")
+    assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, service.fetch("secretRefs"))
     assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
     assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnel_token_secret_ref")
-    assert_equal "/up", desired_state.dig("containers", 0, "healthcheck", "path")
-    assert_equal 3000, desired_state.dig("containers", 0, "healthcheck", "port")
-    assert_equal 5, desired_state.dig("containers", 0, "healthcheck", "intervalSeconds")
-    assert_equal 3, desired_state.dig("containers", 0, "healthcheck", "retries")
+    assert_equal "Production", desired_state.dig("ingress", "routes", 0, "target", "environment")
+    assert_equal "/up", service.dig("healthcheck", "path")
+    assert_equal 3000, service.dig("healthcheck", "port")
+    assert_equal 5, service.dig("healthcheck", "intervalSeconds")
+    assert_equal 3, service.dig("healthcheck", "retries")
   end
 
   test "publishes immutable desired state object plus pointer while keeping legacy desired state path" do
@@ -246,7 +252,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal "docker.io/mccutchen/go-httpbin@sha256:#{'a' * 64}", desired_state.dig("containers", 0, "image")
+    assert_equal "docker.io/mccutchen/go-httpbin@sha256:#{'a' * 64}", desired_state_services(desired_state).first.fetch("image")
   end
 
   test "omits empty secret refs from desired state" do
@@ -285,7 +291,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_not desired_state.dig("containers", 0).key?("secretRefs")
+    assert_not desired_state_services(desired_state).first.key?("secretRefs")
   end
 
   test "publishes web and worker based on node labels" do
@@ -340,8 +346,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal %w[web worker], desired_state.fetch("containers").map { |entry| entry.fetch("serviceName") }
-    assert_equal "./bin/jobs", desired_state.dig("containers", 1, "command", 0)
+    services = desired_state_services(desired_state)
+    assert_equal %w[web worker], services.map { |entry| entry.fetch("name") }
+    assert_equal "./bin/jobs", services.second.dig("command", 0)
     assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
   end
 
@@ -398,7 +405,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    mounts = desired_state.fetch("containers").map { |entry| entry.fetch("volumeMounts").first }
+    mounts = desired_state_services(desired_state).map { |entry| entry.fetch("volumeMounts").first }
 
     assert_equal [
       { "source" => "devopsellence-env-#{environment.id}-app_storage", "target" => "/rails/storage" },
@@ -459,7 +466,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
         "DATABASE_URL" => "projects/acme/secrets/db/versions/latest",
         "SECRET_KEY_BASE" => environment.environment_secrets.first.secret_ref
       },
-      desired_state.dig("containers", 0, "secretRefs")
+      desired_state_services(desired_state).first.fetch("secretRefs")
     )
     assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
   end
@@ -1023,5 +1030,17 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
   def deployment_statuses_for(environment)
     DeploymentNodeStatus.joins(:deployment).where(deployments: { environment_id: environment.id }).order(:id).to_a
+  end
+
+  def desired_state_environment(desired_state)
+    desired_state.fetch("environments").first
+  end
+
+  def desired_state_services(desired_state)
+    desired_state_environment(desired_state).fetch("services")
+  end
+
+  def desired_state_tasks(desired_state)
+    desired_state_environment(desired_state).fetch("tasks")
   end
 end

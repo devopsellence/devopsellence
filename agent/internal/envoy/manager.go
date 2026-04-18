@@ -55,6 +55,7 @@ type Manager struct {
 	http            *http.Client
 	lastIngress     *desiredstatepb.Ingress
 	lastEndpoint    *endpointState
+	lastEndpoints   map[string]*endpointState
 	snapshotVersion atomic.Int64
 }
 
@@ -92,11 +93,12 @@ func New(engine engine.Engine, config Config, logger *slog.Logger) *Manager {
 		httpClient = &http.Client{Timeout: 2 * time.Second}
 	}
 	return &Manager{
-		engine: engine,
-		config: config,
-		logger: logger,
-		xds:    newXDSServer(logger, config.SocketUID, config.SocketGID),
-		http:   httpClient,
+		engine:        engine,
+		config:        config,
+		logger:        logger,
+		xds:           newXDSServer(logger, config.SocketUID, config.SocketGID),
+		http:          httpClient,
+		lastEndpoints: map[string]*endpointState{},
 	}
 }
 
@@ -193,7 +195,17 @@ func (m *Manager) ensureImage(ctx context.Context) error {
 
 // UpdateEDS pushes a new xDS snapshot that routes traffic to the given endpoint.
 func (m *Manager) UpdateEDS(ctx context.Context, address string, port uint16) error {
-	m.lastEndpoint = &endpointState{address: address, port: port}
+	return m.UpdateClusterEDS(ctx, m.config.ClusterName, address, port)
+}
+
+func (m *Manager) UpdateClusterEDS(ctx context.Context, clusterName string, address string, port uint16) error {
+	if strings.TrimSpace(clusterName) == "" {
+		clusterName = m.config.ClusterName
+	}
+	endpoint := &endpointState{address: address, port: port}
+	m.lastEndpoint = endpoint
+	m.lastEndpoints[clusterName] = endpoint
+	m.lastEndpoints[m.config.ClusterName] = endpoint
 	publicIngressListener, err := m.publicIngressListenerConfig(m.lastIngress)
 	if err != nil {
 		return err
@@ -222,7 +234,7 @@ func (m *Manager) applySnapshot(publicIngress *publicIngressListenerConfig) erro
 		port:          m.config.Port,
 		clusterName:   m.config.ClusterName,
 		publicIngress: publicIngress,
-		endpoint:      m.lastEndpoint,
+		endpoints:     m.snapshotEndpoints(),
 	})
 	if err != nil {
 		return fmt.Errorf("build xds snapshot: %w", err)
@@ -231,6 +243,20 @@ func (m *Manager) applySnapshot(publicIngress *publicIngressListenerConfig) erro
 		return fmt.Errorf("apply xds snapshot: %w", err)
 	}
 	return nil
+}
+
+func (m *Manager) snapshotEndpoints() map[string]*endpointState {
+	if len(m.lastEndpoints) == 0 {
+		if m.lastEndpoint == nil {
+			return nil
+		}
+		return map[string]*endpointState{m.config.ClusterName: m.lastEndpoint}
+	}
+	endpoints := make(map[string]*endpointState, len(m.lastEndpoints))
+	for cluster, endpoint := range m.lastEndpoints {
+		endpoints[cluster] = endpoint
+	}
+	return endpoints
 }
 
 func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingress) error {
@@ -413,6 +439,7 @@ func (m *Manager) publicIngressListenerConfig(ingress *desiredstatepb.Ingress) (
 					RedirectHTTP:     false,
 					ChallengeHost:    m.config.ChallengeHost,
 					ChallengePort:    m.config.ChallengePort,
+					Routes:           cloneIngressRoutes(ingress),
 				}, nil
 			}
 			return nil, fmt.Errorf("read public ingress tls cert: %w", err)
@@ -429,6 +456,7 @@ func (m *Manager) publicIngressListenerConfig(ingress *desiredstatepb.Ingress) (
 					RedirectHTTP:     false,
 					ChallengeHost:    m.config.ChallengeHost,
 					ChallengePort:    m.config.ChallengePort,
+					Routes:           cloneIngressRoutes(ingress),
 				}, nil
 			}
 			return nil, fmt.Errorf("read public ingress tls key: %w", err)
@@ -447,7 +475,15 @@ func (m *Manager) publicIngressListenerConfig(ingress *desiredstatepb.Ingress) (
 		ChallengePort:    m.config.ChallengePort,
 		CertificatePEM:   certificatePEM,
 		PrivateKeyPEM:    privateKeyPEM,
+		Routes:           cloneIngressRoutes(ingress),
 	}, nil
+}
+
+func cloneIngressRoutes(ingress *desiredstatepb.Ingress) []*desiredstatepb.IngressRoute {
+	if ingress == nil || len(ingress.Routes) == 0 {
+		return nil
+	}
+	return append([]*desiredstatepb.IngressRoute(nil), ingress.Routes...)
 }
 
 func publishHostPortForIngress(ingress *desiredstatepb.Ingress) bool {

@@ -441,12 +441,13 @@ class SoloE2E
     ds_output = ssh_to_node!("cat #{@desired_state_path}")
     desired = JSON.parse(ds_output)
     raise "desired state missing revision" if desired["revision"].to_s.empty?
-    raise "desired state missing containers" if (desired["containers"] || []).empty?
+    services = desired.fetch("environments").flat_map { |environment| environment.fetch("services", []) }
+    raise "desired state missing services" if services.empty?
 
-    web_container = desired["containers"].find { |c| c["serviceName"] == "web" }
-    raise "web container not in desired state" unless web_container
-    raise "env #{PLAIN_ENV_NAME} missing" unless web_container.dig("env", PLAIN_ENV_NAME) == "hello-solo"
-    raise "secret #{SECRET_VALUE_NAME} not resolved" unless web_container.dig("env", SECRET_VALUE_NAME) == "secret-solo-123"
+    web_service = services.find { |service| service["name"] == "web" }
+    raise "web service not in desired state" unless web_service
+    raise "env #{PLAIN_ENV_NAME} missing" unless web_service.dig("env", PLAIN_ENV_NAME) == "hello-solo"
+    raise "secret #{SECRET_VALUE_NAME} not resolved" unless web_service.dig("env", SECRET_VALUE_NAME) == "secret-solo-123"
     puts "[ok] Desired state verified: secrets resolved, env present"
 
     # Verify CLI logs command runs (may fail inside test container due to no systemd,

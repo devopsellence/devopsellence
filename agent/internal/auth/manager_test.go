@@ -118,7 +118,7 @@ func (f *fakeAuthServer) handler() http.Handler {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"mode":                   "unassigned",
 				"desired_state_sequence": f.desiredStateSequence,
-				"desired_state":          map[string]any{"revision": "unassigned-node-a", "containers": []any{}},
+				"desired_state":          map[string]any{"schemaVersion": 2, "revision": "unassigned-node-a", "environments": []any{}},
 			})
 			return
 		}

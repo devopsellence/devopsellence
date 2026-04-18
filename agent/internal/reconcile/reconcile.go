@@ -29,6 +29,7 @@ const (
 type EnvoyManager interface {
 	Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error
 	UpdateEDS(ctx context.Context, address string, port uint16) error
+	UpdateClusterEDS(ctx context.Context, clusterName string, address string, port uint16) error
 	WaitForRoute(ctx context.Context, path string) error
 }
 
@@ -96,9 +97,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		}
 	}
 
-	desiredByService := map[string]*desiredstatepb.Container{}
-	for _, c := range desired.Containers {
-		desiredByService[c.ServiceName] = c
+	desiredByService := map[string]desiredstate.RuntimeService{}
+	for _, service := range desiredstate.RuntimeServices(desired) {
+		desiredByService[runtimeServiceKey(service.EnvironmentName, service.ServiceName)] = service
 	}
 
 	existing, err := r.engine.ListManaged(ctx)
@@ -111,11 +112,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		if c.Service == "" {
 			continue
 		}
-		existingByService[c.Service] = append(existingByService[c.Service], c)
+		existingByService[containerServiceKey(c)] = append(existingByService[containerServiceKey(c)], c)
 	}
 
-	for service, c := range desiredByService {
-		serviceResult, err := r.reconcileService(ctx, desired.Revision, desired.GetIngress(), desired.GetNodePeers(), c, existingByService[service])
+	for serviceKey, c := range desiredByService {
+		serviceResult, err := r.reconcileService(ctx, desired.GetIngress(), desired.GetNodePeers(), c, existingByService[serviceKey])
 		result.Created += serviceResult.Created
 		result.Updated += serviceResult.Updated
 		result.Removed += serviceResult.Removed
@@ -124,14 +125,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 			return result, err
 		}
 	}
-	if _, ok := desiredByService[webServiceName]; !ok && r.opts.Cloudflared != nil {
+	if !hasWebRuntimeService(desiredByService) && r.opts.Cloudflared != nil {
 		if err := r.opts.Cloudflared.Reconcile(ctx, nil); err != nil {
 			return result, fmt.Errorf("reconcile cloudflared: %w", err)
 		}
 	}
 
 	for _, c := range existing {
-		if _, ok := desiredByService[c.Service]; ok {
+		if _, ok := desiredByService[containerServiceKey(c)]; ok {
 			continue
 		}
 		if c.Name == "" {
@@ -189,10 +190,10 @@ func (r *Reconciler) RunTask(ctx context.Context, revision string, task *desired
 	return result, nil
 }
 
-func (r *Reconciler) reconcileService(ctx context.Context, revision string, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer, desired *desiredstatepb.Container, existing []engine.ContainerState) (Result, error) {
+func (r *Reconciler) reconcileService(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer, desired desiredstate.RuntimeService, existing []engine.ContainerState) (Result, error) {
 	result := Result{}
-	isWeb := desired.ServiceName == webServiceName
-	name, hash, spec, err := r.specFor(desired, revision)
+	isWeb := desired.ServiceKind == desiredstate.ServiceKindWeb
+	name, hash, spec, err := r.specForService(desired)
 	if err != nil {
 		return result, err
 	}
@@ -271,7 +272,7 @@ func (r *Reconciler) reconcileService(ctx context.Context, revision string, ingr
 		} else {
 			result.Created++
 		}
-		current = &engine.ContainerState{Name: name, Hash: hash, Service: desired.ServiceName, Running: true}
+		current = &engine.ContainerState{Name: name, Hash: hash, Environment: desired.EnvironmentName, Service: desired.ServiceName, ServiceKind: desired.ServiceKind, Running: true}
 	}
 
 	return result, nil
@@ -298,7 +299,7 @@ func (r *Reconciler) ensureImage(ctx context.Context, image string) error {
 	return nil
 }
 
-func (r *Reconciler) reconcileWebService(ctx context.Context, desired *desiredstatepb.Container, existing []engine.ContainerState, name, hash string, spec engine.ContainerSpec) (Result, error) {
+func (r *Reconciler) reconcileWebService(ctx context.Context, desired desiredstate.RuntimeService, existing []engine.ContainerState, name, hash string, spec engine.ContainerSpec) (Result, error) {
 	result := Result{}
 
 	var current *engine.ContainerState
@@ -396,16 +397,17 @@ func (r *Reconciler) reconcileWebService(ctx context.Context, desired *desiredst
 	return result, nil
 }
 
-func (r *Reconciler) cutoverWeb(ctx context.Context, name string, desired *desiredstatepb.Container, waitForHealthy bool) error {
+func (r *Reconciler) cutoverWeb(ctx context.Context, name string, desired desiredstate.RuntimeService, waitForHealthy bool) error {
 	ip, err := r.webContainerIP(ctx, name, desired, waitForHealthy)
 	if err != nil {
 		return err
 	}
 
-	if err := r.opts.Envoy.UpdateEDS(ctx, ip, webPort(desired, r.opts.WebPort)); err != nil {
+	clusterName := desiredstate.EnvoyClusterName(desired.EnvironmentName, desired.ServiceName, desiredstate.DefaultHTTPPortName)
+	if err := r.opts.Envoy.UpdateClusterEDS(ctx, clusterName, ip, desiredstate.ServiceHTTPPort(desired.Service, r.opts.WebPort)); err != nil {
 		return fmt.Errorf("update envoy eds: %w", err)
 	}
-	if err := r.opts.Envoy.WaitForRoute(ctx, desired.GetHealthcheck().GetPath()); err != nil {
+	if err := r.opts.Envoy.WaitForRoute(ctx, desired.Service.GetHealthcheck().GetPath()); err != nil {
 		return fmt.Errorf("wait for envoy route: %w", err)
 	}
 	return nil
@@ -420,6 +422,27 @@ func staleContainers(existing []engine.ContainerState, currentName string) []eng
 		stale = append(stale, extra)
 	}
 	return stale
+}
+
+func runtimeServiceKey(environmentName, serviceName string) string {
+	environmentName = strings.TrimSpace(environmentName)
+	if environmentName == "" {
+		environmentName = desiredstate.DefaultEnvironmentName
+	}
+	return environmentName + "/" + strings.TrimSpace(serviceName)
+}
+
+func containerServiceKey(c engine.ContainerState) string {
+	return runtimeServiceKey(c.Environment, c.Service)
+}
+
+func hasWebRuntimeService(services map[string]desiredstate.RuntimeService) bool {
+	for _, service := range services {
+		if service.ServiceKind == desiredstate.ServiceKindWeb {
+			return true
+		}
+	}
+	return false
 }
 
 // tearDownFailedContainer stops a container that failed to become healthy,
@@ -463,7 +486,7 @@ func (r *Reconciler) stopAndRemove(ctx context.Context, c engine.ContainerState)
 	return nil
 }
 
-func (r *Reconciler) webContainerIP(ctx context.Context, name string, desired *desiredstatepb.Container, waitForHealthy bool) (string, error) {
+func (r *Reconciler) webContainerIP(ctx context.Context, name string, desired desiredstate.RuntimeService, waitForHealthy bool) (string, error) {
 	if waitForHealthy {
 		return r.waitHealthy(ctx, name, desired)
 	}
@@ -483,8 +506,8 @@ func (r *Reconciler) webContainerIP(ctx context.Context, name string, desired *d
 	return ip, nil
 }
 
-func (r *Reconciler) waitHealthy(ctx context.Context, name string, desired *desiredstatepb.Container) (string, error) {
-	healthcheck := desired.GetHealthcheck()
+func (r *Reconciler) waitHealthy(ctx context.Context, name string, desired desiredstate.RuntimeService) (string, error) {
+	healthcheck := desired.Service.GetHealthcheck()
 	if healthcheck == nil {
 		return "", fmt.Errorf("container %s missing healthcheck", name)
 	}
@@ -555,36 +578,39 @@ func (r *Reconciler) waitHealthy(ctx context.Context, name string, desired *desi
 	return "", lastErr
 }
 
-func (r *Reconciler) specFor(c *desiredstatepb.Container, revision string) (string, string, engine.ContainerSpec, error) {
-	hash, err := desiredstate.HashContainer(c)
+func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string, string, engine.ContainerSpec, error) {
+	service := runtime.Service
+	hash, err := desiredstate.HashService(service)
 	if err != nil {
-		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash container %s: %w", c.ServiceName, err)
+		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash service %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
 	}
 
-	name, err := desiredstate.ContainerName(c.ServiceName, revision, hash)
+	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, err
 	}
 
-	env := make(map[string]string, len(c.Env))
-	for k, v := range c.Env {
+	env := make(map[string]string, len(service.Env))
+	for k, v := range service.Env {
 		env[k] = v
 	}
 
 	labels := map[string]string{
-		engine.LabelManaged:  "true",
-		engine.LabelService:  c.ServiceName,
-		engine.LabelHash:     hash,
-		engine.LabelRevision: revision,
+		engine.LabelManaged:     "true",
+		engine.LabelEnvironment: runtime.EnvironmentName,
+		engine.LabelService:     runtime.ServiceName,
+		engine.LabelServiceKind: runtime.ServiceKind,
+		engine.LabelHash:        hash,
+		engine.LabelRevision:    runtime.EnvironmentRevision,
 	}
 
 	spec := engine.ContainerSpec{
 		Name:       name,
-		Image:      c.Image,
-		Entrypoint: c.Entrypoint,
-		Command:    c.Command,
+		Image:      service.Image,
+		Entrypoint: service.Entrypoint,
+		Command:    service.Command,
 		Env:        env,
-		Binds:      volumeBinds(c.VolumeMounts),
+		Binds:      volumeBinds(service.VolumeMounts),
 		Labels:     labels,
 		Network:    r.opts.Network,
 	}
@@ -704,13 +730,6 @@ func (p defaultHTTPProber) Get(ctx context.Context, target string, timeout time.
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode, nil
-}
-
-func webPort(container *desiredstatepb.Container, fallback uint16) uint16 {
-	if container != nil && container.Port > 0 {
-		return uint16(container.Port)
-	}
-	return fallback
 }
 
 func isNilInterface(v any) bool {

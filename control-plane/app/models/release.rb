@@ -108,12 +108,12 @@ class Release < ApplicationRecord
     release_command_text.present?
   end
 
-  def scheduled_containers_for(node:)
+  def scheduled_services_for(node:)
     environment = node.environment
-    containers = []
-    containers << container_payload("web", web_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WEB) && web_service.present?
-    containers << container_payload("worker", worker_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WORKER) && worker_service.present?
-    containers.compact
+    services = []
+    services << service_payload("web", "web", web_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WEB) && web_service.present?
+    services << service_payload("worker", "worker", worker_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WORKER) && worker_service.present?
+    services.compact
   end
 
   def release_command_task_for(node:)
@@ -262,21 +262,27 @@ class Release < ApplicationRecord
     end
   end
 
-  def container_payload(service_name, service, organization:, environment:)
+  def service_payload(name, kind, service, organization:, environment:)
     return nil if service.blank?
 
     payload = {
-      serviceName: service_name,
+      name: name,
+      kind: kind,
       image: image_reference_for(organization),
       entrypoint: shell_words(service["entrypoint"]),
       command: shell_words(service["command"]),
       env: service["env"].presence,
-      secretRefs: merged_secret_refs_for_agent(service, service_name: service_name, environment: environment).presence,
+      secretRefs: merged_secret_refs_for_agent(service, service_name: name, environment: environment).presence,
       volumeMounts: service_volume_mounts(service, environment: environment).presence
     }.compact
 
-    if service_name == "web"
-      payload[:port] = service_port_for(service)
+    if kind == "web"
+      payload[:ports] = [
+        {
+          name: "http",
+          port: service_port_for(service)
+        }
+      ]
       payload[:healthcheck] = service_healthcheck(service)
     end
 

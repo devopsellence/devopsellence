@@ -640,7 +640,7 @@ func (m *Manager) fetchAssignmentLocked(ctx context.Context) error {
 	case "unassigned":
 		inline := response.DesiredState
 		if len(inline) == 0 {
-			inline = json.RawMessage(`{"revision":"unassigned","containers":[]}`)
+			inline = json.RawMessage(`{"schemaVersion":2,"revision":"unassigned","environments":[]}`)
 		}
 		m.state.AssignmentMode = "unassigned"
 		m.state.EnvironmentID = 0

@@ -196,7 +196,6 @@ module Deployments
           release: release,
           sequence: sequence
         ).call.merge(
-          schema_version: 1,
           assigned: true,
           desired_state_bucket: executor.desired_state_bucket,
           desired_state_object_path: executor.desired_state_object_path

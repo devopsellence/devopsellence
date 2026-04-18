@@ -19,100 +19,227 @@ func Validate(state *desiredstatepb.DesiredState) error {
 	if state.Revision == "" {
 		return fmt.Errorf("revision required")
 	}
-	if err := validateTask("release_command", state.ReleaseCommand); err != nil {
+	if state.SchemaVersion != CurrentSchemaVersion {
+		return fmt.Errorf("schema_version must be %d", CurrentSchemaVersion)
+	}
+	if err := validateEnvironments(state); err != nil {
 		return err
 	}
 
-	seen := map[string]struct{}{}
-	hasWeb := false
-	for i, c := range state.Containers {
-		if c.ServiceName == "" {
-			return fmt.Errorf("container[%d]: service_name required", i)
-		}
-		if c.ServiceName != "web" && c.ServiceName != "worker" {
-			return fmt.Errorf("container[%s]: unsupported service_name", c.ServiceName)
-		}
-		if c.Image == "" {
-			return fmt.Errorf("container[%s]: image required", c.ServiceName)
-		}
-		if _, ok := seen[c.ServiceName]; ok {
-			return fmt.Errorf("container[%s]: duplicate service_name", c.ServiceName)
-		}
-		seen[c.ServiceName] = struct{}{}
-		if c.ServiceName == "web" {
-			hasWeb = true
-		}
-		for k := range c.Env {
-			if k == "" {
-				return fmt.Errorf("container[%s]: env key empty", c.ServiceName)
-			}
-		}
-		for k, v := range c.SecretRefs {
-			if k == "" {
-				return fmt.Errorf("container[%s]: secret_refs key empty", c.ServiceName)
-			}
-			if v == "" {
-				return fmt.Errorf("container[%s]: secret_refs[%s] empty", c.ServiceName, k)
-			}
-			if _, ok := c.Env[k]; ok {
-				return fmt.Errorf("container[%s]: env key %q conflicts with secret_ref", c.ServiceName, k)
-			}
-		}
-		for _, mount := range c.VolumeMounts {
-			if mount.Source == "" {
-				return fmt.Errorf("container[%s]: volume_mount source required", c.ServiceName)
-			}
-			if mount.Target == "" {
-				return fmt.Errorf("container[%s]: volume_mount target required", c.ServiceName)
-			}
-			if mount.Target[0] != '/' {
-				return fmt.Errorf("container[%s]: volume_mount target must be absolute", c.ServiceName)
-			}
-		}
-		if c.ServiceName == "web" {
-			if c.Port == 0 {
-				return fmt.Errorf("container[%s]: port required", c.ServiceName)
-			}
-			if c.Healthcheck == nil {
-				return fmt.Errorf("container[%s]: healthcheck required", c.ServiceName)
-			}
-			if c.Healthcheck.Path == "" {
-				return fmt.Errorf("container[%s]: healthcheck.path required", c.ServiceName)
-			}
-			if c.Healthcheck.Port == 0 {
-				return fmt.Errorf("container[%s]: healthcheck.port required", c.ServiceName)
-			}
-		} else if c.Healthcheck != nil {
-			return fmt.Errorf("container[%s]: healthcheck unsupported", c.ServiceName)
-		}
-	}
-
 	if state.Ingress != nil {
-		if !hasWeb {
-			return fmt.Errorf("ingress requires web container")
-		}
-		if len(ingressHosts(state.Ingress)) == 0 {
-			return fmt.Errorf("ingress: hosts required")
-		}
-		switch normalizedIngressMode(state.Ingress) {
-		case ingressModeTunnel:
-			if state.Ingress.TunnelToken == "" && state.Ingress.TunnelTokenSecretRef == "" {
-				return fmt.Errorf("ingress: tunnel_token or tunnel_token_secret_ref required")
-			}
-		case ingressModePublic:
-			if state.Ingress.Tls != nil {
-				switch strings.TrimSpace(state.Ingress.Tls.Mode) {
-				case "", "auto", "manual", "off":
-				default:
-					return fmt.Errorf("ingress.tls: unsupported mode %q", state.Ingress.Tls.Mode)
-				}
-			}
-		default:
-			return fmt.Errorf("ingress: unsupported mode %q", state.Ingress.Mode)
+		if err := validateIngress(state); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func validateEnvironments(state *desiredstatepb.DesiredState) error {
+	seenEnvironments := map[string]struct{}{}
+	for i, env := range state.Environments {
+		if env == nil {
+			return fmt.Errorf("environment[%d]: required", i)
+		}
+		name := strings.TrimSpace(env.Name)
+		if name == "" {
+			return fmt.Errorf("environment[%d]: name required", i)
+		}
+		if _, ok := seenEnvironments[name]; ok {
+			return fmt.Errorf("environment[%s]: duplicate name", name)
+		}
+		seenEnvironments[name] = struct{}{}
+		seenServices := map[string]struct{}{}
+		for j, service := range env.Services {
+			if err := validateService(name, j, service); err != nil {
+				return err
+			}
+			serviceName := strings.TrimSpace(service.Name)
+			if _, ok := seenServices[serviceName]; ok {
+				return fmt.Errorf("environment[%s].service[%s]: duplicate name", name, serviceName)
+			}
+			seenServices[serviceName] = struct{}{}
+		}
+		for _, task := range env.Tasks {
+			if err := validateTask("environment["+name+"].task", task); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateService(environmentName string, index int, service *desiredstatepb.Service) error {
+	prefix := fmt.Sprintf("environment[%s].service[%d]", environmentName, index)
+	if service == nil {
+		return fmt.Errorf("%s: required", prefix)
+	}
+	name := strings.TrimSpace(service.Name)
+	if name == "" {
+		return fmt.Errorf("%s.name required", prefix)
+	}
+	prefix = fmt.Sprintf("environment[%s].service[%s]", environmentName, name)
+	if service.Image == "" {
+		return fmt.Errorf("%s.image required", prefix)
+	}
+	for k := range service.Env {
+		if k == "" {
+			return fmt.Errorf("%s.env key empty", prefix)
+		}
+	}
+	for k, v := range service.SecretRefs {
+		if k == "" {
+			return fmt.Errorf("%s.secret_refs key empty", prefix)
+		}
+		if v == "" {
+			return fmt.Errorf("%s.secret_refs[%s] empty", prefix, k)
+		}
+		if _, ok := service.Env[k]; ok {
+			return fmt.Errorf("%s.env key %q conflicts with secret_ref", prefix, k)
+		}
+	}
+	for _, mount := range service.VolumeMounts {
+		if mount.Source == "" {
+			return fmt.Errorf("%s.volume_mount source required", prefix)
+		}
+		if mount.Target == "" {
+			return fmt.Errorf("%s.volume_mount target required", prefix)
+		}
+		if mount.Target[0] != '/' {
+			return fmt.Errorf("%s.volume_mount target must be absolute", prefix)
+		}
+	}
+	for _, port := range service.Ports {
+		if port == nil {
+			continue
+		}
+		if port.Port == 0 {
+			return fmt.Errorf("%s.ports[%s].port required", prefix, port.Name)
+		}
+	}
+	if normalizedServiceKind(service) == ServiceKindWeb {
+		if ServiceHTTPPort(service, 0) == 0 {
+			return fmt.Errorf("%s: http port required", prefix)
+		}
+		if service.Healthcheck == nil {
+			return fmt.Errorf("%s: healthcheck required", prefix)
+		}
+		if service.Healthcheck.Path == "" {
+			return fmt.Errorf("%s.healthcheck.path required", prefix)
+		}
+		if service.Healthcheck.Port == 0 {
+			return fmt.Errorf("%s.healthcheck.port required", prefix)
+		}
+	}
+	return nil
+}
+
+func validateIngress(state *desiredstatepb.DesiredState) error {
+	if len(state.Ingress.Routes) > 0 {
+		if err := validateIngressRoutes(state); err != nil {
+			return err
+		}
+	} else if len(ingressHosts(state.Ingress)) == 0 {
+		return fmt.Errorf("ingress: hosts required")
+	} else if !hasWebService(state) {
+		return fmt.Errorf("ingress requires web service")
+	}
+	switch normalizedIngressMode(state.Ingress) {
+	case ingressModeTunnel:
+		if state.Ingress.TunnelToken == "" && state.Ingress.TunnelTokenSecretRef == "" {
+			return fmt.Errorf("ingress: tunnel_token or tunnel_token_secret_ref required")
+		}
+	case ingressModePublic:
+		if state.Ingress.Tls != nil {
+			switch strings.TrimSpace(state.Ingress.Tls.Mode) {
+			case "", "auto", "manual", "off":
+			default:
+				return fmt.Errorf("ingress.tls: unsupported mode %q", state.Ingress.Tls.Mode)
+			}
+		}
+	default:
+		return fmt.Errorf("ingress: unsupported mode %q", state.Ingress.Mode)
+	}
+	return nil
+}
+
+func validateIngressRoutes(state *desiredstatepb.DesiredState) error {
+	targets := map[string]*desiredstatepb.Service{}
+	for _, service := range RuntimeServices(state) {
+		targets[service.EnvironmentName+"/"+service.ServiceName] = service.Service
+	}
+	seen := map[string]struct{}{}
+	for i, route := range state.Ingress.Routes {
+		if route == nil {
+			return fmt.Errorf("ingress.routes[%d]: required", i)
+		}
+		if route.Match == nil {
+			return fmt.Errorf("ingress.routes[%d].match required", i)
+		}
+		hostname := strings.TrimSpace(route.Match.Hostname)
+		if hostname == "" {
+			return fmt.Errorf("ingress.routes[%d].match.hostname required", i)
+		}
+		pathPrefix := strings.TrimSpace(route.Match.PathPrefix)
+		if pathPrefix == "" {
+			pathPrefix = "/"
+		}
+		if !strings.HasPrefix(pathPrefix, "/") {
+			return fmt.Errorf("ingress.routes[%d].match.path_prefix must start with /", i)
+		}
+		if route.Target == nil {
+			return fmt.Errorf("ingress.routes[%d].target required", i)
+		}
+		env := strings.TrimSpace(route.Target.Environment)
+		serviceName := strings.TrimSpace(route.Target.Service)
+		if env == "" {
+			return fmt.Errorf("ingress.routes[%d].target.environment required", i)
+		}
+		if serviceName == "" {
+			return fmt.Errorf("ingress.routes[%d].target.service required", i)
+		}
+		service := targets[env+"/"+serviceName]
+		if service == nil {
+			return fmt.Errorf("ingress.routes[%d].target references missing service %s/%s", i, env, serviceName)
+		}
+		portName := strings.TrimSpace(route.Target.Port)
+		if portName == "" {
+			portName = DefaultHTTPPortName
+		}
+		if !serviceHasPort(service, portName) {
+			return fmt.Errorf("ingress.routes[%d].target references missing port %s/%s:%s", i, env, serviceName, portName)
+		}
+		key := hostname + "\x00" + pathPrefix
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("ingress.routes[%d]: duplicate route for %s%s", i, hostname, pathPrefix)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func serviceHasPort(service *desiredstatepb.Service, name string) bool {
+	if service == nil {
+		return false
+	}
+	for _, port := range service.Ports {
+		if port == nil {
+			continue
+		}
+		if strings.TrimSpace(port.Name) == name && port.Port > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWebService(state *desiredstatepb.DesiredState) bool {
+	for _, service := range RuntimeServices(state) {
+		if service.ServiceKind == ServiceKindWeb {
+			return true
+		}
+	}
+	return false
 }
 
 func validateTask(name string, task *desiredstatepb.Task) error {

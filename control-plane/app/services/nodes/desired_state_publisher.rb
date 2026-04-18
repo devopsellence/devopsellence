@@ -10,14 +10,14 @@ module Nodes
     def self.unassigned_payload(node:)
       bundle = node.node_bundle
       {
-        schema_version: 1,
+        schemaVersion: 2,
         assigned: false,
         revision: "unassigned-node-bundle-#{bundle.token}",
         sequence: node.desired_state_sequence,
         identity_version: 0,
         desired_state_bucket: node.desired_state_bucket,
         desired_state_object_path: node.desired_state_object_path,
-        containers: [],
+        environments: [],
         published_at: Time.current.utc.iso8601,
         organization_bundle_token: bundle.organization_bundle.token,
         environment_bundle_token: bundle.environment_bundle.token,
@@ -69,7 +69,6 @@ module Nodes
         release: active_release,
         sequence: sequence
       ).call.merge(
-        schema_version: 1,
         assigned: true,
         desired_state_bucket: node.desired_state_bucket,
         desired_state_object_path: node.desired_state_object_path

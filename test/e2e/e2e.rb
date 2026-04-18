@@ -527,7 +527,7 @@ class E2E
         document = StandaloneDesiredStateDocument.find_by!(node: node, sequence: node.desired_state_sequence)
         envelope = JSON.parse(document.payload_json)
         desired = JSON.parse(envelope.fetch("payload_json"))
-        release_command = desired["releaseCommand"] || {}
+        release_command = desired.fetch("environments").flat_map { |environment| environment.fetch("tasks", []) }.find { |task| task["name"] == "release_command" } || {}
         puts({
           revision: desired["revision"],
           release_command_env: release_command["env"],

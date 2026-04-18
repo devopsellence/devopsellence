@@ -48,6 +48,25 @@ func (f *fakeAuthority) Fetch(_ context.Context) (*authority.FetchResult, error)
 	}, nil
 }
 
+func desiredWithWeb(revision string) *desiredstatepb.DesiredState {
+	return &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      revision,
+		Environments: []*desiredstatepb.Environment{{
+			Name:     "production",
+			Revision: revision,
+			Services: []*desiredstatepb.Service{{
+				Name:        "web",
+				Kind:        "web",
+				Image:       "busybox",
+				Command:     []string{"sh"},
+				Ports:       []*desiredstatepb.ServicePort{{Name: "http", Port: 3000}},
+				Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 3000, Retries: 1, TimeoutSeconds: 1},
+			}},
+		}},
+	}
+}
+
 type flakyReporter struct {
 	calls     []report.Status
 	failures  int
@@ -91,11 +110,13 @@ func (f *fakeEngine) ListManaged(ctx context.Context) ([]engine.ContainerState, 
 func (f *fakeEngine) CreateAndStart(ctx context.Context, spec engine.ContainerSpec) error {
 	f.created = append(f.created, spec)
 	f.containers[spec.Name] = engine.ContainerState{
-		Name:    spec.Name,
-		Image:   spec.Image,
-		Running: true,
-		Hash:    spec.Labels[engine.LabelHash],
-		Service: spec.Labels[engine.LabelService],
+		Name:        spec.Name,
+		Image:       spec.Image,
+		Running:     true,
+		Hash:        spec.Labels[engine.LabelHash],
+		Environment: spec.Labels[engine.LabelEnvironment],
+		Service:     spec.Labels[engine.LabelService],
+		ServiceKind: spec.Labels[engine.LabelServiceKind],
 	}
 	return nil
 }
@@ -160,6 +181,10 @@ func (f *fakeEnvoy) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress)
 }
 
 func (f *fakeEnvoy) UpdateEDS(ctx context.Context, address string, port uint16) error {
+	return f.UpdateClusterEDS(ctx, "devopsellence_web", address, port)
+}
+
+func (f *fakeEnvoy) UpdateClusterEDS(ctx context.Context, clusterName string, address string, port uint16) error {
 	f.updated = true
 	return nil
 }
@@ -178,17 +203,9 @@ func TestAgentReconcileE2E(t *testing.T) {
 	dir := t.TempDir()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
 
-	desired := &desiredstatepb.DesiredState{
-		Revision: "rev-1",
-		Containers: []*desiredstatepb.Container{{
-			ServiceName: "web",
-			Image:       "busybox",
-			Command:     []string{"sh", "-c", "echo hi && sleep 1"},
-			Env:         map[string]string{"A": "B", "SECRET": "value"},
-			Port:        3000,
-			Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 3000, Retries: 1, TimeoutSeconds: 1},
-		}},
-	}
+	desired := desiredWithWeb("rev-1")
+	desired.Environments[0].Services[0].Command = []string{"sh", "-c", "echo hi && sleep 1"}
+	desired.Environments[0].Services[0].Env = map[string]string{"A": "B", "SECRET": "value"}
 
 	authority := &fakeAuthority{desired: desired, sequence: 1}
 	eng := newFakeEngine()
@@ -232,16 +249,7 @@ func TestAgentReconcileE2E(t *testing.T) {
 func TestSuppressesDuplicateSettledReportForSameSequence(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	desired := &desiredstatepb.DesiredState{
-		Revision: "rev-1",
-		Containers: []*desiredstatepb.Container{{
-			ServiceName: "web",
-			Image:       "busybox",
-			Command:     []string{"sh"},
-			Port:        3000,
-			Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 3000, Retries: 1, TimeoutSeconds: 1},
-		}},
-	}
+	desired := desiredWithWeb("rev-1")
 
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
@@ -278,16 +286,7 @@ func TestSuppressesDuplicateSettledReportForSameSequence(t *testing.T) {
 func TestReportsSettledAgainForNewSequenceWithSameDesiredState(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	desired := &desiredstatepb.DesiredState{
-		Revision: "rev-1",
-		Containers: []*desiredstatepb.Container{{
-			ServiceName: "web",
-			Image:       "busybox",
-			Command:     []string{"sh"},
-			Port:        3000,
-			Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 3000, Retries: 1, TimeoutSeconds: 1},
-		}},
-	}
+	desired := desiredWithWeb("rev-1")
 
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
@@ -325,16 +324,7 @@ func TestReportsSettledAgainForNewSequenceWithSameDesiredState(t *testing.T) {
 func TestRetriesDuplicateReportAfterReporterFailure(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	desired := &desiredstatepb.DesiredState{
-		Revision: "rev-1",
-		Containers: []*desiredstatepb.Container{{
-			ServiceName: "web",
-			Image:       "busybox",
-			Command:     []string{"sh"},
-			Port:        3000,
-			Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 3000, Retries: 1, TimeoutSeconds: 1},
-		}},
-	}
+	desired := desiredWithWeb("rev-1")
 
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
@@ -417,21 +407,13 @@ func TestNoReportWhenNoDesiredState(t *testing.T) {
 func TestReleaseCommandRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	desired := &desiredstatepb.DesiredState{
-		Revision: "rev-1",
-		Containers: []*desiredstatepb.Container{{
-			ServiceName: "web",
-			Image:       "busybox",
-			Command:     []string{"sh", "-c", "sleep 1"},
-			Port:        3000,
-			Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 3000, Retries: 1, TimeoutSeconds: 1},
-		}},
-		ReleaseCommand: &desiredstatepb.Task{
-			Name:    "release_command",
-			Image:   "busybox",
-			Command: []string{"sh", "-c", "echo migrate"},
-		},
-	}
+	desired := desiredWithWeb("rev-1")
+	desired.Environments[0].Services[0].Command = []string{"sh", "-c", "sleep 1"}
+	desired.Environments[0].Tasks = []*desiredstatepb.Task{{
+		Name:    "release_command",
+		Image:   "busybox",
+		Command: []string{"sh", "-c", "echo migrate"},
+	}}
 
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
@@ -463,5 +445,40 @@ func TestReleaseCommandRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
 	}
 	if len(eng.containers) != 1 {
 		t.Fatalf("expected runtime container after release command, got %#v", eng.containers)
+	}
+}
+
+func TestEnvironmentTasksAreSatisfiedPerEnvironment(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	task := func() *desiredstatepb.Task {
+		return &desiredstatepb.Task{
+			Name:    "release_command",
+			Image:   "busybox",
+			Command: []string{"sh", "-c", "echo migrate"},
+		}
+	}
+	desired := &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      "rev-1",
+		Environments: []*desiredstatepb.Environment{
+			{Name: "production", Revision: "rev-1", Tasks: []*desiredstatepb.Task{task()}},
+			{Name: "staging", Revision: "rev-1", Tasks: []*desiredstatepb.Task{task()}},
+		},
+	}
+
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	reconciler := reconcile.New(eng, reconcile.Options{Network: "devopsellence", WebPort: 3000})
+	reporter := &captureReporter{}
+	metrics := observability.NewMetrics(prometheus.NewRegistry())
+	store := lifecycle.NewStore(filepath.Join(t.TempDir(), "lifecycle-state.json"))
+	ag := New(&fakeAuthority{desired: desired, sequence: 9}, reconciler, reporter, time.Minute, logger, metrics, store)
+
+	if err := ag.reconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(eng.waitCalls) != 2 {
+		t.Fatalf("wait calls = %d, want 2", len(eng.waitCalls))
 	}
 }

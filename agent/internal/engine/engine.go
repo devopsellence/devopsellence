@@ -6,11 +6,13 @@ import (
 )
 
 const (
-	LabelManaged  = "devopsellence.managed"
-	LabelService  = "devopsellence.service"
-	LabelHash     = "devopsellence.hash"
-	LabelRevision = "devopsellence.revision"
-	LabelSystem   = "devopsellence.system"
+	LabelManaged     = "devopsellence.managed"
+	LabelEnvironment = "devopsellence.environment"
+	LabelService     = "devopsellence.service"
+	LabelServiceKind = "devopsellence.service_kind"
+	LabelHash        = "devopsellence.hash"
+	LabelRevision    = "devopsellence.revision"
+	LabelSystem      = "devopsellence.system"
 )
 
 type Engine interface {
@@ -70,12 +72,14 @@ type PortBinding struct {
 }
 
 type ContainerState struct {
-	Name    string
-	Image   string
-	Running bool
-	Hash    string
-	Service string
-	System  string
+	Name        string
+	Image       string
+	Running     bool
+	Hash        string
+	Environment string
+	Service     string
+	ServiceKind string
+	System      string
 }
 
 type ContainerInfo struct {

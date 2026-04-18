@@ -37,7 +37,7 @@ class ApiAgentStandaloneRuntimeTest < ActionDispatch::IntegrationTest
 
       result = Nodes::DesiredStatePublisher.new(
         node: node,
-        payload: ->(sequence:) { { revision: "rev-#{sequence}", containers: [] } }
+        payload: ->(sequence:) { { revision: "rev-#{sequence}", environments: [] } }
       ).call
 
       assert_equal "https://control.example.test/api/v1/agent/desired_state", result.uri
@@ -275,7 +275,7 @@ class ApiAgentStandaloneRuntimeTest < ActionDispatch::IntegrationTest
 
       publisher = Nodes::DesiredStatePublisher.new(
         node: node,
-        payload: ->(sequence:) { { revision: "rev-#{sequence}", containers: [] } }
+        payload: ->(sequence:) { { revision: "rev-#{sequence}", environments: [] } }
       )
 
       publisher.call

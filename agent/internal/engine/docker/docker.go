@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devopsellence/devopsellence/agent/internal/engine"
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/devopsellence/devopsellence/agent/internal/engine"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/registry"
@@ -54,12 +54,14 @@ func (e *Engine) ListManaged(ctx context.Context) ([]engine.ContainerState, erro
 	for _, c := range result.Items {
 		name := containerName(c.Names)
 		states = append(states, engine.ContainerState{
-			Name:    name,
-			Image:   c.Image,
-			Running: c.State == "running",
-			Hash:    c.Labels[engine.LabelHash],
-			Service: c.Labels[engine.LabelService],
-			System:  c.Labels[engine.LabelSystem],
+			Name:        name,
+			Image:       c.Image,
+			Running:     c.State == "running",
+			Hash:        c.Labels[engine.LabelHash],
+			Environment: c.Labels[engine.LabelEnvironment],
+			Service:     c.Labels[engine.LabelService],
+			ServiceKind: c.Labels[engine.LabelServiceKind],
+			System:      c.Labels[engine.LabelSystem],
 		})
 	}
 

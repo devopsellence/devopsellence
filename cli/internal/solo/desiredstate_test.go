@@ -37,13 +37,23 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 	if ds.Revision != "abc1234" {
 		t.Errorf("expected revision abc1234, got %s", ds.Revision)
 	}
-	if len(ds.Containers) != 1 {
-		t.Fatalf("expected 1 container, got %d", len(ds.Containers))
+	if len(ds.Environments) != 1 {
+		t.Fatalf("expected 1 environment, got %d", len(ds.Environments))
+	}
+	environment := ds.Environments[0]
+	if environment.Name != config.DefaultEnvironment {
+		t.Fatalf("expected default environment, got %s", environment.Name)
+	}
+	if len(environment.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(environment.Services))
 	}
 
-	web := ds.Containers[0]
-	if web.ServiceName != "web" {
-		t.Errorf("expected serviceName web, got %s", web.ServiceName)
+	web := environment.Services[0]
+	if web.Name != "web" {
+		t.Errorf("expected service name web, got %s", web.Name)
+	}
+	if web.Kind != "web" {
+		t.Errorf("expected service kind web, got %s", web.Kind)
 	}
 	if web.Image != "myapp:abc1234" {
 		t.Errorf("expected image myapp:abc1234, got %s", web.Image)
@@ -60,8 +70,8 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 	if web.Healthcheck.IntervalSeconds != 5 || web.Healthcheck.TimeoutSeconds != 2 || web.Healthcheck.Retries != 3 || web.Healthcheck.StartPeriodSeconds != 1 {
 		t.Errorf("healthcheck timing = %#v, want control-plane defaults", web.Healthcheck)
 	}
-	if web.Port != 3000 {
-		t.Errorf("expected port 3000, got %d", web.Port)
+	if len(web.Ports) != 1 || web.Ports[0].Name != "http" || web.Ports[0].Port != 3000 {
+		t.Errorf("expected http port 3000, got %#v", web.Ports)
 	}
 
 	// No secret_refs in output.
@@ -69,7 +79,7 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 	if err := json.Unmarshal(data, &rawData); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range ds.Containers {
+	for _, c := range environment.Services {
 		// Verify command is shell wrapped.
 		if len(c.Command) != 3 || c.Command[0] != "sh" {
 			t.Errorf("expected shell-wrapped command, got %v", c.Command)
@@ -104,22 +114,24 @@ func TestBuildDesiredState_WithWorkerAndReleaseCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(ds.Containers) != 2 {
-		t.Fatalf("expected 2 containers, got %d", len(ds.Containers))
+	environment := ds.Environments[0]
+	if len(environment.Services) != 2 {
+		t.Fatalf("expected 2 services, got %d", len(environment.Services))
 	}
 
-	if ds.Containers[1].ServiceName != "worker" {
-		t.Errorf("expected worker container, got %s", ds.Containers[1].ServiceName)
+	if environment.Services[1].Name != "worker" {
+		t.Errorf("expected worker service, got %s", environment.Services[1].Name)
 	}
 
-	if ds.ReleaseCommand == nil {
+	if len(environment.Tasks) != 1 {
 		t.Fatal("expected release command")
 	}
-	if ds.ReleaseCommand.Name != "release" {
-		t.Errorf("expected name 'release', got %s", ds.ReleaseCommand.Name)
+	releaseCommand := environment.Tasks[0]
+	if releaseCommand.Name != "release" {
+		t.Errorf("expected name 'release', got %s", releaseCommand.Name)
 	}
-	if ds.ReleaseCommand.Image != "myapp:def5678" {
-		t.Errorf("expected image myapp:def5678, got %s", ds.ReleaseCommand.Image)
+	if releaseCommand.Image != "myapp:def5678" {
+		t.Errorf("expected image myapp:def5678, got %s", releaseCommand.Image)
 	}
 }
 
@@ -148,10 +160,11 @@ func TestBuildDesiredStateForLabelsFiltersServices(t *testing.T) {
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
-	if len(ds.Containers) != 1 || ds.Containers[0].ServiceName != "worker" {
-		t.Fatalf("containers = %#v, want worker only", ds.Containers)
+	environment := ds.Environments[0]
+	if len(environment.Services) != 1 || environment.Services[0].Name != "worker" {
+		t.Fatalf("services = %#v, want worker only", environment.Services)
 	}
-	if ds.ReleaseCommand != nil {
+	if len(environment.Tasks) != 0 {
 		t.Fatal("release command should not be scheduled on worker-only node")
 	}
 }
@@ -176,10 +189,11 @@ func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
-	if len(ds.Containers) != 1 || ds.Containers[0].ServiceName != "web" {
-		t.Fatalf("containers = %#v, want web only", ds.Containers)
+	environment := ds.Environments[0]
+	if len(environment.Services) != 1 || environment.Services[0].Name != "web" {
+		t.Fatalf("services = %#v, want web only", environment.Services)
 	}
-	if ds.ReleaseCommand == nil {
+	if len(environment.Tasks) != 1 {
 		t.Fatal("expected release command")
 	}
 }
@@ -224,6 +238,9 @@ func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
 	}
 	if ds.Ingress.Mode != "public" || ds.Ingress.TLS.Mode != "auto" || ds.Ingress.TLS.Email != "ops@example.com" || !ds.Ingress.RedirectHTTP {
 		t.Fatalf("ingress = %#v", ds.Ingress)
+	}
+	if len(ds.Ingress.Routes) != 2 || ds.Ingress.Routes[0].Target.Environment != config.DefaultEnvironment || ds.Ingress.Routes[0].Target.Service != "web" {
+		t.Fatalf("routes = %#v", ds.Ingress.Routes)
 	}
 	if len(ds.NodePeers) != 1 || ds.NodePeers[0].Name != "web-b" || ds.NodePeers[0].PublicAddress != "203.0.113.11" {
 		t.Fatalf("node peers = %#v", ds.NodePeers)

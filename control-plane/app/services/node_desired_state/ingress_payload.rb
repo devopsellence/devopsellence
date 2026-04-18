@@ -16,7 +16,8 @@ module NodeDesiredState
         {
           hosts: [ ingress.hostname ],
           mode: Environment::INGRESS_STRATEGY_TUNNEL,
-          tunnel_token_secret_ref: ingress.tunnel_token_secret_ref
+          tunnelTokenSecretRef: ingress.tunnel_token_secret_ref,
+          routes: routes_for(environment:, ingress:)
         }
       else
         return nil unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
@@ -27,9 +28,25 @@ module NodeDesiredState
           tls: {
             mode: "auto"
           },
-          redirect_http: true
+          redirectHttp: true,
+          routes: routes_for(environment:, ingress:)
         }
       end
+    end
+
+    def self.routes_for(environment:, ingress:)
+      [
+        {
+          match: {
+            hostname: ingress.hostname
+          },
+          target: {
+            environment: environment.name,
+            service: "web",
+            port: "http"
+          }
+        }
+      ]
     end
   end
 end

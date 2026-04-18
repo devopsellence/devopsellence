@@ -18,8 +18,6 @@ class Release < ApplicationRecord
   validates :status, inclusion: { in: STATUSES }
   validates :healthcheck_interval_seconds, numericality: { greater_than: 0 }, allow_nil: true
   validates :healthcheck_timeout_seconds, numericality: { greater_than: 0 }, allow_nil: true
-  validate :env_json_is_object
-  validate :secret_refs_json_is_array
   validate :web_json_is_object
   validate :worker_json_is_object
   validate :service_configs_are_valid
@@ -27,47 +25,10 @@ class Release < ApplicationRecord
 
   before_validation :normalize_revision
 
-  def env_vars
-    parse_json_object(env_json, {})
-  end
-
-  def secret_refs
-    parse_json_array(secret_refs_json, [])
-  end
-
-  def secret_refs_for_agent
-    secret_refs.each_with_object({}) do |entry, result|
-      next unless entry.is_a?(Hash)
-
-      name = entry["name"].presence || entry[:name].presence
-      secret = entry["secret"].presence || entry[:secret].presence
-      next if name.blank? || secret.blank?
-
-      result[name] = secret
-    end
-  end
-
-  def healthcheck
-    return nil if healthcheck_path.blank?
-
-    {
-      path: healthcheck_path,
-      port: service_port,
-      intervalSeconds: healthcheck_interval_seconds,
-      timeoutSeconds: healthcheck_timeout_seconds,
-      retries: 3,
-      startPeriodSeconds: 1
-    }
-  end
-
   def image_reference_for(organization)
     return "#{image_repository}@#{image_digest}" if external_image_reference?
 
     "#{organization.gar_repository_path}/#{image_repository}@#{image_digest}"
-  end
-
-  def service_port
-    healthcheck_port || 3000
   end
 
   def external_image_reference?
@@ -79,10 +40,7 @@ class Release < ApplicationRecord
   end
 
   def web_service
-    service = parse_service_config(web_json, fallback: {})
-    return service if service.present?
-
-    legacy_service_config
+    parse_service_config(web_json, fallback: {})
   end
 
   def worker_service
@@ -108,12 +66,12 @@ class Release < ApplicationRecord
     release_command_text.present?
   end
 
-  def scheduled_containers_for(node:)
+  def scheduled_services_for(node:)
     environment = node.environment
-    containers = []
-    containers << container_payload("web", web_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WEB) && web_service.present?
-    containers << container_payload("worker", worker_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WORKER) && worker_service.present?
-    containers.compact
+    services = []
+    services << service_payload("web", "web", web_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WEB) && web_service.present?
+    services << service_payload("worker", "worker", worker_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WORKER) && worker_service.present?
+    services.compact
   end
 
   def release_command_task_for(node:)
@@ -144,22 +102,6 @@ class Release < ApplicationRecord
 
   def normalize_revision
     self.revision = git_sha if revision.blank? && git_sha.present?
-  end
-
-  def env_json_is_object
-    parse_json_object(env_json)
-  rescue JSON::ParserError
-    errors.add(:env_json, "must be valid JSON")
-  rescue TypeError
-    errors.add(:env_json, "must decode to an object")
-  end
-
-  def secret_refs_json_is_array
-    parse_json_array(secret_refs_json)
-  rescue JSON::ParserError
-    errors.add(:secret_refs_json, "must be valid JSON")
-  rescue TypeError
-    errors.add(:secret_refs_json, "must decode to an array")
   end
 
   def web_json_is_object
@@ -262,21 +204,27 @@ class Release < ApplicationRecord
     end
   end
 
-  def container_payload(service_name, service, organization:, environment:)
+  def service_payload(name, kind, service, organization:, environment:)
     return nil if service.blank?
 
     payload = {
-      serviceName: service_name,
+      name: name,
+      kind: kind,
       image: image_reference_for(organization),
       entrypoint: shell_words(service["entrypoint"]),
       command: shell_words(service["command"]),
       env: service["env"].presence,
-      secretRefs: merged_secret_refs_for_agent(service, service_name: service_name, environment: environment).presence,
+      secretRefs: merged_secret_refs_for_agent(service, service_name: name, environment: environment).presence,
       volumeMounts: service_volume_mounts(service, environment: environment).presence
     }.compact
 
-    if service_name == "web"
-      payload[:port] = service_port_for(service)
+    if kind == "web"
+      payload[:ports] = [
+        {
+          name: "http",
+          port: service_port_for(service)
+        }
+      ]
       payload[:healthcheck] = service_healthcheck(service)
     end
 
@@ -330,17 +278,6 @@ class Release < ApplicationRecord
     return nil if text.empty?
 
     Shellwords.split(text)
-  end
-
-  def legacy_service_config
-    stringify_service_config({
-      "entrypoint" => entrypoint,
-      "command" => command,
-      "env" => env_vars.presence,
-      "secret_refs" => secret_refs.presence,
-      "port" => healthcheck.present? ? service_port : nil,
-      "healthcheck" => healthcheck
-    }.compact)
   end
 
   def parse_service_config(value, fallback:)
@@ -403,17 +340,6 @@ class Release < ApplicationRecord
   def parse_json_object(value, fallback = nil)
     parsed = JSON.parse(value.presence || "{}")
     raise TypeError unless parsed.is_a?(Hash)
-
-    parsed
-  rescue JSON::ParserError, TypeError
-    return fallback unless fallback.nil?
-
-    raise
-  end
-
-  def parse_json_array(value, fallback = nil)
-    parsed = JSON.parse(value.presence || "[]")
-    raise TypeError unless parsed.is_a?(Array)
 
     parsed
   rescue JSON::ParserError, TypeError

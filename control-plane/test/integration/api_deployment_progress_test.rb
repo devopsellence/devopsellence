@@ -52,8 +52,20 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
         revision: release.revision,
         phase: "reconciling",
         message: "pulling image",
-        containers: [
-          { name: "web", state: "starting", hash: "sha256:#{'c' * 64}" }
+        summary: {
+          environments: 1,
+          services: 1,
+          unhealthy_services: 0
+        },
+        environments: [
+          {
+            name: environment.name,
+            revision: release.revision,
+            phase: "reconciling",
+            services: [
+              { name: "web", kind: "web", phase: "reconciling", state: "starting", hash: "sha256:#{'c' * 64}" }
+            ]
+          }
         ]
       },
       headers: { "Authorization" => "Bearer #{access_token}" },
@@ -78,7 +90,7 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
     assert_equal "reconciling", body.dig("nodes", 0, "phase")
     assert_equal "pulling image", body.dig("nodes", 0, "message")
     assert_equal "node-a", body.dig("nodes", 0, "name")
-    assert_equal "starting", body.dig("nodes", 0, "containers", 0, "state")
+    assert_equal "starting", body.dig("nodes", 0, "environments", 0, "services", 0, "state")
     assert_equal hostname, body.dig("ingress", "hostname")
     assert_equal "https://#{hostname}", body.dig("ingress", "public_url")
     assert_equal EnvironmentIngress::STATUS_READY, body.dig("ingress", "status")
@@ -89,8 +101,20 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
         revision: release.revision,
         phase: "settled",
         message: "revision healthy",
-        containers: [
-          { name: "web", state: "running", hash: "sha256:#{'c' * 64}" }
+        summary: {
+          environments: 1,
+          services: 1,
+          unhealthy_services: 0
+        },
+        environments: [
+          {
+            name: environment.name,
+            revision: release.revision,
+            phase: "settled",
+            services: [
+              { name: "web", kind: "web", phase: "settled", state: "running", hash: "sha256:#{'c' * 64}" }
+            ]
+          }
         ]
       },
       headers: { "Authorization" => "Bearer #{access_token}" },

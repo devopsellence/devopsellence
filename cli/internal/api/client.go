@@ -155,14 +155,14 @@ type DeploymentProgressSummary struct {
 }
 
 type DeploymentProgressNode struct {
-	ID         int              `json:"id"`
-	Name       string           `json:"name"`
-	Labels     []string         `json:"labels"`
-	Phase      string           `json:"phase"`
-	Message    string           `json:"message"`
-	Error      string           `json:"error"`
-	ReportedAt string           `json:"reported_at"`
-	Containers []map[string]any `json:"containers"`
+	ID           int              `json:"id"`
+	Name         string           `json:"name"`
+	Labels       []string         `json:"labels"`
+	Phase        string           `json:"phase"`
+	Message      string           `json:"message"`
+	Error        string           `json:"error"`
+	ReportedAt   string           `json:"reported_at"`
+	Environments []map[string]any `json:"environments"`
 }
 
 type DeploymentProgressIngress struct {

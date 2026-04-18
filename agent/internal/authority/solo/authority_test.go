@@ -22,7 +22,7 @@ func TestFetch_ValidDesiredState(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "desired-state-override.json")
 
-	state := `{"revision":"abc123","containers":[{"serviceName":"web","image":"myapp:abc123"}]}`
+	state := `{"schemaVersion":2,"revision":"abc123","environments":[{"name":"production","services":[{"name":"web","kind":"web","image":"myapp:abc123","ports":[{"name":"http","port":3000}],"healthcheck":{"path":"/up","port":3000}}]}]}`
 	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -35,11 +35,12 @@ func TestFetch_ValidDesiredState(t *testing.T) {
 	if result.Desired.GetRevision() != "abc123" {
 		t.Errorf("expected revision abc123, got %s", result.Desired.GetRevision())
 	}
-	if len(result.Desired.GetContainers()) != 1 {
-		t.Fatalf("expected 1 container, got %d", len(result.Desired.GetContainers()))
+	services := result.Desired.GetEnvironments()[0].GetServices()
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
 	}
-	if result.Desired.GetContainers()[0].GetServiceName() != "web" {
-		t.Errorf("expected service name web, got %s", result.Desired.GetContainers()[0].GetServiceName())
+	if services[0].GetName() != "web" {
+		t.Errorf("expected service name web, got %s", services[0].GetName())
 	}
 }
 
@@ -47,7 +48,7 @@ func TestFetch_CachesOnSameFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "desired-state-override.json")
 
-	state := `{"revision":"v1","containers":[]}`
+	state := `{"schemaVersion":2,"revision":"v1","environments":[]}`
 	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestFetch_DisabledOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "desired-state-override.json")
 
-	state := `{"enabled":false,"desired_state":{"revision":"v1"}}`
+	state := `{"enabled":false,"desired_state":{"schemaVersion":2,"revision":"v1"}}`
 	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
 	}

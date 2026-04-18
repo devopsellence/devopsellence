@@ -590,6 +590,114 @@ func TestEnsureUpdatesXDSSnapshotWithEndpoint(t *testing.T) {
 	}
 }
 
+func TestUpdateClusterEDSWithRoutesKeepsClustersIndependent(t *testing.T) {
+	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	bootstrapPath := tempBootstrapPath(t)
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  bootstrapPath,
+		Port:           8000,
+		ClusterName:    "devopsellence_web",
+		RestartPolicy:  "unless-stopped",
+		StartupTimeout: 2 * time.Second,
+	}, logger)
+
+	ingress := &desiredstatepb.Ingress{
+		Hosts:       []string{"app.example.com", "staging.example.com"},
+		Mode:        "tunnel",
+		TunnelToken: "tok",
+		Routes: []*desiredstatepb.IngressRoute{
+			{
+				Match:  &desiredstatepb.IngressMatch{Hostname: "app.example.com", PathPrefix: "/"},
+				Target: &desiredstatepb.IngressTarget{Environment: "production", Service: "web", Port: "http"},
+			},
+			{
+				Match:  &desiredstatepb.IngressMatch{Hostname: "staging.example.com", PathPrefix: "/"},
+				Target: &desiredstatepb.IngressTarget{Environment: "staging", Service: "web", Port: "http"},
+			},
+		},
+	}
+	if err := mgr.Ensure(context.Background(), ingress); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+
+	if err := mgr.UpdateEDS(context.Background(), "10.0.0.9", 9000); err != nil {
+		t.Fatalf("update default eds: %v", err)
+	}
+
+	if err := mgr.UpdateClusterEDS(context.Background(), "env-production-web-http", "10.0.0.1", 3000); err != nil {
+		t.Fatalf("update production eds: %v", err)
+	}
+	if err := mgr.UpdateClusterEDS(context.Background(), "env-staging-web-http", "10.0.0.2", 4000); err != nil {
+		t.Fatalf("update staging eds: %v", err)
+	}
+
+	prodEndpoint := mgr.lastEndpoints["env-production-web-http"]
+	if prodEndpoint == nil {
+		t.Fatal("expected production endpoint to be present")
+	}
+	if prodEndpoint.address != "10.0.0.1" || prodEndpoint.port != 3000 {
+		t.Fatalf("production endpoint was overwritten: got %s:%d, want 10.0.0.1:3000",
+			prodEndpoint.address, prodEndpoint.port)
+	}
+
+	stagingEndpoint := mgr.lastEndpoints["env-staging-web-http"]
+	if stagingEndpoint == nil {
+		t.Fatal("expected staging endpoint to be present")
+	}
+	if stagingEndpoint.address != "10.0.0.2" || stagingEndpoint.port != 4000 {
+		t.Fatalf("staging endpoint wrong: got %s:%d, want 10.0.0.2:4000",
+			stagingEndpoint.address, stagingEndpoint.port)
+	}
+
+	defaultEndpoint := mgr.lastEndpoints["devopsellence_web"]
+	if defaultEndpoint == nil {
+		t.Fatal("expected default cluster endpoint to be preserved")
+	}
+	if defaultEndpoint.address != "10.0.0.9" || defaultEndpoint.port != 9000 {
+		t.Fatalf("route cluster update overwrote the default cluster: got %s:%d, want 10.0.0.9:9000",
+			defaultEndpoint.address, defaultEndpoint.port)
+	}
+}
+
+func TestUpdateClusterEDSWithoutRoutesMirrorsToDefaultCluster(t *testing.T) {
+	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	bootstrapPath := tempBootstrapPath(t)
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  bootstrapPath,
+		Port:           8000,
+		ClusterName:    "devopsellence_web",
+		RestartPolicy:  "unless-stopped",
+		StartupTimeout: 2 * time.Second,
+	}, logger)
+
+	if err := mgr.Ensure(context.Background(), nil); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if err := mgr.UpdateClusterEDS(context.Background(), "env-production-web-http", "10.0.0.1", 3000); err != nil {
+		t.Fatalf("update production eds: %v", err)
+	}
+
+	defaultEndpoint := mgr.lastEndpoints["devopsellence_web"]
+	if defaultEndpoint == nil {
+		t.Fatal("expected default cluster endpoint to be present")
+	}
+	if defaultEndpoint.address != "10.0.0.1" || defaultEndpoint.port != 3000 {
+		t.Fatalf("unexpected default cluster endpoint: got %s:%d, want 10.0.0.1:3000",
+			defaultEndpoint.address, defaultEndpoint.port)
+	}
+	if _, ok := mgr.lastEndpoints["env-production-web-http"]; ok {
+		t.Fatal("expected named cluster to be pruned when ingress routes are absent")
+	}
+}
+
 func TestWaitForRoute(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/up" {

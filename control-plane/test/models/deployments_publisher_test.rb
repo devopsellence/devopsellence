@@ -51,9 +51,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal Release::STATUS_DRAFT, release.reload.status
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal "release_command", desired_state.dig("releaseCommand", "name")
-    assert_equal release.image_reference_for(organization), desired_state.dig("releaseCommand", "image")
-    assert_nil desired_state["containers"]
+    task = desired_state_tasks(desired_state).first
+    assert_equal "release_command", task.fetch("name")
+    assert_equal release.image_reference_for(organization), task.fetch("image")
     assert_equal 1, deployment_statuses_for(environment).size
     assert_equal "waiting to run release command", deployment_statuses_for(environment).first.message
   end
@@ -76,10 +76,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      env_json: { "RAILS_ENV" => "production" }.to_json,
-      secret_refs_json: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ].to_json,
-      healthcheck_path: "/up",
-      healthcheck_port: 3000,
+      web_json: {
+        env: { "RAILS_ENV" => "production" },
+        secret_refs: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ],
+        port: 3000,
+        healthcheck: { path: "/up", port: 3000 }
+      }.to_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -113,20 +115,25 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal DeploymentNodeStatus::PHASE_PENDING, deployment_statuses_for(environment).first.phase
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
+    service = desired_state_services(desired_state).first
     assert_equal true, desired_state["assigned"]
     assert_equal release.revision, desired_state["revision"]
-    assert_equal release.image_reference_for(organization), desired_state.dig("containers", 0, "image")
-    assert_equal 3000, desired_state.dig("containers", 0, "port")
-    assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, desired_state.dig("containers", 0, "secretRefs"))
+    assert_equal "Production", desired_state_environment(desired_state).fetch("name")
+    assert_equal "web", service.fetch("name")
+    assert_equal "web", service.fetch("kind")
+    assert_equal release.image_reference_for(organization), service.fetch("image")
+    assert_equal 3000, service.dig("ports", 0, "port")
+    assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, service.fetch("secretRefs"))
     assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
-    assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnel_token_secret_ref")
-    assert_equal "/up", desired_state.dig("containers", 0, "healthcheck", "path")
-    assert_equal 3000, desired_state.dig("containers", 0, "healthcheck", "port")
-    assert_equal 5, desired_state.dig("containers", 0, "healthcheck", "intervalSeconds")
-    assert_equal 3, desired_state.dig("containers", 0, "healthcheck", "retries")
+    assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnelTokenSecretRef")
+    assert_equal "Production", desired_state.dig("ingress", "routes", 0, "target", "environment")
+    assert_equal "/up", service.dig("healthcheck", "path")
+    assert_equal 3000, service.dig("healthcheck", "port")
+    assert_equal 5, service.dig("healthcheck", "intervalSeconds")
+    assert_equal 3, service.dig("healthcheck", "retries")
   end
 
-  test "publishes immutable desired state object plus pointer while keeping legacy desired state path" do
+  test "publishes immutable desired state object plus pointer and direct desired state path" do
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     ensure_test_organization_runtime!(organization)
     project = organization.projects.create!(name: "Project A")
@@ -246,7 +253,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal "docker.io/mccutchen/go-httpbin@sha256:#{'a' * 64}", desired_state.dig("containers", 0, "image")
+    assert_equal "docker.io/mccutchen/go-httpbin@sha256:#{'a' * 64}", desired_state_services(desired_state).first.fetch("image")
   end
 
   test "omits empty secret refs from desired state" do
@@ -267,10 +274,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      env_json: { "RAILS_ENV" => "production" }.to_json,
-      secret_refs_json: [].to_json,
-      healthcheck_path: "/up",
-      healthcheck_port: 3000,
+      web_json: {
+        env: { "RAILS_ENV" => "production" },
+        secret_refs: [],
+        port: 3000,
+        healthcheck: { path: "/up", port: 3000 }
+      }.to_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -285,7 +294,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_not desired_state.dig("containers", 0).key?("secretRefs")
+    assert_not desired_state_services(desired_state).first.key?("secretRefs")
   end
 
   test "publishes web and worker based on node labels" do
@@ -340,8 +349,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal %w[web worker], desired_state.fetch("containers").map { |entry| entry.fetch("serviceName") }
-    assert_equal "./bin/jobs", desired_state.dig("containers", 1, "command", 0)
+    services = desired_state_services(desired_state)
+    assert_equal %w[web worker], services.map { |entry| entry.fetch("name") }
+    assert_equal "./bin/jobs", services.second.dig("command", 0)
     assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
   end
 
@@ -398,7 +408,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    mounts = desired_state.fetch("containers").map { |entry| entry.fetch("volumeMounts").first }
+    mounts = desired_state_services(desired_state).map { |entry| entry.fetch("volumeMounts").first }
 
     assert_equal [
       { "source" => "devopsellence-env-#{environment.id}-app_storage", "target" => "/rails/storage" },
@@ -459,7 +469,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
         "DATABASE_URL" => "projects/acme/secrets/db/versions/latest",
         "SECRET_KEY_BASE" => environment.environment_secrets.first.secret_ref
       },
-      desired_state.dig("containers", 0, "secretRefs")
+      desired_state_services(desired_state).first.fetch("secretRefs")
     )
     assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
   end
@@ -757,12 +767,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     state_b = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_b.reload.desired_state_object_path)
     assert_equal [ hostname ], state_a.dig("ingress", "hosts")
 
-    assert_equal [ "node-b", "worker-a" ], state_a.fetch("node_peers").map { |peer| peer.fetch("name") }
-    node_b_peer = state_a.fetch("node_peers").find { |peer| peer.fetch("name") == "node-b" }
+    assert_equal [ "node-b", "worker-a" ], state_a.fetch("nodePeers").map { |peer| peer.fetch("name") }
+    node_b_peer = state_a.fetch("nodePeers").find { |peer| peer.fetch("name") == "node-b" }
     assert_equal [ Node::LABEL_WEB ], node_b_peer.fetch("labels")
-    assert_equal "198.51.100.11", node_b_peer.fetch("public_address")
+    assert_equal "198.51.100.11", node_b_peer.fetch("publicAddress")
 
-    assert_equal [ "198.51.100.10" ], state_b.fetch("node_peers").select { |peer| peer.fetch("labels").include?(Node::LABEL_WEB) }.map { |peer| peer.fetch("public_address") }
+    assert_equal [ "198.51.100.10" ], state_b.fetch("nodePeers").select { |peer| peer.fetch("labels").include?(Node::LABEL_WEB) }.map { |peer| peer.fetch("publicAddress") }
   end
 
   test "managed deploy claims a node bundle for a new environment" do
@@ -1002,8 +1012,11 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       revision: "r-fast",
       image_repository: "fast-app",
       image_digest: "sha256:#{"b" * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
-      secret_refs_json: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ].to_json
+      web_json: {
+        port: 3000,
+        healthcheck: { path: "/up", port: 3000 },
+        secret_refs: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ]
+      }.to_json
     )
     node, = issue_test_node!(organization: organization, name: "fast-node")
     node.update!(environment: environment)
@@ -1023,5 +1036,17 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
   def deployment_statuses_for(environment)
     DeploymentNodeStatus.joins(:deployment).where(deployments: { environment_id: environment.id }).order(:id).to_a
+  end
+
+  def desired_state_environment(desired_state)
+    desired_state.fetch("environments").first
+  end
+
+  def desired_state_services(desired_state)
+    desired_state_environment(desired_state).fetch("services")
+  end
+
+  def desired_state_tasks(desired_state)
+    desired_state_environment(desired_state).fetch("tasks")
   end
 end

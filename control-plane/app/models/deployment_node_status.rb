@@ -20,14 +20,14 @@ class DeploymentNodeStatus < ApplicationRecord
   validates :phase, inclusion: { in: PHASES }
   validates :node_id, uniqueness: { scope: :deployment_id }
 
-  def containers
-    parsed = JSON.parse(containers_json.presence || "[]")
+  def environments
+    parsed = JSON.parse(environments_json.presence || "[]")
     parsed.is_a?(Array) ? parsed : []
   rescue JSON::ParserError
     []
   end
 
-  def containers=(value)
-    self.containers_json = JSON.generate(Array(value))
+  def environments=(value)
+    self.environments_json = JSON.generate(Array(value))
   end
 end

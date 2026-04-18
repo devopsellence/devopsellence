@@ -68,9 +68,22 @@ func TestReporterPostsStatusToControlPlane(t *testing.T) {
 		Revision: "rel-1",
 		Phase:    report.PhaseReconciling,
 		Message:  "pulling image",
-		Containers: []report.ContainerStatus{
-			{Name: "web", State: "starting", Hash: "hash-1"},
+		Summary: &report.Summary{
+			Environments: 1,
+			Services:     1,
 		},
+		Environments: []report.EnvironmentStatus{{
+			Name:     "production",
+			Revision: "rel-1",
+			Phase:    report.PhaseReconciling,
+			Services: []report.ServiceStatus{{
+				Name:  "web",
+				Kind:  "web",
+				Phase: report.PhaseReconciling,
+				State: "starting",
+				Hash:  "hash-1",
+			}},
+		}},
 	}
 	if err := reporter.Report(context.Background(), status); err != nil {
 		t.Fatalf("Report() error = %v", err)
@@ -82,7 +95,10 @@ func TestReporterPostsStatusToControlPlane(t *testing.T) {
 	if captured.Phase != status.Phase {
 		t.Fatalf("phase = %s, want %s", captured.Phase, status.Phase)
 	}
-	if len(captured.Containers) != 1 || captured.Containers[0].State != "starting" {
-		t.Fatalf("containers = %#v", captured.Containers)
+	if captured.Summary == nil || captured.Summary.Services != 1 {
+		t.Fatalf("summary = %#v", captured.Summary)
+	}
+	if len(captured.Environments) != 1 || captured.Environments[0].Services[0].State != "starting" {
+		t.Fatalf("environments = %#v", captured.Environments)
 	}
 }

@@ -13,7 +13,7 @@ class ApiAgentAssignmentTest < ActionDispatch::IntegrationTest
     assert_equal "unassigned", json_body["mode"]
     assert_equal node.id, json_body.dig("desired_state", "node_id")
     payload = JSON.parse(json_body.dig("desired_state", "payload_json"))
-    assert_equal [], payload.fetch("containers")
+    assert_equal [], payload.fetch("environments")
   end
 
   test "assignment endpoint returns assigned state for nodes with bundles" do

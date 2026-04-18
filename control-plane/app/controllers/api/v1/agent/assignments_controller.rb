@@ -16,7 +16,7 @@ module Api
               node: current_node,
               environment: nil,
               sequence: current_node.desired_state_sequence,
-              payload: { revision: "unassigned", containers: [] }
+              payload: { schemaVersion: 2, revision: "unassigned", environments: [] }
             )
             render json: { mode: "unassigned", desired_state: envelope }
           end

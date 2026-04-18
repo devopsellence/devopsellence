@@ -26,8 +26,14 @@ module Api
             :phase,
             :message,
             :error,
+            summary: [ :environments, :services, :unhealthy_services ],
             task: [ :name, :phase, :message, :error, :exit_code ],
-            containers: [ :name, :state, :hash ],
+            environments: [
+              :name,
+              :revision,
+              :phase,
+              services: [ :name, :kind, :phase, :container, :state, :health, :hash ]
+            ],
             ingress: [ :tls_status, :tls_not_after, :tls_error ]
           )
           permitted.to_h.deep_symbolize_keys

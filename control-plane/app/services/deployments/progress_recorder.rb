@@ -87,7 +87,7 @@ module Deployments
         phase: phase,
         message: status[:message].presence,
         error_message: status[:error].presence,
-        containers: Array(status[:containers]),
+        environments: normalized_environments,
         reported_at: reported_at_for(deployment_node_status, phase)
       }
     end
@@ -96,7 +96,7 @@ module Deployments
       deployment_node_status.phase != attributes[:phase] ||
         deployment_node_status.message != attributes[:message] ||
         deployment_node_status.error_message != attributes[:error_message] ||
-        deployment_node_status.containers != attributes[:containers]
+        deployment_node_status.environments != attributes[:environments]
     end
 
     def reported_at_for(deployment_node_status, phase)
@@ -228,6 +228,12 @@ module Deployments
       return unless node.environment_id
 
       EnvironmentIngresses::ReconcileJob.perform_later(node.environment_id)
+    end
+
+    def normalized_environments
+      Array(status[:environments]).map do |environment|
+        environment.to_h.deep_stringify_keys
+      end
     end
 
     def parse_time(value)

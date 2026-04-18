@@ -37,7 +37,7 @@ class ApiAgentBootstrapAndRefreshTest < ActionDispatch::IntegrationTest
     assignment_body = json_body
     assert_equal "unassigned", assignment_body["mode"]
     desired_payload = JSON.parse(assignment_body.fetch("desired_state").fetch("payload_json"))
-    assert_equal [], desired_payload.fetch("containers")
+    assert_equal [], desired_payload.fetch("environments")
 
     original_refresh = bootstrap_body["refresh_token"]
     post "/api/v1/agent/auth/refresh", params: { refresh_token: original_refresh }, as: :json

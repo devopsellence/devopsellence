@@ -6,18 +6,19 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 )
 
-func TestHashContainerDeterministic(t *testing.T) {
-	c := &desiredstatepb.Container{
-		ServiceName: "worker",
-		Image:       "busybox",
-		Env:         map[string]string{"A": "1", "B": "2"},
+func TestHashServiceDeterministic(t *testing.T) {
+	service := &desiredstatepb.Service{
+		Name:  "worker",
+		Kind:  "worker",
+		Image: "busybox",
+		Env:   map[string]string{"A": "1", "B": "2"},
 	}
 
-	h1, err := HashContainer(c)
+	h1, err := HashService(service)
 	if err != nil {
 		t.Fatalf("hash error: %v", err)
 	}
-	h2, err := HashContainer(c)
+	h2, err := HashService(service)
 	if err != nil {
 		t.Fatalf("hash error: %v", err)
 	}
@@ -26,15 +27,15 @@ func TestHashContainerDeterministic(t *testing.T) {
 	}
 }
 
-func TestHashContainerChanges(t *testing.T) {
-	c1 := &desiredstatepb.Container{ServiceName: "worker", Image: "busybox", Env: map[string]string{"A": "1"}}
-	c2 := &desiredstatepb.Container{ServiceName: "worker", Image: "busybox", Env: map[string]string{"A": "2"}}
+func TestHashServiceChanges(t *testing.T) {
+	c1 := &desiredstatepb.Service{Name: "worker", Kind: "worker", Image: "busybox", Env: map[string]string{"A": "1"}}
+	c2 := &desiredstatepb.Service{Name: "worker", Kind: "worker", Image: "busybox", Env: map[string]string{"A": "2"}}
 
-	h1, err := HashContainer(c1)
+	h1, err := HashService(c1)
 	if err != nil {
 		t.Fatalf("hash error: %v", err)
 	}
-	h2, err := HashContainer(c2)
+	h2, err := HashService(c2)
 	if err != nil {
 		t.Fatalf("hash error: %v", err)
 	}

@@ -74,7 +74,7 @@ func TestLoadAppliesDefaultBuildPlatforms(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 3",
+		"schema_version: 4",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -108,7 +108,7 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 3",
+		"schema_version: 4",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -127,8 +127,8 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 	}
 
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "init has been removed") {
-		t.Fatalf("expected legacy init error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "field init not found") {
+		t.Fatalf("expected unknown init error, got %v", err)
 	}
 }
 
@@ -172,54 +172,36 @@ func TestWriteAndLoadReleaseCommand(t *testing.T) {
 	}
 }
 
-func TestLegacyDirectNodeLabelsMigrateToSoloLabels(t *testing.T) {
+func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.LegacyDirect = &LegacyDirectConfig{Nodes: map[string]LegacyDirectNode{
-		"prod-1": {
-			Host:   "203.0.113.10",
-			User:   "root",
-			Labels: []string{NodeLabelWeb, NodeLabelWorker, NodeLabelWeb},
-		},
-	}}
-	if _, err := Write(root, project); err != nil {
-		t.Fatalf("Write() error = %v", err)
+	path := filepath.Join(root, FilePath)
+	content := strings.Join([]string{
+		"schema_version: 4",
+		"organization: acme",
+		"project: ShopApp",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"web:",
+		"  port: 3000",
+		"  healthcheck:",
+		"    path: /up",
+		"direct:",
+		"  nodes:",
+		"    prod-1:",
+		"      host: 203.0.113.10",
+		"      user: root",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	loaded, err := LoadFromRoot(root)
-	if err != nil {
-		t.Fatalf("LoadFromRoot() error = %v", err)
-	}
-	if loaded.LegacyDirect != nil {
-		t.Fatalf("direct config should be migrated away")
-	}
-	labels := loaded.Solo.Nodes["prod-1"].Labels
-	if strings.Join(labels, ",") != "web,worker" {
-		t.Fatalf("labels = %#v, want web,worker", labels)
-	}
-}
 
-func TestLegacyDirectNodeUnlabeledMigrateToAllLabels(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.LegacyDirect = &LegacyDirectConfig{Nodes: map[string]LegacyDirectNode{
-		"prod-1": {Host: "203.0.113.10", User: "root"},
-	}}
-	if _, err := Write(root, project); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	loaded, err := LoadFromRoot(root)
-	if err != nil {
-		t.Fatalf("LoadFromRoot() error = %v", err)
-	}
-	if loaded.LegacyDirect != nil {
-		t.Fatalf("direct config should be migrated away")
-	}
-	if labels := loaded.Solo.Nodes["prod-1"].Labels; strings.Join(labels, ",") != "web,worker" {
-		t.Fatalf("legacy labels = %#v, want web,worker", labels)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "field direct not found") {
+		t.Fatalf("expected unknown direct error, got %v", err)
 	}
 }
 

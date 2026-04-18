@@ -75,6 +75,7 @@ cd control-plane && mise run test -- test/path/file_test.rb
 - Rails owns product state: accounts, authz, billing, hosted persistence, API surfaces.
 - Placement is policy, not schema. Shared may require one environment per node; solo may allow multiple environments per node.
 - Desired state is mode-independent node runtime state. A node may carry multiple environment instances; an environment may have multiple named services/workers.
+- JSON casing: protobuf-backed desired-state/status payloads follow protobuf JSON casing; Rails-owned JSON/API payloads follow snake_case.
 - Agent runtime must not know product modes like solo/shared. Wire concrete adapters for desired-state source, secret resolver, status sink, registry auth, etc.
 - Core: solid, explicit. Edges: more malleable.
 

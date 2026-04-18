@@ -8,8 +8,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func HashContainer(c *desiredstatepb.Container) (string, error) {
-	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(c)
+func HashService(service *desiredstatepb.Service) (string, error) {
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(service)
 	if err != nil {
 		return "", err
 	}

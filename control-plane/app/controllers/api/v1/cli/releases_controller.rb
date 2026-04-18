@@ -111,14 +111,7 @@ module Api
               revision: params[:revision],
               web: params[:web],
               worker: params[:worker],
-              init: params[:init],
               release_command: params[:release_command],
-              entrypoint: params[:entrypoint],
-              command: params[:command],
-              env_vars: params[:env_json].presence || params[:env_vars],
-              secret_refs: params[:secret_refs_json].presence || params[:secret_refs],
-              port: params[:port],
-              healthcheck: params[:healthcheck],
               healthcheck_interval_seconds: params[:healthcheck_interval_seconds],
               healthcheck_timeout_seconds: params[:healthcheck_timeout_seconds]
             }

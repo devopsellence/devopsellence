@@ -32,7 +32,7 @@ func TestRunDesiredStateSetOverrideAndShowActive(t *testing.T) {
 	dir := t.TempDir()
 	authStatePath := filepath.Join(dir, "agent-auth-state.json")
 	overrideSourcePath := filepath.Join(dir, "manual.json")
-	if err := desiredstatecache.WriteOverride(overrideSourcePath, []byte(`{"enabled":true,"desired_state":{"revision":"manual-rev","containers":[{"serviceName":"web","image":"nginx:latest","port":80,"healthcheck":{"path":"/up","port":80}}]}}`)); err != nil {
+	if err := desiredstatecache.WriteOverride(overrideSourcePath, []byte(`{"enabled":true,"desired_state":{"schemaVersion":2,"revision":"manual-rev","environments":[{"name":"production","services":[{"name":"web","kind":"web","image":"nginx:latest","ports":[{"name":"http","port":80}],"healthcheck":{"path":"/up","port":80}}]}]}}`)); err != nil {
 		t.Fatalf("write source override: %v", err)
 	}
 
@@ -68,12 +68,17 @@ func TestRunDesiredStateShowActiveFallsBackToCache(t *testing.T) {
 		},
 	}
 	desired := &desiredstatepb.DesiredState{
-		Revision: "cached-rev",
-		Containers: []*desiredstatepb.Container{{
-			ServiceName: "web",
-			Image:       "nginx:latest",
-			Port:        80,
-			Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 80},
+		SchemaVersion: 2,
+		Revision:      "cached-rev",
+		Environments: []*desiredstatepb.Environment{{
+			Name: "production",
+			Services: []*desiredstatepb.Service{{
+				Name:        "web",
+				Kind:        "web",
+				Image:       "nginx:latest",
+				Ports:       []*desiredstatepb.ServicePort{{Name: "http", Port: 80}},
+				Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 80},
+			}},
 		}},
 	}
 	if err := store.Save(snapshot, 7, desired); err != nil {

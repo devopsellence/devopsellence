@@ -457,26 +457,58 @@ func (a *Authority) parseDesiredStateEnvelope(ctx context.Context, snapshot auth
 }
 
 func (a *Authority) resolveSecretRefs(ctx context.Context, desired *desiredstatepb.DesiredState, googleToken string, controlPlaneToken string) error {
-	for _, c := range desired.Containers {
-		if len(c.SecretRefs) == 0 {
+	for _, env := range desired.Environments {
+		if env == nil {
 			continue
 		}
-		if c.Env == nil {
-			c.Env = map[string]string{}
-		}
-		for key, ref := range c.SecretRefs {
-			if _, exists := c.Env[key]; exists {
-				return fmt.Errorf("container[%s]: env key %q conflicts with secret_ref", c.ServiceName, key)
+		for _, service := range env.Services {
+			if service == nil {
+				continue
 			}
-			value, resolvedGoogleToken, resolvedControlPlaneToken, err := a.resolveSecretRef(ctx, ref, googleToken, controlPlaneToken)
-			if err != nil {
-				return fmt.Errorf("container[%s] secret_ref[%s]: %w", c.ServiceName, key, err)
+			if len(service.SecretRefs) == 0 {
+				continue
 			}
-			googleToken = resolvedGoogleToken
-			controlPlaneToken = resolvedControlPlaneToken
-			c.Env[key] = value
+			if service.Env == nil {
+				service.Env = map[string]string{}
+			}
+			for key, ref := range service.SecretRefs {
+				if _, exists := service.Env[key]; exists {
+					return fmt.Errorf("service[%s/%s]: env key %q conflicts with secret_ref", env.Name, service.Name, key)
+				}
+				value, resolvedGoogleToken, resolvedControlPlaneToken, err := a.resolveSecretRef(ctx, ref, googleToken, controlPlaneToken)
+				if err != nil {
+					return fmt.Errorf("service[%s/%s] secret_ref[%s]: %w", env.Name, service.Name, key, err)
+				}
+				googleToken = resolvedGoogleToken
+				controlPlaneToken = resolvedControlPlaneToken
+				service.Env[key] = value
+			}
+			service.SecretRefs = nil
 		}
-		c.SecretRefs = nil
+		for _, task := range env.Tasks {
+			if task == nil {
+				continue
+			}
+			if len(task.SecretRefs) == 0 {
+				continue
+			}
+			if task.Env == nil {
+				task.Env = map[string]string{}
+			}
+			for key, ref := range task.SecretRefs {
+				if _, exists := task.Env[key]; exists {
+					return fmt.Errorf("task[%s/%s]: env key %q conflicts with secret_ref", env.Name, task.Name, key)
+				}
+				value, resolvedGoogleToken, resolvedControlPlaneToken, err := a.resolveSecretRef(ctx, ref, googleToken, controlPlaneToken)
+				if err != nil {
+					return fmt.Errorf("task[%s/%s] secret_ref[%s]: %w", env.Name, task.Name, key, err)
+				}
+				googleToken = resolvedGoogleToken
+				controlPlaneToken = resolvedControlPlaneToken
+				task.Env[key] = value
+			}
+			task.SecretRefs = nil
+		}
 	}
 	if desired.Ingress != nil && desired.Ingress.TunnelTokenSecretRef != "" {
 		value, resolvedGoogleToken, resolvedControlPlaneToken, err := a.resolveSecretRef(ctx, desired.Ingress.TunnelTokenSecretRef, googleToken, controlPlaneToken)

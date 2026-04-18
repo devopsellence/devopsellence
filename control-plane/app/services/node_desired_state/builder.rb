@@ -14,22 +14,30 @@ module NodeDesiredState
       ingress = ingress_payload(environment:, node:)
 
       bundle = node.node_bundle
+      revision = release.revision.presence || "node-#{node.id}-seq-#{sequence}"
       {
-        revision: release.revision.presence || "node-#{node.id}-seq-#{sequence}",
-        assignment_sequence: sequence,
-        identity_version: environment.identity_version,
+        schemaVersion: 2,
+        revision: revision,
+        assignmentSequence: sequence,
+        identityVersion: environment.identity_version,
         image: {
           repository: release.image_repository,
           digest: release.image_digest,
           reference: release.image_reference_for(organization)
         },
-        containers: release.scheduled_containers_for(node: node),
+        environments: [
+          {
+            name: environment.name,
+            revision: revision,
+            services: release.scheduled_services_for(node: node)
+          }.compact
+        ],
         ingress: ingress,
-        node_peers: node_peers_payload(environment:, node:),
-        published_at: Time.current.utc.iso8601,
-        organization_bundle_token: bundle&.organization_bundle&.token.to_s,
-        environment_bundle_token: bundle&.environment_bundle&.token.to_s,
-        node_bundle_token: bundle&.token.to_s
+        nodePeers: node_peers_payload(environment:, node:),
+        publishedAt: Time.current.utc.iso8601,
+        organizationBundleToken: bundle&.organization_bundle&.token.to_s,
+        environmentBundleToken: bundle&.environment_bundle&.token.to_s,
+        nodeBundleToken: bundle&.token.to_s
       }.compact
     end
 

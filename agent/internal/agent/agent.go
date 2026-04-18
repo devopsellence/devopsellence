@@ -110,8 +110,8 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		return err
 	}
 
-	if desired.ReleaseCommand != nil {
-		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, desired.Revision, desired.ReleaseCommand, true); err != nil {
+	for _, task := range desiredstate.RuntimeTasks(desired) {
+		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, task.EnvironmentName, task.EnvironmentRevision, task.Task, true); err != nil {
 			a.metrics.ReconcileErrors.Inc()
 			return err
 		}
@@ -133,11 +133,25 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	a.metrics.ContainersUpdated.Add(float64(result.Updated))
 	a.metrics.ContainersRemoved.Add(float64(result.Removed))
 
+	summary, environments, err := a.reconciler.CurrentStatus(ctx, desired)
+	if err != nil {
+		a.metrics.ReconcileErrors.Inc()
+		a.reportStatus(ctx, report.Status{
+			Time:     start,
+			Phase:    report.PhaseError,
+			Revision: desired.Revision,
+			Error:    err.Error(),
+		}, fetched.Sequence)
+		return err
+	}
+
 	a.reportStatus(ctx, report.Status{
-		Time:     start,
-		Phase:    report.PhaseSettled,
-		Revision: desired.Revision,
-		Message:  fmt.Sprintf("created=%d updated=%d removed=%d unchanged=%d", result.Created, result.Updated, result.Removed, result.Unchanged),
+		Time:         start,
+		Phase:        report.PhaseSettled,
+		Revision:     desired.Revision,
+		Message:      fmt.Sprintf("created=%d updated=%d removed=%d unchanged=%d", result.Created, result.Updated, result.Removed, result.Unchanged),
+		Summary:      summary,
+		Environments: environments,
 	}, fetched.Sequence)
 
 	a.logger.Info("reconcile ok",
@@ -152,10 +166,10 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 }
 
 func (a *Agent) runTaskOnce(ctx context.Context, sequence int64, revision string, task *desiredstatepb.Task) error {
-	return a.ensureTaskSatisfied(ctx, sequence, revision, task, false)
+	return a.ensureTaskSatisfied(ctx, sequence, desiredstate.DefaultEnvironmentName, revision, task, false)
 }
 
-func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, revision string, task *desiredstatepb.Task, suppressSuccessReport bool) error {
+func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environmentName string, revision string, task *desiredstatepb.Task, suppressSuccessReport bool) error {
 	taskHash, err := desiredstate.HashTask(task)
 	if err != nil {
 		a.reportStatus(ctx, report.Status{
@@ -171,7 +185,8 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, revisio
 		}, sequence)
 		return err
 	}
-	if a.taskStore != nil && a.taskStore.Satisfied(task.GetName(), sequence, taskHash) {
+	storeName := taskStoreName(environmentName, task.GetName())
+	if a.taskStore != nil && a.taskStore.Satisfied(storeName, sequence, taskHash) {
 		return nil
 	}
 
@@ -205,7 +220,7 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, revisio
 		return err
 	}
 	if a.taskStore != nil {
-		if err := a.taskStore.MarkSatisfied(task.GetName(), sequence, taskHash); err != nil {
+		if err := a.taskStore.MarkSatisfied(storeName, sequence, taskHash); err != nil {
 			a.logger.Warn("persist lifecycle task state failed", "task", task.GetName(), "error", err)
 		}
 	}
@@ -228,6 +243,15 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, revisio
 	return nil
 }
 
+func taskStoreName(environmentName, taskName string) string {
+	environmentName = strings.TrimSpace(environmentName)
+	taskName = strings.TrimSpace(taskName)
+	if environmentName == "" {
+		return taskName
+	}
+	return desiredstate.ScopedKey(environmentName, taskName)
+}
+
 func (a *Agent) reportStatus(ctx context.Context, status report.Status, sequence int64) {
 	fingerprint := newReportFingerprint(sequence, status)
 	if a.lastReport != nil && a.lastReport.suppresses(fingerprint) {
@@ -241,24 +265,24 @@ func (a *Agent) reportStatus(ctx context.Context, status report.Status, sequence
 }
 
 type reportFingerprint struct {
-	sequence       int64
-	revision       string
-	phase          report.Phase
-	message        string
-	err            string
-	taskHash       string
-	containersHash string
+	sequence         int64
+	revision         string
+	phase            report.Phase
+	message          string
+	err              string
+	taskHash         string
+	environmentsHash string
 }
 
 func newReportFingerprint(sequence int64, status report.Status) *reportFingerprint {
 	return &reportFingerprint{
-		sequence:       sequence,
-		revision:       status.Revision,
-		phase:          status.Phase,
-		message:        status.Message,
-		err:            status.Error,
-		taskHash:       fingerprintTask(status.Task),
-		containersHash: fingerprintContainers(status.Containers),
+		sequence:         sequence,
+		revision:         status.Revision,
+		phase:            status.Phase,
+		message:          status.Message,
+		err:              status.Error,
+		taskHash:         fingerprintTask(status.Task),
+		environmentsHash: fingerprintEnvironments(status.Environments),
 	}
 }
 
@@ -276,7 +300,7 @@ func (f *reportFingerprint) suppresses(other *reportFingerprint) bool {
 		f.message == other.message &&
 		f.err == other.err &&
 		f.taskHash == other.taskHash &&
-		f.containersHash == other.containersHash
+		f.environmentsHash == other.environmentsHash
 }
 
 func fingerprintTask(task *report.TaskStatus) string {
@@ -297,19 +321,35 @@ func fingerprintTask(task *report.TaskStatus) string {
 	return builder.String()
 }
 
-func fingerprintContainers(containers []report.ContainerStatus) string {
-	if len(containers) == 0 {
+func fingerprintEnvironments(environments []report.EnvironmentStatus) string {
+	if len(environments) == 0 {
 		return ""
 	}
 
 	var builder strings.Builder
-	for _, container := range containers {
-		builder.WriteString(container.Name)
+	for _, environment := range environments {
+		builder.WriteString(environment.Name)
 		builder.WriteByte(0)
-		builder.WriteString(container.State)
+		builder.WriteString(environment.Revision)
 		builder.WriteByte(0)
-		builder.WriteString(container.Hash)
+		builder.WriteString(string(environment.Phase))
 		builder.WriteByte(0)
+		for _, service := range environment.Services {
+			builder.WriteString(service.Name)
+			builder.WriteByte(0)
+			builder.WriteString(service.Kind)
+			builder.WriteByte(0)
+			builder.WriteString(string(service.Phase))
+			builder.WriteByte(0)
+			builder.WriteString(service.Container)
+			builder.WriteByte(0)
+			builder.WriteString(service.State)
+			builder.WriteByte(0)
+			builder.WriteString(service.Health)
+			builder.WriteByte(0)
+			builder.WriteString(service.Hash)
+			builder.WriteByte(0)
+		}
 	}
 	return builder.String()
 }

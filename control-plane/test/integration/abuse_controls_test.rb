@@ -294,10 +294,12 @@ class AbuseControlsTest < ActionDispatch::IntegrationTest
       image_repository: "shop-app",
       image_digest: "sha256:#{SecureRandom.hex(32)}",
       revision: "rev-#{index}",
-      port: 80,
-      healthcheck: {
-        path: "/up",
-        port: 80
+      web: {
+        port: 80,
+        healthcheck: {
+          path: "/up",
+          port: 80
+        }
       }
     }
   end

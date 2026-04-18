@@ -11,8 +11,6 @@ module Releases
     end
 
     def to_h
-      reject_legacy_init!
-
       attrs = {
         git_sha: required_string(:git_sha),
         image_repository: required_string(:image_repository),
@@ -23,53 +21,16 @@ module Releases
         healthcheck_timeout_seconds: integer_or_default(:healthcheck_timeout_seconds, 2)
       }
 
-      if params[:web].present? || params[:worker].present?
-        structured = {
-          web_json: JSON.generate(parse_service(params[:web], field: :web, allow_healthcheck: true)),
-          worker_json: parse_service(params[:worker], field: :worker, allow_healthcheck: false)&.then { JSON.generate(_1) }
-        }
-        attrs.merge(structured.compact)
-      else
-        attrs.merge(
-          web_json: JSON.generate(
-            parse_service(
-              {
-                entrypoint: params[:entrypoint],
-                command: params[:command],
-                env: params[:env_vars],
-                secret_refs: params[:secret_refs],
-                port: params[:port],
-                healthcheck: params[:healthcheck]
-              },
-              field: :web,
-              allow_healthcheck: true
-            )
-          )
-        )
-      end
+      structured = {
+        web_json: JSON.generate(required_service(:web, allow_healthcheck: true)),
+        worker_json: parse_service(params[:worker], field: :worker, allow_healthcheck: false)&.then { JSON.generate(_1) }
+      }
+      attrs.merge(structured.compact)
     end
 
     private
 
     attr_reader :params
-
-    def reject_legacy_init!
-      return unless legacy_init_provided?
-
-      raise InvalidPayload, "init has been removed; use release_command for release-wide work or your image entrypoint for per-node prep"
-    end
-
-    def legacy_init_provided?
-      value = params[:init]
-      case value
-      when nil
-        false
-      when ActionController::Parameters, Hash, Array
-        true
-      else
-        value.present?
-      end
-    end
 
     def required_string(key)
       value = params[key].to_s.strip
@@ -160,6 +121,13 @@ module Releases
       end
 
       normalized.compact
+    end
+
+    def required_service(field, allow_healthcheck:)
+      service = parse_service(params[field], field:, allow_healthcheck:)
+      raise InvalidPayload, "#{field} is required" if service.blank?
+
+      service
     end
 
     def optional_service_string(value)

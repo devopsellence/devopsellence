@@ -50,7 +50,7 @@ class NodesDiagnoseSignalPublisherTest < ActiveSupport::TestCase
     assert_equal 2, node.reload.desired_state_sequence
     desired_state = store.desired_state_payload(bucket: node.desired_state_bucket, object_path: node.desired_state_object_path)
     assert_equal "rev-1", desired_state.fetch("revision")
-    assert_equal 2, desired_state.fetch("assignment_sequence")
+    assert_equal 2, desired_state.fetch("assignmentSequence")
   end
 
   test "skips nodes without an assigned desired state target" do

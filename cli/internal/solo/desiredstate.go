@@ -12,22 +12,35 @@ import (
 // We use plain encoding/json rather than importing protobuf.
 
 type desiredStateJSON struct {
-	Revision       string          `json:"revision,omitempty"`
-	Containers     []containerJSON `json:"containers,omitempty"`
-	Ingress        *ingressJSON    `json:"ingress,omitempty"`
-	ReleaseCommand *taskJSON       `json:"releaseCommand,omitempty"`
-	NodePeers      []nodePeerJSON  `json:"nodePeers,omitempty"`
+	SchemaVersion int               `json:"schemaVersion,omitempty"`
+	Revision      string            `json:"revision,omitempty"`
+	Environments  []environmentJSON `json:"environments,omitempty"`
+	Ingress       *ingressJSON      `json:"ingress,omitempty"`
+	NodePeers     []nodePeerJSON    `json:"nodePeers,omitempty"`
 }
 
-type containerJSON struct {
-	ServiceName  string            `json:"serviceName"`
+type environmentJSON struct {
+	Name     string        `json:"name"`
+	Revision string        `json:"revision,omitempty"`
+	Services []serviceJSON `json:"services,omitempty"`
+	Tasks    []taskJSON    `json:"tasks,omitempty"`
+}
+
+type serviceJSON struct {
+	Name         string            `json:"name"`
+	Kind         string            `json:"kind,omitempty"`
 	Image        string            `json:"image"`
 	Entrypoint   []string          `json:"entrypoint,omitempty"`
 	Command      []string          `json:"command,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
 	Healthcheck  *healthcheckJSON  `json:"healthcheck,omitempty"`
-	Port         int               `json:"port,omitempty"`
+	Ports        []servicePortJSON `json:"ports,omitempty"`
 	VolumeMounts []volumeMountJSON `json:"volumeMounts,omitempty"`
+}
+
+type servicePortJSON struct {
+	Name string `json:"name,omitempty"`
+	Port int    `json:"port,omitempty"`
 }
 
 type healthcheckJSON struct {
@@ -47,22 +60,40 @@ type volumeMountJSON struct {
 type taskJSON struct {
 	Name         string            `json:"name"`
 	Image        string            `json:"image"`
+	Entrypoint   []string          `json:"entrypoint,omitempty"`
 	Command      []string          `json:"command,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
 	VolumeMounts []volumeMountJSON `json:"volumeMounts,omitempty"`
 }
 
 type ingressJSON struct {
-	Hosts        []string       `json:"hosts,omitempty"`
-	Mode         string         `json:"mode,omitempty"`
-	TLS          ingressTLSJSON `json:"tls,omitempty"`
-	RedirectHTTP bool           `json:"redirectHttp,omitempty"`
+	Hosts        []string           `json:"hosts,omitempty"`
+	Mode         string             `json:"mode,omitempty"`
+	TLS          ingressTLSJSON     `json:"tls,omitempty"`
+	RedirectHTTP bool               `json:"redirectHttp,omitempty"`
+	Routes       []ingressRouteJSON `json:"routes,omitempty"`
 }
 
 type ingressTLSJSON struct {
 	Mode           string `json:"mode,omitempty"`
 	Email          string `json:"email,omitempty"`
 	CADirectoryURL string `json:"caDirectoryUrl,omitempty"`
+}
+
+type ingressRouteJSON struct {
+	Match  ingressMatchJSON  `json:"match"`
+	Target ingressTargetJSON `json:"target"`
+}
+
+type ingressMatchJSON struct {
+	Hostname   string `json:"hostname"`
+	PathPrefix string `json:"pathPrefix,omitempty"`
+}
+
+type ingressTargetJSON struct {
+	Environment string `json:"environment"`
+	Service     string `json:"service"`
+	Port        string `json:"port,omitempty"`
 }
 
 type NodePeer struct {
@@ -85,8 +116,8 @@ func BuildDesiredState(cfg *config.ProjectConfig, imageTag, revision string, sec
 }
 
 // BuildDesiredStateForLabels produces desired-state JSON for one solo node.
-// A nil labels slice preserves the legacy solo behavior: run all configured
-// services. A non-nil labels slice schedules only matching services.
+// A nil labels slice runs all configured services. A non-nil labels slice
+// schedules only matching services.
 func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseCommand bool) ([]byte, error) {
 	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseCommand)
 }
@@ -95,30 +126,39 @@ func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision st
 // public ingress only when the node has the web label.
 func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, webNode bool, includeReleaseCommand bool, nodePeers ...[]NodePeer) ([]byte, error) {
 	ds := desiredStateJSON{
-		Revision: revision,
+		SchemaVersion: 2,
+		Revision:      revision,
 	}
 	if len(nodePeers) > 0 {
 		ds.NodePeers = buildNodePeers(nodePeers[0])
 	}
 
+	environment := environmentJSON{
+		Name:     strings.TrimSpace(cfg.DefaultEnvironment),
+		Revision: revision,
+	}
+	if environment.Name == "" {
+		environment.Name = config.DefaultEnvironment
+	}
+
 	if labels == nil || hasLabel(labels, config.NodeLabelWeb) {
-		webContainer, err := buildContainer("web", cfg.Web, imageTag, secrets)
+		webService, err := buildService("web", "web", cfg.Web, imageTag, secrets)
 		if err != nil {
-			return nil, fmt.Errorf("build web container: %w", err)
+			return nil, fmt.Errorf("build web service: %w", err)
 		}
-		ds.Containers = append(ds.Containers, webContainer)
+		environment.Services = append(environment.Services, webService)
 	}
 
 	if webNode && cfg.Ingress != nil && (labels == nil || hasLabel(labels, config.NodeLabelWeb)) {
-		ds.Ingress = buildIngress(cfg.Ingress)
+		ds.Ingress = buildIngress(cfg.Ingress, environment.Name)
 	}
 
 	if cfg.Worker != nil && (labels == nil || hasLabel(labels, config.NodeLabelWorker)) {
-		workerContainer, err := buildContainer("worker", *cfg.Worker, imageTag, secrets)
+		workerService, err := buildService("worker", "worker", *cfg.Worker, imageTag, secrets)
 		if err != nil {
-			return nil, fmt.Errorf("build worker container: %w", err)
+			return nil, fmt.Errorf("build worker service: %w", err)
 		}
-		ds.Containers = append(ds.Containers, workerContainer)
+		environment.Services = append(environment.Services, workerService)
 	}
 
 	if includeReleaseCommand && cfg.ReleaseCommand != "" {
@@ -130,14 +170,15 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 		for _, v := range cfg.Web.Volumes {
 			vols = append(vols, volumeMountJSON{Source: v.Source, Target: v.Target})
 		}
-		ds.ReleaseCommand = &taskJSON{
+		environment.Tasks = append(environment.Tasks, taskJSON{
 			Name:         "release",
 			Image:        imageTag,
 			Command:      shellCommand(cfg.ReleaseCommand),
 			Env:          env,
 			VolumeMounts: vols,
-		}
+		})
 	}
+	ds.Environments = append(ds.Environments, environment)
 
 	data, err := json.MarshalIndent(ds, "", "  ")
 	if err != nil {
@@ -146,13 +187,26 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	return data, nil
 }
 
-func buildIngress(ingress *config.IngressConfig) *ingressJSON {
+func buildIngress(ingress *config.IngressConfig, environmentName string) *ingressJSON {
 	if ingress == nil || len(ingress.Hosts) == 0 {
 		return nil
 	}
 	mode := strings.TrimSpace(ingress.TLS.Mode)
 	if mode == "" {
 		mode = "auto"
+	}
+	routes := make([]ingressRouteJSON, 0, len(ingress.Hosts))
+	for _, host := range ingress.Hosts {
+		routes = append(routes, ingressRouteJSON{
+			Match: ingressMatchJSON{
+				Hostname: host,
+			},
+			Target: ingressTargetJSON{
+				Environment: environmentName,
+				Service:     "web",
+				Port:        "http",
+			},
+		})
 	}
 	return &ingressJSON{
 		Hosts: append([]string(nil), ingress.Hosts...),
@@ -163,6 +217,7 @@ func buildIngress(ingress *config.IngressConfig) *ingressJSON {
 			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
 		},
 		RedirectHTTP: ingress.RedirectHTTP,
+		Routes:       routes,
 	}
 }
 
@@ -207,15 +262,16 @@ func hasLabel(labels []string, want string) bool {
 	return false
 }
 
-func buildContainer(serviceName string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (containerJSON, error) {
+func buildService(serviceName, kind string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (serviceJSON, error) {
 	env, err := mergeEnv(svc.Env, svc.SecretRefs, secrets)
 	if err != nil {
-		return containerJSON{}, err
+		return serviceJSON{}, err
 	}
-	c := containerJSON{
-		ServiceName: serviceName,
-		Image:       imageTag,
-		Env:         env,
+	c := serviceJSON{
+		Name:  serviceName,
+		Kind:  kind,
+		Image: imageTag,
+		Env:   env,
 	}
 
 	if svc.Entrypoint != "" {
@@ -237,7 +293,7 @@ func buildContainer(serviceName string, svc config.ServiceConfig, imageTag strin
 	}
 
 	if svc.Port > 0 {
-		c.Port = svc.Port
+		c.Ports = []servicePortJSON{{Name: "http", Port: svc.Port}}
 	}
 
 	for _, v := range svc.Volumes {

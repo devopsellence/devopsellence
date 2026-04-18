@@ -74,10 +74,10 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 	}
 }
 
-func TestSoloNodeCanRunLegacyUnlabeledNode(t *testing.T) {
+func TestSoloNodeCanRunUnlabeledNode(t *testing.T) {
 	node := config.SoloNode{}
 	if !soloNodeCanRun(node, config.NodeLabelWeb) || !soloNodeCanRun(node, config.NodeLabelWorker) {
-		t.Fatal("legacy unlabeled node should run all labels")
+		t.Fatal("unlabeled node should run all labels")
 	}
 }
 

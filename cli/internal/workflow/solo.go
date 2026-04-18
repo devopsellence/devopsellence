@@ -393,13 +393,16 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			})
 		} else {
 			var status struct {
-				Phase      string `json:"phase"`
-				Revision   string `json:"revision"`
-				Error      string `json:"error,omitempty"`
-				Containers []struct {
-					Name  string `json:"name"`
-					State string `json:"state"`
-				} `json:"containers"`
+				Phase        string `json:"phase"`
+				Revision     string `json:"revision"`
+				Error        string `json:"error,omitempty"`
+				Environments []struct {
+					Name     string `json:"name"`
+					Services []struct {
+						Name  string `json:"name"`
+						State string `json:"state"`
+					} `json:"services"`
+				} `json:"environments"`
 			}
 			if err := json.Unmarshal([]byte(out), &status); err != nil {
 				a.Printer.Printf("[%s] parse error: %s\n", name, err)
@@ -409,8 +412,10 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			if status.Error != "" {
 				line += " error=" + status.Error
 			}
-			for _, c := range status.Containers {
-				line += fmt.Sprintf(" %s=%s", c.Name, c.State)
+			for _, environment := range status.Environments {
+				for _, service := range environment.Services {
+					line += fmt.Sprintf(" %s/%s=%s", environment.Name, service.Name, service.State)
+				}
 			}
 			a.Printer.Println(line)
 		}

@@ -65,23 +65,23 @@ func newFakeRemoteServer() *fakeRemoteServer {
 		desiredStateURI:   "gs://desired-bucket/nodes/node-a.json",
 		assignmentMode:    "assigned",
 		desiredSequence:   2,
-		unassignedPayload: []byte(`{"revision":"unassigned-node-a","containers":[]}`),
+		unassignedPayload: []byte(`{"schemaVersion":2,"revision":"unassigned-node-a","environments":[]}`),
 		desiredGeneration: "7",
 		desiredETag:       "etag-7",
 		desiredPayload: []byte(`{
+  "schemaVersion": 2,
   "revision": "rev-1",
   "ingress": {
     "hosts": ["abc123.devopsellence.io"],
-    "tunnel_token_secret_ref": "gsm://projects/test-project/secrets/API_KEY/versions/7"
+    "tunnelTokenSecretRef": "gsm://projects/test-project/secrets/API_KEY/versions/7"
   },
-  "containers": [
-    {
-      "service_name": "worker",
+  "environments": [
+    {"name": "production", "services": [{
+      "name": "worker",
+      "kind": "worker",
       "image": "us-central1-docker.pkg.dev/devopsellence/sub-1/app:rev-1",
-      "secret_refs": {
-        "API_KEY": "gsm://projects/test-project/secrets/API_KEY/versions/7"
-      }
-    }
+      "secretRefs": {"API_KEY": "gsm://projects/test-project/secrets/API_KEY/versions/7"}
+    }]}
   ]
 }`),
 		secretValue: "super-secret\n",
@@ -330,10 +330,10 @@ func TestFetchReadsDesiredStateFromAssignmentLocatorAndCachesMetadata(t *testing
 	if desired.Revision != "rev-1" {
 		t.Fatalf("unexpected revision: %s", desired.Revision)
 	}
-	if got := desired.Containers[0].Env["API_KEY"]; got != "super-secret" {
+	if got := desired.Environments[0].Services[0].Env["API_KEY"]; got != "super-secret" {
 		t.Fatalf("unexpected resolved secret: %q", got)
 	}
-	if len(desired.Containers[0].SecretRefs) != 0 {
+	if len(desired.Environments[0].Services[0].SecretRefs) != 0 {
 		t.Fatal("expected secret refs to be cleared after resolution")
 	}
 	if desired.Ingress == nil || desired.Ingress.TunnelToken != "super-secret" {
@@ -388,19 +388,19 @@ func TestFetchReadsDesiredStateOverControlPlaneHTTPAndCachesETag(t *testing.T) {
 	serverState.mu.Lock()
 	serverState.desiredStateURI = server.URL + "/api/v1/agent/desired_state"
 	serverState.desiredPayload = []byte(fmt.Sprintf(`{
+  "schemaVersion": 2,
   "revision": "rev-http",
   "ingress": {
     "hosts": ["abc123.devopsellence.io"],
-    "tunnel_token_secret_ref": "%s/api/v1/agent/secrets/environment_bundles/1/tunnel_token"
+    "tunnelTokenSecretRef": "%s/api/v1/agent/secrets/environment_bundles/1/tunnel_token"
   },
-  "containers": [
-    {
-      "service_name": "worker",
+  "environments": [
+    {"name": "production", "services": [{
+      "name": "worker",
+      "kind": "worker",
       "image": "ghcr.io/example/app:rev-http",
-      "secret_refs": {
-        "API_KEY": "%s/api/v1/agent/secrets/environment_secrets/1"
-      }
-    }
+      "secretRefs": {"API_KEY": "%s/api/v1/agent/secrets/environment_secrets/1"}
+    }]}
   ]
 }`, server.URL, server.URL))
 	serverState.mu.Unlock()
@@ -416,7 +416,7 @@ func TestFetchReadsDesiredStateOverControlPlaneHTTPAndCachesETag(t *testing.T) {
 	if fetchResult.Sequence != serverState.desiredSequence {
 		t.Fatalf("unexpected fetch sequence: %d", fetchResult.Sequence)
 	}
-	if got := fetchResult.Desired.Containers[0].Env["API_KEY"]; got != "super-secret" {
+	if got := fetchResult.Desired.Environments[0].Services[0].Env["API_KEY"]; got != "super-secret" {
 		t.Fatalf("unexpected resolved secret: %q", got)
 	}
 	if fetchResult.Desired.Ingress == nil || fetchResult.Desired.Ingress.TunnelToken != "super-secret" {
@@ -467,8 +467,8 @@ func TestFetchReadsInlineDesiredStateWhileUnassigned(t *testing.T) {
 	if desired.Revision != "unassigned-node-a" {
 		t.Fatalf("unexpected revision: %s", desired.Revision)
 	}
-	if len(desired.Containers) != 0 {
-		t.Fatalf("expected empty container list, got %d", len(desired.Containers))
+	if len(desired.Environments) != 0 {
+		t.Fatalf("expected empty environment list, got %d", len(desired.Environments))
 	}
 }
 
@@ -633,7 +633,7 @@ func TestFetchFallsBackToStaleDesiredStateCacheWhenSourceUnavailable(t *testing.
 
 func TestFetchUsesLocalDesiredStateOverrideWhenPresent(t *testing.T) {
 	overridePath := filepath.Join(t.TempDir(), "desired-state-override.json")
-	if err := os.WriteFile(overridePath, []byte(`{"enabled":true,"desired_state":{"revision":"manual-rev","containers":[]}}`), 0o600); err != nil {
+	if err := os.WriteFile(overridePath, []byte(`{"enabled":true,"desired_state":{"schemaVersion":2,"revision":"manual-rev","environments":[]}}`), 0o600); err != nil {
 		t.Fatalf("write override: %v", err)
 	}
 
@@ -682,7 +682,7 @@ func TestFetchReadsDesiredStateThroughPointerObject(t *testing.T) {
 			})
 		case r.URL.Query().Get("alt") == "media" && object == immutableObjectPath:
 			immutableMediaCalls++
-			_, _ = w.Write(signedEnvelopeJSON(serverState.desiredStateKey, 11, 44, serverState.desiredSequence, []byte(`{"revision":"pointer-rev","containers":[]}`)))
+			_, _ = w.Write(signedEnvelopeJSON(serverState.desiredStateKey, 11, 44, serverState.desiredSequence, []byte(`{"schemaVersion":2,"revision":"pointer-rev","environments":[]}`)))
 		case object == pointerObjectPath:
 			pointerMetadataCalls++
 			_ = json.NewEncoder(w).Encode(map[string]string{
@@ -782,13 +782,18 @@ func TestResolveSecretRefsRejectsUnsupportedScheme(t *testing.T) {
 	authority := New(Config{}, nil, logger)
 
 	desired := &desiredstatepb.DesiredState{
-		Revision: "rev-1",
-		Containers: []*desiredstatepb.Container{{
-			ServiceName: "worker",
-			Image:       "busybox",
-			SecretRefs: map[string]string{
-				"API_KEY": "file://secrets/API_KEY",
-			},
+		SchemaVersion: 2,
+		Revision:      "rev-1",
+		Environments: []*desiredstatepb.Environment{{
+			Name: "production",
+			Services: []*desiredstatepb.Service{{
+				Name:  "worker",
+				Kind:  "worker",
+				Image: "busybox",
+				SecretRefs: map[string]string{
+					"API_KEY": "file://secrets/API_KEY",
+				},
+			}},
 		}},
 	}
 
@@ -802,14 +807,19 @@ func TestResolveSecretRefsRejectsEnvConflict(t *testing.T) {
 	authority := New(Config{}, nil, logger)
 
 	desired := &desiredstatepb.DesiredState{
-		Revision: "rev-1",
-		Containers: []*desiredstatepb.Container{{
-			ServiceName: "worker",
-			Image:       "busybox",
-			Env:         map[string]string{"API_KEY": "inline"},
-			SecretRefs: map[string]string{
-				"API_KEY": "gsm://projects/test-project/secrets/API_KEY/versions/7",
-			},
+		SchemaVersion: 2,
+		Revision:      "rev-1",
+		Environments: []*desiredstatepb.Environment{{
+			Name: "production",
+			Services: []*desiredstatepb.Service{{
+				Name:  "worker",
+				Kind:  "worker",
+				Image: "busybox",
+				Env:   map[string]string{"API_KEY": "inline"},
+				SecretRefs: map[string]string{
+					"API_KEY": "gsm://projects/test-project/secrets/API_KEY/versions/7",
+				},
+			}},
 		}},
 	}
 
@@ -855,7 +865,7 @@ func TestFetchAcceptsBundleEnvelopeWithNodeIDZeroWhenBundleTokensMatch(t *testin
 
 	// Override GCS to return a bundle envelope with node_id=0 (from publish_for_bundle!)
 	// but with matching bundle tokens
-	bundlePayload := []byte(`{"revision":"unassigned-node-bundle-nodeb-1","containers":[]}`)
+	bundlePayload := []byte(`{"schemaVersion":2,"revision":"unassigned-node-bundle-nodeb-1","environments":[]}`)
 
 	gcsHandler := http.NewServeMux()
 	gcsHandler.HandleFunc("/storage/v1/b/desired-bucket/o/", func(w http.ResponseWriter, r *http.Request) {

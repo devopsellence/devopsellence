@@ -467,6 +467,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       revision: "rev-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
+      runtime_json: release_runtime_json,
       status: Release::STATUS_PUBLISHED,
       published_at: Time.current
     )
@@ -556,7 +557,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       revision: "rev-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
     node.update!(environment: environment)
@@ -610,7 +611,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       revision: "rev-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
 
     assert_enqueued_jobs 1, only: Deployments::PublishJob do
@@ -644,7 +645,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       revision: "rev-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
 
     assert_enqueued_jobs 1, only: Deployments::PublishJob do
@@ -676,7 +677,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     node, _access, _refresh = issue_test_node!(
       organization: organization,
       name: "node-a",
-      labels: [Node::LABEL_WEB, Node::LABEL_WORKER],
+      labels: ["web", "worker"],
       managed: true,
       managed_provider: "hetzner",
       managed_region: "ash",
@@ -748,8 +749,18 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       workload_identity_provider: organization.workload_identity_provider,
       runtime_kind: Environment::RUNTIME_CUSTOMER_NODES
     )
-    node, = issue_test_node!(organization: organization, name: "node-a", labels: [Node::LABEL_WEB])
+    node, = issue_test_node!(organization: organization, name: "node-a", labels: ["web"])
     node.update!(environment: environment)
+    release = project.releases.create!(
+      git_sha: "a" * 40,
+      revision: "rev-1",
+      image_repository: "shop-app",
+      image_digest: "sha256:#{'b' * 64}",
+      runtime_json: release_runtime_json,
+      status: Release::STATUS_PUBLISHED,
+      published_at: Time.current
+    )
+    environment.update!(current_release: release)
 
     patch "/api/v1/cli/environments/#{environment.id}/ingress",
       params: { ingress_strategy: Environment::INGRESS_STRATEGY_DIRECT_DNS },
@@ -757,7 +768,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       as: :json
 
     assert_response :unprocessable_entity
-    assert_match "assigned web nodes do not support direct_dns ingress: node-a", json_body.fetch("error_description")
+    assert_match "assigned ingress nodes do not support direct_dns ingress: node-a", json_body.fetch("error_description")
   end
 
   test "switching ingress enqueues desired state republish for deployed environments" do
@@ -779,10 +790,10 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       revision: "rev-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{"b" * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     environment.update!(current_release: release)
-    node, = issue_test_node!(organization: organization, name: "node-a", labels: [Node::LABEL_WEB])
+    node, = issue_test_node!(organization: organization, name: "node-a", labels: ["web"])
     node.update!(environment: environment)
     node.capabilities = [Node::CAPABILITY_DIRECT_DNS_INGRESS]
     node.save!
@@ -1001,6 +1012,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       revision: "rel-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
+      runtime_json: release_runtime_json,
       status: Release::STATUS_PUBLISHED,
       published_at: Time.current
     )
@@ -1404,19 +1416,18 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
         git_sha: "a" * 40,
         image_repository: "shop-app",
         image_digest: "sha256:#{'b' * 64}",
-        web: {
-          secret_refs: [
-            {
-              name: "SECRET_KEY_BASE",
-              secret: "gsm://projects/runtime-dev-example/secrets/smoke-app-secret-key-base/versions/latest"
-            }
-          ],
-          port: 80,
-          healthcheck: {
-            path: "/up",
-            port: 80
-          }
-        }
+        services: {
+          web: web_service_runtime(
+            port: 80,
+            secret_refs: [
+              {
+                name: "SECRET_KEY_BASE",
+                secret: "gsm://projects/runtime-dev-example/secrets/smoke-app-secret-key-base/versions/latest"
+              }
+            ]
+          )
+        },
+        ingress_service: "web"
       },
       headers: auth_headers_for(user),
       as: :json
@@ -1428,7 +1439,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
         "name" => "SECRET_KEY_BASE",
         "secret" => "gsm://projects/runtime-dev-example/secrets/smoke-app-secret-key-base/versions/latest"
       }
-    ], JSON.parse(release.web_json).fetch("secret_refs")
+    ], JSON.parse(release.runtime_json).dig("services", "web", "secret_refs")
   end
 
   test "contributor cannot create a release through the cli api" do
@@ -1443,7 +1454,8 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
           git_sha: "a" * 40,
           image_repository: "shop-app",
           image_digest: "sha256:#{'b' * 64}",
-          web: { port: 80, healthcheck: { path: "/up", port: 80 } }
+          services: { web: web_service_runtime(port: 80) },
+          ingress_service: "web"
         },
         headers: auth_headers_for(user),
         as: :json
@@ -1471,7 +1483,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       revision: "rev-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
 
     assert_no_difference("Deployment.count") do
@@ -1496,28 +1508,31 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
         git_sha: "a" * 40,
         image_repository: "shop-app",
         image_digest: "sha256:#{'b' * 64}",
-        web: {
-          env: { "RAILS_ENV" => "production" },
-          port: 80,
-          healthcheck: { path: "/up", port: 80 },
-          volumes: [{ source: "app_storage", target: "/rails/storage" }]
+        services: {
+          web: web_service_runtime(
+            port: 80,
+            env: { "RAILS_ENV" => "production" },
+            volumes: [{ source: "app_storage", target: "/rails/storage" }]
+          ),
+          worker: worker_service_runtime(
+            command: "./bin/jobs",
+            volumes: [{ source: "app_storage", target: "/rails/storage" }]
+          )
         },
-        worker: {
-          command: "./bin/jobs",
-          volumes: [{ source: "app_storage", target: "/rails/storage" }]
-        }
+        ingress_service: "web"
       },
       headers: auth_headers_for(user),
       as: :json
 
     assert_response :created
     release = project.releases.order(:id).last
-    assert_equal "./bin/jobs", JSON.parse(release.worker_json).fetch("command")
-    assert_equal 80, JSON.parse(release.web_json).fetch("port")
-    assert_equal 80, JSON.parse(release.web_json).fetch("healthcheck").fetch("port")
+    runtime = JSON.parse(release.runtime_json)
+    assert_equal "./bin/jobs", runtime.dig("services", "worker", "command")
+    assert_equal 80, runtime.dig("services", "web", "ports").first.fetch("port")
+    assert_equal 80, runtime.dig("services", "web", "healthcheck", "port")
   end
 
-  test "creates a web-only structured release without worker_json" do
+  test "creates a web-only structured release" do
     user = User.create!(email: "owner-#{SecureRandom.hex(4)}@example.com", confirmed_at: Time.current)
     organization = Organization.create!(name: "acme")
     OrganizationMembership.create!(organization: organization, user: user, role: OrganizationMembership::ROLE_OWNER)
@@ -1528,20 +1543,20 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
         git_sha: "a" * 40,
         image_repository: "shop-app",
         image_digest: "sha256:#{'b' * 64}",
-        web: {
-          env: { "RAILS_ENV" => "production" },
-          port: 80,
-          healthcheck: { path: "/up", port: 80 }
-        }
+        services: {
+          web: web_service_runtime(port: 80, env: { "RAILS_ENV" => "production" })
+        },
+        ingress_service: "web"
       },
       headers: auth_headers_for(user),
       as: :json
 
     assert_response :created
     release = project.releases.order(:id).last
-    assert_equal 80, JSON.parse(release.web_json).fetch("port")
-    assert_equal "{}", release.worker_json
-    assert_equal false, release.requires_label?(Node::LABEL_WORKER)
+    runtime = JSON.parse(release.runtime_json)
+    assert_equal 80, runtime.dig("services", "web", "ports").first.fetch("port")
+    assert_not runtime.fetch("services").key?("worker")
+    assert_equal false, release.requires_role?("worker")
   end
 
   test "rejects release create without web runtime config" do
@@ -1555,16 +1570,14 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
         git_sha: "a" * 40,
         image_repository: "shop-app",
         image_digest: "sha256:#{'b' * 64}",
-        init: {
-          command: "./bin/bootstrap"
-        }
+        services: {}
       },
       headers: auth_headers_for(user),
       as: :json
 
     assert_response :unprocessable_entity
     assert_equal "invalid_request", json_body.fetch("error")
-    assert_equal "web is required", json_body.fetch("error_description")
+    assert_equal "services is required", json_body.fetch("error_description")
   end
 
   private

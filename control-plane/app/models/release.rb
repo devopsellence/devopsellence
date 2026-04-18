@@ -7,6 +7,7 @@ class Release < ApplicationRecord
   STATUS_DRAFT = "draft"
   STATUS_PUBLISHED = "published"
   STATUSES = [ STATUS_DRAFT, STATUS_PUBLISHED ].freeze
+  SERVICE_KINDS = [ "web", "worker", "accessory" ].freeze
 
   belongs_to :project
 
@@ -18,10 +19,8 @@ class Release < ApplicationRecord
   validates :status, inclusion: { in: STATUSES }
   validates :healthcheck_interval_seconds, numericality: { greater_than: 0 }, allow_nil: true
   validates :healthcheck_timeout_seconds, numericality: { greater_than: 0 }, allow_nil: true
-  validate :web_json_is_object
-  validate :worker_json_is_object
-  validate :service_configs_are_valid
-  validate :release_command_is_valid
+  validate :runtime_json_is_object
+  validate :runtime_configs_are_valid
 
   before_validation :normalize_revision
 
@@ -39,63 +38,100 @@ class Release < ApplicationRecord
     registry.include?(".") || registry.include?(":") || registry == "localhost"
   end
 
-  def web_service
-    parse_service_config(web_json, fallback: {})
+  def runtime_payload
+    payload = parse_json_object(runtime_json, fallback: default_runtime_payload)
+    stringify_hash(payload)
   end
 
-  def worker_service
-    service = parse_service_config(worker_json, fallback: {})
-    service.present? ? service : nil
+  def services_config
+    stringify_hash(runtime_payload["services"])
   end
 
-  def release_command_text
-    release_command.to_s.strip.presence
+  def tasks_config
+    stringify_hash(runtime_payload["tasks"])
   end
 
-  def has_worker?
-    worker_service.present?
+  def service_names
+    services_config.keys.sort
+  end
+
+  def web_service_names
+    service_names.select { |name| service_kind(services_config[name]) == "web" }
+  end
+
+  def release_task_config
+    task = tasks_config["release"]
+    task.is_a?(Hash) ? task : nil
+  end
+
+  def has_release_task?
+    release_task_config.present?
   end
 
   def stateful?
-    [web_service, worker_service].compact.any? do |service|
-      Array(service["volumes"]).any?
-    end
+    services_config.values.any? { |service| Array(service["volumes"]).any? }
   end
 
-  def has_release_command?
-    release_command_text.present?
+  def required_roles
+    services_config.values.flat_map { |service| service_roles(service) }.uniq.sort
+  end
+
+  def requires_role?(label)
+    required_roles.include?(label.to_s.strip)
+  end
+
+  def service_roles_for(name)
+    service = services_config[name.to_s]
+    return [] if service.blank?
+
+    service_roles(service)
+  end
+
+  def service_scheduled_on?(service_name, node)
+    node.labeled_any?(service_roles_for(service_name))
+  end
+
+  def ingress_service_name
+    configured = runtime_payload["ingress_service"].to_s.strip
+    return configured if configured.present?
+
+    names = web_service_names
+    return "web" if names.include?("web")
+    return names.first if names.one?
+
+    nil
   end
 
   def scheduled_services_for(node:)
     environment = node.environment
-    services = []
-    services << service_payload("web", "web", web_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WEB) && web_service.present?
-    services << service_payload("worker", "worker", worker_service, organization: node.organization, environment: environment) if node.labeled?(Node::LABEL_WORKER) && worker_service.present?
-    services.compact
+    service_names.filter_map do |name|
+      service = services_config[name]
+      next unless node.labeled_any?(service_roles(service))
+
+      service_payload(name, service, organization: node.organization, environment: environment)
+    end
   end
 
-  def release_command_task_for(node:)
-    return nil unless release_command_text.present?
-    return nil unless web_service.present?
+  def release_task_for(node:)
+    task = release_task_config
+    return nil unless task
+
+    service_name = task["service"].to_s.strip
+    service = services_config[service_name]
+    return nil if service.blank?
+    return nil unless node.labeled_any?(service_roles(service))
 
     task_payload(
-      "release_command",
-      web_service.merge("command" => release_command_text),
+      "release",
+      merged_task_service(service, task),
       organization: node.organization,
       environment: node.environment,
-      secret_service_name: "web"
+      secret_service_name: service_name
     )
   end
 
-  def requires_label?(label)
-    case label.to_s
-    when Node::LABEL_WEB
-      web_service.present?
-    when Node::LABEL_WORKER
-      worker_service.present?
-    else
-      false
-    end
+  def release_task_service_name
+    release_task_config&.dig("service").to_s.strip.presence
   end
 
   private
@@ -104,113 +140,173 @@ class Release < ApplicationRecord
     self.revision = git_sha if revision.blank? && git_sha.present?
   end
 
-  def web_json_is_object
-    parse_service_config(web_json, fallback: {})
+  def runtime_json_is_object
+    parse_json_object(runtime_json)
   rescue JSON::ParserError
-    errors.add(:web_json, "must be valid JSON")
+    errors.add(:runtime_json, "must be valid JSON")
   rescue TypeError
-    errors.add(:web_json, "must decode to an object")
+    errors.add(:runtime_json, "must decode to an object")
   end
 
-  def worker_json_is_object
-    parse_service_config(worker_json, fallback: {})
-  rescue JSON::ParserError
-    errors.add(:worker_json, "must be valid JSON")
-  rescue TypeError
-    errors.add(:worker_json, "must decode to an object")
-  end
-
-  def service_configs_are_valid
-    validate_service_config("web", web_service, allow_healthcheck: true)
-    validate_service_config("worker", worker_service, allow_healthcheck: false)
-  end
-
-  def release_command_is_valid
-    return if release_command.nil?
-    return if release_command_text.present?
-
-    errors.add(:release_command, "must be a non-empty string")
-  end
-
-  def validate_service_config(name, service, allow_healthcheck:, invalid_service_message: nil)
-    return if service.blank?
-
-    unless service.is_a?(Hash)
-      errors.add(:"#{name}_json", "must decode to an object")
+  def runtime_configs_are_valid
+    services = services_config
+    if services.blank?
+      errors.add(:runtime_json, "must include at least one service")
       return
+    end
+
+    services.each do |name, service|
+      validate_service_config(name, service)
+    end
+
+    if web_service_names.empty?
+      errors.add(:runtime_json, "must include at least one web service")
+    end
+
+    validate_release_task
+    validate_ingress_service
+  end
+
+  def validate_service_config(name, service)
+    unless service.is_a?(Hash)
+      errors.add(:runtime_json, "services.#{name} must decode to an object")
+      return
+    end
+
+    kind = service_kind(service)
+    unless SERVICE_KINDS.include?(kind)
+      errors.add(:runtime_json, "services.#{name}.kind must be one of #{SERVICE_KINDS.join(', ')}")
+    end
+
+    roles = service_roles(service)
+    if roles.empty?
+      errors.add(:runtime_json, "services.#{name}.roles must include at least one role")
     end
 
     if service["entrypoint"].present? && !service["entrypoint"].is_a?(String)
-      errors.add(:"#{name}_json", "entrypoint must be a string")
+      errors.add(:runtime_json, "services.#{name}.entrypoint must be a string")
     end
     if service["command"].present? && !service["command"].is_a?(String)
-      errors.add(:"#{name}_json", "command must be a string")
+      errors.add(:runtime_json, "services.#{name}.command must be a string")
     end
-
     unless service["env"].nil? || service["env"].is_a?(Hash)
-      errors.add(:"#{name}_json", "env must be an object")
+      errors.add(:runtime_json, "services.#{name}.env must be an object")
     end
-
     unless service["secret_refs"].nil? || service["secret_refs"].is_a?(Array)
-      errors.add(:"#{name}_json", "secret_refs must be an array")
+      errors.add(:runtime_json, "services.#{name}.secret_refs must be an array")
     end
-
     unless service["volumes"].nil? || service["volumes"].is_a?(Array)
-      errors.add(:"#{name}_json", "volumes must be an array")
+      errors.add(:runtime_json, "services.#{name}.volumes must be an array")
     end
-
-    if service.key?("healthcheck_path") || service.key?("healthcheck_port")
-      errors.add(:"#{name}_json", "must use healthcheck.path and healthcheck.port")
-      return
+    unless service["ports"].nil? || service["ports"].is_a?(Array)
+      errors.add(:runtime_json, "services.#{name}.ports must be an array")
     end
 
     Array(service["secret_refs"]).each do |entry|
       unless entry.is_a?(Hash) && entry["name"].to_s.strip.present? && entry["secret"].to_s.strip.present?
-        errors.add(:"#{name}_json", "secret_refs entries must include name and secret")
+        errors.add(:runtime_json, "services.#{name}.secret_refs entries must include name and secret")
         break
       end
     end
 
     Array(service["volumes"]).each do |entry|
       unless entry.is_a?(Hash) && entry["source"].to_s.strip.present? && entry["target"].to_s.strip.start_with?("/")
-        errors.add(:"#{name}_json", "volumes entries must include source and absolute target")
+        errors.add(:runtime_json, "services.#{name}.volumes entries must include source and absolute target")
         break
       end
     end
 
-    if allow_healthcheck
-      port = service["port"]
-      if !port.is_a?(Integer) || port <= 0
-        errors.add(:"#{name}_json", "port must be a positive integer")
+    ports = service_ports(service)
+    if kind == "web" && http_port(service).to_i <= 0
+      errors.add(:runtime_json, "services.#{name} must expose an http port")
+    end
+    if ports.map { |port| port["name"] }.uniq.length != ports.length
+      errors.add(:runtime_json, "services.#{name}.ports must have unique names")
+    end
+    ports.each do |port|
+      unless port["name"].to_s.strip.present? && port["port"].is_a?(Integer) && port["port"].positive?
+        errors.add(:runtime_json, "services.#{name}.ports entries must include name and positive port")
+        break
       end
+    end
 
-      healthcheck = service["healthcheck"]
+    healthcheck = service["healthcheck"]
+    if kind == "web"
       unless healthcheck.is_a?(Hash)
-        errors.add(:"#{name}_json", "healthcheck must be an object")
+        errors.add(:runtime_json, "services.#{name}.healthcheck must be an object")
         return
       end
-
-      path = healthcheck["path"]
-      if !path.is_a?(String) || path.strip.empty?
-        errors.add(:"#{name}_json", "healthcheck.path must be present")
+      unless healthcheck["path"].to_s.strip.present?
+        errors.add(:runtime_json, "services.#{name}.healthcheck.path must be present")
       end
-
-      healthcheck_port = healthcheck["port"]
-      if !healthcheck_port.nil? && (!healthcheck_port.is_a?(Integer) || healthcheck_port <= 0)
-        errors.add(:"#{name}_json", "healthcheck.port must be a positive integer")
+      unless healthcheck["port"].is_a?(Integer) && healthcheck["port"].positive?
+        errors.add(:runtime_json, "services.#{name}.healthcheck.port must be a positive integer")
       end
-    elsif service.key?("port") || service.key?("healthcheck")
-      errors.add(:"#{name}_json", invalid_service_message || "#{name} cannot define port or healthcheck")
     end
   end
 
-  def service_payload(name, kind, service, organization:, environment:)
-    return nil if service.blank?
+  def validate_release_task
+    task = release_task_config
+    return if task.nil?
 
+    service_name = task["service"].to_s.strip
+    if service_name.blank?
+      errors.add(:runtime_json, "tasks.release.service is required")
+      return
+    end
+    service = services_config[service_name]
+    if service.blank?
+      errors.add(:runtime_json, "tasks.release.service must reference an existing service")
+      return
+    end
+    validate_release_task_string(task, "entrypoint")
+    validate_release_task_string(task, "command")
+    if !release_task_string_present?(task["entrypoint"]) && !release_task_string_present?(task["command"])
+      errors.add(:runtime_json, "tasks.release must set entrypoint or command")
+    end
+    unless task["env"].nil? || task["env"].is_a?(Hash)
+      errors.add(:runtime_json, "tasks.release.env must be an object")
+    end
+    if service_roles(service).empty?
+      errors.add(:runtime_json, "tasks.release.service must reference a service with roles")
+    end
+  end
+
+  def validate_ingress_service
+    name = ingress_service_name
+    if name.blank? && web_service_names.length > 1
+      errors.add(:runtime_json, "ingress_service is required when multiple web services are defined")
+      return
+    end
+    return if name.blank?
+
+    service = services_config[name]
+    if service.blank?
+      errors.add(:runtime_json, "ingress_service must reference an existing service")
+      return
+    end
+    if service_kind(service) != "web"
+      errors.add(:runtime_json, "ingress_service must reference a web service")
+    end
+  end
+
+  def validate_release_task_string(task, field)
+    value = task[field]
+    return if value.nil? || value.is_a?(String)
+
+    errors.add(:runtime_json, "tasks.release.#{field} must be a string")
+  end
+
+  def release_task_string_present?(value)
+    value.is_a?(String) && value.strip.present?
+  end
+
+  def service_payload(name, service, organization:, environment:)
+    image = service["image"].to_s.strip.presence || image_reference_for(organization)
     payload = {
       name: name,
-      kind: kind,
-      image: image_reference_for(organization),
+      kind: service_kind(service),
+      image: image,
       entrypoint: shell_words(service["entrypoint"]),
       command: shell_words(service["command"]),
       env: service["env"].presence,
@@ -218,31 +314,43 @@ class Release < ApplicationRecord
       volumeMounts: service_volume_mounts(service, environment: environment).presence
     }.compact
 
-    if kind == "web"
-      payload[:ports] = [
-        {
-          name: "http",
-          port: service_port_for(service)
-        }
-      ]
-      payload[:healthcheck] = service_healthcheck(service)
-    end
+    ports = desired_state_ports(service)
+    payload[:ports] = ports if ports.present?
+    healthcheck = service_healthcheck(service)
+    payload[:healthcheck] = healthcheck if healthcheck.present?
 
     payload
   end
 
   def task_payload(name, service, organization:, environment:, secret_service_name: nil)
-    return nil if service.blank?
+    image = service["image"].to_s.strip.presence || image_reference_for(organization)
 
     {
       name: name,
-      image: image_reference_for(organization),
+      image: image,
       entrypoint: shell_words(service["entrypoint"]),
       command: shell_words(service["command"]),
       env: service["env"].presence,
       secretRefs: resolved_task_secret_refs(service, secret_service_name:, environment:).presence,
       volumeMounts: service_volume_mounts(service, environment: environment).presence
     }.compact
+  end
+
+  def merged_task_service(service, task)
+    stringify_hash(service).merge(
+      "entrypoint" => task["entrypoint"].presence || service["entrypoint"],
+      "command" => task["command"].presence || service["command"],
+      "env" => stringify_hash(service["env"]).merge(stringify_hash(task["env"]))
+    )
+  end
+
+  def desired_state_ports(service)
+    service_ports(service).map do |port|
+      {
+        name: port["name"],
+        port: port["port"]
+      }
+    end
   end
 
   def service_healthcheck(service)
@@ -254,7 +362,7 @@ class Release < ApplicationRecord
 
     {
       path: path,
-      port: service_healthcheck_port_for(service),
+      port: healthcheck["port"],
       intervalSeconds: healthcheck_interval_seconds,
       timeoutSeconds: healthcheck_timeout_seconds,
       retries: 3,
@@ -262,15 +370,24 @@ class Release < ApplicationRecord
     }
   end
 
-  def service_port_for(service)
-    service["port"] || 3000
+  def http_port(service)
+    service_ports(service).find { |port| port["name"] == "http" }&.dig("port")
   end
 
-  def service_healthcheck_port_for(service)
-    healthcheck = service["healthcheck"]
-    return service_port_for(service) unless healthcheck.is_a?(Hash)
+  def service_ports(service)
+    Array(service["ports"]).filter_map do |entry|
+      next unless entry.is_a?(Hash)
 
-    healthcheck["port"] || service_port_for(service)
+      stringify_hash(entry).slice("name", "port")
+    end
+  end
+
+  def service_kind(service)
+    service["kind"].to_s.strip
+  end
+
+  def service_roles(service)
+    Array(service["roles"]).filter_map { |role| role.to_s.strip.presence }
   end
 
   def shell_words(value)
@@ -278,25 +395,6 @@ class Release < ApplicationRecord
     return nil if text.empty?
 
     Shellwords.split(text)
-  end
-
-  def parse_service_config(value, fallback:)
-    parsed = parse_json_object(value, fallback)
-    stringify_service_config(parsed)
-  end
-
-  def stringify_service_config(value)
-    value.each_with_object({}) do |(key, entry), result|
-      result[key.to_s] =
-        case entry
-        when Hash
-          stringify_service_config(entry)
-        when Array
-          entry.map { |item| item.is_a?(Hash) ? stringify_service_config(item) : item }
-        else
-          entry
-        end
-    end
   end
 
   def service_secret_refs_for_agent(service)
@@ -337,7 +435,7 @@ class Release < ApplicationRecord
     "devopsellence-env-#{environment.id}-#{source}"
   end
 
-  def parse_json_object(value, fallback = nil)
+  def parse_json_object(value, fallback: nil)
     parsed = JSON.parse(value.presence || "{}")
     raise TypeError unless parsed.is_a?(Hash)
 
@@ -346,5 +444,25 @@ class Release < ApplicationRecord
     return fallback unless fallback.nil?
 
     raise
+  end
+
+  def stringify_hash(value)
+    return {} unless value.is_a?(Hash)
+
+    value.each_with_object({}) do |(key, entry), result|
+      result[key.to_s] =
+        case entry
+        when Hash
+          stringify_hash(entry)
+        when Array
+          entry.map { |item| item.is_a?(Hash) ? stringify_hash(item) : item }
+        else
+          entry
+        end
+    end
+  end
+
+  def default_runtime_payload
+    { "services" => {}, "tasks" => {} }
   end
 end

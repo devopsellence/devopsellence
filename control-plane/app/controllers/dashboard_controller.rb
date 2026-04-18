@@ -24,6 +24,7 @@ class DashboardController < ApplicationController
     @releases = @selected_project&.releases&.order(created_at: :desc) || []
     @deployments = @selected_environment&.deployments&.includes(:release)&.order(created_at: :desc) || []
     @environment_secrets = @selected_environment&.environment_secrets&.order(:service_name, :name) || []
+    @secret_service_names = secret_service_names(@selected_environment)
     @default_env_json = default_env_json
     @default_secret_refs_json = default_secret_refs_json
   end
@@ -145,7 +146,7 @@ class DashboardController < ApplicationController
     environment = owned_environment(params[:environment_id])
     return redirect_to(dashboard_path, alert: "Owner role required.") unless environment
 
-    service_name = params[:service_name].to_s.strip
+    service_name = EnvironmentSecret.normalize_service_name_value(params[:service_name])
     name = params[:name].to_s.strip
     value = params[:value].to_s
     return redirect_to(secret_dashboard_path(environment), alert: "Secret value is required.") if value.blank?
@@ -256,16 +257,9 @@ class DashboardController < ApplicationController
         image_repository: params[:image_repository],
         image_digest: params[:image_digest],
         revision: params[:revision],
-        web: params[:web] || {
-          entrypoint: params[:entrypoint],
-          command: params[:command],
-          env: params[:env_json],
-          secret_refs: params[:secret_refs_json],
-          port: params[:port],
-          healthcheck: params[:healthcheck]
-        },
-        worker: params[:worker],
-        release_command: params[:release_command],
+        services: params[:services],
+        tasks: params[:tasks],
+        ingress_service: params[:ingress_service],
         healthcheck_interval_seconds: params[:healthcheck_interval_seconds],
         healthcheck_timeout_seconds: params[:healthcheck_timeout_seconds]
       }
@@ -289,6 +283,12 @@ class DashboardController < ApplicationController
         }
       ]
     )
+  end
+
+  def secret_service_names(environment)
+    names = Array(environment&.current_release&.service_names) +
+      Array(environment&.environment_secrets&.pluck(:service_name))
+    names.map(&:to_s).map(&:strip).reject(&:blank?).uniq.sort
   end
 
   def secret_dashboard_path(environment)

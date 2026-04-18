@@ -248,7 +248,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		wg.Add(1)
 		go func(name string, node config.SoloNode) {
 			defer wg.Done()
-			desiredStateJSON, err := solo.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Labels, hasSoloLabel(node.Labels, config.NodeLabelWeb), name == releaseNode, soloNodePeers(cfg, name))
+			desiredStateJSON, err := solo.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Labels, soloNodeCanRunIngress(node, cfg), name == releaseNode, soloNodePeers(cfg, name))
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
@@ -303,39 +303,54 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 }
 
 func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.SoloNode) (string, error) {
-	webNode := ""
-	workerNode := ""
-	for _, name := range sortedSoloNodeNames(nodes) {
-		node := nodes[name]
-		if webNode == "" && soloNodeCanRun(node, config.NodeLabelWeb) {
-			webNode = name
+	for _, serviceName := range cfg.ServiceNames() {
+		service := cfg.Services[serviceName]
+		scheduled := false
+		for _, nodeName := range sortedSoloNodeNames(nodes) {
+			if soloNodeCanRunRoles(nodes[nodeName], service.Roles) {
+				scheduled = true
+				break
+			}
 		}
-		if workerNode == "" && soloNodeCanRun(node, config.NodeLabelWorker) {
-			workerNode = name
+		if !scheduled {
+			return "", fmt.Errorf("solo deploy requires at least one selected node labeled for service %q (%s)", serviceName, strings.Join(service.Roles, ", "))
 		}
 	}
-	if webNode == "" {
-		return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q", config.NodeLabelWeb)
-	}
-	if cfg.Worker != nil && workerNode == "" {
-		return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q because worker is configured", config.NodeLabelWorker)
-	}
-	if cfg.ReleaseCommand == "" {
+	release := cfg.ReleaseTask()
+	if release == nil {
 		return "", nil
 	}
-	return webNode, nil
+	for _, nodeName := range sortedSoloNodeNames(nodes) {
+		if soloNodeCanRunRoles(nodes[nodeName], cfg.Services[release.Service].Roles) {
+			return nodeName, nil
+		}
+	}
+	return "", fmt.Errorf("solo deploy requires at least one selected node labeled for release task service %q", release.Service)
 }
 
-func soloNodeCanRun(node config.SoloNode, label string) bool {
+func soloNodeCanRunRoles(node config.SoloNode, roles []string) bool {
 	if node.Labels == nil {
 		return true
 	}
-	for _, nodeLabel := range node.Labels {
-		if strings.TrimSpace(nodeLabel) == label {
-			return true
+	for _, role := range roles {
+		for _, nodeLabel := range node.Labels {
+			if strings.TrimSpace(nodeLabel) == strings.TrimSpace(role) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func soloNodeCanRunIngress(node config.SoloNode, cfg *config.ProjectConfig) bool {
+	if cfg == nil || cfg.Ingress == nil {
+		return false
+	}
+	service, ok := cfg.Services[cfg.Ingress.Service]
+	if !ok {
+		return false
+	}
+	return soloNodeCanRunRoles(node, service.Roles)
 }
 
 func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
@@ -1137,9 +1152,17 @@ func (a *App) loadProjectConfigForSoloUpdate() (*config.ProjectConfig, string, e
 func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig {
 	cfg := config.DefaultProjectConfigForType("solo", discovered.ProjectName, config.DefaultEnvironment, discovered.AppType)
 	if discovered.InferredWebPort > 0 {
-		cfg.Web.Port = discovered.InferredWebPort
-		if cfg.Web.Healthcheck != nil {
-			cfg.Web.Healthcheck.Port = discovered.InferredWebPort
+		if serviceName, ok := cfg.PrimaryWebServiceName(); ok {
+			service := cfg.Services[serviceName]
+			for i := range service.Ports {
+				if service.Ports[i].Name == "http" {
+					service.Ports[i].Port = discovered.InferredWebPort
+				}
+			}
+			if service.Healthcheck != nil {
+				service.Healthcheck.Port = discovered.InferredWebPort
+			}
+			cfg.Services[serviceName] = service
 		}
 	}
 	return &cfg
@@ -1193,15 +1216,6 @@ func (a *App) resolveNodes(dc *config.SoloConfig, names []string) (map[string]co
 
 func soloNodeFromConfig(node config.SoloNode) config.SoloNode {
 	return config.SoloNode(node)
-}
-
-func hasSoloLabel(labels []string, want string) bool {
-	for _, label := range labels {
-		if strings.TrimSpace(label) == want {
-			return true
-		}
-	}
-	return false
 }
 
 type ingressDNSReportResult struct {
@@ -1305,7 +1319,7 @@ func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.SoloNode) 
 			}
 		}
 		node := cfg.Solo.Nodes[name]
-		if !hasSoloLabel(node.Labels, config.NodeLabelWeb) {
+		if !soloNodeCanRunIngress(node, cfg) {
 			continue
 		}
 		host := strings.TrimSpace(node.Host)
@@ -1389,11 +1403,6 @@ func parseSoloLabels(value string) ([]string, error) {
 		if label == "" || seen[label] {
 			continue
 		}
-		switch label {
-		case config.NodeLabelWeb, config.NodeLabelWorker:
-		default:
-			return nil, fmt.Errorf("unsupported solo node label %q: use web or worker", label)
-		}
 		seen[label] = true
 		labels = append(labels, label)
 	}
@@ -1430,11 +1439,15 @@ func applySoloRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, se
 	}
 
 	services := []string{}
-	if addServiceSecretRef(&cfg.Web, railsMasterKeySecretName) {
-		services = append(services, "web")
-	}
-	if cfg.Worker != nil && addServiceSecretRef(cfg.Worker, railsMasterKeySecretName) {
-		services = append(services, "worker")
+	for _, serviceName := range cfg.ServiceNames() {
+		service := cfg.Services[serviceName]
+		if service.Kind == config.ServiceKindAccessory {
+			continue
+		}
+		if addServiceSecretRef(&service, railsMasterKeySecretName) {
+			cfg.Services[serviceName] = service
+			services = append(services, serviceName)
+		}
 	}
 	if len(services) == 0 {
 		return "", nil

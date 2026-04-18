@@ -21,7 +21,7 @@ module Api
           return render_error("forbidden", "owner role required", status: :forbidden) unless environment
 
           environment_secret = environment.environment_secrets.find_or_initialize_by(
-            service_name: params[:service_name].to_s.strip,
+            service_name: normalized_service_name,
             name: params[:name].to_s.strip
           )
           value = params[:value].to_s
@@ -43,7 +43,7 @@ module Api
           return render_error("forbidden", "owner role required", status: :forbidden) unless environment
 
           environment_secret = environment.environment_secrets.find_by(
-            service_name: params[:service_name].to_s.strip,
+            service_name: normalized_service_name,
             name: params[:name].to_s.strip
           )
           return render_error("not_found", "secret not found", status: :not_found) unless environment_secret
@@ -68,6 +68,10 @@ module Api
               }
             )
             .find_by(id: params[:environment_id])
+        end
+
+        def normalized_service_name
+          EnvironmentSecret.normalize_service_name_value(params[:service_name])
         end
 
         def serialize(environment_secret)

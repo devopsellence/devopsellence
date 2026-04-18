@@ -23,7 +23,7 @@ module Deployments
         revision: "rel-1",
         image_repository: "api",
         image_digest: "sha256:#{'b' * 64}",
-        web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+        runtime_json: release_runtime_json
       )
       deployment = environment.deployments.create!(
         release: release,
@@ -59,7 +59,7 @@ module Deployments
         revision: "rel-2",
         image_repository: "api",
         image_digest: "sha256:#{'c' * 64}",
-        web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+        runtime_json: release_runtime_json
       )
       environment.deployments.create!(
         release: release,

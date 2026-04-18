@@ -21,7 +21,9 @@ module EnvironmentIngresses
     attr_reader :environment, :stale_node_after, :clock
 
     def eligible_node?(node)
-      return false unless node.labeled?(Node::LABEL_WEB)
+      service_name = environment.current_release&.ingress_service_name
+      return false if service_name.blank?
+      return false unless environment.current_release.service_scheduled_on?(service_name, node)
       return false if node.public_ip.to_s.strip.blank?
       return false if node.provisioning_status != Node::PROVISIONING_READY
       return false unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)

@@ -32,7 +32,7 @@ func TestWriteCreatesAgentsFile(t *testing.T) {
 	if !strings.Contains(text, "devopsellence doctor") {
 		t.Fatalf("AGENTS.md = %q, want doctor guidance", text)
 	}
-	if !strings.Contains(text, "release_command") {
+	if !strings.Contains(text, "tasks.release") {
 		t.Fatalf("AGENTS.md = %q, want lifecycle hook guidance", text)
 	}
 	if !strings.Contains(text, "Organization: acme") {
@@ -79,7 +79,7 @@ func TestWriteReplacesManagedBlockAndPreservesCustomContent(t *testing.T) {
 	if !strings.Contains(text, "Environment: staging") {
 		t.Fatalf("AGENTS.md = %q, want refreshed managed block", text)
 	}
-	if !strings.Contains(text, "release_command") {
-		t.Fatalf("AGENTS.md = %q, want release_command lifecycle guidance", text)
+	if !strings.Contains(text, "tasks.release") {
+		t.Fatalf("AGENTS.md = %q, want tasks.release lifecycle guidance", text)
 	}
 }

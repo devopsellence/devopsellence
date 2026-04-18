@@ -7,7 +7,7 @@ require "test_helper"
 class DeploymentsPublisherTest < ActiveSupport::TestCase
   include ActiveJob::TestHelper
 
-  test "publishes release command desired state to the executor node before rollout" do
+  test "publishes release task desired state to the executor node before rollout" do
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     ensure_test_organization_runtime!(organization)
     project = organization.projects.create!(name: "Project A")
@@ -24,14 +24,15 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
-      release_command: "bundle exec rails db:migrate",
+      runtime_json: release_runtime_json(tasks: {
+        "release" => { "service" => "web", "command" => "bundle exec rails db:migrate" }
+      }),
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
     node.update!(
       environment: environment,
-      capabilities: [Node::CAPABILITY_RELEASE_COMMAND]
+      capabilities: [Node::CAPABILITY_RELEASE_TASK]
     )
     store = FakeObjectStore.new
 
@@ -45,17 +46,17 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
     deployment = result.deployment.reload
     assert_equal Deployment::STATUS_ROLLING_OUT, deployment.status
-    assert_equal Deployment::RELEASE_COMMAND_STATUS_PENDING, deployment.release_command_status
-    assert_equal node.id, deployment.release_command_node_id
+    assert_equal Deployment::RELEASE_TASK_STATUS_PENDING, deployment.release_task_status
+    assert_equal node.id, deployment.release_task_node_id
     assert_nil environment.reload.current_release_id
     assert_equal Release::STATUS_DRAFT, release.reload.status
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
     task = desired_state_tasks(desired_state).first
-    assert_equal "release_command", task.fetch("name")
+    assert_equal "release", task.fetch("name")
     assert_equal release.image_reference_for(organization), task.fetch("image")
     assert_equal 1, deployment_statuses_for(environment).size
-    assert_equal "waiting to run release command", deployment_statuses_for(environment).first.message
+    assert_equal "waiting to run release task", deployment_statuses_for(environment).first.message
   end
 
   test "publishes release and writes node desired state" do
@@ -76,12 +77,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: {
-        env: { "RAILS_ENV" => "production" },
-        secret_refs: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ],
-        port: 3000,
-        healthcheck: { path: "/up", port: 3000 }
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(
+          env: { "RAILS_ENV" => "production" },
+          secret_refs: [ { "name" => "DATABASE_URL", "secret" => "projects/acme/secrets/db/versions/latest" } ]
+        )
+      }),
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -150,7 +151,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
+      runtime_json: release_runtime_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -200,7 +201,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
+      runtime_json: release_runtime_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -235,10 +236,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:#{'a' * 64}",
       image_repository: "docker.io/mccutchen/go-httpbin",
-      web_json: {
-        port: 8080,
-        healthcheck: { path: "/status/200", port: 8080 }
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(port: 8080, healthcheck_path: "/status/200")
+      }),
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -274,12 +274,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: {
-        env: { "RAILS_ENV" => "production" },
-        secret_refs: [],
-        port: 3000,
-        healthcheck: { path: "/up", port: 3000 }
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(env: { "RAILS_ENV" => "production" }, secret_refs: [])
+      }),
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -315,17 +312,13 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: {
-        env: { "RAILS_ENV" => "production" },
-        port: 80,
-        healthcheck: { path: "/up", port: 80 }
-      }.to_json,
-      worker_json: {
-        command: "./bin/jobs"
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(port: 80, env: { "RAILS_ENV" => "production" }),
+        "worker" => worker_service_runtime(command: "./bin/jobs")
+      }),
       revision: "rel-1"
     )
-    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: [Node::LABEL_WEB, Node::LABEL_WORKER])
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: ["web", "worker"])
     node.update!(environment: environment)
     store = FakeObjectStore.new
     hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
@@ -373,18 +366,13 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: {
-        port: 3000,
-        healthcheck: { path: "/up", port: 3000 },
-        volumes: [ { source: "app_storage", target: "/rails/storage" } ]
-      }.to_json,
-      worker_json: {
-        command: "./bin/jobs",
-        volumes: [ { source: "app_storage", target: "/rails/storage" } ]
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(volumes: [ { "source" => "app_storage", "target" => "/rails/storage" } ]),
+        "worker" => worker_service_runtime(command: "./bin/jobs", volumes: [ { "source" => "app_storage", "target" => "/rails/storage" } ])
+      }),
       revision: "rel-1"
     )
-    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: [Node::LABEL_WEB, Node::LABEL_WORKER])
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: ["web", "worker"])
     node.update!(environment: environment)
     store = FakeObjectStore.new
     hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
@@ -443,15 +431,16 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: {
-        env: { "RAILS_ENV" => "production" },
-        port: 80,
-        healthcheck: { path: "/up", port: 80 },
-        secret_refs: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ]
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(
+          port: 80,
+          env: { "RAILS_ENV" => "production" },
+          secret_refs: [ { "name" => "DATABASE_URL", "secret" => "projects/acme/secrets/db/versions/latest" } ]
+        )
+      }),
       revision: "rel-1"
     )
-    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: [Node::LABEL_WEB])
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: ["web"])
     node.update!(environment: environment)
     store = FakeObjectStore.new
 
@@ -492,7 +481,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
+      runtime_json: release_runtime_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -540,7 +529,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
+      runtime_json: release_runtime_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -590,7 +579,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
+      runtime_json: release_runtime_json,
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -643,11 +632,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: {
-        port: 80,
-        healthcheck: { path: "/up", port: 80 },
-        volumes: [ { source: "app_storage", target: "/rails/storage" } ]
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(port: 80, volumes: [ { "source" => "app_storage", "target" => "/rails/storage" } ])
+      }),
       revision: "rel-1"
     )
     node_a, _access_a, _refresh_a = issue_test_node!(organization: organization, name: "node-a")
@@ -700,20 +687,19 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: {
-        port: 80,
-        healthcheck: { path: "/up", port: 80 }
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(port: 80)
+      }),
       revision: "rel-1"
     )
-    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: [Node::LABEL_WEB])
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: ["web"])
     node.update!(environment: environment)
 
     error = assert_raises(Deployments::Publisher::SchedulingError) do
       Deployments::Publisher.new(environment: environment, release: release, store: FakeObjectStore.new).call
     end
 
-    assert_equal "assigned web nodes do not support direct_dns ingress: node-a", error.message
+    assert_equal "assigned ingress nodes do not support direct_dns ingress: node-a", error.message
   end
 
   test "direct_dns desired state includes other node peers" do
@@ -741,15 +727,14 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      web_json: {
-        port: 80,
-        healthcheck: { path: "/up", port: 80 }
-      }.to_json,
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(port: 80)
+      }),
       revision: "rel-1"
     )
-    node_a, = issue_test_node!(organization: organization, name: "node-a", labels: [Node::LABEL_WEB], public_ip: "198.51.100.10")
-    node_b, = issue_test_node!(organization: organization, name: "node-b", labels: [Node::LABEL_WEB], public_ip: "198.51.100.11")
-    worker, = issue_test_node!(organization: organization, name: "worker-a", labels: [Node::LABEL_WORKER], public_ip: "198.51.100.12")
+    node_a, = issue_test_node!(organization: organization, name: "node-a", labels: ["web"], public_ip: "198.51.100.10")
+    node_b, = issue_test_node!(organization: organization, name: "node-b", labels: ["web"], public_ip: "198.51.100.11")
+    worker, = issue_test_node!(organization: organization, name: "worker-a", labels: ["worker"], public_ip: "198.51.100.12")
     [ node_a, node_b, worker ].each do |node|
       node.capabilities = [ Node::CAPABILITY_DIRECT_DNS_INGRESS ]
       node.update!(environment: environment)
@@ -769,10 +754,10 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
     assert_equal [ "node-b", "worker-a" ], state_a.fetch("nodePeers").map { |peer| peer.fetch("name") }
     node_b_peer = state_a.fetch("nodePeers").find { |peer| peer.fetch("name") == "node-b" }
-    assert_equal [ Node::LABEL_WEB ], node_b_peer.fetch("labels")
+    assert_equal [ "web" ], node_b_peer.fetch("labels")
     assert_equal "198.51.100.11", node_b_peer.fetch("publicAddress")
 
-    assert_equal [ "198.51.100.10" ], state_b.fetch("nodePeers").select { |peer| peer.fetch("labels").include?(Node::LABEL_WEB) }.map { |peer| peer.fetch("publicAddress") }
+    assert_equal [ "198.51.100.10" ], state_b.fetch("nodePeers").select { |peer| peer.fetch("labels").include?("web") }.map { |peer| peer.fetch("publicAddress") }
   end
 
   test "managed deploy claims a node bundle for a new environment" do
@@ -792,7 +777,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha:          "abcd1234",
       image_digest:     "sha256:#{"a" * 64}",
       image_repository: "api",
-      web_json:         { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
+      runtime_json:     release_runtime_json,
       revision:         "rel-1"
     )
     bundle_node, = issue_test_node!(
@@ -869,7 +854,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha:          "abcd1234",
       image_digest:     "sha256:#{"a" * 64}",
       image_repository: "api",
-      web_json:         { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
+      runtime_json:     release_runtime_json,
       revision:         "rel-1"
     )
     bundle_node, = issue_test_node!(
@@ -922,7 +907,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
     assert_equal environment.id, bundle_node.reload.environment_id
     assert_equal organization.id, bundle_node.reload.organization_id
-    assert_equal [ Node::LABEL_WEB ], bundle_node.labels
+    assert_equal [ "web" ], bundle_node.labels
     assert_equal warm_bundle.id, bundle_node.node_bundle_id
     assert_equal hostname, environment.reload.environment_ingress.hostname
     assert_predicate bundle_node.reload.desired_state_bucket, :present?
@@ -959,7 +944,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       revision:         "r-bundle",
       image_repository: "bundle-app",
       image_digest:     "sha256:#{"b" * 64}",
-      web_json:         { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json:     release_runtime_json
     )
     node, _, _ = issue_test_node!(organization: organization, name: "pre-node")
     node.update!(environment: environment)
@@ -1004,7 +989,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     )
     environment.environment_secrets.create!(
       name: "DATABASE_URL",
-      service_name: Node::LABEL_WEB,
+      service_name: "web",
       gcp_secret_name: "env-fast-db"
     )
     release = project.releases.create!(
@@ -1012,11 +997,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       revision: "r-fast",
       image_repository: "fast-app",
       image_digest: "sha256:#{"b" * 64}",
-      web_json: {
-        port: 3000,
-        healthcheck: { path: "/up", port: 3000 },
-        secret_refs: [ { name: "DATABASE_URL", secret: "projects/acme/secrets/db/versions/latest" } ]
-      }.to_json
+      runtime_json: release_runtime_json(services: {
+        "web" => web_service_runtime(secret_refs: [ { "name" => "DATABASE_URL", "secret" => "projects/acme/secrets/db/versions/latest" } ])
+      })
     )
     node, = issue_test_node!(organization: organization, name: "fast-node")
     node.update!(environment: environment)

@@ -5,16 +5,19 @@ require "digest"
 class EnvironmentSecret < ApplicationRecord
   ACCESS_VERIFY_INTERVAL = 1.day
   VARIABLE_NAME_FORMAT = /\A[A-Za-z_][A-Za-z0-9_]*\z/
+  SERVICE_NAME_FORMAT = /\A[a-z][a-z0-9-]*\z/
 
   belongs_to :environment
 
   encrypts :value
 
-  validates :service_name, presence: true, inclusion: { in: Node::LABELS }
+  validates :service_name, presence: true
+  validates :service_name, format: { with: SERVICE_NAME_FORMAT }
   validates :name, presence: true, format: { with: VARIABLE_NAME_FORMAT }
   validates :gcp_secret_name, presence: true, uniqueness: true
   validates :name, uniqueness: { scope: [ :environment_id, :service_name ] }
 
+  before_validation :normalize_service_name
   before_validation :assign_gcp_secret_name
 
   def secret_ref
@@ -37,10 +40,14 @@ class EnvironmentSecret < ApplicationRecord
     raw = [
       "env",
       env_slug,
-      service_name.to_s.downcase,
+      normalize_service_name_value(service_name),
       name.to_s.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "")
     ].reject(&:blank?).join("-")
     raw[0, 255]
+  end
+
+  def self.normalize_service_name_value(value)
+    value.to_s.strip.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "")
   end
 
   def access_verified_for?(service_account_email, time: Time.current)
@@ -53,6 +60,10 @@ class EnvironmentSecret < ApplicationRecord
   end
 
   private
+
+  def normalize_service_name
+    self.service_name = self.class.normalize_service_name_value(service_name)
+  end
 
   def assign_gcp_secret_name
     return if gcp_secret_name.present? || environment.blank?

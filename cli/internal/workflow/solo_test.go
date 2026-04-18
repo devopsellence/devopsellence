@@ -41,16 +41,33 @@ func TestDockerBuildArgsRejectsMultiplePlatforms(t *testing.T) {
 
 func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 	cfg := &config.ProjectConfig{
-		Web: config.ServiceConfig{Port: 3000},
-		Worker: &config.ServiceConfig{
-			Command: "sidekiq",
+		Services: map[string]config.ServiceConfig{
+			config.DefaultWebServiceName: {
+				Kind:  config.ServiceKindWeb,
+				Roles: []string{config.DefaultWebRole},
+				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
+				Healthcheck: &config.HTTPHealthcheck{
+					Path: "/up",
+					Port: 3000,
+				},
+			},
+			"worker": {
+				Kind:    config.ServiceKindWorker,
+				Roles:   []string{config.DefaultWorkerRole},
+				Command: "sidekiq",
+			},
 		},
-		ReleaseCommand: "rails db:migrate",
+		Tasks: config.TasksConfig{
+			Release: &config.TaskConfig{
+				Service: config.DefaultWebServiceName,
+				Command: "rails db:migrate",
+			},
+		},
 	}
 	nodes := map[string]config.SoloNode{
-		"worker-a": {Labels: []string{config.NodeLabelWorker}},
-		"web-a":    {Labels: []string{config.NodeLabelWeb}},
-		"web-b":    {Labels: []string{config.NodeLabelWeb}},
+		"worker-a": {Labels: []string{config.DefaultWorkerRole}},
+		"web-a":    {Labels: []string{config.DefaultWebRole}},
+		"web-b":    {Labels: []string{config.DefaultWebRole}},
 	}
 	got, err := validateSoloNodeSchedule(cfg, nodes)
 	if err != nil {
@@ -63,11 +80,25 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 
 func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 	cfg := &config.ProjectConfig{
-		Web:    config.ServiceConfig{Port: 3000},
-		Worker: &config.ServiceConfig{Command: "sidekiq"},
+		Services: map[string]config.ServiceConfig{
+			config.DefaultWebServiceName: {
+				Kind:  config.ServiceKindWeb,
+				Roles: []string{config.DefaultWebRole},
+				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
+				Healthcheck: &config.HTTPHealthcheck{
+					Path: "/up",
+					Port: 3000,
+				},
+			},
+			"worker": {
+				Kind:    config.ServiceKindWorker,
+				Roles:   []string{config.DefaultWorkerRole},
+				Command: "sidekiq",
+			},
+		},
 	}
 	_, err := validateSoloNodeSchedule(cfg, map[string]config.SoloNode{
-		"web-a": {Labels: []string{config.NodeLabelWeb}},
+		"web-a": {Labels: []string{config.DefaultWebRole}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "worker") {
 		t.Fatalf("expected missing worker error, got %v", err)
@@ -76,7 +107,7 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 
 func TestSoloNodeCanRunUnlabeledNode(t *testing.T) {
 	node := config.SoloNode{}
-	if !soloNodeCanRun(node, config.NodeLabelWeb) || !soloNodeCanRun(node, config.NodeLabelWorker) {
+	if !soloNodeCanRunRoles(node, []string{config.DefaultWebRole}) || !soloNodeCanRunRoles(node, []string{config.DefaultWorkerRole}) {
 		t.Fatal("unlabeled node should run all labels")
 	}
 }
@@ -86,7 +117,7 @@ func TestParseSoloLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{config.NodeLabelWeb, config.NodeLabelWorker}
+	want := []string{config.DefaultWebRole, config.DefaultWorkerRole}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("labels = %#v, want %#v", got, want)
 	}
@@ -95,18 +126,18 @@ func TestParseSoloLabels(t *testing.T) {
 func TestSoloNodePeersUsesOtherConfiguredNodes(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Solo: &config.SoloConfig{Nodes: map[string]config.SoloNode{
-			"web-a":    {Host: "203.0.113.10", Labels: []string{config.NodeLabelWeb}},
-			"web-b":    {Host: "203.0.113.11", Labels: []string{config.NodeLabelWeb}},
-			"worker-a": {Host: "203.0.113.12", Labels: []string{config.NodeLabelWorker}},
-			"private":  {Host: "203.0.113.13", Labels: []string{config.NodeLabelWeb}},
+			"web-a":    {Host: "203.0.113.10", Labels: []string{config.DefaultWebRole}},
+			"web-b":    {Host: "203.0.113.11", Labels: []string{config.DefaultWebRole}},
+			"worker-a": {Host: "203.0.113.12", Labels: []string{config.DefaultWorkerRole}},
+			"private":  {Host: "203.0.113.13", Labels: []string{config.DefaultWebRole}},
 		}},
 	}
 
 	got := soloNodePeers(cfg, "web-a")
 	want := []solo.NodePeer{
-		{Name: "private", Labels: []string{config.NodeLabelWeb}, PublicAddress: "203.0.113.13"},
-		{Name: "web-b", Labels: []string{config.NodeLabelWeb}, PublicAddress: "203.0.113.11"},
-		{Name: "worker-a", Labels: []string{config.NodeLabelWorker}, PublicAddress: "203.0.113.12"},
+		{Name: "private", Labels: []string{config.DefaultWebRole}, PublicAddress: "203.0.113.13"},
+		{Name: "web-b", Labels: []string{config.DefaultWebRole}, PublicAddress: "203.0.113.11"},
+		{Name: "worker-a", Labels: []string{config.DefaultWorkerRole}, PublicAddress: "203.0.113.12"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("peers = %#v, want %#v", got, want)
@@ -183,9 +214,19 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 
 	cfg := &config.ProjectConfig{
 		App: config.AppConfig{Type: config.AppTypeRails},
-		Web: config.ServiceConfig{Env: map[string]string{}},
-		Worker: &config.ServiceConfig{
-			Env: map[string]string{},
+		Services: map[string]config.ServiceConfig{
+			config.DefaultWebServiceName: {
+				Kind:        config.ServiceKindWeb,
+				Roles:       []string{config.DefaultWebRole},
+				Env:         map[string]string{},
+				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
+				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
+			},
+			"worker": {
+				Kind:  config.ServiceKindWorker,
+				Roles: []string{config.DefaultWorkerRole},
+				Env:   map[string]string{},
+			},
 		},
 	}
 	secrets := map[string]string{}
@@ -199,7 +240,8 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 	if !strings.Contains(notice, "config/master.key") {
 		t.Fatalf("notice = %q, want config/master.key", notice)
 	}
-	for _, refs := range [][]config.SecretRef{cfg.Web.SecretRefs, cfg.Worker.SecretRefs} {
+	for _, serviceName := range []string{config.DefaultWebServiceName, "worker"} {
+		refs := cfg.Services[serviceName].SecretRefs
 		if len(refs) != 1 || refs[0].Name != railsMasterKeySecretName {
 			t.Fatalf("secret refs = %#v, want RAILS_MASTER_KEY", refs)
 		}
@@ -217,7 +259,15 @@ func TestApplySoloRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
 
 	cfg := &config.ProjectConfig{
 		App: config.AppConfig{Type: config.AppTypeRails},
-		Web: config.ServiceConfig{Env: map[string]string{}},
+		Services: map[string]config.ServiceConfig{
+			config.DefaultWebServiceName: {
+				Kind:        config.ServiceKindWeb,
+				Roles:       []string{config.DefaultWebRole},
+				Env:         map[string]string{},
+				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
+				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
+			},
+		},
 	}
 	secrets := map[string]string{railsMasterKeySecretName: "from-env"}
 	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
@@ -256,8 +306,9 @@ func TestSoloDefaultProjectConfigUsesDiscovery(t *testing.T) {
 	if cfg.App.Type != config.AppTypeGeneric {
 		t.Fatalf("app.type = %q", cfg.App.Type)
 	}
-	if cfg.Web.Port != 8080 || cfg.Web.Healthcheck.Port != 8080 {
-		t.Fatalf("web port = %d healthcheck port = %d, want 8080", cfg.Web.Port, cfg.Web.Healthcheck.Port)
+	web := cfg.Services[config.DefaultWebServiceName]
+	if web.HTTPPort(0) != 8080 || web.Healthcheck.Port != 8080 {
+		t.Fatalf("web port = %d healthcheck port = %d, want 8080", web.HTTPPort(0), web.Healthcheck.Port)
 	}
 }
 

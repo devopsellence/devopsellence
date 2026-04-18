@@ -153,7 +153,7 @@ devopsellence node attach NODE_ID --env production
       </div>
     </div>
 
-    <p>Nodes have labels (<code>web</code>, <code>worker</code>) that determine which services they run, and capabilities (<code>direct_dns_ingress.v1</code>, <code>release_command.v1</code>) that determine which features they support. The control plane validates that the assignment is valid &mdash; a direct DNS environment can't be assigned to a node that doesn't support TLS termination &mdash; but the human makes the placement decision.</p>
+    <p>Nodes have labels (<code>web</code>, <code>worker</code>) that determine which services they run, and capabilities (<code>direct_dns_ingress.v1</code>, <code>release_task.v1</code>) that determine which features they support. The control plane validates that the assignment is valid &mdash; a direct DNS environment can't be assigned to a node that doesn't support TLS termination &mdash; but the human makes the placement decision.</p>
 
     <p>This works because the problem is simple. When you have 1-10 servers and 1-5 environments, there's no bin-packing optimization to perform. You know which server should run production. You know which server is for staging. Automated scheduling adds complexity without solving a problem you have.</p>
 

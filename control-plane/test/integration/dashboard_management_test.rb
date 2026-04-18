@@ -30,7 +30,7 @@ class DashboardManagementTest < ActionDispatch::IntegrationTest
       revision: "rel-1",
       image_repository: "api",
       image_digest: "sha256:abc",
-      web_json: { "port" => 3000, "healthcheck" => { "path" => "/up", "port" => 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
 
     assert_no_difference("Organization.count") do
@@ -100,7 +100,7 @@ class DashboardManagementTest < ActionDispatch::IntegrationTest
     post dashboard_node_labels_path(node), params: { labels: "web,worker" }
 
     assert_redirected_to getting_started_path(anchor: "quickstart-heading")
-    assert_equal [Node::LABEL_WEB], node.reload.labels
+    assert_equal ["web"], node.reload.labels
   end
 
   test "signed in user hitting dashboard is redirected to getting started and can still sign out" do

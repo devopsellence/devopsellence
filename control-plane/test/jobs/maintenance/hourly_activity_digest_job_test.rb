@@ -91,7 +91,7 @@ module Maintenance
           revision: "rev-1",
           image_repository: "shop-app",
           image_digest: "sha256:#{"b" * 64}",
-          web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+          runtime_json: release_runtime_json
         )
         environment.create_environment_ingress!(
           hostname: hostname,

@@ -44,7 +44,7 @@ module EnvironmentIngresses
     test "restores tunnel cname when direct dns cutover fails after cname delete" do
       environment, ingress = build_environment_and_ingress
       client = FakeClient.new(fail_replace: true)
-      node, = issue_test_node!(organization: environment.project.organization, name: "node-a", labels: [ Node::LABEL_WEB ])
+      node, = issue_test_node!(organization: environment.project.organization, name: "node-a", labels: [ "web" ])
       node.capabilities = [ Node::CAPABILITY_DIRECT_DNS_INGRESS ]
       node.public_ip = "198.51.100.10"
       node.provisioning_status = Node::PROVISIONING_READY
@@ -86,7 +86,7 @@ module EnvironmentIngresses
     test "uses the latest deployment status for eligibility" do
       environment, ingress = build_environment_and_ingress
       client = FakeClient.new
-      node, = issue_test_node!(organization: environment.project.organization, name: "node-a", labels: [ Node::LABEL_WEB ])
+      node, = issue_test_node!(organization: environment.project.organization, name: "node-a", labels: [ "web" ])
       node.capabilities = [ Node::CAPABILITY_DIRECT_DNS_INGRESS ]
       node.public_ip = "198.51.100.10"
       node.provisioning_status = Node::PROVISIONING_READY
@@ -150,7 +150,7 @@ module EnvironmentIngresses
           revision: "rel-1",
           image_repository: "shop-app",
           image_digest: "sha256:#{"b" * 64}",
-          web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+          runtime_json: release_runtime_json
         )
         environment.update!(current_release: release)
         ingress = environment.create_environment_ingress!(

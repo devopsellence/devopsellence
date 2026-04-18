@@ -43,7 +43,7 @@ module Deployments
     attr_reader :environment, :release, :request_token, :job_class
 
     def initial_status_message
-      return "waiting to run release command" if release.has_release_command?
+      return "waiting to run release task" if release.has_release_task?
       if environment.managed_runtime?
         "waiting for managed capacity"
       else

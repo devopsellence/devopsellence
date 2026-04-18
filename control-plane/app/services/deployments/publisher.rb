@@ -19,7 +19,7 @@ module Deployments
 
       update_progress!("waiting for managed capacity") if environment.managed_runtime?
       ensure_managed_capacity!(deployment:) if environment.managed_runtime?
-      if release.requires_label?(Node::LABEL_WEB) && !ingress_ready?
+      if release.ingress_service_name.present? && !ingress_ready?
         update_progress!("provisioning ingress")
         provision_ingress!
       end
@@ -58,8 +58,8 @@ module Deployments
           end
       end
 
-      if release_command_stage?(deployment)
-        publish_release_command!(deployment:, assigned_nodes:)
+      if release_task_stage?(deployment)
+        publish_release_task!(deployment:, assigned_nodes:)
       else
         publish_runtime_rollout!(deployment:, assigned_nodes:)
       end
@@ -89,30 +89,29 @@ module Deployments
         raise SchedulingError, "stateful releases can only be published to a single assigned node"
       end
 
-      unless nodes.any? { |node| node.labeled?(Node::LABEL_WEB) }
-        raise SchedulingError, "at least one assigned node must be labeled web"
+      release.service_names.each do |service_name|
+        next if nodes.any? { |node| release.service_scheduled_on?(service_name, node) }
+
+        roles = release.service_roles_for(service_name)
+        raise SchedulingError, "at least one assigned node must match roles for service #{service_name}: #{roles.join(', ')}"
       end
 
-      if environment.direct_dns_ingress?
+      if environment.direct_dns_ingress? && release.ingress_service_name.present?
         incompatible_nodes = nodes.select do |node|
-          node.labeled?(Node::LABEL_WEB) &&
+          release.service_scheduled_on?(release.ingress_service_name, node) &&
             !node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
         end
         if incompatible_nodes.any?
           names = incompatible_nodes.map(&:name).sort.join(", ")
-          raise SchedulingError, "assigned web nodes do not support direct_dns ingress: #{names}"
+          raise SchedulingError, "assigned ingress nodes do not support direct_dns ingress: #{names}"
         end
       end
 
-      if release.requires_label?(Node::LABEL_WORKER) && !nodes.any? { |node| node.labeled?(Node::LABEL_WORKER) }
-        raise SchedulingError, "at least one assigned node must be labeled worker"
-      end
+      return unless release.has_release_task?
 
-      return unless release.has_release_command?
-
-      capable_web_nodes = release_command_executor_candidates(nodes)
-      if capable_web_nodes.empty?
-        raise SchedulingError, "assigned web nodes do not support release_command"
+      capable_release_nodes = release_task_executor_candidates(nodes)
+      if capable_release_nodes.empty?
+        raise SchedulingError, "assigned nodes for #{release.release_task_service_name} do not support release_task"
       end
     end
 
@@ -155,12 +154,12 @@ module Deployments
       existing.each_value(&:destroy!)
     end
 
-    def sync_release_command_status!(deployment:, node:)
+    def sync_release_task_status!(deployment:, node:)
       existing = deployment.deployment_node_statuses.index_by(&:node_id)
       record = existing.delete(node.id)
       attributes = {
         phase: DeploymentNodeStatus::PHASE_PENDING,
-        message: "waiting to run release command",
+        message: "waiting to run release task",
         error_message: nil,
         reported_at: nil
       }
@@ -172,25 +171,25 @@ module Deployments
       existing.each_value(&:destroy!)
     end
 
-    def release_command_stage?(deployment)
-      release.has_release_command? && deployment.release_command_status != Deployment::RELEASE_COMMAND_STATUS_SUCCEEDED
+    def release_task_stage?(deployment)
+      release.has_release_task? && deployment.release_task_status != Deployment::RELEASE_TASK_STATUS_SUCCEEDED
     end
 
-    def publish_release_command!(deployment:, assigned_nodes:)
-      executor = deployment.release_command_node || release_command_executor_candidates(assigned_nodes).first
-      raise SchedulingError, "assigned web nodes do not support release_command" unless executor
+    def publish_release_task!(deployment:, assigned_nodes:)
+      executor = deployment.release_task_node || release_task_executor_candidates(assigned_nodes).first
+      raise SchedulingError, "assigned nodes do not support release_task" unless executor
 
       deployment.update!(
         status: Deployment::STATUS_ROLLING_OUT,
-        status_message: "running release command",
-        release_command_status: Deployment::RELEASE_COMMAND_STATUS_PENDING,
-        release_command_node: executor,
+        status_message: "running release task",
+        release_task_status: Deployment::RELEASE_TASK_STATUS_PENDING,
+        release_task_node: executor,
         finished_at: nil,
         error_message: nil
       )
 
       payload = ->(sequence:) do
-        NodeDesiredState::ReleaseCommandBuilder.new(
+        NodeDesiredState::ReleaseTaskBuilder.new(
           node: executor,
           environment: environment,
           release: release,
@@ -203,7 +202,7 @@ module Deployments
       end
 
       Nodes::DesiredStatePublisher.new(node: executor, payload: payload, store: store).call
-      sync_release_command_status!(deployment:, node: executor)
+      sync_release_task_status!(deployment:, node: executor)
     end
 
     def publish_runtime_rollout!(deployment:, assigned_nodes:)
@@ -217,7 +216,7 @@ module Deployments
       deployment.update!(
         status: Deployment::STATUS_ROLLING_OUT,
         status_message: "publishing desired state",
-        release_command_status: nil,
+        release_task_status: nil,
         finished_at: nil,
         error_message: nil
       )
@@ -227,13 +226,16 @@ module Deployments
       end
 
       sync_deployment_node_statuses!(deployment:, assigned_nodes:)
-      EnvironmentIngresses::ReconcileJob.perform_later(environment.id) if release.requires_label?(Node::LABEL_WEB)
+      EnvironmentIngresses::ReconcileJob.perform_later(environment.id) if release.ingress_service_name.present?
       update_progress!("waiting for node reconcile", deployment:)
     end
 
-    def release_command_executor_candidates(nodes)
+    def release_task_executor_candidates(nodes)
+      service_name = release.release_task_service_name
+      return [] if service_name.blank?
+
       nodes.select do |node|
-        node.labeled?(Node::LABEL_WEB) && node.supports_capability?(Node::CAPABILITY_RELEASE_COMMAND)
+        release.service_scheduled_on?(service_name, node) && node.supports_capability?(Node::CAPABILITY_RELEASE_TASK)
       end
     end
 

@@ -90,10 +90,7 @@ module ManagedNodes
     end
 
     def required_labels
-      labels = []
-      labels << Node::LABEL_WEB    if release.requires_label?(Node::LABEL_WEB)
-      labels << Node::LABEL_WORKER if release.requires_label?(Node::LABEL_WORKER)
-      labels.presence || [ Node::LABEL_WEB ]
+      release.required_roles.presence || [ Node::DEFAULT_LABEL ]
     end
 
     def update_progress(message)

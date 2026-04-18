@@ -12,12 +12,15 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 
 	root := t.TempDir()
 	project := DefaultProjectConfig("acme", "ShopApp", "staging")
-	project.Worker = &Service{
+	project.Services["jobs"] = Service{
+		Kind:       ServiceKindWorker,
+		Roles:      []string{DefaultWorkerRole},
 		Command:    "./bin/jobs",
 		Env:        map[string]string{"QUEUE": "default"},
 		SecretRefs: []SecretRef{{Name: "API_KEY", Secret: "gsm://projects/test/secrets/api-key"}},
 		Volumes:    []Volume{{Source: "app_storage", Target: "/rails/storage"}},
 	}
+	project.Tasks.Release = &TaskConfig{Service: "web", Command: "bundle exec rails db:migrate"}
 
 	written, err := Write(root, project)
 	if err != nil {
@@ -36,17 +39,21 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	if loaded.Organization != "acme" || loaded.Project != "ShopApp" || loaded.DefaultEnvironment != "staging" {
 		t.Fatalf("loaded core fields mismatch: %#v", loaded)
 	}
-	if loaded.Worker == nil || loaded.Worker.Command != "./bin/jobs" {
-		t.Fatalf("worker config mismatch: %#v", loaded.Worker)
+	if loaded.Services["jobs"].Command != "./bin/jobs" {
+		t.Fatalf("jobs service mismatch: %#v", loaded.Services["jobs"])
 	}
-	if written.Build.Context != DefaultBuildContext || written.Web.Port != DefaultWebPort || written.Web.Healthcheck == nil || written.Web.Healthcheck.Path != DefaultHealthcheckPath {
-		t.Fatalf("defaults missing from written config: %#v", written)
+	if written.Build.Context != DefaultBuildContext {
+		t.Fatalf("build context = %q, want %q", written.Build.Context, DefaultBuildContext)
+	}
+	web := written.Services[DefaultWebServiceName]
+	if web.HTTPPort(0) != DefaultWebPort || web.Healthcheck == nil || web.Healthcheck.Path != DefaultHealthcheckPath {
+		t.Fatalf("defaults missing from written config: %#v", web)
 	}
 	if strings.Join(loaded.Build.Platforms, ",") != strings.Join(DefaultBuildPlatforms, ",") {
 		t.Fatalf("build platforms = %#v, want %#v", loaded.Build.Platforms, DefaultBuildPlatforms)
 	}
-	if loaded.App.Type != AppTypeRails {
-		t.Fatalf("app.type = %q, want rails", loaded.App.Type)
+	if loaded.Tasks.Release == nil || loaded.Tasks.Release.Command != "bundle exec rails db:migrate" {
+		t.Fatalf("release task = %#v", loaded.Tasks.Release)
 	}
 	if _, err := os.Stat(filepath.Join(root, FilePath)); err != nil {
 		t.Fatalf("root config missing: %v", err)
@@ -74,17 +81,22 @@ func TestLoadAppliesDefaultBuildPlatforms(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 4",
+		"schema_version: 5",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
 		"build:",
 		"  context: .",
 		"  dockerfile: Dockerfile",
-		"web:",
-		"  port: 3000",
-		"  healthcheck:",
-		"    path: /up",
+		"services:",
+		"  web:",
+		"    kind: web",
+		"    roles: [web]",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -108,17 +120,22 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 4",
+		"schema_version: 5",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
 		"build:",
 		"  context: .",
 		"  dockerfile: Dockerfile",
-		"web:",
-		"  port: 3000",
-		"  healthcheck:",
-		"    path: /up",
+		"services:",
+		"  web:",
+		"    kind: web",
+		"    roles: [web]",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
 		"init:",
 		"  command: ./bin/bootstrap",
 	}, "\n") + "\n"
@@ -132,43 +149,18 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsWorkerHealthcheck(t *testing.T) {
+func TestValidateRejectsWorkerWithoutRoles(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Worker = &Service{
+	project.Services["jobs"] = Service{
+		Kind:    ServiceKindWorker,
 		Command: "./bin/jobs",
-		Healthcheck: &HTTPHealthcheck{
-			Path: "/up",
-			Port: 3000,
-		},
 	}
 
 	err := Validate(&project)
-	if err == nil || !strings.Contains(err.Error(), "worker cannot define port or healthcheck settings") {
-		t.Fatalf("expected worker healthcheck validation error, got %v", err)
-	}
-}
-
-func TestWriteAndLoadReleaseCommand(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	project := DefaultProjectConfig("acme", "ShopApp", "staging")
-	project.ReleaseCommand = "bundle exec rails db:migrate"
-
-	if _, err := Write(root, project); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	loaded, err := LoadFromRoot(root)
-	if err != nil {
-		t.Fatalf("LoadFromRoot() error = %v", err)
-	}
-	if loaded == nil {
-		t.Fatal("LoadFromRoot() returned nil config")
-	}
-	if loaded.ReleaseCommand != "bundle exec rails db:migrate" {
-		t.Fatalf("release_command = %q", loaded.ReleaseCommand)
+	if err == nil || !strings.Contains(err.Error(), "services.jobs.roles") {
+		t.Fatalf("expected worker roles validation error, got %v", err)
 	}
 }
 
@@ -178,17 +170,22 @@ func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 4",
+		"schema_version: 5",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
 		"build:",
 		"  context: .",
 		"  dockerfile: Dockerfile",
-		"web:",
-		"  port: 3000",
-		"  healthcheck:",
-		"    path: /up",
+		"services:",
+		"  web:",
+		"    kind: web",
+		"    roles: [web]",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
 		"direct:",
 		"  nodes:",
 		"    prod-1:",
@@ -205,14 +202,14 @@ func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsUnknownNodeLabel(t *testing.T) {
+func TestValidateAllowsArbitraryNodeLabels(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Solo = &SoloConfig{Nodes: map[string]SoloNode{"prod-1": {Host: "203.0.113.10", User: "root", Labels: []string{"db"}}}}
+	project.Solo = &SoloConfig{Nodes: map[string]SoloNode{"prod-1": {Host: "203.0.113.10", User: "root", Labels: []string{"edge"}}}}
 	err := Validate(&project)
-	if err == nil || !strings.Contains(err.Error(), "unsupported label") {
-		t.Fatalf("expected unsupported label validation error, got %v", err)
+	if err != nil {
+		t.Fatalf("expected arbitrary label support, got %v", err)
 	}
 }
 
@@ -233,9 +230,11 @@ func TestWriteGenericConfigUsesRepoRootPath(t *testing.T) {
 
 	root := t.TempDir()
 	project := DefaultProjectConfigForType("acme", "GenericApp", "production", AppTypeGeneric)
-	project.Web.Port = 8080
-	project.Web.Healthcheck.Path = "/"
-	project.Web.Healthcheck.Port = 8080
+	web := project.Services[DefaultWebServiceName]
+	web.Ports = []ServicePort{{Name: "http", Port: 8080}}
+	web.Healthcheck.Path = "/"
+	web.Healthcheck.Port = 8080
+	project.Services[DefaultWebServiceName] = web
 
 	if _, err := Write(root, project); err != nil {
 		t.Fatalf("Write() error = %v", err)

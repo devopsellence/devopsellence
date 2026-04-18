@@ -18,7 +18,7 @@ const (
 	DiagnoseCapability            = "diagnose.v1"
 	DirectDNSIngressCapability    = "direct_dns_ingress.v1"
 	RegistryPullAuthHTTP          = "registry_pull_auth_http.v1"
-	ReleaseCommandCapability      = "release_command.v1"
+	ReleaseTaskCapability         = "release_task.v1"
 	SecretRefHTTPCapability       = "secret_ref_https.v1"
 	DesiredStateHTTPCapability    = "desired_state_https.v1"
 )
@@ -42,7 +42,7 @@ func CapabilityHeaderValue() string {
 		DiagnoseCapability,
 		DirectDNSIngressCapability,
 		RegistryPullAuthHTTP,
-		ReleaseCommandCapability,
+		ReleaseTaskCapability,
 		SecretRefHTTPCapability,
 	}, ",")
 }

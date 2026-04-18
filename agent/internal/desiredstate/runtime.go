@@ -12,6 +12,7 @@ const (
 	DefaultEnvironmentName = "default"
 	ServiceKindWeb         = "web"
 	ServiceKindWorker      = "worker"
+	ServiceKindAccessory   = "accessory"
 	DefaultHTTPPortName    = "http"
 )
 

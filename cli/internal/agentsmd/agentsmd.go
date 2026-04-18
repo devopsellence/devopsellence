@@ -97,7 +97,7 @@ Shared mode:
 - `+"`devopsellence node remove <id>`"+`
 
 Lifecycle hooks in `+"`devopsellence.yml`"+`:
-- `+"`release_command`"+` runs once on a web node before rollout; use it for migrations and other release-wide one-shot work. It reuses the web image, env, secrets, and volumes.
+- `+"`tasks.release`"+` runs once before rollout; use it for migrations and other release-wide one-shot work. It reuses its configured service image, env, secrets, and volumes.
 
 Default workspace:
 - Organization: %s

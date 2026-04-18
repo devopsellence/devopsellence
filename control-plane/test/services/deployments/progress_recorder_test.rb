@@ -6,7 +6,7 @@ module Deployments
   class ProgressRecorderTest < ActiveSupport::TestCase
     include ActiveJob::TestHelper
 
-    test "release command success marks deployment succeeded and enqueues publish" do
+    test "release task success marks deployment succeeded and enqueues publish" do
       organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
       ensure_test_organization_runtime!(organization)
       project = organization.projects.create!(name: "Project A")
@@ -23,8 +23,9 @@ module Deployments
         git_sha: "abcd1234",
         image_digest: "sha256:abc",
         image_repository: "api",
-        web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json,
-        release_command: "bundle exec rails db:migrate",
+        runtime_json: release_runtime_json(tasks: {
+          "release" => { "service" => "web", "command" => "bundle exec rails db:migrate" }
+        }),
         revision: "rel-1"
       )
       node, = issue_test_node!(organization: organization, name: "node-a")
@@ -34,15 +35,15 @@ module Deployments
         sequence: 1,
         request_token: SecureRandom.hex(16),
         status: Deployment::STATUS_ROLLING_OUT,
-        status_message: "running release command",
+        status_message: "running release task",
         published_at: Time.current,
-        release_command_status: Deployment::RELEASE_COMMAND_STATUS_PENDING,
-        release_command_node: node
+        release_task_status: Deployment::RELEASE_TASK_STATUS_PENDING,
+        release_task_node: node
       )
       deployment.deployment_node_statuses.create!(
         node: node,
         phase: DeploymentNodeStatus::PHASE_PENDING,
-        message: "waiting to run release command"
+        message: "waiting to run release task"
       )
 
       assert_enqueued_with(job: Deployments::PublishJob, args: [deployment.id]) do
@@ -51,18 +52,18 @@ module Deployments
           status: {
             revision: release.revision,
             phase: DeploymentNodeStatus::PHASE_SETTLED,
-            message: "release command completed",
+            message: "release task completed",
             task: {
-              name: "release_command",
+              name: "release",
               phase: DeploymentNodeStatus::PHASE_SETTLED,
-              message: "release command completed"
+              message: "release task completed"
             }
           }
         ).call
       end
 
       deployment.reload
-      assert_equal Deployment::RELEASE_COMMAND_STATUS_SUCCEEDED, deployment.release_command_status
+      assert_equal Deployment::RELEASE_TASK_STATUS_SUCCEEDED, deployment.release_task_status
       assert_equal Deployment::STATUS_ROLLING_OUT, deployment.status
       assert_equal "publishing desired state", deployment.status_message
     end

@@ -267,7 +267,7 @@ class SoloE2E
 
   def write_devopsellence_yml!
     config = {
-      "schema_version" => 4,
+      "schema_version" => 5,
       "organization" => "e2e-org",
       "project" => @project_name,
       "build" => {
@@ -275,19 +275,25 @@ class SoloE2E
         "dockerfile" => "Dockerfile",
         "platforms" => ["linux/#{app_goarch}"]
       },
-      "web" => {
-        "command" => "/server",
-        "port" => APP_PORT,
-        "healthcheck" => {
-          "path" => APP_HEALTH_PATH,
-          "port" => APP_PORT
-        },
-        "env" => {
-          PLAIN_ENV_NAME => "hello-solo"
-        },
-        "secret_refs" => [
-          { "name" => SECRET_VALUE_NAME, "secret" => "projects/x/secrets/e2e" }
-        ]
+      "services" => {
+        "web" => {
+          "kind" => "web",
+          "roles" => ["web"],
+          "command" => "/server",
+          "ports" => [
+            { "name" => "http", "port" => APP_PORT }
+          ],
+          "healthcheck" => {
+            "path" => APP_HEALTH_PATH,
+            "port" => APP_PORT
+          },
+          "env" => {
+            PLAIN_ENV_NAME => "hello-solo"
+          },
+          "secret_refs" => [
+            { "name" => SECRET_VALUE_NAME, "secret" => "projects/x/secrets/e2e" }
+          ]
+        }
       },
       "solo" => {
         "nodes" => {

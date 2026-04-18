@@ -87,9 +87,8 @@ type deployTimings struct {
 }
 
 type runtimeValueOverrides struct {
-	All    map[string]string
-	Web    map[string]string
-	Worker map[string]string
+	All      map[string]string
+	Services map[string]map[string]string
 }
 
 type deployBuildHeartbeat struct {
@@ -741,9 +740,9 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 				GitSHA:          sha,
 				ImageRepository: repository,
 				ImageDigest:     digest,
-				Web:             servicePayload(&cfg.Web),
-				Worker:          servicePayload(cfg.Worker),
-				ReleaseCommand:  strings.TrimSpace(cfg.ReleaseCommand),
+				Services:        servicePayloads(cfg.Services),
+				Tasks:           taskPayloads(cfg.Tasks),
+				IngressService:  ingressServicePayload(cfg),
 			})
 			return callErr
 		}); err != nil {
@@ -2599,15 +2598,18 @@ func (a *App) currentEnvironmentSecrets(ctx context.Context, callAuth authCall, 
 }
 
 func railsRuntimeServices(cfg config.ProjectConfig) []string {
-	return runtimeServices(cfg)
+	services := []string{}
+	for _, name := range cfg.ServiceNames() {
+		if cfg.Services[name].Kind == config.ServiceKindAccessory {
+			continue
+		}
+		services = append(services, name)
+	}
+	return services
 }
 
 func runtimeServices(cfg config.ProjectConfig) []string {
-	services := []string{"web"}
-	if cfg.Worker != nil {
-		services = append(services, "worker")
-	}
-	return services
+	return cfg.ServiceNames()
 }
 
 func parseRuntimeValueOverrides(raw string, fieldName string) (runtimeValueOverrides, error) {
@@ -2631,22 +2633,19 @@ func parseRuntimeValueOverrides(raw string, fieldName string) (runtimeValueOverr
 	}
 
 	overrides := runtimeValueOverrides{}
+	overrides.Services = map[string]map[string]string{}
 	for key, value := range object {
-		scope := strings.ToLower(strings.TrimSpace(key))
+		scope := strings.TrimSpace(key)
 		values, err := stringMapFromScopedValue(value, fieldName, scope)
 		if err != nil {
 			return runtimeValueOverrides{}, err
 		}
 
-		switch scope {
+		switch strings.ToLower(scope) {
 		case "all":
 			overrides.All = values
-		case "web":
-			overrides.Web = values
-		case "worker":
-			overrides.Worker = values
 		default:
-			return runtimeValueOverrides{}, ExitError{Code: 2, Err: fmt.Errorf("%s only supports top-level keys all, web, and worker", fieldName)}
+			overrides.Services[scope] = values
 		}
 	}
 
@@ -2678,16 +2677,19 @@ func stringMapFromAnyMap(object map[string]any, fieldName string) (map[string]st
 }
 
 func validateRuntimeOverrides(cfg config.ProjectConfig, overrides runtimeValueOverrides, fieldName string) error {
-	if cfg.Worker == nil && len(overrides.Worker) > 0 {
-		return ExitError{Code: 2, Err: fmt.Errorf("%s.worker requires a worker service in devopsellence.yml", fieldName)}
+	for serviceName := range overrides.Services {
+		if _, ok := cfg.Services[serviceName]; !ok {
+			return ExitError{Code: 2, Err: fmt.Errorf("%s.%s requires a matching service in devopsellence.yml", fieldName, serviceName)}
+		}
 	}
 	return nil
 }
 
 func applyEnvVarOverrides(cfg config.ProjectConfig, overrides runtimeValueOverrides) config.ProjectConfig {
-	cfg.Web.Env = mergeStringMaps(cfg.Web.Env, overrides.All, overrides.Web)
-	if cfg.Worker != nil {
-		cfg.Worker.Env = mergeStringMaps(cfg.Worker.Env, overrides.All, overrides.Worker)
+	for _, serviceName := range cfg.ServiceNames() {
+		service := cfg.Services[serviceName]
+		service.Env = mergeStringMaps(service.Env, overrides.All, overrides.Services[serviceName])
+		cfg.Services[serviceName] = service
 	}
 	return cfg
 }
@@ -2722,12 +2724,7 @@ func (a *App) syncDeploySecretOverrides(ctx context.Context, callAuth authCall, 
 }
 
 func scopedRuntimeOverrides(overrides runtimeValueOverrides, serviceName string) map[string]string {
-	switch serviceName {
-	case "worker":
-		return overrides.Worker
-	default:
-		return overrides.Web
-	}
+	return overrides.Services[serviceName]
 }
 
 func hasEnvironmentSecret(secrets []api.EnvironmentSecret, serviceName, name string) bool {
@@ -3322,15 +3319,14 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 	update("Writing config…")
 	projectConfig := config.DefaultProjectConfigForType(org.Name, project.Name, environment.Name, discovered.AppType)
 	if existing == nil && discovered.InferredWebPort > 0 {
-		projectConfig.Web.Port = discovered.InferredWebPort
-		if projectConfig.Web.Healthcheck != nil {
-			projectConfig.Web.Healthcheck.Port = discovered.InferredWebPort
-		}
+		projectConfig = setPrimaryWebServicePort(projectConfig, discovered.InferredWebPort)
 	}
 	if existing != nil {
 		projectConfig.Build = existing.Build
-		projectConfig.Web = existing.Web
-		projectConfig.Worker = existing.Worker
+		projectConfig.Services = existing.Services
+		projectConfig.Tasks = existing.Tasks
+		projectConfig.Ingress = existing.Ingress
+		projectConfig.Solo = existing.Solo
 		projectConfig.App = existing.App
 		projectConfig.Organization = org.Name
 		projectConfig.Project = project.Name
@@ -3578,15 +3574,7 @@ func (a *App) applyInferredHealthcheckConfig(workspaceRoot string, cfg config.Pr
 		return cfg, "", "", nil
 	}
 
-	cfg.Web.Port = inferredPort
-	if cfg.Web.Healthcheck == nil {
-		cfg.Web.Healthcheck = &config.HTTPHealthcheck{Path: inferredHealthcheckPath(cfg), Port: inferredPort}
-	} else {
-		cfg.Web.Healthcheck.Port = inferredPort
-		if strings.TrimSpace(cfg.Web.Healthcheck.Path) == "" {
-			cfg.Web.Healthcheck.Path = inferredHealthcheckPath(cfg)
-		}
-	}
+	cfg = setPrimaryWebServicePort(cfg, inferredPort)
 
 	written, err := config.Write(workspaceRoot, cfg)
 	if err != nil {
@@ -3595,7 +3583,7 @@ func (a *App) applyInferredHealthcheckConfig(workspaceRoot string, cfg config.Pr
 	initialized.Config = written
 	return written,
 		"updated " + initialized.ConfigPath + " from built image metadata",
-		fmt.Sprintf("Detected container port %d from built image metadata. Using web.port=%d and healthcheck.port=%d.", inferredPort, inferredPort, inferredPort),
+		fmt.Sprintf("Detected container port %d from built image metadata. Using %s.ports.http=%d and healthcheck.port=%d.", inferredPort, primaryWebServiceName(cfg), inferredPort, inferredPort),
 		nil
 }
 
@@ -3603,26 +3591,77 @@ func shouldApplyInferredImagePort(cfg config.ProjectConfig, inferredPort int) bo
 	if inferredPort <= 0 {
 		return false
 	}
-	if cfg.Web.Port == inferredPort {
+	service, ok := primaryWebService(cfg)
+	if !ok {
 		return false
 	}
-	if cfg.Web.Port != config.DefaultWebPort {
+	if service.HTTPPort(0) == inferredPort {
 		return false
 	}
-	if cfg.Web.Healthcheck != nil && cfg.Web.Healthcheck.Port != 0 && cfg.Web.Healthcheck.Port != config.DefaultWebPort {
+	if service.HTTPPort(0) != config.DefaultWebPort {
+		return false
+	}
+	if service.Healthcheck != nil && service.Healthcheck.Port != 0 && service.Healthcheck.Port != config.DefaultWebPort {
 		return false
 	}
 	return true
 }
 
 func inferredHealthcheckPath(cfg config.ProjectConfig) string {
-	if cfg.Web.Healthcheck != nil && strings.TrimSpace(cfg.Web.Healthcheck.Path) != "" {
-		return cfg.Web.Healthcheck.Path
+	service, ok := primaryWebService(cfg)
+	if ok && service.Healthcheck != nil && strings.TrimSpace(service.Healthcheck.Path) != "" {
+		return service.Healthcheck.Path
 	}
 	if cfg.App.Type == config.AppTypeGeneric {
 		return "/"
 	}
 	return config.DefaultHealthcheckPath
+}
+
+func primaryWebService(cfg config.ProjectConfig) (config.ServiceConfig, bool) {
+	name, ok := cfg.PrimaryWebServiceName()
+	if !ok {
+		return config.ServiceConfig{}, false
+	}
+	service, ok := cfg.Services[name]
+	return service, ok
+}
+
+func primaryWebServiceName(cfg config.ProjectConfig) string {
+	name, ok := cfg.PrimaryWebServiceName()
+	if !ok {
+		return config.DefaultWebServiceName
+	}
+	return name
+}
+
+func setPrimaryWebServicePort(cfg config.ProjectConfig, port int) config.ProjectConfig {
+	name, ok := cfg.PrimaryWebServiceName()
+	if !ok {
+		return cfg
+	}
+	service := cfg.Services[name]
+	found := false
+	for i := range service.Ports {
+		if service.Ports[i].Name == "http" {
+			service.Ports[i].Port = port
+			found = true
+			break
+		}
+	}
+	if !found {
+		service.Ports = append(service.Ports, config.ServicePort{Name: "http", Port: port})
+	}
+	if service.Healthcheck == nil {
+		service.Healthcheck = &config.HTTPHealthcheck{Path: inferredHealthcheckPath(cfg), Port: port}
+	} else {
+		service.Healthcheck.Port = port
+		if strings.TrimSpace(service.Healthcheck.Path) == "" {
+			service.Healthcheck.Path = inferredHealthcheckPath(cfg)
+		}
+	}
+	cfg.Services[name] = service
+	return cfg
 }
 
 func firstExposedPort(ports []int) int {
@@ -3925,8 +3964,12 @@ func servicePayload(service *config.Service) map[string]any {
 		return nil
 	}
 	payload := map[string]any{
+		"kind":        service.Kind,
+		"roles":       append([]string(nil), service.Roles...),
+		"image":       strings.TrimSpace(service.Image),
 		"env":         cloneEnv(service.Env),
 		"secret_refs": service.SecretRefs,
+		"ports":       service.Ports,
 		"volumes":     service.Volumes,
 	}
 	if strings.TrimSpace(service.Entrypoint) != "" {
@@ -3935,9 +3978,6 @@ func servicePayload(service *config.Service) map[string]any {
 	if strings.TrimSpace(service.Command) != "" {
 		payload["command"] = service.Command
 	}
-	if service.Port > 0 {
-		payload["port"] = service.Port
-	}
 	if service.Healthcheck != nil && strings.TrimSpace(service.Healthcheck.Path) != "" {
 		payload["healthcheck"] = map[string]any{
 			"path": service.Healthcheck.Path,
@@ -3945,6 +3985,52 @@ func servicePayload(service *config.Service) map[string]any {
 		}
 	}
 	return payload
+}
+
+func servicePayloads(services map[string]config.ServiceConfig) map[string]any {
+	payloads := map[string]any{}
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		service := services[name]
+		payloads[name] = servicePayload(&service)
+	}
+	return payloads
+}
+
+func taskPayloads(tasks config.TasksConfig) map[string]any {
+	payloads := map[string]any{}
+	if tasks.Release != nil {
+		payload := map[string]any{
+			"service": strings.TrimSpace(tasks.Release.Service),
+			"env":     cloneEnv(tasks.Release.Env),
+		}
+		if strings.TrimSpace(tasks.Release.Entrypoint) != "" {
+			payload["entrypoint"] = tasks.Release.Entrypoint
+		}
+		if strings.TrimSpace(tasks.Release.Command) != "" {
+			payload["command"] = tasks.Release.Command
+		}
+		payloads["release"] = payload
+	}
+	if len(payloads) == 0 {
+		return nil
+	}
+	return payloads
+}
+
+func ingressServicePayload(cfg config.ProjectConfig) string {
+	if cfg.Ingress != nil && strings.TrimSpace(cfg.Ingress.Service) != "" {
+		return strings.TrimSpace(cfg.Ingress.Service)
+	}
+	name, ok := cfg.PrimaryWebServiceName()
+	if !ok {
+		return ""
+	}
+	return name
 }
 
 func cloneEnv(env map[string]string) map[string]string {

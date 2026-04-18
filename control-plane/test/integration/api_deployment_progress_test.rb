@@ -26,7 +26,7 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
       revision: "rel-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     node, access_token, _refresh = issue_test_node!(organization: organization, name: "node-a")
     node.update!(environment: environment)
@@ -157,7 +157,7 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
       revision: "rel-repeat",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     node, access_token, _refresh = issue_test_node!(organization: organization, name: "node-a")
     node.update!(environment: environment)
@@ -232,7 +232,7 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
       revision: "rel-2",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     deployment = environment.deployments.create!(
       release: release,
@@ -270,7 +270,7 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
       revision: "rel-3",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     node, access_token, _refresh = issue_test_node!(organization: organization, name: "node-a")
     node.update!(environment: environment)
@@ -359,7 +359,7 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
       revision: "rel-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     deployment = environment.deployments.create!(
       release: release,

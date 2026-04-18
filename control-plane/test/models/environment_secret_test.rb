@@ -23,6 +23,26 @@ class EnvironmentSecretTest < ActiveSupport::TestCase
     assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.environment_bundle.token}-web-secret-key-base/versions/latest", secret.secret_ref
   end
 
+  test "normalizes service names before validation and secret naming" do
+    organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+    ensure_test_organization_runtime!(organization)
+    project = organization.projects.create!(name: "Project A")
+    environment = project.environments.create!(
+      name: "Production",
+      gcp_project_id: "gcp-proj-a",
+      gcp_project_number: "123456789",
+      service_account_email: "svc-a@gcp-proj-a.iam.gserviceaccount.com",
+      workload_identity_pool: "pool-a",
+      workload_identity_provider: "provider-a"
+    )
+    ensure_test_environment_bundle!(environment)
+
+    secret = environment.environment_secrets.create!(service_name: " Web_API ", name: "SECRET_KEY_BASE")
+
+    assert_equal "web-api", secret.service_name
+    assert_equal "env-#{environment.environment_bundle.token}-web-api-secret-key-base", secret.gcp_secret_name
+  end
+
   test "access_verified_for? requires same grantee and recent verification" do
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     ensure_test_organization_runtime!(organization)

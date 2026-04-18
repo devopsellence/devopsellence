@@ -42,7 +42,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          fetch-tags: true
           ref: ${{ inputs.source_ref }}
 
       - uses: jdx/mise-action@v4
@@ -50,16 +49,31 @@ jobs:
           install: true
 
       - name: Validate inputs
+        env:
+          RELEASE_KIND_INPUT: ${{ inputs.release_kind }}
+          SOURCE_REF_INPUT: ${{ inputs.source_ref }}
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
 
-          version="${{ inputs.version }}"
-          release_kind="${{ inputs.release_kind }}"
+          version="$VERSION_INPUT"
+          release_kind="$RELEASE_KIND_INPUT"
+          source_ref="$SOURCE_REF_INPUT"
 
           ruby -e '
             version = ARGV.fetch(0)
             abort("version must look like v0.1.0") unless version.match?(/\Av\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\z/)
           ' "$version"
+
+          ruby -e '
+            source_ref = ARGV.fetch(0)
+            allowed = /\A(?:[0-9a-f]{7,40}|[A-Za-z0-9._\/-]+)\z/
+            valid = source_ref.match?(allowed) &&
+              !source_ref.include?("..") &&
+              !source_ref.start_with?("/") &&
+              !source_ref.end_with?("/")
+            abort("source_ref must be a branch, tag, or commit SHA") unless valid
+          ' "$source_ref"
 
           case "$release_kind" in
             stable)
@@ -76,11 +90,36 @@ jobs:
               ;;
           esac
 
-      - name: Run selected tests
+      - name: Install selected toolchains
+        env:
+          COMPONENT_INPUT: ${{ inputs.component }}
         run: |
           set -euo pipefail
 
-          case "${{ inputs.component }}" in
+          case "$COMPONENT_INPUT" in
+            both)
+              (cd agent && mise install)
+              (cd cli && mise install)
+              ;;
+            agent)
+              (cd agent && mise install)
+              ;;
+            cli)
+              (cd cli && mise install)
+              ;;
+            *)
+              echo "unknown component: $COMPONENT_INPUT" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Run selected tests
+        env:
+          COMPONENT_INPUT: ${{ inputs.component }}
+        run: |
+          set -euo pipefail
+
+          case "$COMPONENT_INPUT" in
             both)
               (cd agent && mise run test)
               (cd cli && mise run test)
@@ -92,20 +131,25 @@ jobs:
               (cd cli && mise run test)
               ;;
             *)
-              echo "unknown component: ${{ inputs.component }}" >&2
+              echo "unknown component: $COMPONENT_INPUT" >&2
               exit 1
               ;;
           esac
 
       - name: Build and publish selected release(s)
         env:
+          COMPONENT_INPUT: ${{ inputs.component }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_KIND_INPUT: ${{ inputs.release_kind }}
+          SOURCE_REF_INPUT: ${{ inputs.source_ref }}
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
 
-          version="${{ inputs.version }}"
-          release_kind="${{ inputs.release_kind }}"
-          source_ref="${{ inputs.source_ref }}"
+          component="$COMPONENT_INPUT"
+          version="$VERSION_INPUT"
+          release_kind="$RELEASE_KIND_INPUT"
+          source_ref="$SOURCE_REF_INPUT"
           target_sha="$(git rev-parse HEAD)"
           short_sha="$(git rev-parse --short=12 HEAD)"
           build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -156,11 +200,6 @@ jobs:
               fi
             fi
 
-            if gh release view "$tag_name" >/dev/null 2>&1; then
-              echo "release already exists: $tag_name" >&2
-              exit 1
-            fi
-
             rm -rf "$dist_dir"
             mkdir -p "$dist_dir" "${working_dir}/.gocache"
             : > "${dist_dir}/SHA256SUMS"
@@ -173,7 +212,7 @@ jobs:
               (
                 cd "$working_dir"
                 CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOCACHE="$PWD/.gocache" \
-                  go build \
+                  mise exec -- go build \
                     -trimpath \
                     -ldflags "-s -w -X ${module_path}.Version=${version} -X ${module_path}.Commit=${short_sha} -X ${module_path}.${build_time_field}=${build_time}" \
                     -o "dist/${version}/${artifact}" \
@@ -199,16 +238,16 @@ jobs:
               "${prerelease_flag[@]}"
           }
 
-          case "${{ inputs.component }}" in
+          case "$component" in
             both)
               build_component agent
               build_component cli
               ;;
             agent|cli)
-              build_component "${{ inputs.component }}"
+              build_component "$component"
               ;;
             *)
-              echo "unknown component: ${{ inputs.component }}" >&2
+              echo "unknown component: $component" >&2
               exit 1
               ;;
           esac

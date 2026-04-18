@@ -67,6 +67,17 @@ class CliInstallsController < ActionController::Base
         exit 1
       fi
 
+      validate_version() {
+        local version="$1"
+
+        if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          echo "invalid version: $version" >&2
+          exit 1
+        fi
+      }
+
+      validate_version "$CLI_VERSION"
+
       OS_RAW="$(uname -s | tr '[:upper:]' '[:lower:]')"
       ARCH_RAW="$(uname -m)"
       case "$OS_RAW" in

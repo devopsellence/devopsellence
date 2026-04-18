@@ -59,6 +59,19 @@ class AgentInstallScript
           exit 1
         fi
 
+        validate_version() {
+          local version="$1"
+
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid version: $version" >&2
+            exit 1
+          fi
+        }
+
+        if [[ -n "$AGENT_VERSION" ]]; then
+          validate_version "$AGENT_VERSION"
+        fi
+
         OS_RAW="$(uname -s | tr [:upper:] [:lower:])"
         ARCH_RAW="$(uname -m)"
 

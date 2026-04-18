@@ -44,8 +44,22 @@ version="${DEVOPSELLENCE_RELEASE_VERSION:?}"
 commit="${DEVOPSELLENCE_RELEASE_COMMIT:?}"
 build_time="${DEVOPSELLENCE_RELEASE_BUILD_TIME:?}"
 dist_dir="${DEVOPSELLENCE_RELEASE_DIST_DIR:?}"
+dist_root="$PWD/dist"
 module_path="github.com/devopsellence/devopsellence/agent/internal/version"
 build_time_field="BuildTime"
+
+case "$dist_dir" in
+  /*) ;;
+  *) dist_dir="$PWD/$dist_dir" ;;
+esac
+
+case "$dist_dir" in
+  "$dist_root"/*) ;;
+  *)
+    echo "DEVOPSELLENCE_RELEASE_DIST_DIR must be under $dist_root" >&2
+    exit 1
+    ;;
+esac
 
 mise install
 rm -rf "$dist_dir"
@@ -82,8 +96,22 @@ version="${DEVOPSELLENCE_RELEASE_VERSION:?}"
 commit="${DEVOPSELLENCE_RELEASE_COMMIT:?}"
 build_time="${DEVOPSELLENCE_RELEASE_BUILD_TIME:?}"
 dist_dir="${DEVOPSELLENCE_RELEASE_DIST_DIR:?}"
+dist_root="$PWD/dist"
 module_path="github.com/devopsellence/cli/internal/version"
 build_time_field="Date"
+
+case "$dist_dir" in
+  /*) ;;
+  *) dist_dir="$PWD/$dist_dir" ;;
+esac
+
+case "$dist_dir" in
+  "$dist_root"/*) ;;
+  *)
+    echo "DEVOPSELLENCE_RELEASE_DIST_DIR must be under $dist_root" >&2
+    exit 1
+    ;;
+esac
 
 mise install
 rm -rf "$dist_dir"

@@ -60,20 +60,18 @@ jobs:
           release_kind="$RELEASE_KIND_INPUT"
           source_ref="$SOURCE_REF_INPUT"
 
-          ruby -e '
-            version = ARGV.fetch(0)
-            abort("version must look like v0.1.0") unless version.match?(/\Av\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\z/)
-          ' "$version"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "version must look like v0.1.0" >&2
+            exit 1
+          fi
 
-          ruby -e '
-            source_ref = ARGV.fetch(0)
-            allowed = /\A(?:[0-9a-f]{7,40}|[A-Za-z0-9._\/-]+)\z/
-            valid = source_ref.match?(allowed) &&
-              !source_ref.include?("..") &&
-              !source_ref.start_with?("/") &&
-              !source_ref.end_with?("/")
-            abort("source_ref must be a branch, tag, or commit SHA") unless valid
-          ' "$source_ref"
+          if [[ ! "$source_ref" =~ ^([0-9a-f]{7,40}|[A-Za-z0-9._/-]+)$ ]] || \
+             [[ "$source_ref" == *..* ]] || \
+             [[ "$source_ref" == /* ]] || \
+             [[ "$source_ref" == */ ]]; then
+            echo "source_ref must be a branch, tag, or commit SHA" >&2
+            exit 1
+          fi
 
           case "$release_kind" in
             stable)

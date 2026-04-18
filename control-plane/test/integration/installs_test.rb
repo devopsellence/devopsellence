@@ -81,6 +81,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_includes response.body, 'CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-}"'
     assert_includes response.body, "CLI_VERSION='v0.1.0-rc.1'"
+    assert_includes response.body, 'validate_version "$CLI_VERSION"'
   end
 
   test "cli install script safely quotes query-string version" do
@@ -111,6 +112,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_includes response.body, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-}"'
     assert_includes response.body, "AGENT_VERSION='v0.1.0-rc.1'"
+    assert_includes response.body, 'validate_version "$AGENT_VERSION"'
   end
 
   test "agent install script safely quotes query-string version" do

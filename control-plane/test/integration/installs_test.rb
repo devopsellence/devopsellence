@@ -91,7 +91,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_includes response.body, 'CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"'
     assert_includes response.body, 'CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"'
-    assert_operator response.body.index('while [[ $# -gt 0 ]]; do'), :<, response.body.index('CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"')
+    assert_operator response.body.index("while [[ $# -gt 0 ]]; do"), :<, response.body.index('CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"')
   end
 
   test "cli install script safely quotes query-string version" do

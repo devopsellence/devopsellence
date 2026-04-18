@@ -26,7 +26,14 @@ module Api
             :phase,
             :message,
             :error,
+            summary: [ :environments, :services, :unhealthy_services ],
             task: [ :name, :phase, :message, :error, :exit_code ],
+            environments: [
+              :name,
+              :revision,
+              :phase,
+              services: [ :name, :kind, :phase, :container, :state, :health, :hash ]
+            ],
             containers: [ :name, :state, :hash ],
             ingress: [ :tls_status, :tls_not_after, :tls_error ]
           )

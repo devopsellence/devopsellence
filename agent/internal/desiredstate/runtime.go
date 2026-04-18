@@ -145,3 +145,7 @@ func IngressTargetPort(target *desiredstatepb.IngressTarget) string {
 func EnvoyClusterName(environmentName, serviceName, portName string) string {
 	return sanitize(fmt.Sprintf("env-%s-%s-%s", environmentName, serviceName, portName))
 }
+
+func ServiceKind(service *desiredstatepb.Service) string {
+	return normalizedServiceKind(service)
+}

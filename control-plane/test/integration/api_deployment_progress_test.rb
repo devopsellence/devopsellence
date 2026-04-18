@@ -52,8 +52,20 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
         revision: release.revision,
         phase: "reconciling",
         message: "pulling image",
-        containers: [
-          { name: "web", state: "starting", hash: "sha256:#{'c' * 64}" }
+        summary: {
+          environments: 1,
+          services: 1,
+          unhealthy_services: 0
+        },
+        environments: [
+          {
+            name: environment.name,
+            revision: release.revision,
+            phase: "reconciling",
+            services: [
+              { name: "web", kind: "web", phase: "reconciling", state: "starting", hash: "sha256:#{'c' * 64}" }
+            ]
+          }
         ]
       },
       headers: { "Authorization" => "Bearer #{access_token}" },
@@ -89,8 +101,20 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
         revision: release.revision,
         phase: "settled",
         message: "revision healthy",
-        containers: [
-          { name: "web", state: "running", hash: "sha256:#{'c' * 64}" }
+        summary: {
+          environments: 1,
+          services: 1,
+          unhealthy_services: 0
+        },
+        environments: [
+          {
+            name: environment.name,
+            revision: release.revision,
+            phase: "settled",
+            services: [
+              { name: "web", kind: "web", phase: "settled", state: "running", hash: "sha256:#{'c' * 64}" }
+            ]
+          }
         ]
       },
       headers: { "Authorization" => "Bearer #{access_token}" },

@@ -241,6 +241,18 @@ func TestAgentReconcileE2E(t *testing.T) {
 	if status.Phase != report.PhaseSettled {
 		t.Fatalf("unexpected phase: %s", status.Phase)
 	}
+	if status.Summary == nil || status.Summary.Environments != 1 || status.Summary.Services != 1 {
+		t.Fatalf("unexpected summary: %#v", status.Summary)
+	}
+	if len(status.Environments) != 1 || status.Environments[0].Name != "production" {
+		t.Fatalf("unexpected environments: %#v", status.Environments)
+	}
+	if len(status.Environments[0].Services) != 1 || status.Environments[0].Services[0].Name != "web" || status.Environments[0].Services[0].State != "running" {
+		t.Fatalf("unexpected services: %#v", status.Environments[0].Services)
+	}
+	if len(status.Containers) != 1 || status.Containers[0].Name != "web" || status.Containers[0].State != "running" {
+		t.Fatalf("unexpected legacy containers: %#v", status.Containers)
+	}
 	if !envoyManager.updated {
 		t.Fatal("expected envoy EDS update")
 	}

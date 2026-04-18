@@ -133,11 +133,26 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	a.metrics.ContainersUpdated.Add(float64(result.Updated))
 	a.metrics.ContainersRemoved.Add(float64(result.Removed))
 
+	summary, environments, containers, err := a.reconciler.CurrentStatus(ctx, desired)
+	if err != nil {
+		a.metrics.ReconcileErrors.Inc()
+		a.reportStatus(ctx, report.Status{
+			Time:     start,
+			Phase:    report.PhaseError,
+			Revision: desired.Revision,
+			Error:    err.Error(),
+		}, fetched.Sequence)
+		return err
+	}
+
 	a.reportStatus(ctx, report.Status{
-		Time:     start,
-		Phase:    report.PhaseSettled,
-		Revision: desired.Revision,
-		Message:  fmt.Sprintf("created=%d updated=%d removed=%d unchanged=%d", result.Created, result.Updated, result.Removed, result.Unchanged),
+		Time:         start,
+		Phase:        report.PhaseSettled,
+		Revision:     desired.Revision,
+		Message:      fmt.Sprintf("created=%d updated=%d removed=%d unchanged=%d", result.Created, result.Updated, result.Removed, result.Unchanged),
+		Summary:      summary,
+		Environments: environments,
+		Containers:   containers,
 	}, fetched.Sequence)
 
 	a.logger.Info("reconcile ok",

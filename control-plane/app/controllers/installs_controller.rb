@@ -14,7 +14,7 @@ class InstallsController < ActionController::Base
   def install_script
     base_url = PublicBaseUrl.resolve(request)
     default_version = params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.agent_stable_version
-    AgentInstallScript.render(base_url: base_url, stable_version: default_version)
+    AgentInstallScript.render(base_url: base_url, default_version: default_version)
   end
 
   def uninstall_script

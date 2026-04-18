@@ -2,9 +2,9 @@
 
 class AgentInstallScript
   class << self
-    def render(base_url:, stable_version:)
+    def render(base_url:, default_version:)
       default_base_url = ShellQuoting.single_quote(base_url)
-      default_agent_version = ShellQuoting.single_quote(stable_version)
+      default_agent_version = ShellQuoting.single_quote(default_version)
 
       <<~SH
         #!/usr/bin/env bash

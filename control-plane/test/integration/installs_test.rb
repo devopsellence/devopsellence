@@ -113,6 +113,14 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "AGENT_VERSION='v0.1.0-rc.1'"
   end
 
+  test "agent install script safely quotes query-string version" do
+    get "/install.sh", params: { version: "v0.1.0-rc.1$(touch /tmp/pwned)'oops" }
+
+    assert_response :success
+    assert_includes response.body, "AGENT_VERSION='v0.1.0-rc.1$(touch /tmp/pwned)'\"'\"'oops'"
+    refute_includes response.body, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-v0.1.0-rc.1$(touch /tmp/pwned)\'oops}"'
+  end
+
   test "install script waits for docker at service startup" do
     get "/install.sh"
 

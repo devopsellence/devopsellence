@@ -6,7 +6,7 @@ class AgentInstallScriptTest < ActiveSupport::TestCase
   test "render safely embeds default base url without shell evaluation" do
     script = AgentInstallScript.render(
       base_url: "https://example.com$(touch /tmp/pwned)",
-      stable_version: "1.2.3"
+      default_version: "1.2.3"
     )
 
     assert_includes script, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
@@ -17,7 +17,7 @@ class AgentInstallScriptTest < ActiveSupport::TestCase
   test "render safely embeds default agent version without shell evaluation" do
     script = AgentInstallScript.render(
       base_url: "https://example.com",
-      stable_version: "1.0.0$(rm -rf /)"
+      default_version: "1.0.0$(rm -rf /)"
     )
 
     assert_includes script, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-}"'

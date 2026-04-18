@@ -73,7 +73,7 @@ class Release < ApplicationRecord
   end
 
   def required_labels
-    services_config.values.map { |service| service_label(service) }.uniq.sort
+    services_config.values.filter_map { |service| service_label(service).presence }.uniq.sort
   end
 
   def requires_label?(label)
@@ -175,12 +175,13 @@ class Release < ApplicationRecord
     end
 
     kind = service_kind(service)
-    unless SERVICE_KINDS.include?(kind)
-      errors.add(:runtime_json, "services.#{name}.kind must be one of #{SERVICE_KINDS.join(', ')}")
-    end
-
     if kind.blank?
       errors.add(:runtime_json, "services.#{name}.kind must be present")
+      return
+    end
+
+    unless SERVICE_KINDS.include?(kind)
+      errors.add(:runtime_json, "services.#{name}.kind must be one of #{SERVICE_KINDS.join(', ')}")
     end
 
     if service["entrypoint"].present? && !service["entrypoint"].is_a?(String)

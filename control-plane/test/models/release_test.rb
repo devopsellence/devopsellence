@@ -51,6 +51,21 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_includes release.errors[:runtime_json], "tasks.release.entrypoint must be a string"
   end
 
+  test "blank kind does not contribute required labels and reports one kind error" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        services: {
+          "web" => web_service_runtime.merge("kind" => "")
+        }
+      )
+    )
+
+    assert_equal [], release.required_labels
+    assert_not release.valid?
+    kind_errors = release.errors[:runtime_json].grep(/\Aservices\.web\.kind /)
+    assert_equal [ "services.web.kind must be present" ], kind_errors
+  end
+
   private
 
   def build_release(runtime_json:)

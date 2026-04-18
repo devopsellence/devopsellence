@@ -90,29 +90,6 @@ jobs:
               ;;
           esac
 
-      - name: Install selected toolchains
-        env:
-          COMPONENT_INPUT: ${{ inputs.component }}
-        run: |
-          set -euo pipefail
-
-          case "$COMPONENT_INPUT" in
-            both)
-              (cd agent && mise install)
-              (cd cli && mise install)
-              ;;
-            agent)
-              (cd agent && mise install)
-              ;;
-            cli)
-              (cd cli && mise install)
-              ;;
-            *)
-              echo "unknown component: $COMPONENT_INPUT" >&2
-              exit 1
-              ;;
-          esac
-
       - name: Run selected tests
         env:
           COMPONENT_INPUT: ${{ inputs.component }}
@@ -121,14 +98,14 @@ jobs:
 
           case "$COMPONENT_INPUT" in
             both)
-              (cd agent && mise run test)
-              (cd cli && mise run test)
+              mise run test:agent
+              mise run test:cli
               ;;
             agent)
-              (cd agent && mise run test)
+              mise run test:agent
               ;;
             cli)
-              (cd cli && mise run test)
+              mise run test:cli
               ;;
             *)
               echo "unknown component: $COMPONENT_INPUT" >&2
@@ -153,26 +130,23 @@ jobs:
           target_sha="$(git rev-parse HEAD)"
           short_sha="$(git rev-parse --short=12 HEAD)"
           build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          workspace_dir="$PWD"
 
           prerelease_flag=()
           if [[ "$release_kind" == "prerelease" ]]; then
             prerelease_flag=(--prerelease)
           fi
 
-          build_component() {
+          publish_component() {
             local component="$1"
-            local working_dir module_path build_time_field release_label
+            local working_dir release_label
             case "$component" in
               agent)
                 working_dir="agent"
-                module_path="github.com/devopsellence/devopsellence/agent/internal/version"
-                build_time_field="BuildTime"
                 release_label="Agent"
                 ;;
               cli)
                 working_dir="cli"
-                module_path="github.com/devopsellence/cli/internal/version"
-                build_time_field="Date"
                 release_label="CLI"
                 ;;
               *)
@@ -182,7 +156,7 @@ jobs:
             esac
 
             local tag_name="${component}-${version}"
-            local dist_dir="${working_dir}/dist/${version}"
+            local dist_dir="${workspace_dir}/${working_dir}/dist/${version}"
             local release_notes="${release_label} binary release for ${version} from ${source_ref} at ${target_sha}"
             local release_assets=(
               "${dist_dir}/linux-amd64"
@@ -200,26 +174,11 @@ jobs:
               fi
             fi
 
-            rm -rf "$dist_dir"
-            mkdir -p "$dist_dir" "${working_dir}/.gocache"
-            : > "${dist_dir}/SHA256SUMS"
-
-            for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-              goos="${target%/*}"
-              goarch="${target#*/}"
-              artifact="${goos}-${goarch}"
-              output="${dist_dir}/${artifact}"
-              (
-                cd "$working_dir"
-                CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOCACHE="$PWD/.gocache" \
-                  mise exec -- go build \
-                    -trimpath \
-                    -ldflags "-s -w -X ${module_path}.Version=${version} -X ${module_path}.Commit=${short_sha} -X ${module_path}.${build_time_field}=${build_time}" \
-                    -o "dist/${version}/${artifact}" \
-                    ./cmd/devopsellence
-              )
-              sha256sum "$output" | sed "s#  ${dist_dir}/#  #" >> "${dist_dir}/SHA256SUMS"
-            done
+            DEVOPSELLENCE_RELEASE_VERSION="$version" \
+              DEVOPSELLENCE_RELEASE_COMMIT="$short_sha" \
+              DEVOPSELLENCE_RELEASE_BUILD_TIME="$build_time" \
+              DEVOPSELLENCE_RELEASE_DIST_DIR="$dist_dir" \
+              mise run "release:build:${component}"
 
             if gh release view "$tag_name" >/dev/null 2>&1; then
               gh release edit "$tag_name" \
@@ -240,11 +199,11 @@ jobs:
 
           case "$component" in
             both)
-              build_component agent
-              build_component cli
+              publish_component agent
+              publish_component cli
               ;;
             agent|cli)
-              build_component "$component"
+              publish_component "$component"
               ;;
             *)
               echo "unknown component: $component" >&2

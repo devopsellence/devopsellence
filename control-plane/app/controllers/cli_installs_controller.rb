@@ -10,8 +10,8 @@ class CliInstallsController < ActionController::Base
   def install_script
     # For curl | bash installs, default the downloader to the exact host serving
     # the script so callers do not need to pass --base-url explicitly.
-    default_base_url = shell_single_quote(request.base_url)
-    default_version = shell_single_quote(params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.cli_stable_version)
+    default_base_url = ShellQuoting.single_quote(request.base_url)
+    default_version = ShellQuoting.single_quote(params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.cli_stable_version)
 
     <<~SH
       #!/usr/bin/env bash
@@ -188,10 +188,5 @@ class CliInstallsController < ActionController::Base
           ;;
       esac
     SH
-  end
-
-  def shell_single_quote(value)
-    escaped = value.to_s.gsub("'", %q('"'"'))
-    "'#{escaped}'"
   end
 end

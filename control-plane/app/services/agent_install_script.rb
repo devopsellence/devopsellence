@@ -3,8 +3,8 @@
 class AgentInstallScript
   class << self
     def render(base_url:, stable_version:)
-      default_base_url = shell_single_quote(base_url)
-      default_agent_version = shell_single_quote(stable_version)
+      default_base_url = ShellQuoting.single_quote(base_url)
+      default_agent_version = ShellQuoting.single_quote(stable_version)
 
       <<~SH
         #!/usr/bin/env bash
@@ -258,13 +258,6 @@ class AgentInstallScript
 
         echo "devopsellence agent installed and started."
       SH
-    end
-
-    private
-
-    def shell_single_quote(value)
-      escaped = value.to_s.gsub("'", %q('"'"'))
-      "'#{escaped}'"
     end
   end
 end

@@ -13,9 +13,6 @@ Rails.application.routes.draw do
   root "marketing#index"
   get "getting-started" => "marketing#index", as: :getting_started
   get "docs" => "marketing#docs", as: :docs
-  get "roadmap" => "marketing#roadmap", as: :roadmap
-  get "blog" => "marketing#blog_index", as: :blog
-  get "blog/:slug" => "marketing#blog_show", as: :blog_post
   get "privacy" => "marketing#privacy", as: :privacy
   get "terms" => "marketing#terms", as: :terms
 
@@ -29,18 +26,6 @@ Rails.application.routes.draw do
   delete "logout" => "sessions#destroy"
 
   get "cli/login" => "logins#new"
-  get "setup/github-actions" => "setup/github_actions#show", as: :setup_github_actions
-  post "setup/github-actions" => "setup/github_actions#create"
-  get "dashboard" => "dashboard#index"
-  post "dashboard/organizations" => "dashboard#create_organization", as: :dashboard_organizations
-  post "dashboard/organizations/:organization_id/bootstrap" => "dashboard#bootstrap_node", as: :dashboard_bootstrap_node
-  post "dashboard/organizations/:organization_id/projects" => "dashboard#create_project", as: :dashboard_projects
-  post "dashboard/projects/:project_id/environments" => "dashboard#create_environment", as: :dashboard_environments
-  post "dashboard/environments/:environment_id/assignments" => "dashboard#assign_node", as: :dashboard_assignments
-  post "dashboard/environments/:environment_id/secrets" => "dashboard#upsert_environment_secret", as: :dashboard_environment_secrets
-  post "dashboard/nodes/:node_id/labels" => "dashboard#update_node_labels", as: :dashboard_node_labels
-  post "dashboard/projects/:project_id/releases" => "dashboard#create_release", as: :dashboard_releases
-  post "dashboard/releases/:release_id/publish" => "dashboard#publish_release", as: :dashboard_publish_release
   get "install.sh" => "installs#show"
   get "uninstall.sh" => "installs#uninstall"
   get "agent/download" => "agent_downloads#show"

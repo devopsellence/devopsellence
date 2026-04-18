@@ -200,7 +200,7 @@ cd control-plane
 bin/dev
 ```
 
-GitHub binary releases for the agent and CLI are published from public GitHub Actions workflows on `agent-v*` and `cli-v*` tags.
+GitHub binary releases for the agent and CLI are published from a manual public GitHub Actions workflow. Trigger `Component Release`, pick `agent`, `cli`, or `both`, choose a branch/tag/SHA, and provide the release version.
 
 ## Contributing
 

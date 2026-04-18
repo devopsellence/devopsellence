@@ -73,6 +73,13 @@ class InstallsTest < ActionDispatch::IntegrationTest
     refute_includes response.body, "https://app.devopsellence.com"
   end
 
+  test "cli install script accepts version from the query string" do
+    get "/lfg.sh", params: { version: "v0.1.0-rc.1" }
+
+    assert_response :success
+    assert_includes response.body, 'CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-v0.1.0-rc.1}"'
+  end
+
   test "install script bootstraps docker on supported ubuntu releases" do
     get "/install.sh"
 
@@ -85,6 +92,14 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "/etc/apt/sources.list.d/docker.list"
     assert_includes response.body, "dpkg --print-architecture"
     assert_includes response.body, "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+  end
+
+  test "agent install script accepts version from the query string" do
+    get "/install.sh", params: { version: "v0.1.0-rc.1" }
+
+    assert_response :success
+    assert_includes response.body, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-}"'
+    assert_includes response.body, "AGENT_VERSION='v0.1.0-rc.1'"
   end
 
   test "install script waits for docker at service startup" do

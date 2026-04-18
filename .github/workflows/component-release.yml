@@ -1,0 +1,192 @@
+name: Component Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "Which component to release"
+        required: true
+        type: choice
+        options:
+          - both
+          - agent
+          - cli
+        default: both
+      source_ref:
+        description: "Branch, tag, or commit SHA to build from"
+        required: true
+        type: string
+      version:
+        description: "Release version, e.g. v0.1.0 or v0.1.0-rc.1"
+        required: true
+        type: string
+      release_kind:
+        description: "Stable releases must not include a prerelease suffix"
+        required: true
+        type: choice
+        options:
+          - stable
+          - prerelease
+        default: prerelease
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+
+          version="${{ inputs.version }}"
+          release_kind="${{ inputs.release_kind }}"
+
+          ruby -e '
+            version = ARGV.fetch(0)
+            abort("version must look like v0.1.0") unless version.match?(/\Av\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\z/)
+          ' "$version"
+
+          case "$release_kind" in
+            stable)
+              if [[ "$version" == *-* ]]; then
+                echo "stable releases must not include a prerelease suffix: $version" >&2
+                exit 1
+              fi
+              ;;
+            prerelease)
+              if [[ "$version" != *-* ]]; then
+                echo "prereleases must include a suffix like -rc.1 or -dev.1: $version" >&2
+                exit 1
+              fi
+              ;;
+          esac
+
+      - name: Run selected tests
+        run: |
+          set -euo pipefail
+
+          case "${{ inputs.component }}" in
+            both)
+              (cd agent && mise run test)
+              (cd cli && mise run test)
+              ;;
+            agent)
+              (cd agent && mise run test)
+              ;;
+            cli)
+              (cd cli && mise run test)
+              ;;
+            *)
+              echo "unknown component: ${{ inputs.component }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build and publish selected release(s)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          version="${{ inputs.version }}"
+          release_kind="${{ inputs.release_kind }}"
+          source_ref="${{ inputs.source_ref }}"
+          target_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          prerelease_flag=()
+          if [[ "$release_kind" == "prerelease" ]]; then
+            prerelease_flag=(--prerelease)
+          fi
+
+          build_component() {
+            local component="$1"
+            local working_dir module_path build_time_field release_label
+            case "$component" in
+              agent)
+                working_dir="agent"
+                module_path="github.com/devopsellence/devopsellence/agent/internal/version"
+                build_time_field="BuildTime"
+                release_label="Agent"
+                ;;
+              cli)
+                working_dir="cli"
+                module_path="github.com/devopsellence/cli/internal/version"
+                build_time_field="Date"
+                release_label="CLI"
+                ;;
+              *)
+                echo "unknown component: $component" >&2
+                exit 1
+                ;;
+            esac
+
+            local tag_name="${component}-${version}"
+            local dist_dir="${working_dir}/dist/${version}"
+
+            if gh release view "$tag_name" >/dev/null 2>&1; then
+              echo "release already exists: $tag_name" >&2
+              exit 1
+            fi
+
+            rm -rf "$dist_dir"
+            mkdir -p "$dist_dir" "${working_dir}/.gocache"
+            : > "${dist_dir}/SHA256SUMS"
+
+            for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+              goos="${target%/*}"
+              goarch="${target#*/}"
+              artifact="${goos}-${goarch}"
+              output="${dist_dir}/${artifact}"
+              (
+                cd "$working_dir"
+                CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOCACHE="$PWD/.gocache" \
+                  go build \
+                    -trimpath \
+                    -ldflags "-s -w -X ${module_path}.Version=${version} -X ${module_path}.Commit=${short_sha} -X ${module_path}.${build_time_field}=${build_time}" \
+                    -o "dist/${version}/${artifact}" \
+                    ./cmd/devopsellence
+              )
+              sha256sum "$output" | sed "s#  ${dist_dir}/#  #" >> "${dist_dir}/SHA256SUMS"
+            done
+
+            gh release create "$tag_name" \
+              "${dist_dir}/linux-amd64" \
+              "${dist_dir}/linux-arm64" \
+              "${dist_dir}/darwin-amd64" \
+              "${dist_dir}/darwin-arm64" \
+              "${dist_dir}/SHA256SUMS" \
+              --title "${release_label} ${version}" \
+              --notes "${release_label} binary release for ${version} from ${source_ref} at ${target_sha}" \
+              --target "$target_sha" \
+              "${prerelease_flag[@]}"
+          }
+
+          case "${{ inputs.component }}" in
+            both)
+              build_component agent
+              build_component cli
+              ;;
+            agent|cli)
+              build_component "${{ inputs.component }}"
+              ;;
+            *)
+              echo "unknown component: ${{ inputs.component }}" >&2
+              exit 1
+              ;;
+          esac

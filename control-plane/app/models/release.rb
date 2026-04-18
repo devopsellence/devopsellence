@@ -297,7 +297,8 @@ class Release < ApplicationRecord
 
     ports = desired_state_ports(service)
     payload[:ports] = ports if ports.present?
-    payload[:healthcheck] = service_healthcheck(service) if service["healthcheck"].present?
+    healthcheck = service_healthcheck(service)
+    payload[:healthcheck] = healthcheck if healthcheck.present?
 
     payload
   end

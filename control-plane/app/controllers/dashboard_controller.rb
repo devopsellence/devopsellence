@@ -145,7 +145,7 @@ class DashboardController < ApplicationController
     environment = owned_environment(params[:environment_id])
     return redirect_to(dashboard_path, alert: "Owner role required.") unless environment
 
-    service_name = params[:service_name].to_s.strip
+    service_name = EnvironmentSecret.normalize_service_name_value(params[:service_name])
     name = params[:name].to_s.strip
     value = params[:value].to_s
     return redirect_to(secret_dashboard_path(environment), alert: "Secret value is required.") if value.blank?

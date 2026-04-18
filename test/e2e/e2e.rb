@@ -623,7 +623,7 @@ class E2E
         web_nodes = environment.nodes.select { |node| node.labeled?("web") }
         puts({
           web_nodes: web_nodes.map { |node| { name: node.name, capabilities: node.capabilities } },
-          missing_capability_names: environment.assigned_web_nodes_missing_direct_dns_capability.map(&:name)
+          missing_capability_names: environment.assigned_ingress_nodes_missing_direct_dns_capability.map(&:name)
         }.to_json)
       RUBY
 

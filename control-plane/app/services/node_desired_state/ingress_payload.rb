@@ -14,18 +14,20 @@ module NodeDesiredState
         return nil unless ingress.status == EnvironmentIngress::STATUS_READY
 
         {
-          hostname: ingress.hostname,
+          hosts: [ ingress.hostname ],
           mode: Environment::INGRESS_STRATEGY_TUNNEL,
-          public_url: ingress.public_url,
           tunnel_token_secret_ref: ingress.tunnel_token_secret_ref
         }
       else
         return nil unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
 
         {
-          hostname: ingress.hostname,
-          mode: Environment::INGRESS_STRATEGY_DIRECT_DNS,
-          public_url: ingress.public_url
+          hosts: [ ingress.hostname ],
+          mode: "public",
+          tls: {
+            mode: "auto"
+          },
+          redirect_http: true
         }
       end
     end

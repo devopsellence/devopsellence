@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 	"github.com/devopsellence/devopsellence/agent/internal/engine"
-	cerrdefs "github.com/containerd/errdefs"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
@@ -187,7 +187,7 @@ func TestEnsureSkipsHostPortPublishWhenDisabled(t *testing.T) {
 		StartupTimeout: 2 * time.Second,
 	}, logger)
 
-	if err := mgr.Ensure(context.Background(), &desiredstatepb.Ingress{Hostname: "abc123.devopsellence.io", TunnelToken: "tok"}); err != nil {
+	if err := mgr.Ensure(context.Background(), &desiredstatepb.Ingress{Hosts: []string{"abc123.devopsellence.io"}, TunnelToken: "tok"}); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	if eng.createdSpec == nil {
@@ -254,7 +254,7 @@ func TestEnsureRecreatesWhenPublishModeChanges(t *testing.T) {
 		StartupTimeout: 2 * time.Second,
 	}, logger)
 
-	if err := mgr.Ensure(context.Background(), &desiredstatepb.Ingress{Hostname: "abc123.devopsellence.io", TunnelToken: "tok"}); err != nil {
+	if err := mgr.Ensure(context.Background(), &desiredstatepb.Ingress{Hosts: []string{"abc123.devopsellence.io"}, TunnelToken: "tok"}); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	if len(eng.removed) == 0 {
@@ -420,7 +420,7 @@ func TestEnsureFailsWhenImagePullFails(t *testing.T) {
 	}
 }
 
-func TestEnsurePublishesDirectDNSPorts(t *testing.T) {
+func TestEnsurePublishesPublicPorts(t *testing.T) {
 	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
 	bootstrapPath := tempBootstrapPath(t)
@@ -447,8 +447,8 @@ func TestEnsurePublishesDirectDNSPorts(t *testing.T) {
 	}, logger)
 
 	ingress := &desiredstatepb.Ingress{
-		Mode:     "direct_dns",
-		Hostname: "abc123.devopsellence.io",
+		Mode:  "public",
+		Hosts: []string{"abc123.devopsellence.io"},
 	}
 	if err := mgr.Ensure(context.Background(), ingress); err != nil {
 		t.Fatalf("ensure: %v", err)
@@ -464,7 +464,7 @@ func TestEnsurePublishesDirectDNSPorts(t *testing.T) {
 	}
 }
 
-func TestDirectDNSListenerConfigLoadsTLSMaterials(t *testing.T) {
+func TestPublicListenerConfigLoadsTLSMaterials(t *testing.T) {
 	eng := &fakeEngine{}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
 	bootstrapPath := tempBootstrapPath(t)
@@ -488,9 +488,9 @@ func TestDirectDNSListenerConfigLoadsTLSMaterials(t *testing.T) {
 		ClusterName:   "devopsellence_web",
 	}, logger)
 
-	listener, err := mgr.directDNSListenerConfig(&desiredstatepb.Ingress{Mode: "direct_dns", Hostname: "abc123.devopsellence.io"})
+	listener, err := mgr.publicIngressListenerConfig(&desiredstatepb.Ingress{Mode: "public", Hosts: []string{"abc123.devopsellence.io"}})
 	if err != nil {
-		t.Fatalf("direct dns listener config: %v", err)
+		t.Fatalf("public listener config: %v", err)
 	}
 
 	if string(listener.CertificatePEM) != "cert-pem" {
@@ -502,7 +502,7 @@ func TestDirectDNSListenerConfigLoadsTLSMaterials(t *testing.T) {
 }
 
 func TestBuildHTTPSListenerInlinesTLSMaterials(t *testing.T) {
-	listener, err := buildHTTPSListener(&directDNSListenerConfig{
+	listener, err := buildHTTPSListener(&publicIngressListenerConfig{
 		HTTPSPort:      8443,
 		CertificatePEM: []byte("cert-pem"),
 		PrivateKeyPEM:  []byte("key-pem"),
@@ -525,7 +525,7 @@ func TestBuildHTTPSListenerInlinesTLSMaterials(t *testing.T) {
 }
 
 func TestBuildHTTPSListenerPreservesHTTPSMetadataForUpstream(t *testing.T) {
-	listener, err := buildHTTPSListener(&directDNSListenerConfig{
+	listener, err := buildHTTPSListener(&publicIngressListenerConfig{
 		HTTPSPort:      8443,
 		CertificatePEM: []byte("cert-pem"),
 		PrivateKeyPEM:  []byte("key-pem"),

@@ -13,7 +13,7 @@ import (
 const (
 	FilePath               = "devopsellence.yml"
 	GenericFilePath        = FilePath
-	SchemaVersion          = 3
+	SchemaVersion          = 4
 	DefaultEnvironment     = "production"
 	DefaultBuildContext    = "."
 	DefaultDockerfile      = "Dockerfile"
@@ -21,12 +21,12 @@ const (
 	DefaultWebPort         = 3000
 	AppTypeRails           = "rails"
 	AppTypeGeneric         = "generic"
-	DirectLabelWeb         = "web"
-	DirectLabelWorker      = "worker"
+	NodeLabelWeb           = "web"
+	NodeLabelWorker        = "worker"
 )
 
 var DefaultBuildPlatforms = []string{"linux/amd64"}
-var DirectDefaultLabels = []string{DirectLabelWeb}
+var SoloDefaultLabels = []string{NodeLabelWeb}
 
 type Volume struct {
 	Source string `yaml:"source" json:"source"`
@@ -65,7 +65,19 @@ type AppConfig struct {
 	Type string `yaml:"type,omitempty" json:"type,omitempty"`
 }
 
-type DirectNode struct {
+type IngressTLSConfig struct {
+	Mode           string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Email          string `yaml:"email,omitempty" json:"email,omitempty"`
+	CADirectoryURL string `yaml:"ca_directory_url,omitempty" json:"ca_directory_url,omitempty"`
+}
+
+type IngressConfig struct {
+	Hosts        []string         `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	TLS          IngressTLSConfig `yaml:"tls,omitempty" json:"tls,omitempty"`
+	RedirectHTTP bool             `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
+}
+
+type SoloNode struct {
 	Host             string   `yaml:"host" json:"host"`
 	User             string   `yaml:"user" json:"user"`
 	Port             int      `yaml:"port,omitempty" json:"port,omitempty"`
@@ -79,21 +91,41 @@ type DirectNode struct {
 	ProviderImage    string   `yaml:"provider_image,omitempty" json:"provider_image,omitempty"`
 }
 
-type DirectConfig struct {
-	Nodes map[string]DirectNode `yaml:"nodes" json:"nodes"`
+type LegacyDirectNode struct {
+	Host             string   `yaml:"host" json:"host"`
+	User             string   `yaml:"user" json:"user"`
+	Port             int      `yaml:"port,omitempty" json:"port,omitempty"`
+	SSHKey           string   `yaml:"ssh_key,omitempty" json:"ssh_key,omitempty"`
+	AgentStateDir    string   `yaml:"agent_state_dir,omitempty" json:"agent_state_dir,omitempty"`
+	Labels           []string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	Provider         string   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	ProviderServerID string   `yaml:"provider_server_id,omitempty" json:"provider_server_id,omitempty"`
+	ProviderRegion   string   `yaml:"provider_region,omitempty" json:"provider_region,omitempty"`
+	ProviderSize     string   `yaml:"provider_size,omitempty" json:"provider_size,omitempty"`
+	ProviderImage    string   `yaml:"provider_image,omitempty" json:"provider_image,omitempty"`
+}
+
+type SoloConfig struct {
+	Nodes map[string]SoloNode `yaml:"nodes" json:"nodes"`
+}
+
+type LegacyDirectConfig struct {
+	Nodes map[string]LegacyDirectNode `yaml:"nodes" json:"nodes"`
 }
 
 type ProjectConfig struct {
-	SchemaVersion      int            `yaml:"schema_version" json:"schema_version"`
-	App                AppConfig      `yaml:"app,omitempty" json:"app,omitempty"`
-	Organization       string         `yaml:"organization" json:"organization"`
-	Project            string         `yaml:"project" json:"project"`
-	DefaultEnvironment string         `yaml:"default_environment" json:"default_environment"`
-	Build              BuildConfig    `yaml:"build" json:"build"`
-	Web                ServiceConfig  `yaml:"web" json:"web"`
-	Worker             *ServiceConfig `yaml:"worker,omitempty" json:"worker,omitempty"`
-	ReleaseCommand     string         `yaml:"release_command,omitempty" json:"release_command,omitempty"`
-	Direct             *DirectConfig  `yaml:"direct,omitempty" json:"direct,omitempty"`
+	SchemaVersion      int                 `yaml:"schema_version" json:"schema_version"`
+	App                AppConfig           `yaml:"app,omitempty" json:"app,omitempty"`
+	Organization       string              `yaml:"organization" json:"organization"`
+	Project            string              `yaml:"project" json:"project"`
+	DefaultEnvironment string              `yaml:"default_environment" json:"default_environment"`
+	Build              BuildConfig         `yaml:"build" json:"build"`
+	Web                ServiceConfig       `yaml:"web" json:"web"`
+	Worker             *ServiceConfig      `yaml:"worker,omitempty" json:"worker,omitempty"`
+	ReleaseCommand     string              `yaml:"release_command,omitempty" json:"release_command,omitempty"`
+	Ingress            *IngressConfig      `yaml:"ingress,omitempty" json:"ingress,omitempty"`
+	Solo               *SoloConfig         `yaml:"solo,omitempty" json:"solo,omitempty"`
+	LegacyDirect       *LegacyDirectConfig `yaml:"direct,omitempty" json:"direct,omitempty"` // legacy schema v3 migration input only
 }
 
 type Project = ProjectConfig
@@ -137,6 +169,13 @@ func Load(path string) (*ProjectConfig, error) {
 	}
 	if strings.TrimSpace(cfg.App.Type) == "" && filepath.Base(path) == GenericFilePath {
 		cfg.App.Type = AppTypeGeneric
+	}
+	if cfg.SchemaVersion == 0 {
+		return nil, fmt.Errorf("invalid %s in %s: schema_version must be %d; re-run `devopsellence setup`", filepath.Base(path), path, SchemaVersion)
+	}
+	migrateLegacySoloConfig(&cfg)
+	if cfg.SchemaVersion == 3 {
+		cfg.SchemaVersion = SchemaVersion
 	}
 	applyDefaults(&cfg)
 	if err := Validate(&cfg); err != nil {
@@ -197,6 +236,10 @@ func Write(workspaceRoot string, cfg ProjectConfig) (ProjectConfig, error) {
 	if cfg.SchemaVersion == 0 {
 		cfg.SchemaVersion = SchemaVersion
 	}
+	if cfg.SchemaVersion == 3 {
+		cfg.SchemaVersion = SchemaVersion
+	}
+	migrateLegacySoloConfig(&cfg)
 	applyDefaults(&cfg)
 	if err := Validate(&cfg); err != nil {
 		return ProjectConfig{}, err
@@ -292,35 +335,62 @@ func Validate(cfg *ProjectConfig) error {
 			return err
 		}
 	}
-	if cfg.Direct != nil {
-		for name, node := range cfg.Direct.Nodes {
+	if cfg.Ingress != nil {
+		if len(cfg.Ingress.Hosts) == 0 {
+			return errors.New("ingress.hosts must include at least one host")
+		}
+		seenHosts := map[string]bool{}
+		for _, host := range cfg.Ingress.Hosts {
+			host = strings.TrimSpace(host)
+			if host == "" {
+				return errors.New("ingress.hosts entries must be present")
+			}
+			if seenHosts[host] {
+				return fmt.Errorf("ingress.hosts contains duplicate host %q", host)
+			}
+			seenHosts[host] = true
+		}
+		switch strings.TrimSpace(cfg.Ingress.TLS.Mode) {
+		case "", "auto", "off", "manual":
+		default:
+			return fmt.Errorf("ingress.tls.mode must be auto, off, or manual")
+		}
+	}
+	if cfg.Solo != nil {
+		for name, node := range cfg.Solo.Nodes {
 			if strings.TrimSpace(name) == "" {
-				return errors.New("direct.nodes keys must be present")
+				return errors.New("solo.nodes keys must be present")
 			}
 			if strings.TrimSpace(node.Host) == "" {
-				return fmt.Errorf("direct.nodes.%s.host is required", name)
+				return fmt.Errorf("solo.nodes.%s.host is required", name)
 			}
 			if strings.TrimSpace(node.User) == "" {
-				return fmt.Errorf("direct.nodes.%s.user is required", name)
+				return fmt.Errorf("solo.nodes.%s.user is required", name)
 			}
-			if node.Labels != nil && len(node.Labels) == 0 {
-				return fmt.Errorf("direct.nodes.%s.labels must include at least one label", name)
+			if len(node.Labels) == 0 {
+				return fmt.Errorf("solo.nodes.%s.labels must include at least one label", name)
 			}
 			for _, label := range node.Labels {
 				switch strings.TrimSpace(label) {
-				case DirectLabelWeb, DirectLabelWorker:
+				case NodeLabelWeb, NodeLabelWorker:
 				case "":
-					return fmt.Errorf("direct.nodes.%s.labels entries must be present", name)
+					return fmt.Errorf("solo.nodes.%s.labels entries must be present", name)
 				default:
-					return fmt.Errorf("direct.nodes.%s.labels contains unsupported label %q", name, label)
+					return fmt.Errorf("solo.nodes.%s.labels contains unsupported label %q", name, label)
 				}
 			}
 		}
+	}
+	if cfg.LegacyDirect != nil {
+		return errors.New("direct.nodes has been replaced by solo.nodes; re-run `devopsellence setup`")
 	}
 	return nil
 }
 
 func applyDefaults(cfg *ProjectConfig) {
+	if cfg.SchemaVersion == 0 {
+		cfg.SchemaVersion = SchemaVersion
+	}
 	if strings.TrimSpace(cfg.App.Type) == "" {
 		cfg.App.Type = AppTypeRails
 	}
@@ -372,21 +442,41 @@ func applyDefaults(cfg *ProjectConfig) {
 			cfg.Worker.Volumes = []Volume{}
 		}
 	}
-	if cfg.Direct != nil {
-		for name, node := range cfg.Direct.Nodes {
+	if cfg.Ingress != nil {
+		cfg.Ingress.Hosts = normalizeStringList(cfg.Ingress.Hosts)
+		cfg.Ingress.TLS.Mode = strings.TrimSpace(cfg.Ingress.TLS.Mode)
+		if cfg.Ingress.TLS.Mode == "" {
+			cfg.Ingress.TLS.Mode = "auto"
+		}
+		cfg.Ingress.TLS.Email = strings.TrimSpace(cfg.Ingress.TLS.Email)
+		cfg.Ingress.TLS.CADirectoryURL = strings.TrimSpace(cfg.Ingress.TLS.CADirectoryURL)
+		if cfg.Ingress.TLS.Mode == "auto" {
+			cfg.Ingress.RedirectHTTP = true
+		}
+	}
+	if cfg.Solo != nil {
+		if cfg.Solo.Nodes == nil {
+			cfg.Solo.Nodes = map[string]SoloNode{}
+		}
+		for name, node := range cfg.Solo.Nodes {
 			if node.Port == 0 {
 				node.Port = 22
 			}
 			if node.AgentStateDir == "" {
 				node.AgentStateDir = "/var/lib/devopsellence"
 			}
-			node.Labels = normalizeDirectLabels(node.Labels)
-			cfg.Direct.Nodes[name] = node
+			labels := normalizeNodeLabels(node.Labels)
+			if len(labels) == 0 {
+				labels = append([]string(nil), SoloDefaultLabels...)
+			}
+			node.Labels = append([]string(nil), labels...)
+			cfg.Solo.Nodes[name] = node
 		}
 	}
+	cfg.LegacyDirect = nil
 }
 
-func normalizeDirectLabels(labels []string) []string {
+func normalizeLegacyDirectLabels(labels []string) []string {
 	if labels == nil {
 		return nil
 	}
@@ -401,6 +491,76 @@ func normalizeDirectLabels(labels []string) []string {
 		normalized = append(normalized, label)
 	}
 	return normalized
+}
+
+func normalizeNodeLabels(labels []string) []string {
+	if labels == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(labels))
+	normalized := make([]string, 0, len(labels))
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label == "" || seen[label] {
+			continue
+		}
+		seen[label] = true
+		normalized = append(normalized, label)
+	}
+	return normalized
+}
+
+func normalizeStringList(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
+func migrateLegacySoloConfig(cfg *ProjectConfig) {
+	if cfg == nil || cfg.LegacyDirect == nil {
+		return
+	}
+	if cfg.Solo == nil {
+		cfg.Solo = &SoloConfig{Nodes: map[string]SoloNode{}}
+	}
+	if cfg.Solo.Nodes == nil {
+		cfg.Solo.Nodes = map[string]SoloNode{}
+	}
+	for name, node := range cfg.LegacyDirect.Nodes {
+		if _, ok := cfg.Solo.Nodes[name]; !ok {
+			cfg.Solo.Nodes[name] = soloNodeFromLegacyDirectNode(node)
+		}
+	}
+	cfg.LegacyDirect = nil
+	cfg.SchemaVersion = SchemaVersion
+}
+
+func soloNodeFromLegacyDirectNode(node LegacyDirectNode) SoloNode {
+	labels := normalizeLegacyDirectLabels(node.Labels)
+	if labels == nil {
+		labels = []string{NodeLabelWeb, NodeLabelWorker}
+	}
+	return SoloNode{
+		Host:             node.Host,
+		User:             node.User,
+		Port:             node.Port,
+		SSHKey:           node.SSHKey,
+		AgentStateDir:    node.AgentStateDir,
+		Labels:           labels,
+		Provider:         node.Provider,
+		ProviderServerID: node.ProviderServerID,
+		ProviderRegion:   node.ProviderRegion,
+		ProviderSize:     node.ProviderSize,
+		ProviderImage:    node.ProviderImage,
+	}
 }
 
 func validateService(name string, service ServiceConfig, allowHealthcheck bool) error {

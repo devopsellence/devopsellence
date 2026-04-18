@@ -120,7 +120,7 @@ func TestValidateIngressRequiresWeb(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Revision: "rev-1",
 		Ingress: &desiredstatepb.Ingress{
-			Hostname:    "abc123.devopsellence.io",
+			Hosts:       []string{"abc123.devopsellence.io"},
 			TunnelToken: "tok",
 		},
 		Containers: []*desiredstatepb.Container{{ServiceName: "worker", Image: "busybox"}},
@@ -130,7 +130,7 @@ func TestValidateIngressRequiresWeb(t *testing.T) {
 	}
 }
 
-func TestValidateIngressRequiresHostname(t *testing.T) {
+func TestValidateIngressRequiresHosts(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Revision: "rev-1",
 		Ingress: &desiredstatepb.Ingress{
@@ -152,7 +152,7 @@ func TestValidateIngressAllowsTokenSecretRef(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Revision: "rev-1",
 		Ingress: &desiredstatepb.Ingress{
-			Hostname:             "abc123.devopsellence.io",
+			Hosts:                []string{"abc123.devopsellence.io"},
 			TunnelTokenSecretRef: "gsm://projects/test/secrets/cloudflare/versions/latest",
 		},
 		Containers: []*desiredstatepb.Container{{
@@ -167,12 +167,12 @@ func TestValidateIngressAllowsTokenSecretRef(t *testing.T) {
 	}
 }
 
-func TestValidateIngressAllowsDirectDNSMode(t *testing.T) {
+func TestValidateIngressAllowsPublicMode(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Revision: "rev-1",
 		Ingress: &desiredstatepb.Ingress{
-			Mode:     "direct_dns",
-			Hostname: "abc123.devopsellence.io",
+			Mode:  "public",
+			Hosts: []string{"abc123.devopsellence.io"},
 		},
 		Containers: []*desiredstatepb.Container{{
 			ServiceName: "web",
@@ -190,8 +190,8 @@ func TestValidateIngressRejectsUnsupportedMode(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Revision: "rev-1",
 		Ingress: &desiredstatepb.Ingress{
-			Mode:     "bogus",
-			Hostname: "abc123.devopsellence.io",
+			Mode:  "bogus",
+			Hosts: []string{"abc123.devopsellence.io"},
 		},
 		Containers: []*desiredstatepb.Container{{
 			ServiceName: "web",

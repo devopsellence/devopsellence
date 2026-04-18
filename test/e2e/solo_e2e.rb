@@ -8,13 +8,13 @@
 #   2. Start a Docker container acting as the "remote node":
 #      - OpenSSH server for CLI access
 #      - Docker (via docker.sock mount)
-#      - Agent in --mode=direct watching desired-state file
-#   3. Scaffold a test Go app with devopsellence.yml (solo config under `direct`)
+#      - Agent in --mode=solo watching desired-state file
+#   3. Scaffold a test Go app with devopsellence.yml (solo config under `solo`)
 #   4. CLI sets secrets, deploys, checks status
 #   5. Assert: app container running, status.json settled, secrets resolved
 #
 # Usage:
-#   ruby test/e2e/direct_e2e.rb
+#   ruby test/e2e/solo_e2e.rb
 #
 # Environment:
 #   DEVOPSELLENCE_E2E_RUN_ID            - unique run ID (auto-generated)
@@ -39,7 +39,7 @@ require "tmpdir"
 require "yaml"
 require_relative "binary_artifacts"
 
-class DirectE2E
+class SoloE2E
   include E2EBinaryArtifacts
 
   MONOREPO_ROOT = Pathname(__dir__).join("../..").expand_path
@@ -57,8 +57,8 @@ class DirectE2E
     @workspace_root = @checkout_root.parent
     @cli_root = resolve_repo_root(%w[cli], "DEVOPSELLENCE_CLI_ROOT")
     @agent_root = resolve_repo_root(%w[agent], "DEVOPSELLENCE_AGENT_ROOT")
-    @state_dir = MONOREPO_ROOT.join("test/e2e/tmp/direct", @run_id)
-    @app_root_dir = Pathname(Dir.tmpdir).join("devopsellence-direct-e2e", @run_id)
+    @state_dir = MONOREPO_ROOT.join("test/e2e/tmp/solo", @run_id)
+    @app_root_dir = Pathname(Dir.tmpdir).join("devopsellence-solo-e2e", @run_id)
     @agent_state_dir = @app_root_dir.join("node-state").to_s
     @desired_state_path = File.join(@agent_state_dir, "desired-state-override.json")
     @status_path = File.join(@agent_state_dir, "status.json")
@@ -67,20 +67,20 @@ class DirectE2E
     @log_dir = MONOREPO_ROOT.join("test/e2e/log")
     @image_build_dir = @state_dir.join("images")
     @ssh_port = Integer(ENV.fetch("DEVOPSELLENCE_E2E_SSH_PORT", available_port(12_200).to_s))
-    @network = "devopsellence-direct-e2e-#{@run_id}"
-    @node_container = "devopsellence-direct-node-#{@run_id}"
-    @node_image = "devopsellence/direct-e2e-node:#{@run_id}"
+    @network = "devopsellence-solo-e2e-#{@run_id}"
+    @node_container = "devopsellence-solo-node-#{@run_id}"
+    @node_image = "devopsellence/solo-e2e-node:#{@run_id}"
     @run_labels = {
       "devopsellence.e2e" => "1",
       "devopsellence.e2e.run_id" => @run_id,
-      "devopsellence.e2e.mode" => "direct"
+      "devopsellence.e2e.mode" => "solo"
     }
     @keep_runtime = ENV["DEVOPSELLENCE_E2E_KEEP"] == "1"
     @container_log_paths = {
-      @node_container => @log_dir.join("direct-e2e-node-#{@run_id}.log")
+      @node_container => @log_dir.join("solo-e2e-node-#{@run_id}.log")
     }
     @ssh_key_dir = @state_dir.join("ssh")
-    @project_name = "e2e-direct-#{SecureRandom.hex(3)}"
+    @project_name = "e2e-solo-#{SecureRandom.hex(3)}"
   end
 
   def call
@@ -123,7 +123,7 @@ class DirectE2E
   # Build a Docker image that acts as a remote node:
   # - OpenSSH server for CLI SSH access
   # - Docker CLI (docker.sock mounted at runtime)
-  # - Agent binary running in the solo-path `--mode=direct`
+  # - Agent binary running in solo mode
   def build_node_image!
     image_dir = @image_build_dir.join("node")
     FileUtils.rm_rf(image_dir)
@@ -151,9 +151,9 @@ class DirectE2E
       echo "[node] sshd started on port 22"
       echo "[node] starting agent in solo mode..."
 
-      # Run agent in the solo-path implementation.
+      # Run agent in solo mode.
       exec /usr/local/bin/devopsellence \
-        --mode=direct \
+        --mode=solo \
         --auth-state-path=#{@agent_state_dir}/auth.json \
         --desired-state-override-path=#{@desired_state_path} \
         --envoy-bootstrap-path=#{@envoy_bootstrap_path} \
@@ -267,7 +267,7 @@ class DirectE2E
 
   def write_devopsellence_yml!
     config = {
-      "schema_version" => 3,
+      "schema_version" => 4,
       "organization" => "e2e-org",
       "project" => @project_name,
       "build" => {
@@ -283,21 +283,21 @@ class DirectE2E
           "port" => APP_PORT
         },
         "env" => {
-          PLAIN_ENV_NAME => "hello-direct"
+          PLAIN_ENV_NAME => "hello-solo"
         },
         "secret_refs" => [
           { "name" => SECRET_VALUE_NAME, "secret" => "projects/x/secrets/e2e" }
         ]
       },
-      "direct" => {
+      "solo" => {
         "nodes" => {
           "node-1" => {
+            "labels" => ["web"],
             "host" => "127.0.0.1",
             "user" => "root",
             "port" => @ssh_port,
             "ssh_key" => @ssh_private_key.to_s,
-            "agent_state_dir" => @agent_state_dir,
-            "labels" => ["web"]
+            "agent_state_dir" => @agent_state_dir
           }
         }
       }
@@ -364,7 +364,7 @@ class DirectE2E
   def set_secrets!
     # Use CLI to set secrets (writes to .env in app dir).
     run!(
-      cli_binary.to_s, "secret", "set", SECRET_VALUE_NAME, "--value", "secret-direct-123",
+      cli_binary.to_s, "secret", "set", SECRET_VALUE_NAME, "--value", "secret-solo-123",
       chdir: @app_dir.to_s,
       timeout: 30,
       env: ssh_env
@@ -445,8 +445,8 @@ class DirectE2E
 
     web_container = desired["containers"].find { |c| c["serviceName"] == "web" }
     raise "web container not in desired state" unless web_container
-    raise "env #{PLAIN_ENV_NAME} missing" unless web_container.dig("env", PLAIN_ENV_NAME) == "hello-direct"
-    raise "secret #{SECRET_VALUE_NAME} not resolved" unless web_container.dig("env", SECRET_VALUE_NAME) == "secret-direct-123"
+    raise "env #{PLAIN_ENV_NAME} missing" unless web_container.dig("env", PLAIN_ENV_NAME) == "hello-solo"
+    raise "secret #{SECRET_VALUE_NAME} not resolved" unless web_container.dig("env", SECRET_VALUE_NAME) == "secret-solo-123"
     puts "[ok] Desired state verified: secrets resolved, env present"
 
     # Verify CLI logs command runs (may fail inside test container due to no systemd,
@@ -655,7 +655,7 @@ class DirectE2E
   def teardown!
     capture_logs!
     if @keep_runtime
-      puts "\n[keep] preserved direct e2e runtime"
+      puts "\n[keep] preserved solo e2e runtime"
       puts "[keep] network=#{@network}"
       puts "[keep] state_dir=#{@state_dir}"
       puts "[keep] app_dir=#{@app_dir}"
@@ -706,4 +706,4 @@ class DirectE2E
   end
 end
 
-DirectE2E.new.call
+SoloE2E.new.call

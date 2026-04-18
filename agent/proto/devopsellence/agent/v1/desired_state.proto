@@ -11,6 +11,7 @@ message DesiredState {
   repeated Container containers = 3;
   Ingress ingress = 4;
   Task release_command = 6;
+  repeated NodePeer node_peers = 7;
 }
 
 message Container {
@@ -52,10 +53,22 @@ message Task {
 }
 
 message Ingress {
-  string hostname = 1;
-  string tunnel_token = 2;
-  string tunnel_token_secret_ref = 3;
-  string mode = 4;
-  reserved 5, 6;
-  reserved "origin_hostname", "origin_port";
+  repeated string hosts = 1;
+  string mode = 2;
+  IngressTLS tls = 3;
+  bool redirect_http = 4;
+  string tunnel_token = 5;
+  string tunnel_token_secret_ref = 6;
+}
+
+message IngressTLS {
+  string mode = 1;
+  string email = 2;
+  string ca_directory_url = 3;
+}
+
+message NodePeer {
+  string name = 1;
+  repeated string labels = 2;
+  string public_address = 3;
 }

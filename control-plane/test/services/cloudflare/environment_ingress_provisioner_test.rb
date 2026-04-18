@@ -176,7 +176,7 @@ module Cloudflare
         cloudflare_tunnel_id: bundle.cloudflare_tunnel_id,
         gcp_secret_name: bundle.gcp_secret_name,
         status: EnvironmentIngress::STATUS_DEGRADED,
-        last_error: "no eligible direct_dns web nodes with fresh heartbeat, settled rollout, and ready TLS",
+        last_error: "no eligible public web nodes with fresh heartbeat and settled rollout",
         provisioned_at: bundle.provisioned_at
       )
       client = FakeClient.new

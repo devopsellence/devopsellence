@@ -10,10 +10,11 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/devopsellence/devopsellence/agent/internal/acme"
 	"github.com/devopsellence/devopsellence/agent/internal/agent"
 	"github.com/devopsellence/devopsellence/agent/internal/auth"
-	"github.com/devopsellence/devopsellence/agent/internal/authority/direct"
 	"github.com/devopsellence/devopsellence/agent/internal/authority/remote"
+	"github.com/devopsellence/devopsellence/agent/internal/authority/solo"
 	"github.com/devopsellence/devopsellence/agent/internal/cloudflared"
 	"github.com/devopsellence/devopsellence/agent/internal/config"
 	cpregistry "github.com/devopsellence/devopsellence/agent/internal/controlplane"
@@ -24,7 +25,6 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/gcp"
 	"github.com/devopsellence/devopsellence/agent/internal/lifecycle"
 	"github.com/devopsellence/devopsellence/agent/internal/observability"
-	"github.com/devopsellence/devopsellence/agent/internal/origincert"
 	"github.com/devopsellence/devopsellence/agent/internal/reconcile"
 	"github.com/devopsellence/devopsellence/agent/internal/registryauth"
 	"github.com/devopsellence/devopsellence/agent/internal/report/controlplane"
@@ -77,15 +77,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cfg.Mode == config.ModeDirect {
-		runDirect(ctx, cfg, eng, logger, metrics)
+	if cfg.Mode == config.ModeSolo {
+		runSolo(ctx, cfg, eng, logger, metrics)
 	} else {
-		runNormal(ctx, cfg, eng, logger, registry, metrics)
+		runShared(ctx, cfg, eng, logger, registry, metrics)
 	}
 }
 
-func runDirect(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, metrics *observability.Metrics) {
-	desiredAuthority := direct.New(cfg.DesiredStateOverridePath, logger.With("authority", "direct"))
+func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, metrics *observability.Metrics) {
+	desiredAuthority := solo.New(cfg.DesiredStateOverridePath, logger.With("authority", "solo"))
 
 	envoyManager := envoy.New(eng, envoy.Config{
 		Image:          cfg.EnvoyImage,
@@ -107,6 +107,14 @@ func runDirect(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		TunnelToken:    cfg.CloudflareTunnelToken,
 		StartupTimeout: cfg.StopTimeout,
 	}, logger)
+	ingressCertManager := acme.New(acme.Config{
+		CertPath:    cfg.EnvoyTLSCertPath,
+		KeyPath:     cfg.EnvoyTLSKeyPath,
+		FileUID:     cfg.EnvoyUID,
+		FileGID:     cfg.EnvoyGID,
+		RenewBefore: cfg.IngressCertRenewBefore,
+		Logger:      logger,
+	})
 
 	reconciler := reconcile.New(eng, reconcile.Options{
 		Network:     cfg.NetworkName,
@@ -115,6 +123,7 @@ func runDirect(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		WebPort:     cfg.WebPort,
 		Envoy:       envoyManager,
 		Cloudflared: cloudflaredManager,
+		IngressCert: ingressCertManager,
 		Logger:      logger,
 	})
 
@@ -136,7 +145,7 @@ func runDirect(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 	}
 }
 
-func runNormal(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, _ *prometheus.Registry, metrics *observability.Metrics) {
+func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, _ *prometheus.Registry, metrics *observability.Metrics) {
 	var systemImagePrefetcher *systemimages.Prefetcher
 	var prefetchOnce sync.Once
 	triggerSystemImagePrefetch := func() {
@@ -219,19 +228,14 @@ func runNormal(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		TunnelToken:    cfg.CloudflareTunnelToken,
 		StartupTimeout: cfg.StopTimeout,
 	}, logger)
-	originCertManager, err := origincert.New(origincert.Config{
-		BaseURL:     cfg.ControlPlaneBaseURL,
+	ingressCertManager := acme.New(acme.Config{
 		CertPath:    cfg.EnvoyTLSCertPath,
 		KeyPath:     cfg.EnvoyTLSKeyPath,
 		FileUID:     cfg.EnvoyUID,
 		FileGID:     cfg.EnvoyGID,
 		RenewBefore: cfg.IngressCertRenewBefore,
-		Tokens:      authManager,
+		Logger:      logger,
 	})
-	if err != nil {
-		logger.Error("ingress cert manager init failed", "error", err)
-		os.Exit(1)
-	}
 	if auth.AssignmentEligible(authManager.DesiredStateTarget().Mode) {
 		triggerSystemImagePrefetch()
 	}
@@ -244,7 +248,7 @@ func runNormal(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		Envoy:         envoyManager,
 		Cloudflared:   cloudflaredManager,
 		ImagePullAuth: imagePullAuth,
-		IngressCert:   originCertManager,
+		IngressCert:   ingressCertManager,
 		Logger:        logger,
 	})
 

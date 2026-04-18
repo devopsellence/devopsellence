@@ -56,6 +56,7 @@ These assumptions are visible in the code today. The product has a solo path tha
 - Solo mode uses the local filesystem as the source of truth for desired state and local status artifacts.
 - Shared mode should use simple external primitives: object storage for desired state, a secret manager for secrets, and a container registry for images.
 - The runtime data plane should stay decoupled from the management plane as much as possible.
+- Ingress desired state should be the same in solo and shared mode: hostnames, public web nodes, Envoy, and node-owned TLS. The control plane may help publish DNS, but certificate private keys should stay on the node.
 - Local override must always remain possible. Operators need an escape hatch.
 - The system should remain understandable with ordinary tools: SSH, Docker, files, logs, JSON, and cloud CLIs.
 

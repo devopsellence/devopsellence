@@ -5,14 +5,14 @@ on:
     branches: [master]
     paths:
       - .github/workflows/e2e-solo.yml
-      - test/e2e/direct_e2e.rb
+      - test/e2e/solo_e2e.rb
       - agent/**
       - cli/**
       - mise.toml
   pull_request:
     paths:
       - .github/workflows/e2e-solo.yml
-      - test/e2e/direct_e2e.rb
+      - test/e2e/solo_e2e.rb
       - agent/**
       - cli/**
       - mise.toml
@@ -35,12 +35,12 @@ jobs:
         env:
           DEVOPSELLENCE_CLI_ROOT: ${{ github.workspace }}/cli
           DEVOPSELLENCE_AGENT_ROOT: ${{ github.workspace }}/agent
-        run: ruby test/e2e/direct_e2e.rb
+        run: ruby test/e2e/solo_e2e.rb
 
       - name: Upload e2e logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: e2e-solo-logs
-          path: test/e2e/log/direct-e2e-*.log
+          path: test/e2e/log/solo-e2e-*.log
           if-no-files-found: ignore

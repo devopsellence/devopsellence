@@ -1,4 +1,4 @@
-package direct
+package solo
 
 import (
 	"encoding/json"
@@ -14,7 +14,9 @@ import (
 type desiredStateJSON struct {
 	Revision       string          `json:"revision,omitempty"`
 	Containers     []containerJSON `json:"containers,omitempty"`
+	Ingress        *ingressJSON    `json:"ingress,omitempty"`
 	ReleaseCommand *taskJSON       `json:"releaseCommand,omitempty"`
+	NodePeers      []nodePeerJSON  `json:"nodePeers,omitempty"`
 }
 
 type containerJSON struct {
@@ -50,6 +52,31 @@ type taskJSON struct {
 	VolumeMounts []volumeMountJSON `json:"volumeMounts,omitempty"`
 }
 
+type ingressJSON struct {
+	Hosts        []string       `json:"hosts,omitempty"`
+	Mode         string         `json:"mode,omitempty"`
+	TLS          ingressTLSJSON `json:"tls,omitempty"`
+	RedirectHTTP bool           `json:"redirectHttp,omitempty"`
+}
+
+type ingressTLSJSON struct {
+	Mode           string `json:"mode,omitempty"`
+	Email          string `json:"email,omitempty"`
+	CADirectoryURL string `json:"caDirectoryUrl,omitempty"`
+}
+
+type NodePeer struct {
+	Name          string
+	Labels        []string
+	PublicAddress string
+}
+
+type nodePeerJSON struct {
+	Name          string   `json:"name,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
+	PublicAddress string   `json:"publicAddress,omitempty"`
+}
+
 // BuildDesiredState produces desired-state JSON from a ProjectConfig, image tag,
 // git revision, and pre-resolved secrets. Secrets are merged into env vars;
 // no secret_refs appear in the output.
@@ -57,15 +84,24 @@ func BuildDesiredState(cfg *config.ProjectConfig, imageTag, revision string, sec
 	return BuildDesiredStateForLabels(cfg, imageTag, revision, secrets, nil, cfg.ReleaseCommand != "")
 }
 
-// BuildDesiredStateForLabels produces desired-state JSON for one direct node.
-// A nil labels slice preserves the legacy direct behavior: run all configured
+// BuildDesiredStateForLabels produces desired-state JSON for one solo node.
+// A nil labels slice preserves the legacy solo behavior: run all configured
 // services. A non-nil labels slice schedules only matching services.
 func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseCommand bool) ([]byte, error) {
+	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseCommand)
+}
+
+// BuildDesiredStateForNode produces desired-state JSON for one node, including
+// public ingress only when the node has the web label.
+func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, webNode bool, includeReleaseCommand bool, nodePeers ...[]NodePeer) ([]byte, error) {
 	ds := desiredStateJSON{
 		Revision: revision,
 	}
+	if len(nodePeers) > 0 {
+		ds.NodePeers = buildNodePeers(nodePeers[0])
+	}
 
-	if labels == nil || hasLabel(labels, config.DirectLabelWeb) {
+	if labels == nil || hasLabel(labels, config.NodeLabelWeb) {
 		webContainer, err := buildContainer("web", cfg.Web, imageTag, secrets)
 		if err != nil {
 			return nil, fmt.Errorf("build web container: %w", err)
@@ -73,7 +109,11 @@ func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision st
 		ds.Containers = append(ds.Containers, webContainer)
 	}
 
-	if cfg.Worker != nil && (labels == nil || hasLabel(labels, config.DirectLabelWorker)) {
+	if webNode && cfg.Ingress != nil && (labels == nil || hasLabel(labels, config.NodeLabelWeb)) {
+		ds.Ingress = buildIngress(cfg.Ingress)
+	}
+
+	if cfg.Worker != nil && (labels == nil || hasLabel(labels, config.NodeLabelWorker)) {
 		workerContainer, err := buildContainer("worker", *cfg.Worker, imageTag, secrets)
 		if err != nil {
 			return nil, fmt.Errorf("build worker container: %w", err)
@@ -104,6 +144,58 @@ func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision st
 		return nil, fmt.Errorf("marshal desired state: %w", err)
 	}
 	return data, nil
+}
+
+func buildIngress(ingress *config.IngressConfig) *ingressJSON {
+	if ingress == nil || len(ingress.Hosts) == 0 {
+		return nil
+	}
+	mode := strings.TrimSpace(ingress.TLS.Mode)
+	if mode == "" {
+		mode = "auto"
+	}
+	return &ingressJSON{
+		Hosts: append([]string(nil), ingress.Hosts...),
+		Mode:  "public",
+		TLS: ingressTLSJSON{
+			Mode:           mode,
+			Email:          strings.TrimSpace(ingress.TLS.Email),
+			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
+		},
+		RedirectHTTP: ingress.RedirectHTTP,
+	}
+}
+
+func buildNodePeers(peers []NodePeer) []nodePeerJSON {
+	out := make([]nodePeerJSON, 0, len(peers))
+	for _, peer := range peers {
+		name := strings.TrimSpace(peer.Name)
+		address := strings.TrimSpace(peer.PublicAddress)
+		labels := normalizedLabels(peer.Labels)
+		if name == "" && address == "" && len(labels) == 0 {
+			continue
+		}
+		out = append(out, nodePeerJSON{
+			Name:          name,
+			Labels:        labels,
+			PublicAddress: address,
+		})
+	}
+	return out
+}
+
+func normalizedLabels(labels []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label == "" || seen[label] {
+			continue
+		}
+		seen[label] = true
+		out = append(out, label)
+	}
+	return out
 }
 
 func hasLabel(labels []string, want string) bool {

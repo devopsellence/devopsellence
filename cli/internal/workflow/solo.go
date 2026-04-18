@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,55 +17,57 @@ import (
 
 	"github.com/devopsellence/cli/internal/api"
 	"github.com/devopsellence/cli/internal/config"
-	"github.com/devopsellence/cli/internal/direct"
-	"github.com/devopsellence/cli/internal/direct/providers"
 	"github.com/devopsellence/cli/internal/discovery"
+	"github.com/devopsellence/cli/internal/output"
+	"github.com/devopsellence/cli/internal/solo"
+	"github.com/devopsellence/cli/internal/solo/providers"
 	"github.com/devopsellence/cli/internal/ui"
 )
 
-type DirectDeployOptions struct {
+type SoloDeployOptions struct {
+	Nodes        []string
+	SkipDNSCheck bool
+}
+
+type SoloStatusOptions struct {
 	Nodes []string
 }
 
-type DirectStatusOptions struct {
-	Nodes []string
-}
-
-type DirectSecretsSetOptions struct {
+type SoloSecretsSetOptions struct {
 	Key        string
 	Value      string
 	ValueStdin bool
 }
 
-type DirectSecretsListOptions struct{}
+type SoloSecretsListOptions struct{}
 
-type DirectSecretsDeleteOptions struct {
+type SoloSecretsDeleteOptions struct {
 	Key string
 }
 
-type DirectNodeListOptions struct{}
+type SoloNodeListOptions struct{}
 
-type DirectLogsOptions struct {
+type SoloLogsOptions struct {
 	Node   string
 	Follow bool
 }
 
-type DirectNodeLabelSetOptions struct {
+type SoloNodeLabelSetOptions struct {
 	Node   string
 	Labels string
 }
 
-type DirectAgentInstallOptions struct {
+type SoloAgentInstallOptions struct {
 	Node        string
 	AgentBinary string
 	BaseURL     string
 }
 
-type DirectDoctorOptions struct {
+type SoloDoctorOptions struct {
 	Nodes []string
 }
 
-type DirectNodeCreateOptions struct {
+type SoloNodeCreateOptions struct {
 	Name         string
 	Provider     string
 	Region       string
@@ -76,30 +79,43 @@ type DirectNodeCreateOptions struct {
 	Deploy       bool
 }
 
-type DirectNodeRemoveOptions struct {
+type SoloNodeRemoveOptions struct {
 	Name string
 	Yes  bool
 }
 
 type SharedNodeCreateOptions struct {
-	DirectNodeCreateOptions
+	SoloNodeCreateOptions
 	NodeBootstrapOptions
 }
 
 type providerNodeCreateResult struct {
-	Node         config.DirectNode
+	Node         config.SoloNode
 	Server       providers.Server
 	Labels       []string
 	ProviderSlug string
 }
 
-type DirectSetupOptions struct{}
+type SoloSetupOptions struct{}
 
-func (a *App) createProviderNode(ctx context.Context, opts DirectNodeCreateOptions, projectName string) (providerNodeCreateResult, error) {
+type IngressSetOptions struct {
+	Hosts               []string
+	TLSMode             string
+	TLSEmail            string
+	TLSCADirectoryURL   string
+	RedirectHTTP        bool
+	RedirectHTTPChanged bool
+}
+
+type IngressCheckOptions struct {
+	Wait time.Duration
+}
+
+func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions, projectName string) (providerNodeCreateResult, error) {
 	if opts.Name == "" {
 		return providerNodeCreateResult{}, fmt.Errorf("node name is required")
 	}
-	labels, err := parseDirectLabels(firstNonEmpty(opts.Labels, strings.Join(config.DirectDefaultLabels, ",")))
+	labels, err := parseSoloLabels(firstNonEmpty(opts.Labels, strings.Join(config.SoloDefaultLabels, ",")))
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
@@ -110,11 +126,11 @@ func (a *App) createProviderNode(ctx context.Context, opts DirectNodeCreateOptio
 	if opts.Size == "" {
 		opts.Size = "cx22"
 	}
-	provider, err := a.resolveDirectProvider(providerSlug)
+	provider, err := a.resolveSoloProvider(providerSlug)
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
-	sshPublicKey, sshPublicKeyPath, err := readDirectSSHPublicKey(opts.SSHPublicKey)
+	sshPublicKey, sshPublicKeyPath, err := readSoloSSHPublicKey(opts.SSHPublicKey)
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
@@ -136,14 +152,14 @@ func (a *App) createProviderNode(ctx context.Context, opts DirectNodeCreateOptio
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
-	server, err = waitForDirectProviderServer(ctx, provider, server)
+	server, err = waitForSoloProviderServer(ctx, provider, server)
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
 	if server.PublicIP == "" {
 		return providerNodeCreateResult{}, fmt.Errorf("created server %s but provider did not return a public IPv4 address", server.ID)
 	}
-	node := config.DirectNode{
+	node := config.SoloNode{
 		Host:             server.PublicIP,
 		User:             "root",
 		Port:             22,
@@ -169,21 +185,24 @@ func (a *App) createProviderNode(ctx context.Context, opts DirectNodeCreateOptio
 	}, nil
 }
 
-func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error {
-	cfg, workspaceRoot, err := a.loadDirectConfig()
+func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
+	cfg, workspaceRoot, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
 
-	nodes, err := a.resolveNodes(cfg.Direct, opts.Nodes)
+	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
 	if err != nil {
 		return err
 	}
 	if len(nodes) == 0 {
-		return fmt.Errorf("no nodes configured; add direct.nodes to devopsellence.yml")
+		return fmt.Errorf("no nodes configured; add solo.nodes to devopsellence.yml")
 	}
-	releaseNode, err := validateDirectNodeSchedule(cfg, nodes)
+	releaseNode, err := validateSoloNodeSchedule(cfg, nodes)
 	if err != nil {
+		return err
+	}
+	if err := a.checkIngressBeforeDeploy(ctx, cfg, nodes, opts.SkipDNSCheck); err != nil {
 		return err
 	}
 
@@ -196,7 +215,7 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 	if len(shortSHA) > 7 {
 		shortSHA = shortSHA[:7]
 	}
-	imageTag := directImageTag(cfg.Project, shortSHA)
+	imageTag := soloImageTag(cfg.Project, shortSHA)
 
 	// Build Docker image.
 	if !a.Printer.JSON {
@@ -209,11 +228,11 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 	}
 
 	// Load local secrets and build desired state.
-	secrets, err := direct.LoadSecrets(workspaceRoot)
+	secrets, err := solo.LoadSecrets(workspaceRoot)
 	if err != nil {
 		return fmt.Errorf("load secrets: %w", err)
 	}
-	if notice, err := applyDirectRailsMasterKey(workspaceRoot, cfg, secrets); err != nil {
+	if notice, err := applySoloRailsMasterKey(workspaceRoot, cfg, secrets); err != nil {
 		return err
 	} else if notice != "" && !a.Printer.JSON {
 		a.Printer.Println("Rails: " + notice)
@@ -224,12 +243,12 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 	var errs []string
 	var wg sync.WaitGroup
 
-	for _, name := range sortedDirectNodeNames(nodes) {
+	for _, name := range sortedSoloNodeNames(nodes) {
 		node := nodes[name]
 		wg.Add(1)
-		go func(name string, node config.DirectNode) {
+		go func(name string, node config.SoloNode) {
 			defer wg.Done()
-			desiredStateJSON, err := direct.BuildDesiredStateForLabels(cfg, imageTag, shortSHA, secrets, node.Labels, name == releaseNode)
+			desiredStateJSON, err := solo.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Labels, hasSoloLabel(node.Labels, config.NodeLabelWeb), name == releaseNode, soloNodePeers(cfg, name))
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
@@ -240,7 +259,7 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 			if !a.Printer.JSON {
 				a.Printer.Println(fmt.Sprintf("[%s] Transferring image...", name))
 			}
-			if err := transferImage(ctx, node, imageTag, a.directProgress(name)); err != nil {
+			if err := transferImage(ctx, node, imageTag, a.soloProgress(name)); err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] image transfer: %s", name, err))
 				mu.Unlock()
@@ -252,7 +271,7 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 			}
 			overridePath := filepath.Join(node.AgentStateDir, "desired-state-override.json")
 			cmd := remoteDesiredStateOverrideCommand(overridePath)
-			if _, err := direct.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
+			if _, err := solo.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] write desired state: %s", name, err))
 				mu.Unlock()
@@ -272,7 +291,7 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 
 	if a.Printer.JSON {
 		nodeNames := make([]string, 0, len(nodes))
-		nodeNames = append(nodeNames, sortedDirectNodeNames(nodes)...)
+		nodeNames = append(nodeNames, sortedSoloNodeNames(nodes)...)
 		return a.Printer.PrintJSON(map[string]any{
 			"revision": shortSHA,
 			"image":    imageTag,
@@ -283,23 +302,23 @@ func (a *App) DirectDeploy(ctx context.Context, opts DirectDeployOptions) error 
 	return nil
 }
 
-func validateDirectNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.DirectNode) (string, error) {
+func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.SoloNode) (string, error) {
 	webNode := ""
 	workerNode := ""
-	for _, name := range sortedDirectNodeNames(nodes) {
+	for _, name := range sortedSoloNodeNames(nodes) {
 		node := nodes[name]
-		if webNode == "" && directNodeCanRun(node, config.DirectLabelWeb) {
+		if webNode == "" && soloNodeCanRun(node, config.NodeLabelWeb) {
 			webNode = name
 		}
-		if workerNode == "" && directNodeCanRun(node, config.DirectLabelWorker) {
+		if workerNode == "" && soloNodeCanRun(node, config.NodeLabelWorker) {
 			workerNode = name
 		}
 	}
 	if webNode == "" {
-		return "", fmt.Errorf("direct deploy requires at least one selected node labeled %q", config.DirectLabelWeb)
+		return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q", config.NodeLabelWeb)
 	}
 	if cfg.Worker != nil && workerNode == "" {
-		return "", fmt.Errorf("direct deploy requires at least one selected node labeled %q because worker is configured", config.DirectLabelWorker)
+		return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q because worker is configured", config.NodeLabelWorker)
 	}
 	if cfg.ReleaseCommand == "" {
 		return "", nil
@@ -307,7 +326,7 @@ func validateDirectNodeSchedule(cfg *config.ProjectConfig, nodes map[string]conf
 	return webNode, nil
 }
 
-func directNodeCanRun(node config.DirectNode, label string) bool {
+func soloNodeCanRun(node config.SoloNode, label string) bool {
 	if node.Labels == nil {
 		return true
 	}
@@ -319,7 +338,7 @@ func directNodeCanRun(node config.DirectNode, label string) bool {
 	return false
 }
 
-func sortedDirectNodeNames(nodes map[string]config.DirectNode) []string {
+func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
 	names := make([]string, 0, len(nodes))
 	for name := range nodes {
 		names = append(names, name)
@@ -328,13 +347,13 @@ func sortedDirectNodeNames(nodes map[string]config.DirectNode) []string {
 	return names
 }
 
-func (a *App) DirectStatus(ctx context.Context, opts DirectStatusOptions) error {
-	cfg, _, err := a.loadDirectConfig()
+func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
+	cfg, _, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
 
-	nodes, err := a.resolveNodes(cfg.Direct, opts.Nodes)
+	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
 	if err != nil {
 		return err
 	}
@@ -346,7 +365,7 @@ func (a *App) DirectStatus(ctx context.Context, opts DirectStatusOptions) error 
 
 	for name, node := range nodes {
 		statusPath := filepath.Join(node.AgentStateDir, "status.json")
-		out, err := direct.RunSSH(ctx, node, remoteReadFileCommand(statusPath), nil)
+		out, err := solo.RunSSH(ctx, node, remoteReadFileCommand(statusPath), nil)
 		if err != nil {
 			if a.Printer.JSON {
 				jsonResults = append(jsonResults, map[string]any{
@@ -403,7 +422,7 @@ func (a *App) DirectStatus(ctx context.Context, opts DirectStatusOptions) error 
 	return nil
 }
 
-func (a *App) DirectSecretsSet(_ context.Context, opts DirectSecretsSetOptions) error {
+func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) error {
 	if opts.ValueStdin {
 		data, err := io.ReadAll(a.In)
 		if err != nil {
@@ -417,11 +436,11 @@ func (a *App) DirectSecretsSet(_ context.Context, opts DirectSecretsSetOptions) 
 	if strings.TrimSpace(opts.Value) == "" {
 		return ExitError{Code: 2, Err: errors.New("secret value is required")}
 	}
-	_, workspaceRoot, err := a.loadDirectConfig()
+	_, workspaceRoot, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
-	if err := direct.SaveSecret(workspaceRoot, opts.Key, opts.Value); err != nil {
+	if err := solo.SaveSecret(workspaceRoot, opts.Key, opts.Value); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -431,12 +450,12 @@ func (a *App) DirectSecretsSet(_ context.Context, opts DirectSecretsSetOptions) 
 	return nil
 }
 
-func (a *App) DirectSecretsList(_ context.Context, _ DirectSecretsListOptions) error {
-	_, workspaceRoot, err := a.loadDirectConfig()
+func (a *App) SoloSecretsList(_ context.Context, _ SoloSecretsListOptions) error {
+	_, workspaceRoot, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
-	keys, err := direct.ListSecrets(workspaceRoot)
+	keys, err := solo.ListSecrets(workspaceRoot)
 	if err != nil {
 		return err
 	}
@@ -453,35 +472,35 @@ func (a *App) DirectSecretsList(_ context.Context, _ DirectSecretsListOptions) e
 	return nil
 }
 
-func (a *App) DirectNodeList(_ context.Context, _ DirectNodeListOptions) error {
-	cfg, _, err := a.loadDirectConfig()
+func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {
+	cfg, _, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"schema_version": outputSchemaVersion,
-			"nodes":          cfg.Direct.Nodes,
+			"nodes":          cfg.Solo.Nodes,
 		})
 	}
-	names := sortedDirectNodeNames(cfg.Direct.Nodes)
+	names := sortedSoloNodeNames(cfg.Solo.Nodes)
 	if len(names) == 0 {
 		a.Printer.Println("No nodes.")
 		return nil
 	}
 	for _, name := range names {
-		node := cfg.Direct.Nodes[name]
+		node := cfg.Solo.Nodes[name]
 		a.Printer.Println(fmt.Sprintf("%s  host=%s  labels=%s", name, node.Host, strings.Join(node.Labels, ",")))
 	}
 	return nil
 }
 
-func (a *App) DirectSecretsDelete(_ context.Context, opts DirectSecretsDeleteOptions) error {
-	_, workspaceRoot, err := a.loadDirectConfig()
+func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
+	_, workspaceRoot, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
-	if err := direct.DeleteSecret(workspaceRoot, opts.Key); err != nil {
+	if err := solo.DeleteSecret(workspaceRoot, opts.Key); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -491,23 +510,24 @@ func (a *App) DirectSecretsDelete(_ context.Context, opts DirectSecretsDeleteOpt
 	return nil
 }
 
-func (a *App) DirectLogs(ctx context.Context, opts DirectLogsOptions) error {
-	cfg, _, err := a.loadDirectConfig()
+func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
+	cfg, _, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
 
-	node, ok := cfg.Direct.Nodes[opts.Node]
+	soloNode, ok := cfg.Solo.Nodes[opts.Node]
 	if !ok {
 		return fmt.Errorf("node %q not found in config", opts.Node)
 	}
+	node := soloNodeFromConfig(soloNode)
 
 	if opts.Follow {
 		// Stream directly to the user's terminal — do not buffer.
-		return direct.RunSSHInteractive(ctx, node, remoteJournalctlCommand("-u devopsellence-agent -f"), a.Printer.Out, a.Printer.Out)
+		return solo.RunSSHInteractive(ctx, node, remoteJournalctlCommand("-u devopsellence-agent -f"), a.Printer.Out, a.Printer.Out)
 	}
 
-	out, err := direct.RunSSH(ctx, node, remoteJournalctlCommand("-u devopsellence-agent --no-pager -n 100"), nil)
+	out, err := solo.RunSSH(ctx, node, remoteJournalctlCommand("-u devopsellence-agent --no-pager -n 100"), nil)
 	if err != nil {
 		return err
 	}
@@ -515,21 +535,22 @@ func (a *App) DirectLogs(ctx context.Context, opts DirectLogsOptions) error {
 	return nil
 }
 
-func (a *App) DirectNodeLabelSet(_ context.Context, opts DirectNodeLabelSetOptions) error {
-	cfg, workspaceRoot, err := a.loadDirectConfig()
+func (a *App) SoloNodeLabelSet(_ context.Context, opts SoloNodeLabelSetOptions) error {
+	cfg, workspaceRoot, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
-	node, ok := cfg.Direct.Nodes[opts.Node]
+	soloNode, ok := cfg.Solo.Nodes[opts.Node]
 	if !ok {
 		return fmt.Errorf("node %q not found in config", opts.Node)
 	}
-	labels, err := parseDirectLabels(opts.Labels)
+	node := soloNodeFromConfig(soloNode)
+	labels, err := parseSoloLabels(opts.Labels)
 	if err != nil {
 		return err
 	}
 	node.Labels = labels
-	cfg.Direct.Nodes[opts.Node] = node
+	cfg.Solo.Nodes[opts.Node] = config.SoloNode(node)
 	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 		return err
 	}
@@ -540,44 +561,45 @@ func (a *App) DirectNodeLabelSet(_ context.Context, opts DirectNodeLabelSetOptio
 			"config_path": a.ConfigStore.PathFor(workspaceRoot),
 		})
 	}
-	a.Printer.Println("Updated direct node " + opts.Node + " labels: " + strings.Join(labels, ","))
+	a.Printer.Println("Updated solo node " + opts.Node + " labels: " + strings.Join(labels, ","))
 	return nil
 }
 
-func (a *App) DirectAgentInstall(ctx context.Context, opts DirectAgentInstallOptions) error {
-	cfg, _, err := a.loadDirectConfig()
+func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions) error {
+	cfg, _, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
-	node, ok := cfg.Direct.Nodes[opts.Node]
+	soloNode, ok := cfg.Solo.Nodes[opts.Node]
 	if !ok {
 		return fmt.Errorf("node %q not found in config", opts.Node)
 	}
+	node := soloNodeFromConfig(soloNode)
 	if !a.Printer.JSON {
-		a.Printer.Println("Installing direct agent on " + opts.Node + "...")
+		a.Printer.Println("Installing solo agent on " + opts.Node + "...")
 	}
-	if err := installDirectAgent(ctx, node, opts, a.directProgress(opts.Node)); err != nil {
+	if err := installSoloAgent(ctx, node, opts, a.soloProgress(opts.Node)); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "action": "installed"})
 	}
-	a.Printer.Println("Installed direct agent on " + opts.Node)
+	a.Printer.Println("Installed solo agent on " + opts.Node)
 	return nil
 }
 
-func (a *App) DirectDoctor(ctx context.Context, opts DirectDoctorOptions) error {
-	cfg, _, err := a.loadDirectConfig()
+func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
+	cfg, _, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
-	nodes, err := a.resolveNodes(cfg.Direct, opts.Nodes)
+	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
 	if err != nil {
 		return err
 	}
 	results := make([]map[string]any, 0, len(nodes))
 	failed := false
-	for _, name := range sortedDirectNodeNames(nodes) {
+	for _, name := range sortedSoloNodeNames(nodes) {
 		node := nodes[name]
 		checks := []struct {
 			name string
@@ -588,7 +610,7 @@ func (a *App) DirectDoctor(ctx context.Context, opts DirectDoctorOptions) error 
 			{name: "agent", cmd: "systemctl is-active --quiet devopsellence-agent"},
 		}
 		for _, check := range checks {
-			err := direct.RunSSHInteractive(ctx, node, check.cmd, io.Discard, io.Discard)
+			err := solo.RunSSHInteractive(ctx, node, check.cmd, io.Discard, io.Discard)
 			ok := err == nil
 			if !ok {
 				failed = true
@@ -608,12 +630,12 @@ func (a *App) DirectDoctor(ctx context.Context, opts DirectDoctorOptions) error 
 			return err
 		}
 		if failed {
-			return ExitError{Code: 1, Err: fmt.Errorf("direct doctor failed")}
+			return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
 		}
 		return nil
 	}
 	if failed {
-		return ExitError{Code: 1, Err: fmt.Errorf("direct doctor failed")}
+		return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
 	}
 	return nil
 }
@@ -675,10 +697,10 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		if cfg == nil {
 			return "", errors.New("No solo nodes configured yet. Run `devopsellence setup`.")
 		}
-		if cfg.Direct == nil || len(cfg.Direct.Nodes) == 0 {
+		if cfg.Solo == nil || len(cfg.Solo.Nodes) == 0 {
 			return "", errors.New("No solo nodes configured yet. Run `devopsellence setup`.")
 		}
-		return fmt.Sprintf("%d node(s) configured", len(cfg.Direct.Nodes)), nil
+		return fmt.Sprintf("%d node(s) configured", len(cfg.Solo.Nodes)), nil
 	})
 
 	ok := true
@@ -703,14 +725,14 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		}
 		a.Printer.Println(prefix, fmt.Sprintf("%v:", check["name"]), check["detail"])
 	}
-	if ok && cfg != nil && cfg.Direct != nil && len(cfg.Direct.Nodes) > 0 {
-		return a.DirectDoctor(ctx, DirectDoctorOptions{})
+	if ok && cfg != nil && cfg.Solo != nil && len(cfg.Solo.Nodes) > 0 {
+		return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{})
 	}
 	return nil
 }
 
-func (a *App) DirectNodeCreate(ctx context.Context, opts DirectNodeCreateOptions) error {
-	cfg, workspaceRoot, err := a.loadProjectConfigForDirectUpdate()
+func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
+	cfg, workspaceRoot, err := a.loadProjectConfigForSoloUpdate()
 	if err != nil {
 		return err
 	}
@@ -720,31 +742,31 @@ func (a *App) DirectNodeCreate(ctx context.Context, opts DirectNodeCreateOptions
 	if opts.Deploy && a.Printer.JSON {
 		return fmt.Errorf("node create --deploy is not supported with --json")
 	}
-	if cfg.Direct != nil {
-		if _, ok := cfg.Direct.Nodes[opts.Name]; ok {
-			return fmt.Errorf("direct node %q already exists", opts.Name)
+	if cfg.Solo != nil {
+		if _, ok := cfg.Solo.Nodes[opts.Name]; ok {
+			return fmt.Errorf("solo node %q already exists", opts.Name)
 		}
 	}
 	created, err := a.createProviderNode(ctx, opts, cfg.Project)
 	if err != nil {
 		return err
 	}
-	if err := a.writeDirectNode(workspaceRoot, cfg, opts.Name, created.Node); err != nil {
+	if err := a.writeSoloNode(workspaceRoot, cfg, opts.Name, created.Node); err != nil {
 		return err
 	}
 	if !opts.NoInstall || opts.Deploy {
 		if !a.Printer.JSON {
 			a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
 		}
-		if err := waitForDirectSSH(ctx, created.Node, 3*time.Minute); err != nil {
+		if err := waitForSoloSSH(ctx, created.Node, 3*time.Minute); err != nil {
 			return err
 		}
-		if err := installDirectAgent(ctx, created.Node, DirectAgentInstallOptions{}, a.directProgress(opts.Name)); err != nil {
+		if err := installSoloAgent(ctx, created.Node, SoloAgentInstallOptions{}, a.soloProgress(opts.Name)); err != nil {
 			return err
 		}
 	}
 	if opts.Deploy {
-		if err := a.DirectDeploy(ctx, DirectDeployOptions{Nodes: []string{opts.Name}}); err != nil {
+		if err := a.SoloDeploy(ctx, SoloDeployOptions{Nodes: []string{opts.Name}}); err != nil {
 			return err
 		}
 	}
@@ -796,7 +818,7 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 	if !opts.Unassigned && bootstrap.Workspace.Project.Name != "" {
 		projectName = bootstrap.Workspace.Project.Name
 	}
-	created, err := a.createProviderNode(ctx, opts.DirectNodeCreateOptions, projectName)
+	created, err := a.createProviderNode(ctx, opts.SoloNodeCreateOptions, projectName)
 	if err != nil {
 		return err
 	}
@@ -823,7 +845,7 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 	if !a.Printer.JSON {
 		a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
 	}
-	if err := waitForDirectSSH(ctx, created.Node, 3*time.Minute); err != nil {
+	if err := waitForSoloSSH(ctx, created.Node, 3*time.Minute); err != nil {
 		return err
 	}
 	if !a.Printer.JSON {
@@ -833,7 +855,7 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 	if a.Printer.JSON {
 		stdout, stderr = io.Discard, io.Discard
 	}
-	if err := direct.RunSSHInteractive(ctx, created.Node, installCommand, stdout, stderr); err != nil {
+	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, stdout, stderr); err != nil {
 		return err
 	}
 
@@ -863,29 +885,30 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 	return nil
 }
 
-func (a *App) DirectNodeRemove(ctx context.Context, opts DirectNodeRemoveOptions) error {
+func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {
 	if !opts.Yes {
 		return fmt.Errorf("node remove requires --yes")
 	}
-	cfg, workspaceRoot, err := a.loadDirectConfig()
+	cfg, workspaceRoot, err := a.loadSoloConfig()
 	if err != nil {
 		return err
 	}
-	node, ok := cfg.Direct.Nodes[opts.Name]
+	soloNode, ok := cfg.Solo.Nodes[opts.Name]
 	if !ok {
 		return fmt.Errorf("node %q not found in config", opts.Name)
 	}
+	node := soloNodeFromConfig(soloNode)
 	if node.Provider == "" || node.ProviderServerID == "" {
 		return fmt.Errorf("node %q does not have provider metadata; refusing provider delete", opts.Name)
 	}
-	provider, err := a.resolveDirectProvider(node.Provider)
+	provider, err := a.resolveSoloProvider(node.Provider)
 	if err != nil {
 		return err
 	}
 	if err := provider.DeleteServer(ctx, node.ProviderServerID); err != nil {
 		return err
 	}
-	delete(cfg.Direct.Nodes, opts.Name)
+	delete(cfg.Solo.Nodes, opts.Name)
 	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 		return err
 	}
@@ -896,9 +919,9 @@ func (a *App) DirectNodeRemove(ctx context.Context, opts DirectNodeRemoveOptions
 	return nil
 }
 
-func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
+func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if !a.Printer.Interactive {
-		return fmt.Errorf("direct setup requires an interactive terminal; use node create or edit devopsellence.yml")
+		return fmt.Errorf("solo setup requires an interactive terminal; use node create or edit devopsellence.yml")
 	}
 	mode, err := a.promptLine("Node source (existing/hetzner)", "existing")
 	if err != nil {
@@ -908,7 +931,7 @@ func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 	if err != nil {
 		return err
 	}
-	labels, err := a.promptLine("Labels", strings.Join(config.DirectDefaultLabels, ","))
+	labels, err := a.promptLine("Labels", strings.Join(config.SoloDefaultLabels, ","))
 	if err != nil {
 		return err
 	}
@@ -921,11 +944,11 @@ func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 		if err != nil {
 			return err
 		}
-		sshPublicKey, err := a.promptLine("SSH public key path", defaultDirectSSHPublicKeyPath())
+		sshPublicKey, err := a.promptLine("SSH public key path", defaultSoloSSHPublicKeyPath())
 		if err != nil {
 			return err
 		}
-		if err := a.DirectNodeCreate(ctx, DirectNodeCreateOptions{
+		if err := a.SoloNodeCreate(ctx, SoloNodeCreateOptions{
 			Name:         name,
 			Provider:     "hetzner",
 			Region:       region,
@@ -935,7 +958,7 @@ func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 		}); err != nil {
 			return err
 		}
-		return a.DirectDoctor(ctx, DirectDoctorOptions{Nodes: []string{name}})
+		return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
 	}
 	host, err := a.promptLine("Host", "")
 	if err != nil {
@@ -945,19 +968,19 @@ func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 	if err != nil {
 		return err
 	}
-	sshKey, err := a.promptLine("SSH private key path", defaultDirectSSHPrivateKeyPath())
+	sshKey, err := a.promptLine("SSH private key path", defaultSoloSSHPrivateKeyPath())
 	if err != nil {
 		return err
 	}
-	cfg, workspaceRoot, err := a.loadProjectConfigForDirectUpdate()
+	cfg, workspaceRoot, err := a.loadProjectConfigForSoloUpdate()
 	if err != nil {
 		return err
 	}
-	parsedLabels, err := parseDirectLabels(labels)
+	parsedLabels, err := parseSoloLabels(labels)
 	if err != nil {
 		return err
 	}
-	node := config.DirectNode{
+	node := config.SoloNode{
 		Host:          host,
 		User:          user,
 		SSHKey:        strings.TrimSpace(sshKey),
@@ -965,16 +988,103 @@ func (a *App) DirectSetup(ctx context.Context, _ DirectSetupOptions) error {
 		AgentStateDir: "/var/lib/devopsellence",
 		Labels:        parsedLabels,
 	}
-	if err := a.writeDirectNode(workspaceRoot, cfg, name, node); err != nil {
+	if err := a.writeSoloNode(workspaceRoot, cfg, name, node); err != nil {
 		return err
 	}
-	if err := installDirectAgent(ctx, node, DirectAgentInstallOptions{}, a.directProgress(name)); err != nil {
+	if err := installSoloAgent(ctx, node, SoloAgentInstallOptions{}, a.soloProgress(name)); err != nil {
 		return err
 	}
-	return a.DirectDoctor(ctx, DirectDoctorOptions{Nodes: []string{name}})
+	return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
 }
 
-func (a *App) directProgress(nodeName string) func(string) {
+func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
+	discovered, err := discovery.Discover(a.Cwd)
+	if err != nil {
+		return err
+	}
+	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		cfg = soloDefaultProjectConfig(discovered)
+	}
+	hosts := normalizeIngressHosts(opts.Hosts)
+	if len(hosts) == 0 {
+		return fmt.Errorf("ingress set requires at least one --host")
+	}
+	tlsMode := strings.TrimSpace(opts.TLSMode)
+	if tlsMode == "" {
+		tlsMode = "auto"
+	}
+	switch tlsMode {
+	case "auto", "off", "manual":
+	default:
+		return fmt.Errorf("ingress tls mode must be auto, off, or manual")
+	}
+	redirectHTTP := tlsMode == "auto"
+	if opts.RedirectHTTPChanged {
+		redirectHTTP = opts.RedirectHTTP
+	}
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: hosts,
+		TLS: config.IngressTLSConfig{
+			Mode:           tlsMode,
+			Email:          strings.TrimSpace(opts.TLSEmail),
+			CADirectoryURL: strings.TrimSpace(opts.TLSCADirectoryURL),
+		},
+		RedirectHTTP: redirectHTTP,
+	}
+	written, err := a.ConfigStore.Write(discovered.WorkspaceRoot, *cfg)
+	if err != nil {
+		return err
+	}
+	if a.Printer.JSON {
+		return a.Printer.PrintJSON(map[string]any{
+			"schema_version": outputSchemaVersion,
+			"ingress":        written.Ingress,
+			"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
+		})
+	}
+	a.Printer.Println("Ingress hosts:", strings.Join(written.Ingress.Hosts, ","))
+	a.Printer.Println("TLS:", written.Ingress.TLS.Mode)
+	a.Printer.Println("Config:", a.ConfigStore.PathFor(discovered.WorkspaceRoot))
+	return nil
+}
+
+func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {
+	cfg, _, err := a.loadSoloConfig()
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(opts.Wait)
+	for {
+		report, err := ingressDNSReport(ctx, cfg, nil)
+		if err != nil {
+			return err
+		}
+		if report.OK || opts.Wait <= 0 || time.Now().After(deadline) {
+			if a.Printer.JSON {
+				if err := a.Printer.PrintJSON(report); err != nil {
+					return err
+				}
+			} else {
+				printIngressDNSReport(a.Printer, report)
+			}
+			if !report.OK {
+				return ExitError{Code: 1, Err: fmt.Errorf("ingress DNS is not ready")}
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+func (a *App) soloProgress(nodeName string) func(string) {
 	if a.Printer.JSON {
 		return func(string) {}
 	}
@@ -983,9 +1093,9 @@ func (a *App) directProgress(nodeName string) func(string) {
 	}
 }
 
-// loadDirectConfig discovers the workspace root, loads devopsellence.yml,
-// and validates that direct config is present.
-func (a *App) loadDirectConfig() (*config.ProjectConfig, string, error) {
+// loadSoloConfig discovers the workspace root, loads devopsellence.yml,
+// and validates that solo config is present.
+func (a *App) loadSoloConfig() (*config.ProjectConfig, string, error) {
 	discovered, err := discovery.Discover(a.Cwd)
 	if err != nil {
 		return nil, "", err
@@ -998,13 +1108,13 @@ func (a *App) loadDirectConfig() (*config.ProjectConfig, string, error) {
 	if cfg == nil {
 		return nil, "", fmt.Errorf("no devopsellence.yml found; run `devopsellence setup --mode solo`")
 	}
-	if cfg.Direct == nil || len(cfg.Direct.Nodes) == 0 {
-		return nil, "", fmt.Errorf("no direct.nodes configured in devopsellence.yml")
+	if cfg.Solo == nil || len(cfg.Solo.Nodes) == 0 {
+		return nil, "", fmt.Errorf("no solo.nodes configured in devopsellence.yml")
 	}
 	return cfg, workspaceRoot, nil
 }
 
-func (a *App) loadProjectConfigForDirectUpdate() (*config.ProjectConfig, string, error) {
+func (a *App) loadProjectConfigForSoloUpdate() (*config.ProjectConfig, string, error) {
 	discovered, err := discovery.Discover(a.Cwd)
 	if err != nil {
 		return nil, "", err
@@ -1014,13 +1124,13 @@ func (a *App) loadProjectConfigForDirectUpdate() (*config.ProjectConfig, string,
 		return nil, "", err
 	}
 	if cfg == nil {
-		cfg = directDefaultProjectConfig(discovered)
+		cfg = soloDefaultProjectConfig(discovered)
 	}
 	return cfg, discovered.WorkspaceRoot, nil
 }
 
-func directDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig {
-	cfg := config.DefaultProjectConfigForType("direct", discovered.ProjectName, config.DefaultEnvironment, discovered.AppType)
+func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig {
+	cfg := config.DefaultProjectConfigForType("solo", discovered.ProjectName, config.DefaultEnvironment, discovered.AppType)
 	if discovered.InferredWebPort > 0 {
 		cfg.Web.Port = discovered.InferredWebPort
 		if cfg.Web.Healthcheck != nil {
@@ -1030,29 +1140,38 @@ func directDefaultProjectConfig(discovered discovery.Result) *config.ProjectConf
 	return &cfg
 }
 
-func (a *App) writeDirectNode(workspaceRoot string, cfg *config.ProjectConfig, name string, node config.DirectNode) error {
-	if cfg.Direct == nil {
-		cfg.Direct = &config.DirectConfig{Nodes: map[string]config.DirectNode{}}
+func (a *App) writeSoloNode(workspaceRoot string, cfg *config.ProjectConfig, name string, node config.SoloNode) error {
+	labels := node.Labels
+	if len(labels) == 0 {
+		labels = append([]string(nil), config.SoloDefaultLabels...)
 	}
-	if cfg.Direct.Nodes == nil {
-		cfg.Direct.Nodes = map[string]config.DirectNode{}
+	if cfg.Solo == nil {
+		cfg.Solo = &config.SoloConfig{Nodes: map[string]config.SoloNode{}}
 	}
-	cfg.Direct.Nodes[name] = node
+	if cfg.Solo.Nodes == nil {
+		cfg.Solo.Nodes = map[string]config.SoloNode{}
+	}
+	node.Labels = labels
+	cfg.Solo.Nodes[name] = config.SoloNode(node)
 	_, err := a.ConfigStore.Write(workspaceRoot, *cfg)
 	return err
 }
 
 // resolveNodes filters nodes by the given names, or returns all if names is empty.
 // Returns an error if any requested name is not present in the config.
-func (a *App) resolveNodes(dc *config.DirectConfig, names []string) (map[string]config.DirectNode, error) {
+func (a *App) resolveNodes(dc *config.SoloConfig, names []string) (map[string]config.SoloNode, error) {
 	if len(names) == 0 {
-		return dc.Nodes, nil
+		result := make(map[string]config.SoloNode, len(dc.Nodes))
+		for name, node := range dc.Nodes {
+			result[name] = soloNodeFromConfig(node)
+		}
+		return result, nil
 	}
-	result := make(map[string]config.DirectNode, len(names))
+	result := make(map[string]config.SoloNode, len(names))
 	var unknown []string
 	for _, name := range names {
 		if node, ok := dc.Nodes[name]; ok {
-			result[name] = node
+			result[name] = soloNodeFromConfig(node)
 		} else {
 			unknown = append(unknown, name)
 		}
@@ -1067,12 +1186,194 @@ func (a *App) resolveNodes(dc *config.DirectConfig, names []string) (map[string]
 	return result, nil
 }
 
+func soloNodeFromConfig(node config.SoloNode) config.SoloNode {
+	return config.SoloNode(node)
+}
+
+func hasSoloLabel(labels []string, want string) bool {
+	for _, label := range labels {
+		if strings.TrimSpace(label) == want {
+			return true
+		}
+	}
+	return false
+}
+
+type ingressDNSReportResult struct {
+	SchemaVersion int                    `json:"schema_version"`
+	OK            bool                   `json:"ok"`
+	ExpectedIPs   []string               `json:"expected_ips"`
+	Hosts         []ingressDNSHostResult `json:"hosts"`
+}
+
+type ingressDNSHostResult struct {
+	Host     string   `json:"host"`
+	OK       bool     `json:"ok"`
+	Resolved []string `json:"resolved,omitempty"`
+	Missing  []string `json:"missing,omitempty"`
+	Error    string   `json:"error,omitempty"`
+}
+
+func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.SoloNode, skip bool) error {
+	if skip || cfg == nil || cfg.Ingress == nil || cfg.Ingress.TLS.Mode != "auto" {
+		return nil
+	}
+	report, err := ingressDNSReport(ctx, cfg, nodes)
+	if err != nil {
+		return err
+	}
+	if report.OK {
+		return nil
+	}
+	if !a.Printer.JSON {
+		printIngressDNSReport(a.Printer, report)
+	}
+	return fmt.Errorf("ingress DNS is not ready; update DNS or pass --skip-dns-check")
+}
+
+func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.SoloNode) (ingressDNSReportResult, error) {
+	hosts := []string{}
+	if cfg != nil && cfg.Ingress != nil {
+		hosts = normalizeIngressHosts(cfg.Ingress.Hosts)
+	}
+	if len(hosts) == 0 {
+		return ingressDNSReportResult{}, fmt.Errorf("ingress.hosts is not configured")
+	}
+	expected := webNodeIPs(cfg, selected)
+	if len(expected) == 0 {
+		return ingressDNSReportResult{}, fmt.Errorf("no web nodes configured")
+	}
+	report := ingressDNSReportResult{
+		SchemaVersion: outputSchemaVersion,
+		OK:            true,
+		ExpectedIPs:   expected,
+		Hosts:         make([]ingressDNSHostResult, 0, len(hosts)),
+	}
+	for _, host := range hosts {
+		result := ingressDNSHostResult{Host: host}
+		resolved, err := net.DefaultResolver.LookupHost(ctx, host)
+		if err != nil {
+			result.Error = err.Error()
+		}
+		result.Resolved = normalizeIngressHosts(resolved)
+		result.Missing = missingStrings(expected, result.Resolved)
+		result.OK = err == nil && len(result.Missing) == 0
+		if !result.OK {
+			report.OK = false
+		}
+		report.Hosts = append(report.Hosts, result)
+	}
+	return report, nil
+}
+
+func printIngressDNSReport(printer output.Printer, report ingressDNSReportResult) {
+	printer.Println("Expected IPs:", strings.Join(report.ExpectedIPs, ","))
+	for _, host := range report.Hosts {
+		state := "ok"
+		if !host.OK {
+			state = "fail"
+		}
+		line := fmt.Sprintf("%s  %s", state, host.Host)
+		if len(host.Resolved) > 0 {
+			line += " resolved=" + strings.Join(host.Resolved, ",")
+		}
+		if len(host.Missing) > 0 {
+			line += " missing=" + strings.Join(host.Missing, ",")
+		}
+		if host.Error != "" {
+			line += " error=" + host.Error
+		}
+		printer.Println(line)
+	}
+}
+
+func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.SoloNode) []string {
+	if cfg == nil || cfg.Solo == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	ips := []string{}
+	for _, name := range sortedSoloNodeNames(cfg.Solo.Nodes) {
+		if selected != nil {
+			if _, ok := selected[name]; !ok {
+				continue
+			}
+		}
+		node := cfg.Solo.Nodes[name]
+		if !hasSoloLabel(node.Labels, config.NodeLabelWeb) {
+			continue
+		}
+		host := strings.TrimSpace(node.Host)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		ips = append(ips, host)
+	}
+	sort.Strings(ips)
+	return ips
+}
+
+func soloNodePeers(cfg *config.ProjectConfig, currentNode string) []solo.NodePeer {
+	if cfg == nil || cfg.Solo == nil {
+		return nil
+	}
+	peers := []solo.NodePeer{}
+	for _, name := range sortedSoloNodeNames(cfg.Solo.Nodes) {
+		if name == currentNode {
+			continue
+		}
+		node := cfg.Solo.Nodes[name]
+		host := strings.TrimSpace(node.Host)
+		if host == "" {
+			continue
+		}
+		peers = append(peers, solo.NodePeer{
+			Name:          name,
+			Labels:        append([]string(nil), node.Labels...),
+			PublicAddress: host,
+		})
+	}
+	return peers
+}
+
+func normalizeIngressHosts(values []string) []string {
+	seen := map[string]bool{}
+	normalized := []string{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" || seen[part] {
+				continue
+			}
+			seen[part] = true
+			normalized = append(normalized, part)
+		}
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+func missingStrings(want, have []string) []string {
+	haveSet := map[string]bool{}
+	for _, value := range have {
+		haveSet[value] = true
+	}
+	missing := []string{}
+	for _, value := range want {
+		if !haveSet[value] {
+			missing = append(missing, value)
+		}
+	}
+	return missing
+}
+
 // shellQuote returns a POSIX shell safe single-quoted string.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func parseDirectLabels(value string) ([]string, error) {
+func parseSoloLabels(value string) ([]string, error) {
 	parts := strings.FieldsFunc(value, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\t' || r == '\n'
 	})
@@ -1084,20 +1385,20 @@ func parseDirectLabels(value string) ([]string, error) {
 			continue
 		}
 		switch label {
-		case config.DirectLabelWeb, config.DirectLabelWorker:
+		case config.NodeLabelWeb, config.NodeLabelWorker:
 		default:
-			return nil, fmt.Errorf("unsupported direct node label %q: use web or worker", label)
+			return nil, fmt.Errorf("unsupported solo node label %q: use web or worker", label)
 		}
 		seen[label] = true
 		labels = append(labels, label)
 	}
 	if len(labels) == 0 {
-		return nil, fmt.Errorf("at least one direct node label is required")
+		return nil, fmt.Errorf("at least one solo node label is required")
 	}
 	return labels, nil
 }
 
-func applyDirectRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, secrets map[string]string) (string, error) {
+func applySoloRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, secrets map[string]string) (string, error) {
 	if cfg == nil || cfg.App.Type != config.AppTypeRails {
 		return "", nil
 	}
@@ -1152,7 +1453,7 @@ func addServiceSecretRef(svc *config.ServiceConfig, name string) bool {
 	return true
 }
 
-func installDirectAgent(ctx context.Context, node config.DirectNode, opts DirectAgentInstallOptions, progress func(string)) error {
+func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentInstallOptions, progress func(string)) error {
 	if progress == nil {
 		progress = func(string) {}
 	}
@@ -1164,36 +1465,36 @@ func installDirectAgent(ctx context.Context, node config.DirectNode, opts Direct
 			return fmt.Errorf("open agent binary: %w", err)
 		}
 		defer file.Close()
-		if err := direct.RunSSHStream(ctx, node, "cat > "+shellQuote(remotePath), file); err != nil {
+		if err := solo.RunSSHStream(ctx, node, "cat > "+shellQuote(remotePath), file); err != nil {
 			return fmt.Errorf("upload agent binary: %w", err)
 		}
-		defer direct.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remotePath), io.Discard, io.Discard)
+		defer solo.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remotePath), io.Discard, io.Discard)
 		progress("Installing Docker, agent, and systemd service...")
-		return runDirectAgentInstallScript(ctx, node, directAgentInstallScript(directAgentInstallScriptOptions{
+		return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
 			LocalBinaryPath: remotePath,
 		}), progress)
 	}
 
 	baseURL := strings.TrimRight(firstNonEmpty(opts.BaseURL, os.Getenv("DEVOPSELLENCE_BASE_URL"), api.DefaultBaseURL), "/")
 	progress("Installing Docker, agent, and systemd service...")
-	return runDirectAgentInstallScript(ctx, node, directAgentInstallScript(directAgentInstallScriptOptions{
+	return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
 		BaseURL: baseURL,
 	}), progress)
 }
 
-func runDirectAgentInstallScript(ctx context.Context, node config.DirectNode, script string, progress func(string)) error {
+func runSoloAgentInstallScript(ctx context.Context, node config.SoloNode, script string, progress func(string)) error {
 	writer := &lineProgressWriter{progress: progress}
-	err := direct.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), writer, writer)
+	err := solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), writer, writer)
 	writer.Flush()
 	return err
 }
 
-type directAgentInstallScriptOptions struct {
+type soloAgentInstallScriptOptions struct {
 	BaseURL         string
 	LocalBinaryPath string
 }
 
-func directAgentInstallScript(opts directAgentInstallScriptOptions) string {
+func soloAgentInstallScript(opts soloAgentInstallScriptOptions) string {
 	stateDir := "/var/lib/devopsellence"
 	authStatePath := stateDir + "/auth.json"
 	overridePath := stateDir + "/desired-state-override.json"
@@ -1311,7 +1612,7 @@ After=network-online.target docker.service docker.socket
 Wants=network-online.target docker.service docker.socket
 
 [Service]
-ExecStart=$AGENT_BIN --mode=direct --auth-state-path=%s --desired-state-override-path=%s --envoy-bootstrap-path=%s
+ExecStart=$AGENT_BIN --mode=solo --auth-state-path=%s --desired-state-override-path=%s --envoy-bootstrap-path=%s
 Restart=always
 RestartSec=2
 
@@ -1327,7 +1628,7 @@ run_root systemctl is-active --quiet devopsellence-agent
 `, shellQuote(stateDir), shellQuote(baseURL), shellQuote(localBinary), authStatePath, overridePath, envoyBootstrapPath)
 }
 
-func waitForDirectProviderServer(ctx context.Context, provider providers.Provider, server providers.Server) (providers.Server, error) {
+func waitForSoloProviderServer(ctx context.Context, provider providers.Provider, server providers.Server) (providers.Server, error) {
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
 		if provider.Ready(server) {
@@ -1349,10 +1650,10 @@ func waitForDirectProviderServer(ctx context.Context, provider providers.Provide
 	}
 }
 
-func waitForDirectSSH(ctx context.Context, node config.DirectNode, timeout time.Duration) error {
+func waitForSoloSSH(ctx context.Context, node config.SoloNode, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		if _, err := direct.RunSSH(ctx, node, "true", nil); err == nil {
+		if _, err := solo.RunSSH(ctx, node, "true", nil); err == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -1366,11 +1667,11 @@ func waitForDirectSSH(ctx context.Context, node config.DirectNode, timeout time.
 	}
 }
 
-func readDirectSSHPublicKey(path string) (string, string, error) {
+func readSoloSSHPublicKey(path string) (string, string, error) {
 	path = strings.TrimSpace(path)
 	candidates := []string{path}
 	if path == "" {
-		candidates = defaultDirectSSHPublicKeyCandidates()
+		candidates = defaultSoloSSHPublicKeyCandidates()
 	}
 	for _, candidate := range candidates {
 		if strings.TrimSpace(candidate) == "" {
@@ -1391,8 +1692,8 @@ func readDirectSSHPublicKey(path string) (string, string, error) {
 	return "", "", fmt.Errorf("no SSH public key found; pass --ssh-public-key")
 }
 
-func defaultDirectSSHPrivateKeyPath() string {
-	for _, candidate := range defaultDirectSSHPrivateKeyCandidates() {
+func defaultSoloSSHPrivateKeyPath() string {
+	for _, candidate := range defaultSoloSSHPrivateKeyCandidates() {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -1400,8 +1701,8 @@ func defaultDirectSSHPrivateKeyPath() string {
 	return ""
 }
 
-func defaultDirectSSHPublicKeyPath() string {
-	for _, candidate := range defaultDirectSSHPublicKeyCandidates() {
+func defaultSoloSSHPublicKeyPath() string {
+	for _, candidate := range defaultSoloSSHPublicKeyCandidates() {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -1409,8 +1710,8 @@ func defaultDirectSSHPublicKeyPath() string {
 	return ""
 }
 
-func defaultDirectSSHPublicKeyCandidates() []string {
-	keys := defaultDirectSSHPrivateKeyCandidates()
+func defaultSoloSSHPublicKeyCandidates() []string {
+	keys := defaultSoloSSHPrivateKeyCandidates()
 	candidates := make([]string, 0, len(keys))
 	for _, key := range keys {
 		candidates = append(candidates, key+".pub")
@@ -1418,7 +1719,7 @@ func defaultDirectSSHPublicKeyCandidates() []string {
 	return candidates
 }
 
-func defaultDirectSSHPrivateKeyCandidates() []string {
+func defaultSoloSSHPrivateKeyCandidates() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
@@ -1480,22 +1781,22 @@ func dockerBuild(ctx context.Context, contextPath, dockerfile, tag string, platf
 
 func dockerBuildArgs(contextPath, dockerfile, tag string, platforms []string) ([]string, error) {
 	if len(platforms) != 1 {
-		return nil, fmt.Errorf("direct deploy requires exactly one build platform, got %d", len(platforms))
+		return nil, fmt.Errorf("solo deploy requires exactly one build platform, got %d", len(platforms))
 	}
 	return []string{"build", "--platform", platforms[0], "-f", dockerfile, "-t", tag, contextPath}, nil
 }
 
-func directImageTag(project, revision string) string {
+func soloImageTag(project, revision string) string {
 	return fmt.Sprintf("%s:%s", discovery.Slugify(project), revision)
 }
 
 // transferImage pipes `docker save | gzip` through ssh to `gunzip | docker load`.
-func transferImage(ctx context.Context, node config.DirectNode, imageTag string, progress func(string)) error {
+func transferImage(ctx context.Context, node config.SoloNode, imageTag string, progress func(string)) error {
 	if progress == nil {
 		progress = func(string) {}
 	}
 	progress("Checking remote Docker...")
-	if _, err := direct.RunSSH(ctx, node, remoteDockerCheckCommand(), nil); err != nil {
+	if _, err := solo.RunSSH(ctx, node, remoteDockerCheckCommand(), nil); err != nil {
 		return fmt.Errorf("remote docker check: %w", err)
 	}
 	// docker save <tag> | gzip | ssh ... 'gunzip | docker load'
@@ -1536,7 +1837,7 @@ func transferImage(ctx context.Context, node config.DirectNode, imageTag string,
 	stopTicker := startProgressTicker(ctx, func(string) {
 		progress(fmt.Sprintf("Still transferring image... %s compressed sent", formatBytes(meter.Total())))
 	}, 5*time.Second, "")
-	sshErr := direct.RunSSHStream(ctx, node, remoteDockerLoadCommand(), meter)
+	sshErr := solo.RunSSHStream(ctx, node, remoteDockerLoadCommand(), meter)
 	stopTicker()
 
 	// If SSH failed (e.g., auth error, network), close the read end of the pipe

@@ -172,16 +172,16 @@ func TestWriteAndLoadReleaseCommand(t *testing.T) {
 	}
 }
 
-func TestDirectNodeLabelsRoundTrip(t *testing.T) {
+func TestLegacyDirectNodeLabelsMigrateToSoloLabels(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Direct = &DirectConfig{Nodes: map[string]DirectNode{
+	project.LegacyDirect = &LegacyDirectConfig{Nodes: map[string]LegacyDirectNode{
 		"prod-1": {
 			Host:   "203.0.113.10",
 			User:   "root",
-			Labels: []string{DirectLabelWeb, DirectLabelWorker, DirectLabelWeb},
+			Labels: []string{NodeLabelWeb, NodeLabelWorker, NodeLabelWeb},
 		},
 	}}
 	if _, err := Write(root, project); err != nil {
@@ -191,18 +191,21 @@ func TestDirectNodeLabelsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	labels := loaded.Direct.Nodes["prod-1"].Labels
+	if loaded.LegacyDirect != nil {
+		t.Fatalf("direct config should be migrated away")
+	}
+	labels := loaded.Solo.Nodes["prod-1"].Labels
 	if strings.Join(labels, ",") != "web,worker" {
 		t.Fatalf("labels = %#v, want web,worker", labels)
 	}
 }
 
-func TestDirectNodeLegacyUnlabeledRoundTrip(t *testing.T) {
+func TestLegacyDirectNodeUnlabeledMigrateToAllLabels(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Direct = &DirectConfig{Nodes: map[string]DirectNode{
+	project.LegacyDirect = &LegacyDirectConfig{Nodes: map[string]LegacyDirectNode{
 		"prod-1": {Host: "203.0.113.10", User: "root"},
 	}}
 	if _, err := Write(root, project); err != nil {
@@ -212,18 +215,19 @@ func TestDirectNodeLegacyUnlabeledRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	if labels := loaded.Direct.Nodes["prod-1"].Labels; labels != nil {
-		t.Fatalf("legacy labels = %#v, want nil", labels)
+	if loaded.LegacyDirect != nil {
+		t.Fatalf("direct config should be migrated away")
+	}
+	if labels := loaded.Solo.Nodes["prod-1"].Labels; strings.Join(labels, ",") != "web,worker" {
+		t.Fatalf("legacy labels = %#v, want web,worker", labels)
 	}
 }
 
-func TestValidateRejectsUnknownDirectNodeLabel(t *testing.T) {
+func TestValidateRejectsUnknownNodeLabel(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Direct = &DirectConfig{Nodes: map[string]DirectNode{
-		"prod-1": {Host: "203.0.113.10", User: "root", Labels: []string{"db"}},
-	}}
+	project.Solo = &SoloConfig{Nodes: map[string]SoloNode{"prod-1": {Host: "203.0.113.10", User: "root", Labels: []string{"db"}}}}
 	err := Validate(&project)
 	if err == nil || !strings.Contains(err.Error(), "unsupported label") {
 		t.Fatalf("expected unsupported label validation error, got %v", err)

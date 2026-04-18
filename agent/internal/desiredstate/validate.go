@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	ingressModeTunnel    = "tunnel"
-	ingressModeDirectDNS = "direct_dns"
+	ingressModeTunnel = "tunnel"
+	ingressModePublic = "public"
 )
 
 func Validate(state *desiredstatepb.DesiredState) error {
@@ -91,15 +91,22 @@ func Validate(state *desiredstatepb.DesiredState) error {
 		if !hasWeb {
 			return fmt.Errorf("ingress requires web container")
 		}
-		if state.Ingress.Hostname == "" {
-			return fmt.Errorf("ingress: hostname required")
+		if len(ingressHosts(state.Ingress)) == 0 {
+			return fmt.Errorf("ingress: hosts required")
 		}
 		switch normalizedIngressMode(state.Ingress) {
 		case ingressModeTunnel:
 			if state.Ingress.TunnelToken == "" && state.Ingress.TunnelTokenSecretRef == "" {
 				return fmt.Errorf("ingress: tunnel_token or tunnel_token_secret_ref required")
 			}
-		case ingressModeDirectDNS:
+		case ingressModePublic:
+			if state.Ingress.Tls != nil {
+				switch strings.TrimSpace(state.Ingress.Tls.Mode) {
+				case "", "auto", "manual", "off":
+				default:
+					return fmt.Errorf("ingress.tls: unsupported mode %q", state.Ingress.Tls.Mode)
+				}
+			}
 		default:
 			return fmt.Errorf("ingress: unsupported mode %q", state.Ingress.Mode)
 		}
@@ -159,9 +166,23 @@ func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {
 	switch strings.TrimSpace(ingress.Mode) {
 	case "", ingressModeTunnel:
 		return ingressModeTunnel
-	case ingressModeDirectDNS:
-		return ingressModeDirectDNS
+	case ingressModePublic:
+		return strings.TrimSpace(ingress.Mode)
 	default:
 		return strings.TrimSpace(ingress.Mode)
 	}
+}
+
+func ingressHosts(ingress *desiredstatepb.Ingress) []string {
+	if ingress == nil {
+		return nil
+	}
+	hosts := make([]string, 0, len(ingress.Hosts))
+	for _, host := range ingress.Hosts {
+		host = strings.TrimSpace(host)
+		if host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
 }

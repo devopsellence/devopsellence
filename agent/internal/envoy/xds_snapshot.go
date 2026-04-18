@@ -21,12 +21,14 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
+const acmeChallengeClusterName = "devopsellence_acme_http01"
+
 // snapshotParams holds the full desired configuration for an xDS snapshot.
 type snapshotParams struct {
-	port        uint16
-	clusterName string
-	directDNS   *directDNSListenerConfig // nil when not in direct_dns mode
-	endpoint    *endpointState           // nil when no upstream is assigned yet
+	port          uint16
+	clusterName   string
+	publicIngress *publicIngressListenerConfig // nil when not in public mode
+	endpoint      *endpointState               // nil when no upstream is assigned yet
 }
 
 type endpointState struct {
@@ -43,11 +45,19 @@ func buildSnapshot(version string, p snapshotParams) (*cachev3.Snapshot, error) 
 	if err != nil {
 		return nil, fmt.Errorf("build cluster: %w", err)
 	}
+	clusters := []cachetypes.Resource{cluster}
+	if p.publicIngress != nil && p.publicIngress.ChallengeEnabled {
+		challengeCluster, err := buildStaticCluster(acmeChallengeClusterName, p.publicIngress.ChallengeHost, p.publicIngress.ChallengePort)
+		if err != nil {
+			return nil, fmt.Errorf("build acme challenge cluster: %w", err)
+		}
+		clusters = append(clusters, challengeCluster)
+	}
 	endpoint := buildEndpoint(p.clusterName, p.endpoint)
 
 	resources := map[resourcev3.Type][]cachetypes.Resource{
 		resourcev3.ListenerType: listeners,
-		resourcev3.ClusterType:  {cluster},
+		resourcev3.ClusterType:  clusters,
 		resourcev3.EndpointType: {endpoint},
 	}
 	snap, err := cachev3.NewSnapshot(version, resources)
@@ -63,16 +73,24 @@ func buildListeners(p snapshotParams) ([]cachetypes.Resource, error) {
 		return nil, err
 	}
 	listeners := []cachetypes.Resource{httpListener}
-	if p.directDNS != nil {
-		redirectListener, err := buildHTTPRedirectListener(p.directDNS.HTTPPort)
+	if p.publicIngress != nil {
+		var publicHTTP *listenerv3.Listener
+		if p.publicIngress.RedirectHTTP {
+			publicHTTP, err = buildHTTPRedirectListener(p.publicIngress.HTTPPort, p.publicIngress.Hosts, p.publicIngress.ChallengeEnabled)
+		} else {
+			publicHTTP, err = buildPublicHTTPListener(p.publicIngress.HTTPPort, p.clusterName, p.publicIngress.Hosts, p.publicIngress.ChallengeEnabled)
+		}
 		if err != nil {
 			return nil, err
 		}
-		httpsListener, err := buildHTTPSListener(p.directDNS, p.clusterName)
-		if err != nil {
-			return nil, err
+		listeners = append(listeners, publicHTTP)
+		if p.publicIngress.TLSEnabled {
+			httpsListener, err := buildHTTPSListener(p.publicIngress, p.clusterName)
+			if err != nil {
+				return nil, err
+			}
+			listeners = append(listeners, httpsListener)
 		}
-		listeners = append(listeners, redirectListener, httpsListener)
 	}
 	return listeners, nil
 }
@@ -91,8 +109,8 @@ func buildHTTPListener(port uint16, clusterName string) (*listenerv3.Listener, e
 	}, nil
 }
 
-func buildHTTPRedirectListener(port uint16) (*listenerv3.Listener, error) {
-	hcmAny, err := buildRedirectHCMAny("ingress_public_http", accessLogFormat)
+func buildPublicHTTPListener(port uint16, clusterName string, domains []string, challenge bool) (*listenerv3.Listener, error) {
+	hcmAny, err := buildPublicHTTPHCMAny("ingress_public_http", "public_route_http", clusterName, domains, challenge)
 	if err != nil {
 		return nil, err
 	}
@@ -105,14 +123,29 @@ func buildHTTPRedirectListener(port uint16) (*listenerv3.Listener, error) {
 	}, nil
 }
 
-func buildHTTPSListener(listener *directDNSListenerConfig, clusterName string) (*listenerv3.Listener, error) {
-	hcmAny, err := buildHCMAny(
+func buildHTTPRedirectListener(port uint16, domains []string, challenge bool) (*listenerv3.Listener, error) {
+	hcmAny, err := buildRedirectHCMAny("ingress_public_http", accessLogFormat, domains, challenge)
+	if err != nil {
+		return nil, err
+	}
+	return &listenerv3.Listener{
+		Name:    "listener_public_http",
+		Address: socketAddress("0.0.0.0", port),
+		FilterChains: []*listenerv3.FilterChain{{
+			Filters: []*listenerv3.Filter{hcmFilter(hcmAny)},
+		}},
+	}, nil
+}
+
+func buildHTTPSListener(listener *publicIngressListenerConfig, clusterName string) (*listenerv3.Listener, error) {
+	hcmAny, err := buildHCMAnyWithDomains(
 		"ingress_public_https",
 		"public_route_https",
 		clusterName,
 		accessLogFormat,
 		[]*corev3.HeaderValueOption{overwriteRequestHeader("x-forwarded-proto", "https")},
 		"https",
+		listener.Hosts,
 	)
 	if err != nil {
 		return nil, err
@@ -165,6 +198,27 @@ func buildCluster(clusterName string) (*clusterv3.Cluster, error) {
 	}, nil
 }
 
+func buildStaticCluster(name, address string, port uint16) (*clusterv3.Cluster, error) {
+	return &clusterv3.Cluster{
+		Name:                 name,
+		ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STRICT_DNS},
+		ConnectTimeout:       durationpb.New(time.Second),
+		LbPolicy:             clusterv3.Cluster_ROUND_ROBIN,
+		LoadAssignment: &endpointv3.ClusterLoadAssignment{
+			ClusterName: name,
+			Endpoints: []*endpointv3.LocalityLbEndpoints{{
+				LbEndpoints: []*endpointv3.LbEndpoint{{
+					HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
+						Endpoint: &endpointv3.Endpoint{
+							Address: socketAddress(address, port),
+						},
+					},
+				}},
+			}},
+		},
+	}, nil
+}
+
 func buildEndpoint(clusterName string, ep *endpointState) *endpointv3.ClusterLoadAssignment {
 	cla := &endpointv3.ClusterLoadAssignment{
 		ClusterName: clusterName,
@@ -186,6 +240,10 @@ func buildEndpoint(clusterName string, ep *endpointState) *endpointv3.ClusterLoa
 
 // buildHCMAny builds a marshaled HttpConnectionManager for use as a filter typed_config.
 func buildHCMAny(statPrefix, routeName, clusterName, logFormat string, requestHeaders []*corev3.HeaderValueOption, schemeToOverwrite string) (*anypb.Any, error) {
+	return buildHCMAnyWithDomains(statPrefix, routeName, clusterName, logFormat, requestHeaders, schemeToOverwrite, nil)
+}
+
+func buildHCMAnyWithDomains(statPrefix, routeName, clusterName, logFormat string, requestHeaders []*corev3.HeaderValueOption, schemeToOverwrite string, domains []string) (*anypb.Any, error) {
 	alAny, err := buildAccessLogAny(logFormat)
 	if err != nil {
 		return nil, err
@@ -196,7 +254,7 @@ func buildHCMAny(statPrefix, routeName, clusterName, logFormat string, requestHe
 	}
 	virtualHost := &routev3.VirtualHost{
 		Name:    "web",
-		Domains: []string{"*"},
+		Domains: routeDomains(domains),
 		Routes: []*routev3.Route{{
 			Match: &routev3.RouteMatch{
 				PathSpecifier: &routev3.RouteMatch_Prefix{Prefix: "/"},
@@ -215,7 +273,7 @@ func buildHCMAny(statPrefix, routeName, clusterName, logFormat string, requestHe
 		StatPrefix: statPrefix,
 		RouteSpecifier: &hcmv3.HttpConnectionManager_RouteConfig{
 			RouteConfig: &routev3.RouteConfiguration{
-				Name: routeName,
+				Name:         routeName,
 				VirtualHosts: []*routev3.VirtualHost{virtualHost},
 			},
 		},
@@ -238,7 +296,7 @@ func buildHCMAny(statPrefix, routeName, clusterName, logFormat string, requestHe
 	return anypb.New(hcm)
 }
 
-func buildRedirectHCMAny(statPrefix, logFormat string) (*anypb.Any, error) {
+func buildRedirectHCMAny(statPrefix, logFormat string, domains []string, challenge bool) (*anypb.Any, error) {
 	alAny, err := buildAccessLogAny(logFormat)
 	if err != nil {
 		return nil, err
@@ -247,6 +305,22 @@ func buildRedirectHCMAny(statPrefix, logFormat string) (*anypb.Any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal router: %w", err)
 	}
+	var routes []*routev3.Route
+	if challenge {
+		routes = append(routes, acmeChallengeRoute())
+	}
+	routes = append(routes, &routev3.Route{
+		Match: &routev3.RouteMatch{
+			PathSpecifier: &routev3.RouteMatch_Prefix{Prefix: "/"},
+		},
+		Action: &routev3.Route_Redirect{
+			Redirect: &routev3.RedirectAction{
+				SchemeRewriteSpecifier: &routev3.RedirectAction_HttpsRedirect{
+					HttpsRedirect: true,
+				},
+			},
+		},
+	})
 	hcm := &hcmv3.HttpConnectionManager{
 		StatPrefix: statPrefix,
 		RouteSpecifier: &hcmv3.HttpConnectionManager_RouteConfig{
@@ -254,19 +328,8 @@ func buildRedirectHCMAny(statPrefix, logFormat string) (*anypb.Any, error) {
 				Name: "redirect_route",
 				VirtualHosts: []*routev3.VirtualHost{{
 					Name:    "redirect",
-					Domains: []string{"*"},
-					Routes: []*routev3.Route{{
-						Match: &routev3.RouteMatch{
-							PathSpecifier: &routev3.RouteMatch_Prefix{Prefix: "/"},
-						},
-						Action: &routev3.Route_Redirect{
-							Redirect: &routev3.RedirectAction{
-								SchemeRewriteSpecifier: &routev3.RedirectAction_HttpsRedirect{
-									HttpsRedirect: true,
-								},
-							},
-						},
-					}},
+					Domains: routeDomains(domains),
+					Routes:  routes,
 				}},
 			},
 		},
@@ -280,6 +343,71 @@ func buildRedirectHCMAny(statPrefix, logFormat string) (*anypb.Any, error) {
 		}},
 	}
 	return anypb.New(hcm)
+}
+
+func buildPublicHTTPHCMAny(statPrefix, routeName, clusterName string, domains []string, challenge bool) (*anypb.Any, error) {
+	alAny, err := buildAccessLogAny(accessLogFormat)
+	if err != nil {
+		return nil, err
+	}
+	routerAny, err := anypb.New(&routerv3.Router{})
+	if err != nil {
+		return nil, fmt.Errorf("marshal router: %w", err)
+	}
+	var routes []*routev3.Route
+	if challenge {
+		routes = append(routes, acmeChallengeRoute())
+	}
+	routes = append(routes, &routev3.Route{
+		Match: &routev3.RouteMatch{
+			PathSpecifier: &routev3.RouteMatch_Prefix{Prefix: "/"},
+		},
+		Action: &routev3.Route_Route{
+			Route: &routev3.RouteAction{
+				ClusterSpecifier: &routev3.RouteAction_Cluster{Cluster: clusterName},
+			},
+		},
+	})
+	hcm := &hcmv3.HttpConnectionManager{
+		StatPrefix: statPrefix,
+		RouteSpecifier: &hcmv3.HttpConnectionManager_RouteConfig{
+			RouteConfig: &routev3.RouteConfiguration{
+				Name: routeName,
+				VirtualHosts: []*routev3.VirtualHost{{
+					Name:    "public_http",
+					Domains: routeDomains(domains),
+					Routes:  routes,
+				}},
+			},
+		},
+		HttpFilters: []*hcmv3.HttpFilter{{
+			Name:       "envoy.filters.http.router",
+			ConfigType: &hcmv3.HttpFilter_TypedConfig{TypedConfig: routerAny},
+		}},
+		AccessLog: []*accesslogv3.AccessLog{{
+			Name:       "envoy.access_loggers.file",
+			ConfigType: &accesslogv3.AccessLog_TypedConfig{TypedConfig: alAny},
+		}},
+		SchemeHeaderTransformation: &corev3.SchemeHeaderTransformation{
+			Transformation: &corev3.SchemeHeaderTransformation_SchemeToOverwrite{
+				SchemeToOverwrite: "http",
+			},
+		},
+	}
+	return anypb.New(hcm)
+}
+
+func acmeChallengeRoute() *routev3.Route {
+	return &routev3.Route{
+		Match: &routev3.RouteMatch{
+			PathSpecifier: &routev3.RouteMatch_Prefix{Prefix: "/.well-known/acme-challenge/"},
+		},
+		Action: &routev3.Route_Route{
+			Route: &routev3.RouteAction{
+				ClusterSpecifier: &routev3.RouteAction_Cluster{Cluster: acmeChallengeClusterName},
+			},
+		},
+	}
 }
 
 func buildAccessLogAny(logFormat string) (*anypb.Any, error) {
@@ -308,6 +436,13 @@ func overwriteRequestHeader(key, value string) *corev3.HeaderValueOption {
 		},
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 	}
+}
+
+func routeDomains(domains []string) []string {
+	if len(domains) == 0 {
+		return []string{"*"}
+	}
+	return append([]string(nil), domains...)
 }
 
 func socketAddress(host string, port uint16) *corev3.Address {

@@ -1,4 +1,4 @@
-package direct
+package solo
 
 import (
 	"encoding/json"
@@ -140,7 +140,7 @@ func TestBuildDesiredStateForLabelsFiltersServices(t *testing.T) {
 		ReleaseCommand: "rails db:migrate",
 	}
 
-	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.DirectLabelWorker}, false)
+	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWorker}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 		ReleaseCommand: "rails db:migrate",
 	}
 
-	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.DirectLabelWeb}, true)
+	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWeb}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,6 +181,78 @@ func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 	}
 	if ds.ReleaseCommand == nil {
 		t.Fatal("expected release command")
+	}
+}
+
+func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: "myapp",
+		Web: config.ServiceConfig{
+			Port:        3000,
+			Env:         map[string]string{},
+			SecretRefs:  []config.SecretRef{},
+			Healthcheck: &config.HTTPHealthcheck{Path: "/", Port: 3000},
+		},
+		Ingress: &config.IngressConfig{
+			Hosts: []string{"app.example.com", "www.example.com"},
+			TLS: config.IngressTLSConfig{
+				Mode:           "auto",
+				Email:          "ops@example.com",
+				CADirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
+			},
+			RedirectHTTP: true,
+		},
+	}
+
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWeb}, true, false, []NodePeer{{
+		Name:          "web-b",
+		Labels:        []string{config.NodeLabelWeb},
+		PublicAddress: "203.0.113.11",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ds desiredStateJSON
+	if err := json.Unmarshal(data, &ds); err != nil {
+		t.Fatal(err)
+	}
+	if ds.Ingress == nil {
+		t.Fatal("expected ingress")
+	}
+	if strings.Join(ds.Ingress.Hosts, ",") != "app.example.com,www.example.com" {
+		t.Fatalf("hosts = %#v", ds.Ingress.Hosts)
+	}
+	if ds.Ingress.Mode != "public" || ds.Ingress.TLS.Mode != "auto" || ds.Ingress.TLS.Email != "ops@example.com" || !ds.Ingress.RedirectHTTP {
+		t.Fatalf("ingress = %#v", ds.Ingress)
+	}
+	if len(ds.NodePeers) != 1 || ds.NodePeers[0].Name != "web-b" || ds.NodePeers[0].PublicAddress != "203.0.113.11" {
+		t.Fatalf("node peers = %#v", ds.NodePeers)
+	}
+}
+
+func TestBuildDesiredStateForNodeOmitsIngressForWorkerNode(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: "myapp",
+		Web: config.ServiceConfig{
+			Port:        3000,
+			Env:         map[string]string{},
+			SecretRefs:  []config.SecretRef{},
+			Healthcheck: &config.HTTPHealthcheck{Path: "/", Port: 3000},
+		},
+		Worker:  &config.ServiceConfig{Command: "sidekiq"},
+		Ingress: &config.IngressConfig{Hosts: []string{"app.example.com"}},
+	}
+
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWorker}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ds desiredStateJSON
+	if err := json.Unmarshal(data, &ds); err != nil {
+		t.Fatal(err)
+	}
+	if ds.Ingress != nil {
+		t.Fatalf("ingress = %#v, want nil", ds.Ingress)
 	}
 }
 

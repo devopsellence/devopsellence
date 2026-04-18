@@ -505,7 +505,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			"  shared - sign in, create/select org/project/env, and write workspace config",
 		}, "\n"),
 		RunE: runByMode(func(ctx context.Context) error {
-			return app.DirectSetup(ctx, DirectSetupOptions{})
+			return app.SoloSetup(ctx, SoloSetupOptions{})
 		}, func(ctx context.Context) error {
 			return app.Init(ctx, setupSharedOpts)
 		}),
@@ -517,17 +517,18 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(setupCommand)
 
 	var deploySharedOpts DeployOptions
-	var deploySoloOpts DirectDeployOptions
+	var deploySoloOpts SoloDeployOptions
 	deployCommand := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy the current app using the selected workspace mode",
 		RunE: runByMode(func(ctx context.Context) error {
-			return app.DirectDeploy(ctx, deploySoloOpts)
+			return app.SoloDeploy(ctx, deploySoloOpts)
 		}, func(ctx context.Context) error {
 			return app.Deploy(ctx, deploySharedOpts)
 		}),
 	}
 	deployCommand.Flags().StringSliceVar(&deploySoloOpts.Nodes, "nodes", nil, "Comma-separated node names (solo mode)")
+	deployCommand.Flags().BoolVar(&deploySoloOpts.SkipDNSCheck, "skip-dns-check", false, "Skip ingress DNS readiness check before deploy (solo mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Organization, "org", os.Getenv("DEVOPSELLENCE_ORGANIZATION"), "Organization name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Project, "project", os.Getenv("DEVOPSELLENCE_PROJECT"), "Project name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Image, "image", "", "Deploy an existing digest ref instead of building locally (shared mode)")
@@ -536,13 +537,49 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	deployCommand.Flags().BoolVar(&deploySharedOpts.SkipRailsMasterKeySync, "no-rails-master-key-sync", false, "Do not auto-sync config/master.key to the shared secret RAILS_MASTER_KEY")
 	root.AddCommand(deployCommand)
 
+	var ingressSetOpts IngressSetOptions
+	var ingressCheckOpts IngressCheckOptions
+	ingressCommand := &cobra.Command{
+		Use:   "ingress",
+		Short: "Manage public hostnames and TLS",
+	}
+	ingressSetCommand := &cobra.Command{
+		Use:   "set",
+		Short: "Set ingress hostnames and TLS policy",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ingressSetOpts.RedirectHTTPChanged = cmd.Flags().Changed("redirect-http")
+			return runByMode(func(ctx context.Context) error {
+				return app.IngressSet(ctx, ingressSetOpts)
+			}, func(ctx context.Context) error {
+				return app.IngressSet(ctx, ingressSetOpts)
+			})(cmd, args)
+		},
+	}
+	ingressSetCommand.Flags().StringSliceVar(&ingressSetOpts.Hosts, "host", nil, "Hostname, repeatable or comma-separated")
+	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSMode, "tls-mode", "auto", "TLS mode: auto, manual, or off")
+	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSEmail, "tls-email", "", "ACME account email")
+	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSCADirectoryURL, "acme-ca", "", "ACME directory URL override")
+	ingressSetCommand.Flags().BoolVar(&ingressSetOpts.RedirectHTTP, "redirect-http", true, "Redirect HTTP to HTTPS")
+	ingressCheckCommand := &cobra.Command{
+		Use:   "check",
+		Short: "Check that ingress DNS points at public web nodes",
+		RunE: runByMode(func(ctx context.Context) error {
+			return app.IngressCheck(ctx, ingressCheckOpts)
+		}, func(ctx context.Context) error {
+			return app.IngressCheck(ctx, ingressCheckOpts)
+		}),
+	}
+	ingressCheckCommand.Flags().DurationVar(&ingressCheckOpts.Wait, "wait", 0, "Poll until DNS is ready or this timeout elapses")
+	ingressCommand.AddCommand(ingressSetCommand, ingressCheckCommand)
+	root.AddCommand(ingressCommand)
+
 	var statusSharedOpts StatusOptions
-	var statusSoloOpts DirectStatusOptions
+	var statusSoloOpts SoloStatusOptions
 	statusCommand := &cobra.Command{
 		Use:   "status",
 		Short: "Show deploy or runtime status for the selected workspace mode",
 		RunE: runByMode(func(ctx context.Context) error {
-			return app.DirectStatus(ctx, statusSoloOpts)
+			return app.SoloStatus(ctx, statusSoloOpts)
 		}, func(ctx context.Context) error {
 			return app.Status(ctx, statusSharedOpts)
 		}),
@@ -577,11 +614,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(openCommand)
 
 	var secretSharedSetOpts SecretSetOptions
-	var secretSoloSetOpts DirectSecretsSetOptions
+	var secretSoloSetOpts SoloSecretsSetOptions
 	var secretSharedListOpts SecretListOptions
-	var secretSoloListOpts DirectSecretsListOptions
+	var secretSoloListOpts SoloSecretsListOptions
 	var secretSharedDeleteOpts SecretDeleteOptions
-	var secretSoloDeleteOpts DirectSecretsDeleteOptions
+	var secretSoloDeleteOpts SoloSecretsDeleteOptions
 	var secretValue string
 	var secretValueStdin bool
 	secretCommand := &cobra.Command{
@@ -600,7 +637,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			secretSharedSetOpts.Value = secretValue
 			secretSharedSetOpts.ValueStdin = secretValueStdin
 			return runByMode(func(ctx context.Context) error {
-				return app.DirectSecretsSet(ctx, secretSoloSetOpts)
+				return app.SoloSecretsSet(ctx, secretSoloSetOpts)
 			}, func(ctx context.Context) error {
 				secretSharedSetOpts.ValueProvided = cmd.Flags().Changed("value")
 				return app.SecretSet(ctx, secretSharedSetOpts)
@@ -621,7 +658,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Use:   "list",
 		Short: "List secrets",
 		RunE: runByMode(func(ctx context.Context) error {
-			return app.DirectSecretsList(ctx, secretSoloListOpts)
+			return app.SoloSecretsList(ctx, secretSoloListOpts)
 		}, func(ctx context.Context) error {
 			return app.SecretList(ctx, secretSharedListOpts)
 		}),
@@ -637,7 +674,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			secretSoloDeleteOpts.Key = strings.TrimSpace(args[0])
 			secretSharedDeleteOpts.Name = strings.TrimSpace(args[0])
 			return runByMode(func(ctx context.Context) error {
-				return app.DirectSecretsDelete(ctx, secretSoloDeleteOpts)
+				return app.SoloSecretsDelete(ctx, secretSoloDeleteOpts)
 			}, func(ctx context.Context) error {
 				return app.SecretDelete(ctx, secretSharedDeleteOpts)
 			})(cmd, args)
@@ -651,18 +688,18 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(secretCommand)
 
 	var nodeRegisterOpts NodeBootstrapOptions
-	var nodeCreateOpts DirectNodeCreateOptions
+	var nodeCreateOpts SoloNodeCreateOptions
 	var nodeCreateBootstrapOpts NodeBootstrapOptions
 	var nodeListSharedOpts NodeListOptions
-	var nodeListSoloOpts DirectNodeListOptions
+	var nodeListSoloOpts SoloNodeListOptions
 	var nodeAttachOpts NodeAssignOptions
 	var nodeDetachOpts NodeUnassignOptions
-	var nodeRemoveSoloOpts DirectNodeRemoveOptions
+	var nodeRemoveSoloOpts SoloNodeRemoveOptions
 	var nodeRemoveSharedOpts NodeDeleteOptions
 	var nodeLabelSharedOpts NodeLabelSetOptions
-	var nodeLabelSoloOpts DirectNodeLabelSetOptions
+	var nodeLabelSoloOpts SoloNodeLabelSetOptions
 	var nodeDiagnoseOpts NodeDiagnoseOptions
-	var nodeLogsOpts DirectLogsOptions
+	var nodeLogsOpts SoloLogsOptions
 	var nodeLabels string
 	nodeCommand := &cobra.Command{
 		Use:   "node",
@@ -687,11 +724,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeCreateOpts.Name = args[0]
 			return runByMode(func(ctx context.Context) error {
-				return app.DirectNodeCreate(ctx, nodeCreateOpts)
+				return app.SoloNodeCreate(ctx, nodeCreateOpts)
 			}, func(ctx context.Context) error {
 				return app.SharedNodeCreate(ctx, SharedNodeCreateOptions{
-					DirectNodeCreateOptions: nodeCreateOpts,
-					NodeBootstrapOptions:    nodeCreateBootstrapOpts,
+					SoloNodeCreateOptions: nodeCreateOpts,
+					NodeBootstrapOptions:  nodeCreateBootstrapOpts,
 				})
 			})(cmd, args)
 		},
@@ -712,7 +749,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Use:   "list",
 		Short: "List nodes",
 		RunE: runByMode(func(ctx context.Context) error {
-			return app.DirectNodeList(ctx, nodeListSoloOpts)
+			return app.SoloNodeList(ctx, nodeListSoloOpts)
 		}, func(ctx context.Context) error {
 			return app.NodeList(ctx, nodeListSharedOpts)
 		}),
@@ -758,7 +795,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runByMode(func(ctx context.Context) error {
 				nodeRemoveSoloOpts.Name = args[0]
-				return app.DirectNodeRemove(ctx, nodeRemoveSoloOpts)
+				return app.SoloNodeRemove(ctx, nodeRemoveSoloOpts)
 			}, func(ctx context.Context) error {
 				id, parseErr := strconv.Atoi(args[0])
 				if parseErr != nil {
@@ -779,7 +816,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			nodeLabelSoloOpts.Labels = nodeLabels
 			nodeLabelSharedOpts.Labels = nodeLabels
 			return runByMode(func(ctx context.Context) error {
-				return app.DirectNodeLabelSet(ctx, nodeLabelSoloOpts)
+				return app.SoloNodeLabelSet(ctx, nodeLabelSoloOpts)
 			}, func(ctx context.Context) error {
 				id, parseErr := strconv.Atoi(args[0])
 				if parseErr != nil {
@@ -816,7 +853,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeLogsOpts.Node = args[0]
 			return runSoloOnly("node logs", func(ctx context.Context) error {
-				return app.DirectLogs(ctx, nodeLogsOpts)
+				return app.SoloLogs(ctx, nodeLogsOpts)
 			})(cmd, args)
 		},
 	}
@@ -824,7 +861,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeCommand.AddCommand(nodeRegisterCommand, nodeCreateCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand)
 	root.AddCommand(nodeCommand)
 
-	var agentInstallOpts DirectAgentInstallOptions
+	var agentInstallOpts SoloAgentInstallOptions
 	agentCommand := &cobra.Command{
 		Use:   "agent",
 		Short: "Manage the solo agent install",
@@ -836,7 +873,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentInstallOpts.Node = args[0]
 			return runSoloOnly("agent install", func(ctx context.Context) error {
-				return app.DirectAgentInstall(ctx, agentInstallOpts)
+				return app.SoloAgentInstall(ctx, agentInstallOpts)
 			})(cmd, args)
 		},
 	}

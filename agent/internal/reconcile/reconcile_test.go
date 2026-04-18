@@ -184,7 +184,7 @@ func TestReconcileWebUsesDesiredPortWhenPresent(t *testing.T) {
 	}
 }
 
-func TestReconcileEnsuresIngressCertificateForDirectDNSIngress(t *testing.T) {
+func TestReconcileEnsuresIngressCertificateForPublicIngress(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
 	envoyManager := &fakeEnvoyManager{engine: eng}
@@ -201,9 +201,14 @@ func TestReconcileEnsuresIngressCertificateForDirectDNSIngress(t *testing.T) {
 	desired := &desiredstatepb.DesiredState{
 		Revision: "rev-1",
 		Ingress: &desiredstatepb.Ingress{
-			Mode:     "direct_dns",
-			Hostname: "abc123.devopsellence.io",
+			Mode:  "public",
+			Hosts: []string{"abc123.devopsellence.io"},
 		},
+		NodePeers: []*desiredstatepb.NodePeer{{
+			Name:          "node-b",
+			Labels:        []string{"web"},
+			PublicAddress: "198.51.100.11",
+		}},
 		Containers: []*desiredstatepb.Container{{
 			ServiceName: "web",
 			Image:       "busybox",
@@ -217,6 +222,9 @@ func TestReconcileEnsuresIngressCertificateForDirectDNSIngress(t *testing.T) {
 	}
 	if ingressCertManager.calls != 1 {
 		t.Fatalf("expected ingress cert ensure call, got %d", ingressCertManager.calls)
+	}
+	if len(ingressCertManager.nodePeers) != 1 || ingressCertManager.nodePeers[0].GetPublicAddress() != "198.51.100.11" {
+		t.Fatalf("node peers = %#v", ingressCertManager.nodePeers)
 	}
 }
 
@@ -241,12 +249,14 @@ func (f *fakeImagePullAuth) AuthForImage(ctx context.Context, image string) (*en
 type fakeIngressCertManager struct {
 	calls     int
 	ingress   *desiredstatepb.Ingress
+	nodePeers []*desiredstatepb.NodePeer
 	ensureErr error
 }
 
-func (f *fakeIngressCertManager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error {
+func (f *fakeIngressCertManager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer) error {
 	f.calls++
 	f.ingress = ingress
+	f.nodePeers = nodePeers
 	return f.ensureErr
 }
 
@@ -510,7 +520,7 @@ func TestReconcileWebPassesIngressToCloudflared(t *testing.T) {
 	desired := &desiredstatepb.DesiredState{
 		Revision: "rev-1",
 		Ingress: &desiredstatepb.Ingress{
-			Hostname:    "abc123.devopsellence.io",
+			Hosts:       []string{"abc123.devopsellence.io"},
 			TunnelToken: "tok",
 		},
 		Containers: []*desiredstatepb.Container{{
@@ -527,10 +537,10 @@ func TestReconcileWebPassesIngressToCloudflared(t *testing.T) {
 	if len(cloudflared.ingresses) != 1 {
 		t.Fatalf("expected cloudflared reconcile, got %d", len(cloudflared.ingresses))
 	}
-	if got := cloudflared.ingresses[0].Hostname; got != "abc123.devopsellence.io" {
-		t.Fatalf("unexpected ingress hostname: %s", got)
+	if got := strings.Join(cloudflared.ingresses[0].Hosts, ","); got != "abc123.devopsellence.io" {
+		t.Fatalf("unexpected ingress hosts: %s", got)
 	}
-	if envoyManager.ingress == nil || envoyManager.ingress.Hostname != "abc123.devopsellence.io" {
+	if envoyManager.ingress == nil || strings.Join(envoyManager.ingress.Hosts, ",") != "abc123.devopsellence.io" {
 		t.Fatalf("unexpected envoy ingress: %+v", envoyManager.ingress)
 	}
 }

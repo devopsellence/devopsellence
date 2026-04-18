@@ -25,7 +25,6 @@ module EnvironmentIngresses
       return false if node.public_ip.to_s.strip.blank?
       return false if node.provisioning_status != Node::PROVISIONING_READY
       return false unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
-      return false unless node.ingress_tls_ready?
       return false unless fresh?(node)
 
       latest_deployment_node_status_for(node)&.phase == DeploymentNodeStatus::PHASE_SETTLED

@@ -41,7 +41,7 @@ type ImagePullAuthProvider interface {
 }
 
 type IngressCertManager interface {
-	Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error
+	Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer) error
 }
 
 type HTTPProber interface {
@@ -115,7 +115,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 	}
 
 	for service, c := range desiredByService {
-		serviceResult, err := r.reconcileService(ctx, desired.Revision, desired.GetIngress(), c, existingByService[service])
+		serviceResult, err := r.reconcileService(ctx, desired.Revision, desired.GetIngress(), desired.GetNodePeers(), c, existingByService[service])
 		result.Created += serviceResult.Created
 		result.Updated += serviceResult.Updated
 		result.Removed += serviceResult.Removed
@@ -189,7 +189,7 @@ func (r *Reconciler) RunTask(ctx context.Context, revision string, task *desired
 	return result, nil
 }
 
-func (r *Reconciler) reconcileService(ctx context.Context, revision string, ingress *desiredstatepb.Ingress, desired *desiredstatepb.Container, existing []engine.ContainerState) (Result, error) {
+func (r *Reconciler) reconcileService(ctx context.Context, revision string, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer, desired *desiredstatepb.Container, existing []engine.ContainerState) (Result, error) {
 	result := Result{}
 	isWeb := desired.ServiceName == webServiceName
 	name, hash, spec, err := r.specFor(desired, revision)
@@ -205,8 +205,11 @@ func (r *Reconciler) reconcileService(ctx context.Context, revision string, ingr
 		if r.opts.Envoy == nil {
 			return result, fmt.Errorf("envoy manager required for web service")
 		}
+		if err := r.opts.Envoy.Ensure(ctx, ingress); err != nil {
+			return result, fmt.Errorf("ensure envoy: %w", err)
+		}
 		if r.opts.IngressCert != nil {
-			if err := r.opts.IngressCert.Ensure(ctx, ingress); err != nil {
+			if err := r.opts.IngressCert.Ensure(ctx, ingress, nodePeers); err != nil {
 				return result, fmt.Errorf("ensure ingress certificate: %w", err)
 			}
 		}

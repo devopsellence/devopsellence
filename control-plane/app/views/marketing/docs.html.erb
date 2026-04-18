@@ -304,7 +304,7 @@
   <section class="prose-section" id="solo-mode">
     <h2>Solo mode <span class="mode-badge mode-badge--solo">solo</span></h2>
     <p>Solo mode deploys over SSH without the control plane. The CLI builds the image locally, streams it to each configured node, writes desired state on the node, and the agent reconciles containers from local files.</p>
-    <p>Today, solo mode exposes web traffic through Envoy on <code>http://&lt;node-host&gt;:8000</code>. Shared-style tunnel mode and automatic SSL for solo mode are planned, but not available yet.</p>
+    <p>Public ingress uses Envoy in solo and shared mode. Add hostnames with <code>devopsellence ingress set</code>; the agent answers HTTP-01 challenges and keeps HTTPS certificates on the node.</p>
 
     <h3>Set up a node</h3>
     <p>Use the setup wizard for an existing SSH node or a Hetzner node created by the CLI:</p>
@@ -343,7 +343,7 @@
     <p>Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in <code>devopsellence.yml</code>. The provider API token and SSH private key value are not written to config.</p>
 
     <h3>Solo config</h3>
-    <p>Solo node inventory is part of <code>devopsellence.yml</code>, so it can be committed and used from CI. The config schema stores this under the <code>direct</code> block (the internal name for solo mode). Keep private key material in your SSH agent, local filesystem, or CI secrets.</p>
+    <p>Solo node inventory is part of <code>devopsellence.yml</code>, so it can be committed and used from CI. SSH private key material stays in your SSH agent, local filesystem, or CI secrets.</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -352,7 +352,16 @@
         <span class="terminal-bar-title">devopsellence.yml</span>
       </div>
       <div class="terminal-body">
-        <pre class="config-pre"><code>direct:
+        <pre class="config-pre"><code>nodes:
+  prod-1:
+    roles:
+      - web
+    public: true
+  worker-1:
+    roles:
+      - worker
+
+solo:
   nodes:
     prod-1:
       host: 203.0.113.10
@@ -360,13 +369,9 @@
       port: 22
       ssh_key: ~/.ssh/id_ed25519
       agent_state_dir: /var/lib/devopsellence
-      labels:
-        - web
     worker-1:
       host: 203.0.113.11
-      user: ubuntu
-      labels:
-        - worker</code></pre>
+      user: ubuntu</code></pre>
       </div>
     </div>
     <p>Labels control placement in solo mode too. <code>web</code> nodes run web containers. <code>worker</code> nodes run worker containers. A node can have both labels. <code>release_command</code> runs once on one selected web-capable node.</p>
@@ -677,15 +682,15 @@ release_command: bundle exec rails db:migrate</code></pre>
         <dd>Runs once on a web-capable node before the rollout proceeds. Use for migrations. Failure stops the deploy.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>direct.nodes</code></dt>
-        <dd>Solo mode node inventory keyed by node name. Each node has <code>host</code>, <code>user</code>, optional <code>port</code>, optional <code>ssh_key</code>, optional <code>agent_state_dir</code>, and <code>labels</code>. (The config key is <code>direct</code> for historical reasons; the user-facing mode name is <code>solo</code>.)</dd>
+        <dt><code>solo.nodes</code></dt>
+        <dd>Solo mode connection inventory keyed by node name. Each node has <code>host</code>, <code>user</code>, optional <code>port</code>, optional <code>ssh_key</code>, and optional <code>agent_state_dir</code>.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>direct.nodes.*.labels</code></dt>
-        <dd>Service placement labels (solo mode). Supported values are <code>web</code> and <code>worker</code>.</dd>
+        <dt><code>nodes.*.roles</code></dt>
+        <dd>Service placement roles for solo and shared mode. Supported values are <code>web</code> and <code>worker</code>.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>direct.nodes.*.provider</code></dt>
+        <dt><code>solo.nodes.*.provider</code></dt>
         <dd>Provider metadata for CLI-created solo servers. Values like provider server ID, region, size, and image are non-secret and can be committed.</dd>
       </div>
     </dl>
@@ -792,7 +797,7 @@ release_command: bundle exec rails db:migrate</code></pre>
 
   <section class="prose-section" id="ingress">
     <h2>Ingress &amp; HTTPS <span class="mode-badge mode-badge--shared">shared</span></h2>
-    <p>The managed ingress modes below apply to shared mode. In solo mode, the app is exposed via Envoy on <code>http://&lt;node-host&gt;:8000</code> (HTTP only). Tunnel mode and automatic SSL for solo mode are planned.</p>
+    <p>Ingress uses the same desired-state shape in solo and shared mode: hostnames, public web nodes, Envoy, and node-owned TLS certificates.</p>
 
     <h3>Tunnel mode (default)</h3>
     <p>The default for getting started quickly. A Cloudflare tunnel routes traffic from a <code>*.devopsellence.io</code> hostname to a single node. No DNS configuration or open ports required.</p>
@@ -815,13 +820,13 @@ release_command: bundle exec rails db:migrate</code></pre>
         <div class="tl"><span class="tp">$</span> devopsellence context env ingress --ingress-strategy direct_dns</div>
       </div>
     </div>
-    <p>In direct DNS mode, the agent generates its own TLS certificate via Let's Encrypt and terminates HTTPS directly on your server. DNS points to your server's IP.</p>
+    <p>In direct DNS mode, the agent generates its own TLS certificate via Let's Encrypt and terminates HTTPS directly on public web nodes. DNS can point one hostname at more than one node, and one environment can serve more than one hostname.</p>
     <p>To use your own domain:</p>
     <ol>
       <li>Create a <strong>CNAME</strong> or <strong>ALIAS</strong> record pointing your domain to the canonical hostname devopsellence assigns to your environment.</li>
       <li>Or, provision a <strong>load balancer</strong> in Cloudflare (or another provider) and point it to your server IPs for multi-node traffic distribution.</li>
     </ol>
-    <p>This gives you full control over DNS, load balancing, and failover. Your TLS private key is generated on the server and never leaves it &mdash; the control plane only sees the certificate signing request.</p>
+    <p>This gives you full control over DNS, load balancing, and failover. Your TLS private key is generated on the server and never leaves it.</p>
 
     <h3>Choosing a mode</h3>
     <dl class="docs-fields">
@@ -964,6 +969,14 @@ release_command: bundle exec rails db:migrate</code></pre>
       <div class="docs-field">
         <dt><code>devopsellence status</code></dt>
         <dd>In solo mode, read agent status from configured nodes over SSH.</dd>
+      </div>
+      <div class="docs-field">
+        <dt><code>devopsellence ingress set --host app.example.com</code></dt>
+        <dd>Set public ingress hostnames and TLS policy. The command surface is shared by solo and shared mode.</dd>
+      </div>
+      <div class="docs-field">
+        <dt><code>devopsellence ingress check --wait 5m</code></dt>
+        <dd>Check DNS against public web node IPs before deploy.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node logs &lt;name&gt;</code></dt>

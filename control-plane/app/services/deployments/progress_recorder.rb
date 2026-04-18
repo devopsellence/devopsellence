@@ -28,7 +28,7 @@ module Deployments
         deployment_node_status.update!(attributes)
       end
 
-      handle_release_command_status!(deployment_node_status)
+      handle_release_task_status!(deployment_node_status)
       refresh_rollout!(deployment_node_status.deployment) if rollout_refresh_needed?(deployment_node_status)
       enqueue_ingress_reconcile! if ingress_changed || phase == DeploymentNodeStatus::PHASE_SETTLED || phase == DeploymentNodeStatus::PHASE_ERROR
 
@@ -111,11 +111,11 @@ module Deployments
     end
 
     def refresh_rollout!(deployment)
-      if deployment.release_command_active?
+      if deployment.release_task_active?
         deployment.update!(
           finished_at: nil,
           status: Deployment::STATUS_ROLLING_OUT,
-          status_message: release_command_status_message(deployment)
+          status_message: release_task_status_message(deployment)
         )
         return
       end
@@ -168,20 +168,20 @@ module Deployments
       "waiting for node reconcile"
     end
 
-    def handle_release_command_status!(deployment_node_status)
+    def handle_release_task_status!(deployment_node_status)
       task = status[:task]
       return unless task.is_a?(Hash)
-      return unless task[:name].to_s == "release_command"
+      return unless task[:name].to_s == "release"
 
       deployment = deployment_node_status.deployment
-      return unless deployment.release_command_node_id == node.id
+      return unless deployment.release_task_node_id == node.id
 
       case task[:phase].to_s
       when DeploymentNodeStatus::PHASE_RECONCILING
         deployment.update!(
           status: Deployment::STATUS_ROLLING_OUT,
-          status_message: "running release command",
-          release_command_status: Deployment::RELEASE_COMMAND_STATUS_RUNNING,
+          status_message: "running release task",
+          release_task_status: Deployment::RELEASE_TASK_STATUS_RUNNING,
           finished_at: nil,
           error_message: nil
         )
@@ -189,7 +189,7 @@ module Deployments
         deployment.update!(
           status: Deployment::STATUS_ROLLING_OUT,
           status_message: "publishing desired state",
-          release_command_status: Deployment::RELEASE_COMMAND_STATUS_SUCCEEDED,
+          release_task_status: Deployment::RELEASE_TASK_STATUS_SUCCEEDED,
           finished_at: nil,
           error_message: nil
         )
@@ -197,24 +197,24 @@ module Deployments
       when DeploymentNodeStatus::PHASE_ERROR
         deployment.update!(
           status: Deployment::STATUS_FAILED,
-          status_message: "release command failed",
-          release_command_status: Deployment::RELEASE_COMMAND_STATUS_FAILED,
+          status_message: "release task failed",
+          release_task_status: Deployment::RELEASE_TASK_STATUS_FAILED,
           finished_at: Time.current,
           error_message: status[:error].presence || task[:error].presence || deployment_node_status.error_message
         )
       end
     end
 
-    def release_command_status_message(deployment)
-      case deployment.release_command_status
-      when Deployment::RELEASE_COMMAND_STATUS_PENDING
-        "waiting to run release command"
-      when Deployment::RELEASE_COMMAND_STATUS_RUNNING
-        "running release command"
-      when Deployment::RELEASE_COMMAND_STATUS_SUCCEEDED
+    def release_task_status_message(deployment)
+      case deployment.release_task_status
+      when Deployment::RELEASE_TASK_STATUS_PENDING
+        "waiting to run release task"
+      when Deployment::RELEASE_TASK_STATUS_RUNNING
+        "running release task"
+      when Deployment::RELEASE_TASK_STATUS_SUCCEEDED
         "publishing desired state"
       else
-        "running release command"
+        "running release task"
       end
     end
 

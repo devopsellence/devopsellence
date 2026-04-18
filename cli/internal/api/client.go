@@ -200,9 +200,9 @@ type ReleaseCreateRequest struct {
 	GitSHA          string         `json:"git_sha"`
 	ImageRepository string         `json:"image_repository"`
 	ImageDigest     string         `json:"image_digest"`
-	Web             map[string]any `json:"web,omitempty"`
-	Worker          map[string]any `json:"worker,omitempty"`
-	ReleaseCommand  string         `json:"release_command,omitempty"`
+	Services        map[string]any `json:"services"`
+	Tasks           map[string]any `json:"tasks,omitempty"`
+	IngressService  string         `json:"ingress_service,omitempty"`
 }
 
 func New(baseURL string) *Client {

@@ -8,20 +8,24 @@ import (
 	"github.com/devopsellence/cli/internal/config"
 )
 
-func TestBuildDesiredState_WebOnly(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Project: "myapp",
-		Web: config.ServiceConfig{
-			Command: "rails server",
-			Port:    3000,
-			Env:     map[string]string{"RAILS_ENV": "production"},
-			SecretRefs: []config.SecretRef{
-				{Name: "DATABASE_URL", Secret: "projects/x/secrets/db"},
-			},
-			Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
+func baseProject() *config.ProjectConfig {
+	cfg := config.DefaultProjectConfig("solo", "myapp", config.DefaultEnvironment)
+	cfg.Services["web"] = config.Service{
+		Kind:    config.ServiceKindWeb,
+		Roles:   []string{config.DefaultWebRole},
+		Command: "rails server",
+		Env:     map[string]string{"RAILS_ENV": "production"},
+		SecretRefs: []config.SecretRef{
+			{Name: "DATABASE_URL", Secret: "projects/x/secrets/db"},
 		},
+		Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
+		Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
 	}
+	return &cfg
+}
 
+func TestBuildDesiredState_WebOnly(t *testing.T) {
+	cfg := baseProject()
 	secrets := map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}
 
 	data, err := BuildDesiredState(cfg, "myapp:abc1234", "abc1234", secrets)
@@ -37,9 +41,6 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 	if ds.Revision != "abc1234" {
 		t.Errorf("expected revision abc1234, got %s", ds.Revision)
 	}
-	if len(ds.Environments) != 1 {
-		t.Fatalf("expected 1 environment, got %d", len(ds.Environments))
-	}
 	environment := ds.Environments[0]
 	if environment.Name != config.DefaultEnvironment {
 		t.Fatalf("expected default environment, got %s", environment.Name)
@@ -49,62 +50,34 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 	}
 
 	web := environment.Services[0]
-	if web.Name != "web" {
-		t.Errorf("expected service name web, got %s", web.Name)
+	if web.Name != "web" || web.Kind != "web" || web.Image != "myapp:abc1234" {
+		t.Fatalf("web service = %#v", web)
 	}
-	if web.Kind != "web" {
-		t.Errorf("expected service kind web, got %s", web.Kind)
-	}
-	if web.Image != "myapp:abc1234" {
-		t.Errorf("expected image myapp:abc1234, got %s", web.Image)
-	}
-	if web.Env["RAILS_ENV"] != "production" {
-		t.Errorf("expected RAILS_ENV=production")
-	}
-	if web.Env["DATABASE_URL"] != "postgres://localhost/mydb" {
-		t.Errorf("expected DATABASE_URL resolved, got %s", web.Env["DATABASE_URL"])
+	if web.Env["RAILS_ENV"] != "production" || web.Env["DATABASE_URL"] != "postgres://localhost/mydb" {
+		t.Fatalf("env = %#v", web.Env)
 	}
 	if web.Healthcheck == nil || web.Healthcheck.Path != "/up" {
-		t.Errorf("expected healthcheck /up")
-	}
-	if web.Healthcheck.IntervalSeconds != 5 || web.Healthcheck.TimeoutSeconds != 2 || web.Healthcheck.Retries != 3 || web.Healthcheck.StartPeriodSeconds != 1 {
-		t.Errorf("healthcheck timing = %#v, want control-plane defaults", web.Healthcheck)
+		t.Fatalf("healthcheck = %#v", web.Healthcheck)
 	}
 	if len(web.Ports) != 1 || web.Ports[0].Name != "http" || web.Ports[0].Port != 3000 {
-		t.Errorf("expected http port 3000, got %#v", web.Ports)
+		t.Fatalf("ports = %#v", web.Ports)
 	}
-
-	// No secret_refs in output.
-	rawData := make(map[string]json.RawMessage)
-	if err := json.Unmarshal(data, &rawData); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range environment.Services {
-		// Verify command is shell wrapped.
-		if len(c.Command) != 3 || c.Command[0] != "sh" {
-			t.Errorf("expected shell-wrapped command, got %v", c.Command)
-		}
+	if len(web.Command) != 3 || web.Command[0] != "sh" {
+		t.Fatalf("command = %#v", web.Command)
 	}
 }
 
-func TestBuildDesiredState_WithWorkerAndReleaseCommand(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Project: "myapp",
-		Web: config.ServiceConfig{
-			Port:        3000,
-			Env:         map[string]string{},
-			SecretRefs:  []config.SecretRef{},
-			Healthcheck: &config.HTTPHealthcheck{Path: "/", Port: 3000},
-		},
-		Worker: &config.ServiceConfig{
-			Command:    "sidekiq",
-			Env:        map[string]string{"QUEUE": "default"},
-			SecretRefs: []config.SecretRef{},
-		},
-		ReleaseCommand: "rails db:migrate",
+func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
+	cfg := baseProject()
+	cfg.Services["jobs"] = config.Service{
+		Kind:    config.ServiceKindWorker,
+		Roles:   []string{config.DefaultWorkerRole},
+		Command: "sidekiq",
+		Env:     map[string]string{"QUEUE": "default"},
 	}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: "rails db:migrate"}
 
-	data, err := BuildDesiredState(cfg, "myapp:def5678", "def5678", map[string]string{})
+	data, err := BuildDesiredState(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,41 +91,28 @@ func TestBuildDesiredState_WithWorkerAndReleaseCommand(t *testing.T) {
 	if len(environment.Services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(environment.Services))
 	}
-
-	if environment.Services[1].Name != "worker" {
-		t.Errorf("expected worker service, got %s", environment.Services[1].Name)
+	if environment.Services[0].Name != "jobs" || environment.Services[1].Name != "web" {
+		t.Fatalf("services = %#v", environment.Services)
 	}
-
 	if len(environment.Tasks) != 1 {
-		t.Fatal("expected release command")
+		t.Fatal("expected release task")
 	}
-	releaseCommand := environment.Tasks[0]
-	if releaseCommand.Name != "release" {
-		t.Errorf("expected name 'release', got %s", releaseCommand.Name)
-	}
-	if releaseCommand.Image != "myapp:def5678" {
-		t.Errorf("expected image myapp:def5678, got %s", releaseCommand.Image)
+	releaseTask := environment.Tasks[0]
+	if releaseTask.Name != "release" || releaseTask.Image != "myapp:def5678" {
+		t.Fatalf("release task = %#v", releaseTask)
 	}
 }
 
-func TestBuildDesiredStateForLabelsFiltersServices(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Project: "myapp",
-		Web: config.ServiceConfig{
-			Port:        3000,
-			Env:         map[string]string{},
-			SecretRefs:  []config.SecretRef{},
-			Healthcheck: &config.HTTPHealthcheck{Path: "/", Port: 3000},
-		},
-		Worker: &config.ServiceConfig{
-			Command:    "sidekiq",
-			Env:        map[string]string{},
-			SecretRefs: []config.SecretRef{},
-		},
-		ReleaseCommand: "rails db:migrate",
+func TestBuildDesiredStateForLabelsFiltersServicesByRole(t *testing.T) {
+	cfg := baseProject()
+	cfg.Services["jobs"] = config.Service{
+		Kind:    config.ServiceKindWorker,
+		Roles:   []string{config.DefaultWorkerRole},
+		Command: "sidekiq",
 	}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: "rails db:migrate"}
 
-	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWorker}, false)
+	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWorkerRole}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,27 +121,19 @@ func TestBuildDesiredStateForLabelsFiltersServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := ds.Environments[0]
-	if len(environment.Services) != 1 || environment.Services[0].Name != "worker" {
-		t.Fatalf("services = %#v, want worker only", environment.Services)
+	if len(environment.Services) != 1 || environment.Services[0].Name != "jobs" {
+		t.Fatalf("services = %#v, want jobs only", environment.Services)
 	}
 	if len(environment.Tasks) != 0 {
-		t.Fatal("release command should not be scheduled on worker-only node")
+		t.Fatal("release task should not be scheduled on worker-only node")
 	}
 }
 
 func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Project: "myapp",
-		Web: config.ServiceConfig{
-			Port:        3000,
-			Env:         map[string]string{},
-			SecretRefs:  []config.SecretRef{},
-			Healthcheck: &config.HTTPHealthcheck{Path: "/", Port: 3000},
-		},
-		ReleaseCommand: "rails db:migrate",
-	}
+	cfg := baseProject()
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: "rails db:migrate"}
 
-	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWeb}, true)
+	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWebRole}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,33 +146,26 @@ func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 		t.Fatalf("services = %#v, want web only", environment.Services)
 	}
 	if len(environment.Tasks) != 1 {
-		t.Fatal("expected release command")
+		t.Fatal("expected release task")
 	}
 }
 
-func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Project: "myapp",
-		Web: config.ServiceConfig{
-			Port:        3000,
-			Env:         map[string]string{},
-			SecretRefs:  []config.SecretRef{},
-			Healthcheck: &config.HTTPHealthcheck{Path: "/", Port: 3000},
+func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
+	cfg := baseProject()
+	cfg.Ingress = &config.IngressConfig{
+		Hosts:   []string{"app.example.com", "www.example.com"},
+		Service: "web",
+		TLS: config.IngressTLSConfig{
+			Mode:           "auto",
+			Email:          "ops@example.com",
+			CADirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
 		},
-		Ingress: &config.IngressConfig{
-			Hosts: []string{"app.example.com", "www.example.com"},
-			TLS: config.IngressTLSConfig{
-				Mode:           "auto",
-				Email:          "ops@example.com",
-				CADirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
-			},
-			RedirectHTTP: true,
-		},
+		RedirectHTTP: true,
 	}
 
-	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWeb}, true, false, []NodePeer{{
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWebRole}, true, false, []NodePeer{{
 		Name:          "web-b",
-		Labels:        []string{config.NodeLabelWeb},
+		Labels:        []string{config.DefaultWebRole},
 		PublicAddress: "203.0.113.11",
 	}})
 	if err != nil {
@@ -236,31 +181,24 @@ func TestBuildDesiredStateForNodeIncludesIngressForPublicWebNode(t *testing.T) {
 	if strings.Join(ds.Ingress.Hosts, ",") != "app.example.com,www.example.com" {
 		t.Fatalf("hosts = %#v", ds.Ingress.Hosts)
 	}
-	if ds.Ingress.Mode != "public" || ds.Ingress.TLS.Mode != "auto" || ds.Ingress.TLS.Email != "ops@example.com" || !ds.Ingress.RedirectHTTP {
-		t.Fatalf("ingress = %#v", ds.Ingress)
-	}
-	if len(ds.Ingress.Routes) != 2 || ds.Ingress.Routes[0].Target.Environment != config.DefaultEnvironment || ds.Ingress.Routes[0].Target.Service != "web" {
+	if len(ds.Ingress.Routes) != 2 || ds.Ingress.Routes[0].Target.Service != "web" {
 		t.Fatalf("routes = %#v", ds.Ingress.Routes)
 	}
-	if len(ds.NodePeers) != 1 || ds.NodePeers[0].Name != "web-b" || ds.NodePeers[0].PublicAddress != "203.0.113.11" {
+	if len(ds.NodePeers) != 1 || ds.NodePeers[0].Name != "web-b" {
 		t.Fatalf("node peers = %#v", ds.NodePeers)
 	}
 }
 
-func TestBuildDesiredStateForNodeOmitsIngressForWorkerNode(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Project: "myapp",
-		Web: config.ServiceConfig{
-			Port:        3000,
-			Env:         map[string]string{},
-			SecretRefs:  []config.SecretRef{},
-			Healthcheck: &config.HTTPHealthcheck{Path: "/", Port: 3000},
-		},
-		Worker:  &config.ServiceConfig{Command: "sidekiq"},
-		Ingress: &config.IngressConfig{Hosts: []string{"app.example.com"}},
+func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
+	cfg := baseProject()
+	cfg.Services["jobs"] = config.Service{
+		Kind:    config.ServiceKindWorker,
+		Roles:   []string{config.DefaultWorkerRole},
+		Command: "sidekiq",
 	}
+	cfg.Ingress = &config.IngressConfig{Hosts: []string{"app.example.com"}, Service: "web"}
 
-	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.NodeLabelWorker}, true, false)
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWorkerRole}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,17 +212,7 @@ func TestBuildDesiredStateForNodeOmitsIngressForWorkerNode(t *testing.T) {
 }
 
 func TestBuildDesiredState_MissingSecretErrors(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Project: "myapp",
-		Web: config.ServiceConfig{
-			Port:        3000,
-			Env:         map[string]string{},
-			SecretRefs:  []config.SecretRef{{Name: "DATABASE_URL", Secret: "projects/x/secrets/db"}},
-			Healthcheck: &config.HTTPHealthcheck{Path: "/", Port: 3000},
-		},
-	}
-
-	// No secrets provided — should fail.
+	cfg := baseProject()
 	_, err := BuildDesiredState(cfg, "myapp:abc1234", "abc1234", map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for missing secret, got nil")

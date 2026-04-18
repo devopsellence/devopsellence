@@ -104,7 +104,7 @@ func validateService(environmentName string, index int, service *desiredstatepb.
 		return fmt.Errorf("%s.image required", prefix)
 	}
 	switch strings.TrimSpace(service.Kind) {
-	case "", ServiceKindWeb, ServiceKindWorker:
+	case "", ServiceKindWeb, ServiceKindWorker, ServiceKindAccessory:
 	default:
 		return fmt.Errorf("%s.kind unsupported: %q", prefix, service.Kind)
 	}

@@ -101,13 +101,13 @@
 
     <h2>Release commands: running migrations first</h2>
 
-    <p>Many web applications need to run a one-time command before the new code starts &mdash; typically a database migration. devopsellence handles this with <strong>release commands</strong>.</p>
+    <p>Many web applications need to run a one-time command before the new code starts &mdash; typically a database migration. devopsellence handles this with <strong>release tasks</strong>.</p>
 
-    <p>When a release includes a release command (e.g., <code>bundle exec rails db:migrate</code>):</p>
+    <p>When a release includes a release task (e.g., <code>bundle exec rails db:migrate</code>):</p>
 
     <ol>
-      <li>The control plane selects one capable node (one that supports the <code>release_command.v1</code> capability) and publishes the release command as a task in the desired state.</li>
-      <li>The agent on that node creates a temporary container with the same image and environment as the web service, but with the release command as its entrypoint.</li>
+      <li>The control plane selects one capable node (one that supports the <code>release_task.v1</code> capability) and publishes the release task in the desired state.</li>
+      <li>The agent on that node creates a temporary container with the same image and environment as the configured service, but with the release task as its entrypoint.</li>
       <li>The agent waits for the command to complete and captures the exit code and last 100 lines of output.</li>
       <li>If the command succeeds, the agent reports success. The control plane then publishes the normal rollout (containers on all nodes) in a new desired-state update.</li>
       <li>If the command fails, the deployment is marked as failed. The old containers continue running.</li>

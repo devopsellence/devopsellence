@@ -5,8 +5,7 @@ class AddServiceRuntimeAndNodeLabels < ActiveRecord::Migration[8.1]
     end
 
     change_table :releases, bulk: true do |t|
-      t.text :web_json, null: false, default: "{}"
-      t.text :worker_json, null: false, default: "{}"
+      t.text :runtime_json, null: false, default: "{}"
     end
   end
 end

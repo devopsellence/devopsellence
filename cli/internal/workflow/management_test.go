@@ -60,7 +60,7 @@ func TestInitWritesAgentsFile(t *testing.T) {
 	if !strings.Contains(text, "devopsellence secret set NAME") {
 		t.Fatalf("AGENTS.md = %q, want secret guidance", text)
 	}
-	if !strings.Contains(text, "release_command") {
+	if !strings.Contains(text, "tasks.release") {
 		t.Fatalf("AGENTS.md = %q, want lifecycle hook guidance", text)
 	}
 	if !strings.Contains(text, "Environment: production") {
@@ -162,8 +162,9 @@ func TestInitWritesGenericConfigAtRepoRoot(t *testing.T) {
 	if loaded == nil || loaded.App.Type != config.AppTypeGeneric {
 		t.Fatalf("loaded generic config mismatch: %#v", loaded)
 	}
-	if loaded.Web.Healthcheck == nil || loaded.Web.Healthcheck.Path != "/" {
-		t.Fatalf("generic healthcheck path = %#v, want /", loaded.Web.Healthcheck)
+	web := webService(t, loaded)
+	if web.Healthcheck == nil || web.Healthcheck.Path != "/" {
+		t.Fatalf("generic healthcheck path = %#v, want /", web.Healthcheck)
 	}
 }
 
@@ -1279,8 +1280,12 @@ func TestDeployUsesResolveDeployTargetWhenAvailable(t *testing.T) {
 func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 	root := makeGitGenericRoot(t)
 	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
-	project.Web.Env = map[string]string{"FROM_CONFIG": "1"}
-	project.Worker = &config.Service{
+	web := project.Services[config.DefaultWebServiceName]
+	web.Env = map[string]string{"FROM_CONFIG": "1"}
+	project.Services[config.DefaultWebServiceName] = web
+	project.Services["worker"] = config.Service{
+		Kind:    config.ServiceKindWorker,
+		Roles:   []string{config.DefaultWorkerRole},
 		Command: "./bin/jobs",
 		Env:     map[string]string{"WORKER_FROM_CONFIG": "1"},
 	}
@@ -1363,10 +1368,12 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 		t.Fatalf("Deploy() error = %v", err)
 	}
 
-	if got, want := releaseCaptured.Web["env"], map[string]any{"FROM_CONFIG": "1", "RAILS_ENV": "production", "WEB_ONLY": "true"}; !equalJSONMap(got, want) {
+	webPayload := releaseServicePayload(t, releaseCaptured, config.DefaultWebServiceName)
+	workerPayload := releaseServicePayload(t, releaseCaptured, "worker")
+	if got, want := webPayload["env"], map[string]any{"FROM_CONFIG": "1", "RAILS_ENV": "production", "WEB_ONLY": "true"}; !equalJSONMap(got, want) {
 		t.Fatalf("web env = %#v, want %#v", got, want)
 	}
-	if got, want := releaseCaptured.Worker["env"], map[string]any{"WORKER_FROM_CONFIG": "1", "RAILS_ENV": "production", "QUEUE": "critical"}; !equalJSONMap(got, want) {
+	if got, want := workerPayload["env"], map[string]any{"WORKER_FROM_CONFIG": "1", "RAILS_ENV": "production", "QUEUE": "critical"}; !equalJSONMap(got, want) {
 		t.Fatalf("worker env = %#v, want %#v", got, want)
 	}
 
@@ -1897,7 +1904,7 @@ func TestDeployRailsSyncsMasterKeySecret(t *testing.T) {
 
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Worker = &config.ServiceConfig{Command: "bin/jobs"}
+	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Roles: []string{config.DefaultWorkerRole}, Command: "bin/jobs"}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2226,9 +2233,15 @@ func TestDeployBuildsGenericWorkspaceImage(t *testing.T) {
 
 	root := makeGitGenericRoot(t)
 	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
-	project.Web.Port = 8080
-	project.Web.Healthcheck.Path = "/"
-	project.Web.Healthcheck.Port = 8080
+	web := project.Services[config.DefaultWebServiceName]
+	for i := range web.Ports {
+		if web.Ports[i].Name == "http" {
+			web.Ports[i].Port = 8080
+		}
+	}
+	web.Healthcheck.Path = "/"
+	web.Healthcheck.Port = 8080
+	project.Services[config.DefaultWebServiceName] = web
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2298,12 +2311,13 @@ func TestDeployBuildsGenericWorkspaceImage(t *testing.T) {
 	if err := app.Deploy(context.Background(), DeployOptions{}); err != nil {
 		t.Fatalf("Deploy() error = %v", err)
 	}
-	if releaseCaptured.Web["env"] == nil {
+	webPayload := releaseServicePayload(t, releaseCaptured, config.DefaultWebServiceName)
+	if webPayload["env"] == nil {
 		t.Fatalf("web env payload missing")
 	}
-	envMap, ok := releaseCaptured.Web["env"].(map[string]any)
+	envMap, ok := webPayload["env"].(map[string]any)
 	if !ok {
-		t.Fatalf("web env payload type = %T", releaseCaptured.Web["env"])
+		t.Fatalf("web env payload type = %T", webPayload["env"])
 	}
 	if _, exists := envMap["RAILS_MASTER_KEY"]; exists {
 		t.Fatalf("generic deploy should not inject RAILS_MASTER_KEY: %#v", envMap)
@@ -2476,18 +2490,20 @@ func TestDeployAutoInitInfersPortFromBuiltImageMetadata(t *testing.T) {
 	if loaded == nil {
 		t.Fatal("config was not written during auto-init")
 	}
-	if loaded.Web.Port != 80 {
-		t.Fatalf("web.port = %d, want 80", loaded.Web.Port)
+	web := webService(t, loaded)
+	if web.HTTPPort(0) != 80 {
+		t.Fatalf("web http port = %d, want 80", web.HTTPPort(0))
 	}
-	if loaded.Web.Healthcheck == nil || loaded.Web.Healthcheck.Port != 80 {
-		t.Fatalf("healthcheck = %#v, want port 80", loaded.Web.Healthcheck)
+	if web.Healthcheck == nil || web.Healthcheck.Port != 80 {
+		t.Fatalf("healthcheck = %#v, want port 80", web.Healthcheck)
 	}
-	if port := intValueAny(releaseCaptured.Web["port"]); port != 80 {
-		t.Fatalf("release web.port = %v, want 80", releaseCaptured.Web["port"])
+	webPayload := releaseServicePayload(t, releaseCaptured, config.DefaultWebServiceName)
+	if port := servicePayloadHTTPPort(webPayload); port != 80 {
+		t.Fatalf("release web http port = %v, want 80", webPayload["ports"])
 	}
-	healthcheck, ok := releaseCaptured.Web["healthcheck"].(map[string]any)
+	healthcheck, ok := webPayload["healthcheck"].(map[string]any)
 	if !ok {
-		t.Fatalf("release healthcheck payload missing: %#v", releaseCaptured.Web["healthcheck"])
+		t.Fatalf("release healthcheck payload missing: %#v", webPayload["healthcheck"])
 	}
 	if port := intValueAny(healthcheck["port"]); port != 80 {
 		t.Fatalf("release healthcheck.port = %v, want 80", healthcheck["port"])
@@ -2628,11 +2644,12 @@ func TestInitInfersThrustPortForFirstGeneratedConfig(t *testing.T) {
 	if loaded == nil {
 		t.Fatal("config was not written")
 	}
-	if loaded.Web.Port != 80 {
-		t.Fatalf("web.port = %d, want 80", loaded.Web.Port)
+	web := webService(t, loaded)
+	if web.HTTPPort(0) != 80 {
+		t.Fatalf("web http port = %d, want 80", web.HTTPPort(0))
 	}
-	if loaded.Web.Healthcheck == nil || loaded.Web.Healthcheck.Port != 80 {
-		t.Fatalf("healthcheck.port = %#v, want 80", loaded.Web.Healthcheck)
+	if web.Healthcheck == nil || web.Healthcheck.Port != 80 {
+		t.Fatalf("healthcheck.port = %#v, want 80", web.Healthcheck)
 	}
 }
 
@@ -3076,7 +3093,7 @@ func TestDeployRailsSecretSyncRunsConcurrently(t *testing.T) {
 
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Worker = &config.ServiceConfig{Command: "bin/jobs"}
+	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Roles: []string{config.DefaultWorkerRole}, Command: "bin/jobs"}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -3511,6 +3528,49 @@ func intValueAny(value any) int {
 	default:
 		return 0
 	}
+}
+
+func webService(t *testing.T, cfg *config.ProjectConfig) config.ServiceConfig {
+	t.Helper()
+	name, ok := cfg.PrimaryWebServiceName()
+	if !ok {
+		t.Fatalf("missing primary web service: %#v", cfg.Services)
+	}
+	service, ok := cfg.Services[name]
+	if !ok {
+		t.Fatalf("primary web service %q missing: %#v", name, cfg.Services)
+	}
+	return service
+}
+
+func releaseServicePayload(t *testing.T, release api.ReleaseCreateRequest, name string) map[string]any {
+	t.Helper()
+	raw, ok := release.Services[name]
+	if !ok {
+		t.Fatalf("release service %q missing: %#v", name, release.Services)
+	}
+	payload, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("release service %q payload type = %T", name, raw)
+	}
+	return payload
+}
+
+func servicePayloadHTTPPort(payload map[string]any) int {
+	ports, ok := payload["ports"].([]any)
+	if !ok {
+		return 0
+	}
+	for _, raw := range ports {
+		port, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if stringValueAny(port["name"]) == "http" {
+			return intValueAny(port["port"])
+		}
+	}
+	return 0
 }
 
 func stringValueAny(value any) string {

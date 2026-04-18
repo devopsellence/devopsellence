@@ -37,7 +37,7 @@ class ManagedNodesEnsureCapacityTest < ActiveSupport::TestCase
     release = project.releases.create!(
       git_sha: "a" * 40, revision: "r1", image_repository: "app",
       image_digest: "sha256:#{"b" * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     node, = issue_test_node!(organization: organization, name: "assigned-node",
       managed: true, managed_provider: "hetzner", managed_region: "ash",
@@ -73,7 +73,7 @@ class ManagedNodesEnsureCapacityTest < ActiveSupport::TestCase
     release = project.releases.create!(
       git_sha: "a" * 40, revision: "r1", image_repository: "app",
       image_digest: "sha256:#{"b" * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
 
     # Create a warm server in the pool (no bundle, no org, no env)
@@ -120,7 +120,7 @@ class ManagedNodesEnsureCapacityTest < ActiveSupport::TestCase
     release = project.releases.create!(
       git_sha: "a" * 40, revision: "r1", image_repository: "app",
       image_digest: "sha256:#{"b" * 64}",
-      web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+      runtime_json: release_runtime_json
     )
     stale_node, = issue_test_node!(organization: organization, name: "stale-node",
       managed: true, managed_provider: "hetzner", managed_region: "ash",

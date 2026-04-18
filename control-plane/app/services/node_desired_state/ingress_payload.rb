@@ -3,8 +3,9 @@
 module NodeDesiredState
   class IngressPayload
     def self.build(node:, environment:, release:)
-      return nil unless node.labeled?(Node::LABEL_WEB)
-      return nil unless release.requires_label?(Node::LABEL_WEB)
+      ingress_service_name = release.ingress_service_name
+      return nil if ingress_service_name.blank?
+      return nil unless release.service_scheduled_on?(ingress_service_name, node)
       return nil unless Devopsellence::IngressConfig.managed?
 
       ingress = environment.environment_ingress
@@ -17,7 +18,7 @@ module NodeDesiredState
           hosts: [ ingress.hostname ],
           mode: Environment::INGRESS_STRATEGY_TUNNEL,
           tunnelTokenSecretRef: ingress.tunnel_token_secret_ref,
-          routes: routes_for(environment:, ingress:)
+          routes: routes_for(environment:, ingress:, release:)
         }
       else
         return nil unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
@@ -29,12 +30,12 @@ module NodeDesiredState
             mode: "auto"
           },
           redirectHttp: true,
-          routes: routes_for(environment:, ingress:)
+          routes: routes_for(environment:, ingress:, release:)
         }
       end
     end
 
-    def self.routes_for(environment:, ingress:)
+    def self.routes_for(environment:, ingress:, release:)
       [
         {
           match: {
@@ -42,7 +43,7 @@ module NodeDesiredState
           },
           target: {
             environment: environment.name,
-            service: "web",
+            service: release.ingress_service_name,
             port: "http"
           }
         }

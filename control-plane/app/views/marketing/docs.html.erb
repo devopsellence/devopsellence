@@ -374,7 +374,7 @@ solo:
       user: ubuntu</code></pre>
       </div>
     </div>
-    <p>Labels control placement in solo mode too. <code>web</code> nodes run web containers. <code>worker</code> nodes run worker containers. A node can have both labels. <code>release_command</code> runs once on one selected web-capable node.</p>
+    <p>Labels control placement in solo mode too. <code>web</code> nodes run web services. <code>worker</code> nodes run worker services. A node can have both labels. <code>tasks.release</code> runs once on one node labeled for its configured service.</p>
 
     <h3>Deploy and inspect</h3>
     <div class="terminal">
@@ -434,7 +434,7 @@ solo:
       <li>The image is pushed to the configured registry. On today's managed backend, that is Google Artifact Registry.</li>
       <li>A signed release is published to the control plane.</li>
       <li>Desired state is published to the configured delivery backend. On today's managed backend, that is GCS.</li>
-      <li>If <code>release_command</code> is set, it runs on one web-capable node first.</li>
+      <li>If <code>tasks.release</code> is set, it runs on one capable node first.</li>
       <li>Agents pull the new state, pull the image, and start new containers.</li>
       <li>For web services, Envoy proxy shifts traffic to new containers after health checks pass.</li>
       <li>Old containers are stopped and removed.</li>
@@ -571,7 +571,7 @@ jobs:
         <span class="terminal-bar-title">devopsellence.yml</span>
       </div>
       <div class="terminal-body">
-        <pre class="config-pre"><code>schema_version: 3
+        <pre class="config-pre"><code>schema_version: 5
 
 app:
   type: rails
@@ -584,30 +584,40 @@ build:
   context: .
   dockerfile: Dockerfile
 
-web:
-  command: bundle exec puma -C config/puma.rb
-  env:
-    RAILS_ENV: production
-    RAILS_LOG_TO_STDOUT: "1"
-    WEB_CONCURRENCY: "2"
-  port: 3000
-  healthcheck:
-    path: /up
-    port: 3000
-  volumes:
-    - source: app_storage
-      target: /rails/storage
+services:
+  web:
+    kind: web
+    roles: [web]
+    command: bundle exec puma -C config/puma.rb
+    env:
+      RAILS_ENV: production
+      RAILS_LOG_TO_STDOUT: "1"
+      WEB_CONCURRENCY: "2"
+    ports:
+      - name: http
+        port: 3000
+    healthcheck:
+      path: /up
+      port: 3000
+    volumes:
+      - source: app_storage
+        target: /rails/storage
 
-worker:
-  command: bundle exec sidekiq
-  env:
-    RAILS_ENV: production
-    MALLOC_ARENA_MAX: "2"
-  volumes:
-    - source: app_storage
-      target: /rails/storage
+  worker:
+    kind: worker
+    roles: [worker]
+    command: bundle exec sidekiq
+    env:
+      RAILS_ENV: production
+      MALLOC_ARENA_MAX: "2"
+    volumes:
+      - source: app_storage
+        target: /rails/storage
 
-release_command: bundle exec rails db:migrate</code></pre>
+tasks:
+  release:
+    service: web
+    command: bundle exec rails db:migrate</code></pre>
       </div>
     </div>
 
@@ -615,7 +625,7 @@ release_command: bundle exec rails db:migrate</code></pre>
     <dl class="docs-fields">
       <div class="docs-field">
         <dt><code>schema_version</code></dt>
-        <dd>Required. Currently <code>3</code>.</dd>
+        <dd>Required. Currently <code>5</code>.</dd>
       </div>
       <div class="docs-field">
         <dt><code>app.type</code></dt>
@@ -642,52 +652,44 @@ release_command: bundle exec rails db:migrate</code></pre>
         <dd>Path to Dockerfile relative to context. Default: <code>Dockerfile</code>.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>web.command</code></dt>
-        <dd>The command to start the web process.</dd>
+        <dt><code>services.*.kind</code></dt>
+        <dd>Service kind. Use <code>web</code>, <code>worker</code>, or <code>accessory</code>.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>web.env</code></dt>
-        <dd>Key-value environment variables for the web service.</dd>
+        <dt><code>services.*.roles</code></dt>
+        <dd>Placement roles used to match services to nodes.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>web.port</code></dt>
-        <dd>Port the web process listens on. Envoy proxy routes HTTPS traffic to this port.</dd>
+        <dt><code>services.*.command</code></dt>
+        <dd>The command to start the service process.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>web.healthcheck.path</code></dt>
-        <dd>HTTP path for health checks. The agent hits this before shifting traffic.</dd>
+        <dt><code>services.*.env</code></dt>
+        <dd>Key-value environment variables for the service.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>web.healthcheck.port</code></dt>
-        <dd>Port for health checks. Usually same as <code>web.port</code>.</dd>
+        <dt><code>services.*.ports</code></dt>
+        <dd>Named container ports. Web services must expose an <code>http</code> port.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>web.volumes</code></dt>
+        <dt><code>services.*.healthcheck</code></dt>
+        <dd>HTTP path and port for health checks. The agent hits this before shifting traffic.</dd>
+      </div>
+      <div class="docs-field">
+        <dt><code>services.*.volumes</code></dt>
         <dd>Persistent volumes. Each entry has <code>source</code> (volume name) and <code>target</code> (mount path).</dd>
       </div>
       <div class="docs-field">
-        <dt><code>worker.command</code></dt>
-        <dd>The command to start the worker process.</dd>
-      </div>
-      <div class="docs-field">
-        <dt><code>worker.env</code></dt>
-        <dd>Key-value environment variables for the worker service.</dd>
-      </div>
-      <div class="docs-field">
-        <dt><code>worker.volumes</code></dt>
-        <dd>Persistent volumes for the worker. Same format as <code>web.volumes</code>.</dd>
-      </div>
-      <div class="docs-field">
-        <dt><code>release_command</code></dt>
-        <dd>Runs once on a web-capable node before the rollout proceeds. Use for migrations. Failure stops the deploy.</dd>
+        <dt><code>tasks.release</code></dt>
+        <dd>Runs once on a node matching its configured service before the rollout proceeds. Use for migrations. Failure stops the deploy.</dd>
       </div>
       <div class="docs-field">
         <dt><code>solo.nodes</code></dt>
         <dd>Solo mode connection inventory keyed by node name. Each node has <code>host</code>, <code>user</code>, optional <code>port</code>, optional <code>ssh_key</code>, and optional <code>agent_state_dir</code>.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>nodes.*.roles</code></dt>
-        <dd>Service placement roles for solo and shared mode. Supported values are <code>web</code> and <code>worker</code>.</dd>
+        <dt><code>solo.nodes.*.labels</code></dt>
+        <dd>Service placement labels for solo and shared mode. Use labels matching your services' roles.</dd>
       </div>
       <div class="docs-field">
         <dt><code>solo.nodes.*.provider</code></dt>
@@ -759,8 +761,8 @@ release_command: bundle exec rails db:migrate</code></pre>
   <section class="prose-section" id="lifecycle-hooks">
     <h2>Lifecycle hooks</h2>
 
-    <h3>release_command</h3>
-    <p><code>release_command</code> runs once on a single web-capable node before the rollout proceeds. It runs in a new container using the web image, with the same environment variables, secrets, and volume mounts.</p>
+    <h3>tasks.release</h3>
+    <p><code>tasks.release</code> runs once on a node matching its configured service before the rollout proceeds. It runs in a new container using that service's image, environment variables, secrets, and volume mounts.</p>
     <p>Use it for database migrations or any one-time setup that must succeed before new code goes live. If the command fails (non-zero exit), the deploy stops.</p>
     <div class="terminal">
       <div class="terminal-bar">
@@ -770,7 +772,10 @@ release_command: bundle exec rails db:migrate</code></pre>
         <span class="terminal-bar-title">devopsellence.yml</span>
       </div>
       <div class="terminal-body">
-        <pre class="config-pre"><code>release_command: bundle exec rails db:migrate</code></pre>
+        <pre class="config-pre"><code>tasks:
+  release:
+    service: web
+    command: bundle exec rails db:migrate</code></pre>
       </div>
     </div>
 
@@ -1120,7 +1125,7 @@ release_command: bundle exec rails db:migrate</code></pre>
 
     <h3>What stays the same</h3>
     <ul>
-      <li>Your <code>devopsellence.yml</code> app config (build, web, worker, release_command, healthcheck, volumes).</li>
+      <li>Your <code>devopsellence.yml</code> app config (build, services, tasks, ingress, health checks, volumes).</li>
       <li>Your Dockerfile and application code.</li>
       <li>The agent's reconciliation loop, zero-downtime rollouts, health checks, and Envoy proxy.</li>
       <li>CLI verbs: <code>deploy</code>, <code>status</code>, <code>secret</code>, <code>doctor</code>.</li>
@@ -1136,7 +1141,7 @@ release_command: bundle exec rails db:migrate</code></pre>
       <li><strong>Docker not running?</strong> The CLI needs Docker to build images. Start Docker and try again.</li>
       <li><strong>Auth expired?</strong> Run <code>devopsellence auth login</code> to refresh, then <code>devopsellence doctor</code> to verify.</li>
       <li><strong>Deploy hangs?</strong> Check the deploy output. A failing health check or crashing container will stall the rollout. Fix the app and redeploy.</li>
-      <li><strong>release_command failing?</strong> The command runs in a container with your web image. Check that migrations or setup scripts work with your current database state.</li>
+      <li><strong>Release task failing?</strong> The command runs in a container with its configured service image. Check that migrations or setup scripts work with your current database state.</li>
       <li><strong>Node not picking up deploys?</strong> Run <code>devopsellence node diagnose &lt;id&gt;</code> to check agent status and connectivity. Verify the node is assigned to the correct environment.</li>
       <li><strong>Secrets not available?</strong> In shared mode, secrets are scoped to a service. Make sure you set the secret with the correct <code>--service</code> flag matching your service name (<code>web</code> or <code>worker</code>), then confirm with <code>devopsellence secret list</code>.</li>
       <li><strong>Solo deploy transfer looks slow?</strong> The CLI prints compressed bytes while streaming the image over SSH. If it fails before transfer, run <code>devopsellence doctor</code> in a solo workspace and check SSH plus Docker or passwordless sudo access.</li>

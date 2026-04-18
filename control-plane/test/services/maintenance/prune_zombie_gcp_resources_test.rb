@@ -67,7 +67,7 @@ class MaintenancePruneZombieGcpResourcesTest < ActiveSupport::TestCase
       provisioned_at: Time.current
     )
     environment.environment_secrets.create!(
-      service_name: Node::LABEL_WEB,
+      service_name: "web",
       name: "SECRET_KEY_BASE",
       gcp_secret_name: "env-a22222222222-web-secret-key-base"
     )

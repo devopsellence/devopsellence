@@ -68,8 +68,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_120000) do
     t.text "error_message"
     t.datetime "finished_at"
     t.datetime "published_at", null: false
-    t.bigint "release_command_node_id"
-    t.string "release_command_status"
+    t.bigint "release_task_node_id"
+    t.string "release_task_status"
     t.integer "release_id", null: false
     t.string "request_token", null: false
     t.integer "sequence", null: false
@@ -80,7 +80,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_120000) do
     t.index ["environment_id", "request_token"], name: "index_deployments_on_environment_id_and_request_token", unique: true
     t.index ["environment_id", "sequence"], name: "index_deployments_on_environment_id_and_sequence", unique: true
     t.index ["environment_id"], name: "index_deployments_on_environment_id"
-    t.index ["release_command_node_id"], name: "index_deployments_on_release_command_node_id"
+    t.index ["release_task_node_id"], name: "index_deployments_on_release_task_node_id"
     t.index ["release_id"], name: "index_deployments_on_release_id"
   end
 
@@ -405,13 +405,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_120000) do
     t.string "image_repository", default: "", null: false
     t.integer "project_id", null: false
     t.datetime "published_at"
-    t.string "release_command"
     t.string "revision"
+    t.text "runtime_json", default: "{}", null: false
     t.text "secret_refs_json", default: "[]", null: false
     t.string "status", default: "draft", null: false
     t.datetime "updated_at", null: false
-    t.text "web_json", default: "{}", null: false
-    t.text "worker_json", default: "{}", null: false
     t.index ["project_id", "created_at"], name: "index_releases_on_project_id_and_created_at"
     t.index ["project_id", "git_sha"], name: "index_releases_on_project_id_and_git_sha"
     t.index ["project_id"], name: "index_releases_on_project_id"
@@ -482,7 +480,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_120000) do
   add_foreign_key "deployment_node_statuses", "deployments"
   add_foreign_key "deployment_node_statuses", "nodes"
   add_foreign_key "deployments", "environments"
-  add_foreign_key "deployments", "nodes", column: "release_command_node_id"
+  add_foreign_key "deployments", "nodes", column: "release_task_node_id"
   add_foreign_key "deployments", "releases"
   add_foreign_key "environment_bundles", "environments", column: "claimed_by_environment_id"
   add_foreign_key "environment_bundles", "organization_bundles"

@@ -280,7 +280,7 @@
                   <%= form_with url: dashboard_environment_secrets_path(@selected_environment), method: :post, class: "space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3" do %>
                     <div>
                       <%= label_tag :service_name, "service", class: "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600" %>
-                      <%= select_tag :service_name, options_for_select([[Node::LABEL_WEB, Node::LABEL_WEB], [Node::LABEL_WORKER, Node::LABEL_WORKER]]), class: "w-full rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= select_tag :service_name, options_for_select([["web", "web"], ["worker", "worker"]]), class: "w-full rounded border border-slate-300 px-3 py-2 text-sm" %>
                     </div>
                     <div>
                       <%= label_tag :name, "env var name", class: "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600" %>
@@ -304,27 +304,31 @@
                 <h2 class="text-base font-semibold">releases</h2>
                 <% if @owner_selected %>
                   <%= form_with url: dashboard_releases_path(@selected_project), method: :post, class: "space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3" do %>
+                    <%= hidden_field_tag "services[web][kind]", "web" %>
+                    <%= hidden_field_tag "services[web][roles][]", "web" %>
+                    <%= hidden_field_tag "services[web][ports][0][name]", "http" %>
+                    <%= hidden_field_tag :ingress_service, "web" %>
                     <div class="grid gap-3 sm:grid-cols-2">
                       <%= text_field_tag :git_sha, nil, required: true, placeholder: "git sha", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
                       <%= text_field_tag :revision, nil, placeholder: "revision (defaults to git sha)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
                       <%= text_field_tag :image_repository, nil, required: true, placeholder: "image repository inside org gar repo", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
                       <%= text_field_tag :image_digest, nil, required: true, placeholder: "image digest (sha256:...)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-                      <%= text_field_tag :entrypoint, nil, placeholder: "entrypoint (optional)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-                      <%= text_field_tag :command, nil, placeholder: "command (optional)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-                      <%= number_field_tag :port, 3000, min: 1, placeholder: "app port", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-                      <%= text_field_tag "healthcheck[path]", "/up", placeholder: "healthcheck path", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-                      <%= number_field_tag "healthcheck[port]", 3000, min: 1, class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag "services[web][entrypoint]", nil, placeholder: "web entrypoint (optional)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag "services[web][command]", nil, placeholder: "web command (optional)", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= number_field_tag "services[web][ports][0][port]", 3000, min: 1, placeholder: "web http port", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= text_field_tag "services[web][healthcheck][path]", "/up", placeholder: "healthcheck path", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+                      <%= number_field_tag "services[web][healthcheck][port]", 3000, min: 1, class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
                       <%= number_field_tag :healthcheck_interval_seconds, 5, min: 1, class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
                       <%= number_field_tag :healthcheck_timeout_seconds, 2, min: 1, class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
                     </div>
                     <div class="grid gap-3 lg:grid-cols-2">
                       <div>
                         <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-600">env json</p>
-                        <%= text_area_tag :env_json, @default_env_json, required: true, rows: 8, class: "w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs" %>
+                        <%= text_area_tag "services[web][env]", @default_env_json, required: true, rows: 8, class: "w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs" %>
                       </div>
                       <div>
                         <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-600">secret refs json</p>
-                        <%= text_area_tag :secret_refs_json, @default_secret_refs_json, required: true, rows: 8, class: "w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs" %>
+                        <%= text_area_tag "services[web][secret_refs]", @default_secret_refs_json, required: true, rows: 8, class: "w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs" %>
                       </div>
                     </div>
                     <%= submit_tag "Create release", class: "rounded bg-slate-900 px-4 py-2 text-sm text-white" %>

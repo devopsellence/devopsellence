@@ -22,6 +22,7 @@ class NodesCleanupTest < ActiveSupport::TestCase
       revision: "rel-1",
       image_repository: "shop-app",
       image_digest: "sha256:#{'b' * 64}",
+      runtime_json: release_runtime_json,
       status: Release::STATUS_PUBLISHED,
       published_at: Time.current
     )

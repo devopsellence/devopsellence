@@ -64,10 +64,10 @@ module Api
           return render_error("forbidden", "owner role required", status: :forbidden) unless environment
 
           if requested_ingress_strategy == Environment::INGRESS_STRATEGY_DIRECT_DNS
-            incompatible_nodes = environment.assigned_web_nodes_missing_direct_dns_capability
+            incompatible_nodes = environment.assigned_ingress_nodes_missing_direct_dns_capability
             if incompatible_nodes.any?
               names = incompatible_nodes.map(&:name).sort.join(", ")
-              return render_error("invalid_request", "assigned web nodes do not support direct_dns ingress: #{names}", status: :unprocessable_entity)
+              return render_error("invalid_request", "assigned ingress nodes do not support direct_dns ingress: #{names}", status: :unprocessable_entity)
             end
           end
 

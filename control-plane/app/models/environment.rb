@@ -72,9 +72,12 @@ class Environment < ApplicationRecord
     ingress_strategy == INGRESS_STRATEGY_DIRECT_DNS
   end
 
-  def assigned_web_nodes_missing_direct_dns_capability
+  def assigned_ingress_nodes_missing_direct_dns_capability
+    service_name = current_release&.ingress_service_name
+    return [] if service_name.blank?
+
     nodes.select do |node|
-      node.labeled?(Node::LABEL_WEB) &&
+      current_release.service_scheduled_on?(service_name, node) &&
         !node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
     end
   end

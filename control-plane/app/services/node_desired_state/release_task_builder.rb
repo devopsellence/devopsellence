@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module NodeDesiredState
-  class ReleaseCommandBuilder
+  class ReleaseTaskBuilder
     def initialize(node:, environment:, release:, sequence:)
       @node = node
       @environment = environment
@@ -21,7 +21,7 @@ module NodeDesiredState
           {
             name: environment.name,
             revision: revision,
-            tasks: [ release.release_command_task_for(node: node) ].compact
+            tasks: [ release.release_task_for(node: node) ].compact
           }.compact
         ],
         publishedAt: Time.current.utc.iso8601,

@@ -38,7 +38,7 @@ module Deployments
       return true if deployment.status == Deployment::STATUS_SCHEDULING
 
       deployment.status == Deployment::STATUS_ROLLING_OUT &&
-        deployment.release_command_status == Deployment::RELEASE_COMMAND_STATUS_SUCCEEDED
+        deployment.release_task_status == Deployment::RELEASE_TASK_STATUS_SUCCEEDED
     end
   end
 end

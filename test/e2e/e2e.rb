@@ -527,23 +527,23 @@ class E2E
         document = StandaloneDesiredStateDocument.find_by!(node: node, sequence: node.desired_state_sequence)
         envelope = JSON.parse(document.payload_json)
         desired = JSON.parse(envelope.fetch("payload_json"))
-        release_command = desired.fetch("environments").flat_map { |environment| environment.fetch("tasks", []) }.find { |task| task["name"] == "release_command" } || {}
+        release_task = desired.fetch("environments").flat_map { |environment| environment.fetch("tasks", []) }.find { |task| task["name"] == "release" } || {}
         puts({
           revision: desired["revision"],
-          release_command_env: release_command["env"],
-          release_command_secret_refs: release_command["secretRefs"],
-          release_command_command: release_command["command"]
+          release_task_env: release_task["env"],
+          release_task_secret_refs: release_task["secretRefs"],
+          release_task_command: release_task["command"]
         }.to_json)
       RUBY
       raise "desired state missing revision" if desired_state.fetch("revision").to_s.empty?
-      release_command_env = desired_state.fetch("release_command_env")
-      secret_refs = desired_state.fetch("release_command_secret_refs")
-      command = desired_state.fetch("release_command_command")
-      raise "release command env missing from desired state" unless release_command_env.is_a?(Hash)
-      raise "plain env missing from desired state" unless release_command_env.fetch(PLAIN_ENV_NAME) == plain_env_value
+      release_task_env = desired_state.fetch("release_task_env")
+      secret_refs = desired_state.fetch("release_task_secret_refs")
+      command = desired_state.fetch("release_task_command")
+      raise "release task env missing from desired state" unless release_task_env.is_a?(Hash)
+      raise "plain env missing from desired state" unless release_task_env.fetch(PLAIN_ENV_NAME) == plain_env_value
       raise "secret value ref missing from desired state" unless secret_refs.is_a?(Hash) && secret_refs.key?(SECRET_VALUE_NAME)
       raise "stdin secret ref missing from desired state" unless secret_refs.is_a?(Hash) && secret_refs.key?(SECRET_STDIN_NAME)
-      raise "release marker missing from release command" unless Array(command).include?(release_marker_value)
+      raise "release marker missing from release task" unless Array(command).include?(release_marker_value)
 
       return if standalone_runtime?
 
@@ -620,7 +620,7 @@ class E2E
     def assert_direct_dns_feature!
       deployed_environment = rails_json!(<<~RUBY)
         environment = Environment.joins(:project).find_by!(projects: { name: #{@project_name.inspect} }, name: #{@environment_name.inspect})
-        web_nodes = environment.nodes.select { |node| node.labeled?(Node::LABEL_WEB) }
+        web_nodes = environment.nodes.select { |node| node.labeled?("web") }
         puts({
           web_nodes: web_nodes.map { |node| { name: node.name, capabilities: node.capabilities } },
           missing_capability_names: environment.assigned_web_nodes_missing_direct_dns_capability.map(&:name)
@@ -786,15 +786,22 @@ class E2E
     def update_app_config!(plain_env_value, release_marker_value:)
       config_path = workspace_config_path
       config = YAML.load_file(config_path.to_s)
-      config["web"] ||= {}
-      config["web"]["port"] = APP_PORT
-      config["web"]["healthcheck"] ||= {}
-      config["web"]["healthcheck"]["path"] = APP_HEALTH_PATH
-      config["web"]["healthcheck"]["port"] = APP_PORT
-      config["web"]["env"] ||= {}
-      config["web"]["env"][PLAIN_ENV_NAME] = plain_env_value
-      config["web"]["volumes"] = [ { "source" => "app_storage", "target" => APP_VOLUME_TARGET } ]
-      config["release_command"] = "release-task #{APP_VOLUME_TARGET}/#{RELEASE_MARKER_FILENAME} #{Shellwords.escape(release_marker_value)}"
+      config.delete("web")
+      config.delete("release")
+      config["services"] ||= {}
+      config["services"]["web"] ||= { "kind" => "web", "roles" => [ "web" ] }
+      config["services"]["web"]["kind"] = "web"
+      config["services"]["web"]["roles"] = [ "web" ]
+      config["services"]["web"]["ports"] = [ { "name" => "http", "port" => APP_PORT } ]
+      config["services"]["web"]["healthcheck"] = { "path" => APP_HEALTH_PATH, "port" => APP_PORT }
+      config["services"]["web"]["env"] ||= {}
+      config["services"]["web"]["env"][PLAIN_ENV_NAME] = plain_env_value
+      config["services"]["web"]["volumes"] = [ { "source" => "app_storage", "target" => APP_VOLUME_TARGET } ]
+      config["tasks"] ||= {}
+      config["tasks"]["release"] = {
+        "service" => "web",
+        "command" => "release-task #{APP_VOLUME_TARGET}/#{RELEASE_MARKER_FILENAME} #{Shellwords.escape(release_marker_value)}"
+      }
       File.write(config_path, YAML.dump(config))
     end
 

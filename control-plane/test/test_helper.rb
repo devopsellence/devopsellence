@@ -172,7 +172,46 @@ module ActiveSupport
       bundle
     end
 
-    def issue_test_node!(organization: nil, name: nil, labels: [Node::LABEL_WEB], managed: false, managed_provider: nil, managed_region: nil, managed_size_slug: nil, provider_server_id: nil, public_ip: nil)
+    def web_service_runtime(port: 3000, healthcheck_path: "/up", healthcheck_port: nil, command: nil, entrypoint: nil, env: {}, secret_refs: [], volumes: [], roles: [ "web" ], image: nil)
+      {
+        "kind" => "web",
+        "roles" => roles,
+        "image" => image,
+        "entrypoint" => entrypoint,
+        "command" => command,
+        "env" => env,
+        "secret_refs" => secret_refs,
+        "ports" => [ { "name" => "http", "port" => port } ],
+        "healthcheck" => { "path" => healthcheck_path, "port" => healthcheck_port || port },
+        "volumes" => volumes
+      }.compact
+    end
+
+    def worker_service_runtime(command: nil, entrypoint: nil, env: {}, secret_refs: [], volumes: [], roles: [ "worker" ], image: nil)
+      {
+        "kind" => "worker",
+        "roles" => roles,
+        "image" => image,
+        "entrypoint" => entrypoint,
+        "command" => command,
+        "env" => env,
+        "secret_refs" => secret_refs,
+        "volumes" => volumes
+      }.compact
+    end
+
+    def release_runtime_json(services: nil, tasks: {}, ingress_service: "web")
+      services ||= { "web" => web_service_runtime }
+      ::JSON.generate(
+        {
+          "services" => services,
+          "tasks" => tasks,
+          "ingress_service" => ingress_service
+        }.compact
+      )
+    end
+
+    def issue_test_node!(organization: nil, name: nil, labels: [ Node::DEFAULT_LABEL ], managed: false, managed_provider: nil, managed_region: nil, managed_size_slug: nil, provider_server_id: nil, public_ip: nil)
       ensure_test_organization_runtime!(organization) if organization
 
       raw_access = SecureRandom.hex(Node::TOKEN_BYTES)

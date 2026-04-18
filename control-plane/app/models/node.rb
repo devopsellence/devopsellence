@@ -8,10 +8,8 @@ class Node < ApplicationRecord
   LAST_SEEN_TOUCH_INTERVAL = 1.minute
   LAST_SEEN_LOCK_TIMEOUT = "100ms"
   CAPABILITY_DIRECT_DNS_INGRESS = "direct_dns_ingress.v1"
-  CAPABILITY_RELEASE_COMMAND = "release_command.v1"
-  LABEL_WEB = "web"
-  LABEL_WORKER = "worker"
-  LABELS = [LABEL_WEB, LABEL_WORKER].freeze
+  CAPABILITY_RELEASE_TASK = "release_task.v1"
+  DEFAULT_LABEL = "web"
   INGRESS_TLS_PENDING = "pending"
   INGRESS_TLS_READY = "ready"
   INGRESS_TLS_FAILED = "failed"
@@ -150,14 +148,14 @@ class Node < ApplicationRecord
 
   def labels
     parsed = JSON.parse(labels_json.presence || '["web"]')
-    return [LABEL_WEB] unless parsed.is_a?(Array)
+    return [DEFAULT_LABEL] unless parsed.is_a?(Array)
 
     parsed.filter_map do |entry|
       label = entry.to_s.strip
       label.presence
     end
   rescue JSON::ParserError
-    [LABEL_WEB]
+    [DEFAULT_LABEL]
   end
 
   def capabilities
@@ -193,12 +191,19 @@ class Node < ApplicationRecord
       label = entry.to_s.strip
       label.presence
     end.uniq
-    normalized = [LABEL_WEB] if normalized.empty?
+    normalized = [DEFAULT_LABEL] if normalized.empty?
     self.labels_json = JSON.generate(normalized)
   end
 
   def labeled?(label)
     labels.include?(label.to_s)
+  end
+
+  def labeled_any?(values)
+    candidates = Array(values).filter_map { |value| value.to_s.strip.presence }
+    return false if candidates.empty?
+
+    (labels & candidates).any?
   end
 
   def touch_last_seen_at_if_stale!(time: Time.current)
@@ -265,9 +270,9 @@ class Node < ApplicationRecord
 
     invalid = parsed.filter_map do |entry|
       label = entry.to_s.strip
-      label unless LABELS.include?(label)
+      label if label.blank?
     end
-    errors.add(:labels_json, "contains unsupported labels") if invalid.any?
+    errors.add(:labels_json, "contains blank labels") if invalid.any?
   rescue JSON::ParserError
     errors.add(:labels_json, "must be valid JSON")
   end

@@ -109,9 +109,9 @@ module Api
               image_repository: params[:image_repository],
               image_digest: params[:image_digest],
               revision: params[:revision],
-              web: params[:web],
-              worker: params[:worker],
-              release_command: params[:release_command],
+              services: params[:services],
+              tasks: params[:tasks],
+              ingress_service: params[:ingress_service],
               healthcheck_interval_seconds: params[:healthcheck_interval_seconds],
               healthcheck_timeout_seconds: params[:healthcheck_timeout_seconds]
             }

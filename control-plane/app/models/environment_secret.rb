@@ -10,7 +10,7 @@ class EnvironmentSecret < ApplicationRecord
 
   encrypts :value
 
-  validates :service_name, presence: true, inclusion: { in: Node::LABELS }
+  validates :service_name, presence: true
   validates :name, presence: true, format: { with: VARIABLE_NAME_FORMAT }
   validates :gcp_secret_name, presence: true, uniqueness: true
   validates :name, uniqueness: { scope: [ :environment_id, :service_name ] }

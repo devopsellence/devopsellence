@@ -21,7 +21,7 @@ module Environments
         revision: "rev-1",
         image_repository: "shop-app",
         image_digest: "sha256:#{"b" * 64}",
-        web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+        runtime_json: release_runtime_json
       )
       environment.update!(current_release: release)
       node, = issue_test_node!(organization: organization, name: "node-a")
@@ -86,7 +86,7 @@ module Environments
           revision: "rev-1",
           image_repository: "shop-app",
           image_digest: "sha256:#{"b" * 64}",
-          web_json: { port: 3000, healthcheck: { path: "/up", port: 3000 } }.to_json
+          runtime_json: release_runtime_json
         )
         environment.update!(current_release: release)
         node_bundle = NodeBundle.create!(

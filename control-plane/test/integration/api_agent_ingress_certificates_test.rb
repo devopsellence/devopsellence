@@ -27,6 +27,16 @@ class ApiAgentIngressCertificatesTest < ActionDispatch::IntegrationTest
       status: EnvironmentIngress::STATUS_PENDING,
       provisioned_at: Time.current
     )
+    release = project.releases.create!(
+      git_sha: "a" * 40,
+      revision: "rev-1",
+      image_repository: "shop-app",
+      image_digest: "sha256:#{'b' * 64}",
+      runtime_json: release_runtime_json,
+      status: Release::STATUS_PUBLISHED,
+      published_at: Time.current
+    )
+    environment.update!(current_release: release)
     node, access_token, = issue_test_node!(organization: organization, name: "node-a")
     node.update!(
       environment: environment,

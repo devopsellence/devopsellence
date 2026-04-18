@@ -413,13 +413,13 @@ func TestNoReportWhenNoDesiredState(t *testing.T) {
 	}
 }
 
-func TestReleaseCommandRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
+func TestReleaseTaskRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
 	desired := desiredWithWeb("rev-1")
 	desired.Environments[0].Services[0].Command = []string{"sh", "-c", "sleep 1"}
 	desired.Environments[0].Tasks = []*desiredstatepb.Task{{
-		Name:    "release_command",
+		Name:    "release",
 		Image:   "busybox",
 		Command: []string{"sh", "-c", "echo migrate"},
 	}}
@@ -446,14 +446,14 @@ func TestReleaseCommandRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
 	if len(reporter.calls) != 2 {
 		t.Fatalf("reports = %d, want 2", len(reporter.calls))
 	}
-	if reporter.calls[0].Task == nil || reporter.calls[0].Task.Name != "release_command" {
-		t.Fatalf("expected release_command task report, got %#v", reporter.calls[0].Task)
+	if reporter.calls[0].Task == nil || reporter.calls[0].Task.Name != "release" {
+		t.Fatalf("expected release task report, got %#v", reporter.calls[0].Task)
 	}
 	if reporter.calls[1].Phase != report.PhaseSettled || reporter.calls[1].Task != nil {
 		t.Fatalf("expected final settled runtime report, got %#v", reporter.calls[1])
 	}
 	if len(eng.containers) != 1 {
-		t.Fatalf("expected runtime container after release command, got %#v", eng.containers)
+		t.Fatalf("expected runtime container after release task, got %#v", eng.containers)
 	}
 }
 
@@ -462,7 +462,7 @@ func TestEnvironmentTasksAreSatisfiedPerEnvironment(t *testing.T) {
 
 	task := func() *desiredstatepb.Task {
 		return &desiredstatepb.Task{
-			Name:    "release_command",
+			Name:    "release",
 			Image:   "busybox",
 			Command: []string{"sh", "-c", "echo migrate"},
 		}

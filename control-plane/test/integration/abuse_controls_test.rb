@@ -197,7 +197,8 @@ class AbuseControlsTest < ActionDispatch::IntegrationTest
       git_sha: "a" * 40,
       revision: "rev-1",
       image_repository: "shop-app",
-      image_digest: "sha256:#{'b' * 64}"
+      image_digest: "sha256:#{'b' * 64}",
+      runtime_json: release_runtime_json
     )
     deployment = environment.deployments.create!(
       release: release,
@@ -294,13 +295,10 @@ class AbuseControlsTest < ActionDispatch::IntegrationTest
       image_repository: "shop-app",
       image_digest: "sha256:#{SecureRandom.hex(32)}",
       revision: "rev-#{index}",
-      web: {
-        port: 80,
-        healthcheck: {
-          path: "/up",
-          port: 80
-        }
-      }
+      services: {
+        web: web_service_runtime(port: 80)
+      },
+      ingress_service: "web"
     }
   end
 

@@ -98,7 +98,7 @@ In shared mode, `node create` provisions the server and runs the registration in
 `devopsellence` reads `devopsellence.yml` from the app root:
 
 ```yaml
-schema_version: 4
+schema_version: 5
 app:
   type: rails
 organization: solo
@@ -109,13 +109,22 @@ build:
   dockerfile: Dockerfile
   platforms:
     - linux/amd64
-web:
-  port: 3000
-  healthcheck:
-    path: /up
-    port: 3000
-release_command: bin/rails db:migrate
+services:
+  web:
+    kind: web
+    roles: [web]
+    ports:
+      - name: http
+        port: 3000
+    healthcheck:
+      path: /up
+      port: 3000
+tasks:
+  release:
+    service: web
+    command: bin/rails db:migrate
 ingress:
+  service: web
   hosts:
     - app.example.com
   tls:

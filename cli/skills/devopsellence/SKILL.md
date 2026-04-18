@@ -107,7 +107,7 @@ devopsellence node logs <name> --follow
 
 When the user is editing `devopsellence.yml`, recognize these deploy-time hooks:
 
-- `release_command`: string command that runs once on a web node before rollout. Good for migrations. It reuses the web image, env, secrets, and volumes.
+- `tasks.release`: one-shot task that runs before rollout. Good for migrations. It reuses the configured service image, env, secrets, and volumes.
 - For per-node prep work, prefer the image entrypoint or boot-time scripts; the config-level `init` hook is no longer supported.
 
 ## Heuristics

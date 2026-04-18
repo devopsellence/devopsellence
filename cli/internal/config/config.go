@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -14,7 +15,7 @@ import (
 const (
 	FilePath               = "devopsellence.yml"
 	GenericFilePath        = FilePath
-	SchemaVersion          = 4
+	SchemaVersion          = 5
 	DefaultEnvironment     = "production"
 	DefaultBuildContext    = "."
 	DefaultDockerfile      = "Dockerfile"
@@ -22,12 +23,16 @@ const (
 	DefaultWebPort         = 3000
 	AppTypeRails           = "rails"
 	AppTypeGeneric         = "generic"
-	NodeLabelWeb           = "web"
-	NodeLabelWorker        = "worker"
+	DefaultWebRole         = "web"
+	DefaultWorkerRole      = "worker"
+	DefaultWebServiceName  = "web"
+	ServiceKindWeb         = "web"
+	ServiceKindWorker      = "worker"
+	ServiceKindAccessory   = "accessory"
 )
 
 var DefaultBuildPlatforms = []string{"linux/amd64"}
-var SoloDefaultLabels = []string{NodeLabelWeb}
+var SoloDefaultLabels = []string{DefaultWebRole}
 
 type Volume struct {
 	Source string `yaml:"source" json:"source"`
@@ -44,17 +49,36 @@ type HTTPHealthcheck struct {
 	Port int    `yaml:"port,omitempty" json:"port,omitempty"`
 }
 
+type ServicePort struct {
+	Name string `yaml:"name" json:"name"`
+	Port int    `yaml:"port" json:"port"`
+}
+
 type ServiceConfig struct {
+	Kind        string            `yaml:"kind" json:"kind"`
+	Roles       []string          `yaml:"roles" json:"roles"`
+	Image       string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Entrypoint  string            `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
 	Command     string            `yaml:"command,omitempty" json:"command,omitempty"`
 	Env         map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 	SecretRefs  []SecretRef       `yaml:"secret_refs,omitempty" json:"secret_refs,omitempty"`
-	Port        int               `yaml:"port,omitempty" json:"port,omitempty"`
+	Ports       []ServicePort     `yaml:"ports,omitempty" json:"ports,omitempty"`
 	Healthcheck *HTTPHealthcheck  `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 	Volumes     []Volume          `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 }
 
 type Service = ServiceConfig
+
+type TaskConfig struct {
+	Service    string            `yaml:"service" json:"service"`
+	Entrypoint string            `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
+	Command    string            `yaml:"command,omitempty" json:"command,omitempty"`
+	Env        map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+}
+
+type TasksConfig struct {
+	Release *TaskConfig `yaml:"release,omitempty" json:"release,omitempty"`
+}
 
 type BuildConfig struct {
 	Context    string   `yaml:"context" json:"context"`
@@ -74,6 +98,7 @@ type IngressTLSConfig struct {
 
 type IngressConfig struct {
 	Hosts        []string         `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	Service      string           `yaml:"service,omitempty" json:"service,omitempty"`
 	TLS          IngressTLSConfig `yaml:"tls,omitempty" json:"tls,omitempty"`
 	RedirectHTTP bool             `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
 }
@@ -97,17 +122,16 @@ type SoloConfig struct {
 }
 
 type ProjectConfig struct {
-	SchemaVersion      int            `yaml:"schema_version" json:"schema_version"`
-	App                AppConfig      `yaml:"app,omitempty" json:"app,omitempty"`
-	Organization       string         `yaml:"organization" json:"organization"`
-	Project            string         `yaml:"project" json:"project"`
-	DefaultEnvironment string         `yaml:"default_environment" json:"default_environment"`
-	Build              BuildConfig    `yaml:"build" json:"build"`
-	Web                ServiceConfig  `yaml:"web" json:"web"`
-	Worker             *ServiceConfig `yaml:"worker,omitempty" json:"worker,omitempty"`
-	ReleaseCommand     string         `yaml:"release_command,omitempty" json:"release_command,omitempty"`
-	Ingress            *IngressConfig `yaml:"ingress,omitempty" json:"ingress,omitempty"`
-	Solo               *SoloConfig    `yaml:"solo,omitempty" json:"solo,omitempty"`
+	SchemaVersion      int                      `yaml:"schema_version" json:"schema_version"`
+	App                AppConfig                `yaml:"app,omitempty" json:"app,omitempty"`
+	Organization       string                   `yaml:"organization" json:"organization"`
+	Project            string                   `yaml:"project" json:"project"`
+	DefaultEnvironment string                   `yaml:"default_environment" json:"default_environment"`
+	Build              BuildConfig              `yaml:"build" json:"build"`
+	Services           map[string]ServiceConfig `yaml:"services" json:"services"`
+	Tasks              TasksConfig              `yaml:"tasks,omitempty" json:"tasks,omitempty"`
+	Ingress            *IngressConfig           `yaml:"ingress,omitempty" json:"ingress,omitempty"`
+	Solo               *SoloConfig              `yaml:"solo,omitempty" json:"solo,omitempty"`
 }
 
 type Project = ProjectConfig
@@ -242,14 +266,21 @@ func DefaultProjectConfigForType(organization, project, environment, appType str
 			Dockerfile: DefaultDockerfile,
 			Platforms:  append([]string(nil), DefaultBuildPlatforms...),
 		},
-		Web: ServiceConfig{
-			Env:        map[string]string{},
-			SecretRefs: []SecretRef{},
-			Volumes:    []Volume{},
-			Port:       DefaultWebPort,
-			Healthcheck: &HTTPHealthcheck{
-				Path: healthcheckPath,
-				Port: DefaultWebPort,
+		Services: map[string]ServiceConfig{
+			DefaultWebServiceName: {
+				Kind:       ServiceKindWeb,
+				Roles:      []string{DefaultWebRole},
+				Env:        map[string]string{},
+				SecretRefs: []SecretRef{},
+				Volumes:    []Volume{},
+				Ports: []ServicePort{{
+					Name: "http",
+					Port: DefaultWebPort,
+				}},
+				Healthcheck: &HTTPHealthcheck{
+					Path: healthcheckPath,
+					Port: DefaultWebPort,
+				},
 			},
 		},
 	}
@@ -290,13 +321,24 @@ func Validate(cfg *ProjectConfig) error {
 			return errors.New("build.platforms entries must be present")
 		}
 	}
-	if err := validateService("web", cfg.Web, true); err != nil {
-		return err
+	if len(cfg.Services) == 0 {
+		return errors.New("services must include at least one service")
 	}
-	if cfg.Worker != nil {
-		if err := validateService("worker", *cfg.Worker, false); err != nil {
+	webServices := 0
+	for _, name := range cfg.ServiceNames() {
+		service := cfg.Services[name]
+		if err := validateService(name, service); err != nil {
 			return err
 		}
+		if service.Kind == ServiceKindWeb {
+			webServices++
+		}
+	}
+	if webServices == 0 {
+		return errors.New("services must include at least one web service")
+	}
+	if err := validateTasks(cfg); err != nil {
+		return err
 	}
 	if cfg.Ingress != nil {
 		if len(cfg.Ingress.Hosts) == 0 {
@@ -312,6 +354,16 @@ func Validate(cfg *ProjectConfig) error {
 				return fmt.Errorf("ingress.hosts contains duplicate host %q", host)
 			}
 			seenHosts[host] = true
+		}
+		if strings.TrimSpace(cfg.Ingress.Service) == "" {
+			return errors.New("ingress.service is required")
+		}
+		service, ok := cfg.Services[cfg.Ingress.Service]
+		if !ok {
+			return fmt.Errorf("ingress.service %q not found in services", cfg.Ingress.Service)
+		}
+		if service.Kind != ServiceKindWeb {
+			return fmt.Errorf("ingress.service %q must be kind %q", cfg.Ingress.Service, ServiceKindWeb)
 		}
 		switch strings.TrimSpace(cfg.Ingress.TLS.Mode) {
 		case "", "auto", "off", "manual":
@@ -334,12 +386,8 @@ func Validate(cfg *ProjectConfig) error {
 				return fmt.Errorf("solo.nodes.%s.labels must include at least one label", name)
 			}
 			for _, label := range node.Labels {
-				switch strings.TrimSpace(label) {
-				case NodeLabelWeb, NodeLabelWorker:
-				case "":
+				if strings.TrimSpace(label) == "" {
 					return fmt.Errorf("solo.nodes.%s.labels entries must be present", name)
-				default:
-					return fmt.Errorf("solo.nodes.%s.labels contains unsupported label %q", name, label)
 				}
 			}
 		}
@@ -366,44 +414,47 @@ func applyDefaults(cfg *ProjectConfig) {
 	if len(cfg.Build.Platforms) == 0 {
 		cfg.Build.Platforms = append([]string(nil), DefaultBuildPlatforms...)
 	}
-	if cfg.Web.Env == nil {
-		cfg.Web.Env = map[string]string{}
+	if cfg.Services == nil {
+		cfg.Services = map[string]ServiceConfig{}
 	}
-	if cfg.Web.SecretRefs == nil {
-		cfg.Web.SecretRefs = []SecretRef{}
-	}
-	if cfg.Web.Volumes == nil {
-		cfg.Web.Volumes = []Volume{}
-	}
-	if cfg.Web.Port == 0 {
-		cfg.Web.Port = DefaultWebPort
-	}
-	if cfg.Web.Healthcheck == nil {
-		cfg.Web.Healthcheck = &HTTPHealthcheck{}
-	}
-	if strings.TrimSpace(cfg.Web.Healthcheck.Path) == "" {
-		if cfg.App.Type == AppTypeGeneric {
-			cfg.Web.Healthcheck.Path = "/"
-		} else {
-			cfg.Web.Healthcheck.Path = DefaultHealthcheckPath
+	for name, service := range cfg.Services {
+		if service.Env == nil {
+			service.Env = map[string]string{}
 		}
+		if service.SecretRefs == nil {
+			service.SecretRefs = []SecretRef{}
+		}
+		if service.Volumes == nil {
+			service.Volumes = []Volume{}
+		}
+		service.Roles = normalizeStringList(service.Roles)
+		service.Ports = normalizeServicePorts(service.Ports)
+		if service.Kind == ServiceKindWeb {
+			if len(service.Ports) == 0 {
+				service.Ports = []ServicePort{{Name: "http", Port: DefaultWebPort}}
+			}
+			if service.Healthcheck == nil {
+				service.Healthcheck = &HTTPHealthcheck{}
+			}
+			if strings.TrimSpace(service.Healthcheck.Path) == "" {
+				if cfg.App.Type == AppTypeGeneric {
+					service.Healthcheck.Path = "/"
+				} else {
+					service.Healthcheck.Path = DefaultHealthcheckPath
+				}
+			}
+			if service.Healthcheck.Port == 0 {
+				service.Healthcheck.Port = service.HTTPPort(DefaultWebPort)
+			}
+		}
+		cfg.Services[name] = service
 	}
-	if cfg.Web.Healthcheck.Port == 0 {
-		cfg.Web.Healthcheck.Port = cfg.Web.Port
-	}
-	if cfg.Worker != nil {
-		if cfg.Worker.Env == nil {
-			cfg.Worker.Env = map[string]string{}
-		}
-		if cfg.Worker.SecretRefs == nil {
-			cfg.Worker.SecretRefs = []SecretRef{}
-		}
-		if cfg.Worker.Volumes == nil {
-			cfg.Worker.Volumes = []Volume{}
-		}
+	if cfg.Tasks.Release != nil {
+		cfg.Tasks.Release.Env = mergeStringMaps(cfg.Tasks.Release.Env)
 	}
 	if cfg.Ingress != nil {
 		cfg.Ingress.Hosts = normalizeStringList(cfg.Ingress.Hosts)
+		cfg.Ingress.Service = strings.TrimSpace(cfg.Ingress.Service)
 		cfg.Ingress.TLS.Mode = strings.TrimSpace(cfg.Ingress.TLS.Mode)
 		if cfg.Ingress.TLS.Mode == "" {
 			cfg.Ingress.TLS.Mode = "auto"
@@ -466,46 +517,170 @@ func normalizeStringList(values []string) []string {
 	return normalized
 }
 
-func validateService(name string, service ServiceConfig, allowHealthcheck bool) error {
+func normalizeServicePorts(ports []ServicePort) []ServicePort {
+	if ports == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	normalized := make([]ServicePort, 0, len(ports))
+	for _, port := range ports {
+		name := strings.TrimSpace(port.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		normalized = append(normalized, ServicePort{Name: name, Port: port.Port})
+	}
+	return normalized
+}
+
+func validateService(name string, service ServiceConfig) error {
+	switch service.Kind {
+	case ServiceKindWeb, ServiceKindWorker, ServiceKindAccessory:
+	default:
+		return fmt.Errorf("services.%s.kind must be one of %q, %q, or %q", name, ServiceKindWeb, ServiceKindWorker, ServiceKindAccessory)
+	}
+	if len(service.Roles) == 0 {
+		return fmt.Errorf("services.%s.roles must include at least one role", name)
+	}
+	for _, role := range service.Roles {
+		if strings.TrimSpace(role) == "" {
+			return fmt.Errorf("services.%s.roles entries must be present", name)
+		}
+	}
 	for key := range service.Env {
 		if strings.TrimSpace(key) == "" {
-			return fmt.Errorf("%s.env keys must be present", name)
+			return fmt.Errorf("services.%s.env keys must be present", name)
 		}
 	}
 	for _, secret := range service.SecretRefs {
 		if strings.TrimSpace(secret.Name) == "" {
-			return fmt.Errorf("%s.secret_refs[].name is required", name)
+			return fmt.Errorf("services.%s.secret_refs[].name is required", name)
 		}
 		if strings.TrimSpace(secret.Secret) == "" {
-			return fmt.Errorf("%s.secret_refs[].secret is required", name)
+			return fmt.Errorf("services.%s.secret_refs[].secret is required", name)
 		}
 	}
 	for _, volume := range service.Volumes {
 		if strings.TrimSpace(volume.Source) == "" {
-			return fmt.Errorf("%s.volumes[].source is required", name)
+			return fmt.Errorf("services.%s.volumes[].source is required", name)
 		}
 		if strings.TrimSpace(volume.Target) == "" {
-			return fmt.Errorf("%s.volumes[].target is required", name)
+			return fmt.Errorf("services.%s.volumes[].target is required", name)
 		}
 		if !filepath.IsAbs(volume.Target) {
-			return fmt.Errorf("%s.volumes[].target must be absolute", name)
+			return fmt.Errorf("services.%s.volumes[].target must be absolute", name)
 		}
 	}
-	if allowHealthcheck {
-		if service.Port <= 0 {
-			return fmt.Errorf("%s.port must be a positive integer", name)
+	seenPorts := map[string]bool{}
+	for _, port := range service.Ports {
+		if strings.TrimSpace(port.Name) == "" {
+			return fmt.Errorf("services.%s.ports[].name is required", name)
+		}
+		if port.Port <= 0 {
+			return fmt.Errorf("services.%s.ports[%s].port must be a positive integer", name, port.Name)
+		}
+		if seenPorts[port.Name] {
+			return fmt.Errorf("services.%s.ports contains duplicate port %q", name, port.Name)
+		}
+		seenPorts[port.Name] = true
+	}
+	if service.Kind == ServiceKindWeb {
+		if service.HTTPPort(0) <= 0 {
+			return fmt.Errorf("services.%s must expose an http port", name)
 		}
 		if service.Healthcheck == nil {
-			return fmt.Errorf("%s.healthcheck is required", name)
+			return fmt.Errorf("services.%s.healthcheck is required", name)
 		}
 		if strings.TrimSpace(service.Healthcheck.Path) == "" {
-			return fmt.Errorf("%s.healthcheck.path is required", name)
+			return fmt.Errorf("services.%s.healthcheck.path is required", name)
 		}
 		if service.Healthcheck.Port <= 0 {
-			return fmt.Errorf("%s.healthcheck.port must be a positive integer", name)
+			return fmt.Errorf("services.%s.healthcheck.port must be a positive integer", name)
 		}
-	} else if service.Port != 0 || service.Healthcheck != nil {
-		return fmt.Errorf("%s cannot define port or healthcheck settings", name)
 	}
 	return nil
+}
+
+func validateTasks(cfg *ProjectConfig) error {
+	release := cfg.Tasks.Release
+	if release == nil {
+		return nil
+	}
+	serviceName := strings.TrimSpace(release.Service)
+	if serviceName == "" {
+		return errors.New("tasks.release.service is required")
+	}
+	service, ok := cfg.Services[serviceName]
+	if !ok {
+		return fmt.Errorf("tasks.release.service %q not found in services", serviceName)
+	}
+	if len(service.Roles) == 0 {
+		return fmt.Errorf("tasks.release.service %q must declare at least one role", serviceName)
+	}
+	if strings.TrimSpace(release.Entrypoint) == "" && strings.TrimSpace(release.Command) == "" {
+		return errors.New("tasks.release must set entrypoint or command")
+	}
+	for key := range release.Env {
+		if strings.TrimSpace(key) == "" {
+			return errors.New("tasks.release.env keys must be present")
+		}
+	}
+	return nil
+}
+
+func (cfg ProjectConfig) ServiceNames() []string {
+	names := make([]string, 0, len(cfg.Services))
+	for name := range cfg.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (cfg ProjectConfig) ServicesByKind(kind string) []string {
+	names := []string{}
+	for _, name := range cfg.ServiceNames() {
+		if cfg.Services[name].Kind == kind {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func (cfg ProjectConfig) PrimaryWebServiceName() (string, bool) {
+	services := cfg.ServicesByKind(ServiceKindWeb)
+	if len(services) == 0 {
+		return "", false
+	}
+	if len(services) == 1 {
+		return services[0], true
+	}
+	if _, ok := cfg.Services[DefaultWebServiceName]; ok && cfg.Services[DefaultWebServiceName].Kind == ServiceKindWeb {
+		return DefaultWebServiceName, true
+	}
+	return "", false
+}
+
+func (cfg ProjectConfig) ReleaseTask() *TaskConfig {
+	return cfg.Tasks.Release
+}
+
+func (service ServiceConfig) HTTPPort(fallback int) int {
+	for _, port := range service.Ports {
+		if strings.TrimSpace(port.Name) == "http" && port.Port > 0 {
+			return port.Port
+		}
+	}
+	return fallback
+}
+
+func mergeStringMaps(parts ...map[string]string) map[string]string {
+	merged := map[string]string{}
+	for _, part := range parts {
+		for key, value := range part {
+			merged[key] = value
+		}
+	}
+	return merged
 }

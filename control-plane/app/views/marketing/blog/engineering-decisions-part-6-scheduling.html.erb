@@ -59,7 +59,7 @@ devopsellence node label set NODE_ID --labels web,worker</code></pre>
 
     <ul>
       <li><strong><code>direct_dns_ingress.v1</code></strong> &mdash; the agent can terminate TLS locally and serve traffic on public ports. Required for environments using direct DNS ingress.</li>
-      <li><strong><code>release_command.v1</code></strong> &mdash; the agent can execute one-time release commands (like database migrations) before the main rollout.</li>
+      <li><strong><code>release_task.v1</code></strong> &mdash; the agent can execute one-time release tasks (like database migrations) before the main rollout.</li>
       <li><strong><code>desired_state_pointer.v1</code></strong> &mdash; the agent supports the pointer-based desired state fetch (immutable GCS objects instead of mutable overwrites).</li>
     </ul>
 
@@ -145,8 +145,8 @@ devopsellence node register --env production</code></pre>
     <p>When a new release is published to an environment, the control plane validates and publishes to all assigned nodes:</p>
 
     <ol>
-      <li><strong>Validate assignments.</strong> At least one node must be labeled <code>web</code> (every release needs a web service). If the release has a worker service, at least one node must be labeled <code>worker</code>. If the release has a release command, at least one web node must support <code>release_command.v1</code>.</li>
-      <li><strong>Run release command (if any).</strong> Select one capable web node. Publish the release command task to that node only. Wait for success before proceeding.</li>
+      <li><strong>Validate assignments.</strong> At least one node must match each service role. If the release has a release task, one node matching that task's service must support <code>release_task.v1</code>.</li>
+      <li><strong>Run release task (if any).</strong> Select one capable node. Publish the release task to that node only. Wait for success before proceeding.</li>
       <li><strong>Publish to all nodes.</strong> For each assigned node, build a desired-state envelope containing only the services that match the node's labels. A web-only node gets the web container spec. A worker-only node gets the worker container spec. A node with both labels gets both.</li>
     </ol>
 

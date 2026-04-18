@@ -60,9 +60,10 @@ module Api
               git_sha: release.git_sha,
               image_repository: release.image_repository,
               image_digest: release.image_digest,
-              release_command: release.release_command_text
+              services: release.services_config,
+              tasks: release.tasks_config
             },
-            release_command: serialize_release_command(deployment),
+            release_task: serialize_release_task(deployment),
             summary: {
               assigned_nodes: total,
               pending: pending,
@@ -99,12 +100,12 @@ module Api
           }
         end
 
-        def serialize_release_command(deployment)
-          return nil unless deployment.release.has_release_command?
+        def serialize_release_task(deployment)
+          return nil unless deployment.release.has_release_task?
 
-          executor = deployment.release_command_node
+          executor = deployment.release_task_node
           {
-            status: deployment.release_command_status,
+            status: deployment.release_task_status,
             executor_node_id: executor&.id,
             executor_node_name: executor&.name
           }

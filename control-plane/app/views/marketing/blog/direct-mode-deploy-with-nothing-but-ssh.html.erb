@@ -113,9 +113,9 @@ DATABASE_URL</code></pre>
 
     <h2>Configuration</h2>
 
-    <p>Solo mode configuration lives in the same <code>devopsellence.yml</code> that defines your app. Today it is stored under the <code>direct</code> block:</p>
+    <p>Solo mode configuration lives in the same <code>devopsellence.yml</code> that defines your app. Today it is stored under the <code>solo</code> block:</p>
 
-    <pre><code>schema_version: 3
+    <pre><code>schema_version: 5
 organization: my-org
 project: my-app
 
@@ -123,19 +123,24 @@ build:
   context: .
   dockerfile: Dockerfile
 
-web:
-  command: "./server"
-  port: 3000
-  healthcheck:
-    path: /up
-    port: 3000
-  env:
-    RAILS_ENV: production
-  secret_refs:
-    - name: DATABASE_URL
-      secret: ignored-in-direct-mode
+services:
+  web:
+    kind: web
+    roles: [web]
+    command: "./server"
+    ports:
+      - name: http
+        port: 3000
+    healthcheck:
+      path: /up
+      port: 3000
+    env:
+      RAILS_ENV: production
+    secret_refs:
+      - name: DATABASE_URL
+        secret: ignored-in-solo-mode
 
-direct:
+solo:
   nodes:
     prod-1:
       host: 10.0.0.5
@@ -173,7 +178,7 @@ $ devopsellence node logs prod-1 --follow</code></pre>
       <li><strong>Envoy integration.</strong> Traffic routing via xDS endpoint discovery. The agent updates Envoy's config atomically.</li>
       <li><strong>Drain delays.</strong> Configurable delay between removing the old endpoint and stopping the old container, so in-flight requests complete.</li>
       <li><strong>Self-healing.</strong> If a container crashes, the next reconciliation loop restarts it. The 2-second loop means recovery is fast.</li>
-      <li><strong>Release commands.</strong> Run once per deploy before container swap &mdash; database migrations, asset compilation, cache warming.</li>
+      <li><strong>Release tasks.</strong> Run once per deploy before container swap &mdash; database migrations, asset compilation, cache warming.</li>
       <li><strong>Volume mounts.</strong> Persistent data survives container replacement.</li>
     </ul>
 

@@ -112,19 +112,19 @@ type nodePeerJSON struct {
 // git revision, and pre-resolved secrets. Secrets are merged into env vars;
 // no secret_refs appear in the output.
 func BuildDesiredState(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string) ([]byte, error) {
-	return BuildDesiredStateForLabels(cfg, imageTag, revision, secrets, nil, cfg.ReleaseCommand != "")
+	return BuildDesiredStateForLabels(cfg, imageTag, revision, secrets, nil, cfg.ReleaseTask() != nil)
 }
 
 // BuildDesiredStateForLabels produces desired-state JSON for one solo node.
 // A nil labels slice runs all configured services. A non-nil labels slice
 // schedules only matching services.
-func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseCommand bool) ([]byte, error) {
-	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseCommand)
+func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseTask bool) ([]byte, error) {
+	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseTask)
 }
 
 // BuildDesiredStateForNode produces desired-state JSON for one node, including
 // public ingress only when the node has the web label.
-func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, webNode bool, includeReleaseCommand bool, nodePeers ...[]NodePeer) ([]byte, error) {
+func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, ingressNode bool, includeReleaseTask bool, nodePeers ...[]NodePeer) ([]byte, error) {
 	ds := desiredStateJSON{
 		SchemaVersion: 2,
 		Revision:      revision,
@@ -141,42 +141,28 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 		environment.Name = config.DefaultEnvironment
 	}
 
-	if labels == nil || hasLabel(labels, config.NodeLabelWeb) {
-		webService, err := buildService("web", "web", cfg.Web, imageTag, secrets)
-		if err != nil {
-			return nil, fmt.Errorf("build web service: %w", err)
+	for _, serviceName := range cfg.ServiceNames() {
+		service := cfg.Services[serviceName]
+		if !shouldScheduleService(labels, service.Roles) {
+			continue
 		}
-		environment.Services = append(environment.Services, webService)
+		rendered, err := buildService(serviceName, service, imageTag, secrets)
+		if err != nil {
+			return nil, fmt.Errorf("build service %s: %w", serviceName, err)
+		}
+		environment.Services = append(environment.Services, rendered)
 	}
 
-	if webNode && cfg.Ingress != nil && (labels == nil || hasLabel(labels, config.NodeLabelWeb)) {
+	if ingressNode && cfg.Ingress != nil && shouldScheduleIngress(labels, cfg) {
 		ds.Ingress = buildIngress(cfg.Ingress, environment.Name)
 	}
 
-	if cfg.Worker != nil && (labels == nil || hasLabel(labels, config.NodeLabelWorker)) {
-		workerService, err := buildService("worker", "worker", *cfg.Worker, imageTag, secrets)
+	if includeReleaseTask && cfg.ReleaseTask() != nil && shouldScheduleReleaseTask(labels, cfg) {
+		releaseTask, err := buildReleaseTask(cfg, imageTag, secrets)
 		if err != nil {
-			return nil, fmt.Errorf("build worker service: %w", err)
+			return nil, fmt.Errorf("build release task: %w", err)
 		}
-		environment.Services = append(environment.Services, workerService)
-	}
-
-	if includeReleaseCommand && cfg.ReleaseCommand != "" {
-		env, err := mergeEnv(cfg.Web.Env, cfg.Web.SecretRefs, secrets)
-		if err != nil {
-			return nil, fmt.Errorf("build release command: %w", err)
-		}
-		var vols []volumeMountJSON
-		for _, v := range cfg.Web.Volumes {
-			vols = append(vols, volumeMountJSON{Source: v.Source, Target: v.Target})
-		}
-		environment.Tasks = append(environment.Tasks, taskJSON{
-			Name:         "release",
-			Image:        imageTag,
-			Command:      shellCommand(cfg.ReleaseCommand),
-			Env:          env,
-			VolumeMounts: vols,
-		})
+		environment.Tasks = append(environment.Tasks, releaseTask)
 	}
 	ds.Environments = append(ds.Environments, environment)
 
@@ -203,7 +189,7 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 			},
 			Target: ingressTargetJSON{
 				Environment: environmentName,
-				Service:     "web",
+				Service:     ingress.Service,
 				Port:        "http",
 			},
 		})
@@ -253,24 +239,60 @@ func normalizedLabels(labels []string) []string {
 	return out
 }
 
-func hasLabel(labels []string, want string) bool {
-	for _, label := range labels {
-		if strings.TrimSpace(label) == want {
-			return true
+func shouldScheduleService(labels []string, roles []string) bool {
+	if labels == nil {
+		return true
+	}
+	return hasAnyRole(labels, roles)
+}
+
+func shouldScheduleIngress(labels []string, cfg *config.ProjectConfig) bool {
+	if cfg == nil || cfg.Ingress == nil {
+		return false
+	}
+	service, ok := cfg.Services[cfg.Ingress.Service]
+	if !ok {
+		return false
+	}
+	return shouldScheduleService(labels, service.Roles)
+}
+
+func shouldScheduleReleaseTask(labels []string, cfg *config.ProjectConfig) bool {
+	release := cfg.ReleaseTask()
+	if release == nil {
+		return false
+	}
+	service, ok := cfg.Services[release.Service]
+	if !ok {
+		return false
+	}
+	return shouldScheduleService(labels, service.Roles)
+}
+
+func hasAnyRole(labels []string, roles []string) bool {
+	for _, role := range roles {
+		for _, label := range labels {
+			if strings.TrimSpace(label) == strings.TrimSpace(role) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func buildService(serviceName, kind string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (serviceJSON, error) {
+func buildService(serviceName string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (serviceJSON, error) {
 	env, err := mergeEnv(svc.Env, svc.SecretRefs, secrets)
 	if err != nil {
 		return serviceJSON{}, err
 	}
+	image := strings.TrimSpace(svc.Image)
+	if image == "" {
+		image = imageTag
+	}
 	c := serviceJSON{
 		Name:  serviceName,
-		Kind:  kind,
-		Image: imageTag,
+		Kind:  svc.Kind,
+		Image: image,
 		Env:   env,
 	}
 
@@ -292,8 +314,8 @@ func buildService(serviceName, kind string, svc config.ServiceConfig, imageTag s
 		}
 	}
 
-	if svc.Port > 0 {
-		c.Ports = []servicePortJSON{{Name: "http", Port: svc.Port}}
+	for _, port := range svc.Ports {
+		c.Ports = append(c.Ports, servicePortJSON{Name: port.Name, Port: port.Port})
 	}
 
 	for _, v := range svc.Volumes {
@@ -304,6 +326,45 @@ func buildService(serviceName, kind string, svc config.ServiceConfig, imageTag s
 	}
 
 	return c, nil
+}
+
+func buildReleaseTask(cfg *config.ProjectConfig, imageTag string, secrets map[string]string) (taskJSON, error) {
+	release := cfg.ReleaseTask()
+	if release == nil {
+		return taskJSON{}, fmt.Errorf("release task not configured")
+	}
+	service, ok := cfg.Services[release.Service]
+	if !ok {
+		return taskJSON{}, fmt.Errorf("service %q not found", release.Service)
+	}
+	baseEnv := mergeStringMaps(service.Env, release.Env)
+	env, err := mergeEnv(baseEnv, service.SecretRefs, secrets)
+	if err != nil {
+		return taskJSON{}, err
+	}
+	image := strings.TrimSpace(service.Image)
+	if image == "" {
+		image = imageTag
+	}
+	task := taskJSON{
+		Name:  "release",
+		Image: image,
+		Env:   env,
+	}
+	if strings.TrimSpace(release.Entrypoint) != "" {
+		task.Entrypoint = shellCommand(release.Entrypoint)
+	} else if strings.TrimSpace(service.Entrypoint) != "" {
+		task.Entrypoint = shellCommand(service.Entrypoint)
+	}
+	if strings.TrimSpace(release.Command) != "" {
+		task.Command = shellCommand(release.Command)
+	} else if strings.TrimSpace(service.Command) != "" {
+		task.Command = shellCommand(service.Command)
+	}
+	for _, v := range service.Volumes {
+		task.VolumeMounts = append(task.VolumeMounts, volumeMountJSON{Source: v.Source, Target: v.Target})
+	}
+	return task, nil
 }
 
 // mergeEnv combines static env, secret_refs resolved via the secrets map, into
@@ -326,6 +387,16 @@ func mergeEnv(env map[string]string, secretRefs []config.SecretRef, secrets map[
 		return nil, fmt.Errorf("missing secrets: %s (run `devopsellence secret set <name>` to add them)", strings.Join(missing, ", "))
 	}
 	return merged, nil
+}
+
+func mergeStringMaps(parts ...map[string]string) map[string]string {
+	merged := map[string]string{}
+	for _, part := range parts {
+		for key, value := range part {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 // shellCommand wraps a command string as shell -c invocation.

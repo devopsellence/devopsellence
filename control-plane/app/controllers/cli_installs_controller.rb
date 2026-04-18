@@ -10,15 +10,21 @@ class CliInstallsController < ActionController::Base
   def install_script
     # For curl | bash installs, default the downloader to the exact host serving
     # the script so callers do not need to pass --base-url explicitly.
-    base_url = request.base_url
-    default_version = params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.cli_stable_version
+    default_base_url = shell_single_quote(request.base_url)
+    default_version = shell_single_quote(params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.cli_stable_version)
 
     <<~SH
       #!/usr/bin/env bash
       set -euo pipefail
 
-      BASE_URL="${DEVOPSELLENCE_BASE_URL:-#{base_url}}"
-      CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-#{default_version}}"
+      BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"
+      if [[ -z "$BASE_URL" ]]; then
+        BASE_URL=#{default_base_url}
+      fi
+      CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-}"
+      if [[ -z "$CLI_VERSION" ]]; then
+        CLI_VERSION=#{default_version}
+      fi
       CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-$BASE_URL/cli/checksums}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
       TARGET_NAME="devopsellence"
@@ -182,5 +188,10 @@ class CliInstallsController < ActionController::Base
           ;;
       esac
     SH
+  end
+
+  def shell_single_quote(value)
+    escaped = value.to_s.gsub("'", %q('"'"'))
+    "'#{escaped}'"
   end
 end

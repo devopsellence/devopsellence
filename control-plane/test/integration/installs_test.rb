@@ -50,7 +50,8 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_equal "text/plain", response.media_type
-    assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-https://dev.devopsellence.com}"'
+    assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
+    assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
     assert_includes response.body, 'INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"'
     assert_includes response.body, 'if [[ "$OS" == "darwin" ]]; then'
     assert_includes response.body, 'INSTALL_DIR="$HOME/.local/bin"'
@@ -69,7 +70,8 @@ class InstallsTest < ActionDispatch::IntegrationTest
     end
 
     assert_response :success
-    assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-https://dev.devopsellence.com}"'
+    assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
+    assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
     refute_includes response.body, "https://app.devopsellence.com"
   end
 
@@ -77,7 +79,16 @@ class InstallsTest < ActionDispatch::IntegrationTest
     get "/lfg.sh", params: { version: "v0.1.0-rc.1" }
 
     assert_response :success
-    assert_includes response.body, 'CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-v0.1.0-rc.1}"'
+    assert_includes response.body, 'CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-}"'
+    assert_includes response.body, "CLI_VERSION='v0.1.0-rc.1'"
+  end
+
+  test "cli install script safely quotes query-string version" do
+    get "/lfg.sh", params: { version: "v0.1.0-rc.1$(touch /tmp/pwned)'oops" }
+
+    assert_response :success
+    assert_includes response.body, "CLI_VERSION='v0.1.0-rc.1$(touch /tmp/pwned)'\"'\"'oops'"
+    refute_includes response.body, 'CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-v0.1.0-rc.1$(touch /tmp/pwned)\'oops}"'
   end
 
   test "install script bootstraps docker on supported ubuntu releases" do

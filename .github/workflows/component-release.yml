@@ -57,7 +57,7 @@ jobs:
 
           ruby -e '
             version = ARGV.fetch(0)
-            abort("version must look like v0.1.0") unless version.match?(/\Av\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\z/)
+            abort("version must look like v0.1.0") unless version.match?(/\Av\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\z/)
           ' "$version"
 
           case "$release_kind" in

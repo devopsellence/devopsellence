@@ -1,10 +1,12 @@
 <footer class="footer">
   <div class="footer-inner">
     <nav class="footer-links" aria-label="Footer">
+      <%= link_to "home", root_path %>
+      <%= link_to "docs", docs_path %>
+      <a href="mailto:<%= @contact_email %>">contact</a>
       <%= link_to "privacy", privacy_path %>
       <%= link_to "terms", terms_path %>
     </nav>
-    <p class="footer-contact"><a href="mailto:<%= @contact_email %>"><%= @contact_email %></a></p>
     <p class="footer-trademark">devopsellence is a trademark of its owner. Heroku is a trademark of Salesforce, Inc. devopsellence is not affiliated with or endorsed by Salesforce.</p>
   </div>
 </footer>

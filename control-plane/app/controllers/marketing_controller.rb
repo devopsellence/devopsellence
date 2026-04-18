@@ -9,6 +9,10 @@ class MarketingController < ApplicationController
     assign_public_install_command
   end
 
+  def docs
+    assign_public_install_command
+  end
+
   def privacy
     assign_legal_page
   end

@@ -12,6 +12,7 @@ Rails.application.routes.draw do
   # Defines the root path route ("/")
   root "marketing#index"
   get "getting-started" => "marketing#index", as: :getting_started
+  get "docs" => "marketing#docs", as: :docs
   get "privacy" => "marketing#privacy", as: :privacy
   get "terms" => "marketing#terms", as: :terms
 

@@ -7,8 +7,8 @@ class ReleaseTest < ActiveSupport::TestCase
     release = build_release(
       runtime_json: release_runtime_json(
         services: {
-          "admin" => web_service_runtime(roles: [ "admin" ]),
-          "public" => web_service_runtime(roles: [ "public" ])
+          "admin" => web_service_runtime,
+          "public" => web_service_runtime
         },
         ingress_service: nil
       )
@@ -22,8 +22,8 @@ class ReleaseTest < ActiveSupport::TestCase
     release = build_release(
       runtime_json: release_runtime_json(
         services: {
-          "admin" => web_service_runtime(roles: [ "admin" ]),
-          "web" => web_service_runtime(roles: [ "web" ])
+          "admin" => web_service_runtime,
+          "web" => web_service_runtime
         },
         ingress_service: nil
       )

@@ -12,7 +12,6 @@ func baseProject() *config.ProjectConfig {
 	cfg := config.DefaultProjectConfig("solo", "myapp", config.DefaultEnvironment)
 	cfg.Services["web"] = config.Service{
 		Kind:    config.ServiceKindWeb,
-		Roles:   []string{config.DefaultWebRole},
 		Command: "rails server",
 		Env:     map[string]string{"RAILS_ENV": "production"},
 		SecretRefs: []config.SecretRef{
@@ -71,7 +70,6 @@ func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
 		Kind:    config.ServiceKindWorker,
-		Roles:   []string{config.DefaultWorkerRole},
 		Command: "sidekiq",
 		Env:     map[string]string{"QUEUE": "default"},
 	}
@@ -103,11 +101,10 @@ func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 	}
 }
 
-func TestBuildDesiredStateForLabelsFiltersServicesByRole(t *testing.T) {
+func TestBuildDesiredStateForLabelsFiltersServicesByKindLabel(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
 		Kind:    config.ServiceKindWorker,
-		Roles:   []string{config.DefaultWorkerRole},
 		Command: "sidekiq",
 	}
 	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: "rails db:migrate"}
@@ -193,7 +190,6 @@ func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
 		Kind:    config.ServiceKindWorker,
-		Roles:   []string{config.DefaultWorkerRole},
 		Command: "sidekiq",
 	}
 	cfg.Ingress = &config.IngressConfig{Hosts: []string{"app.example.com"}, Service: "web"}

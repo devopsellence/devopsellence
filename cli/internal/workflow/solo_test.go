@@ -44,7 +44,6 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
 				Kind:  config.ServiceKindWeb,
-				Roles: []string{config.DefaultWebRole},
 				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{
 					Path: "/up",
@@ -53,7 +52,6 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 			},
 			"worker": {
 				Kind:    config.ServiceKindWorker,
-				Roles:   []string{config.DefaultWorkerRole},
 				Command: "sidekiq",
 			},
 		},
@@ -83,7 +81,6 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
 				Kind:  config.ServiceKindWeb,
-				Roles: []string{config.DefaultWebRole},
 				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{
 					Path: "/up",
@@ -92,7 +89,6 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 			},
 			"worker": {
 				Kind:    config.ServiceKindWorker,
-				Roles:   []string{config.DefaultWorkerRole},
 				Command: "sidekiq",
 			},
 		},
@@ -107,7 +103,7 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 
 func TestSoloNodeCanRunUnlabeledNode(t *testing.T) {
 	node := config.SoloNode{}
-	if !soloNodeCanRunRoles(node, []string{config.DefaultWebRole}) || !soloNodeCanRunRoles(node, []string{config.DefaultWorkerRole}) {
+	if !soloNodeCanRunKind(node, config.DefaultWebRole) || !soloNodeCanRunKind(node, config.DefaultWorkerRole) {
 		t.Fatal("unlabeled node should run all labels")
 	}
 }
@@ -217,15 +213,13 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
 				Kind:        config.ServiceKindWeb,
-				Roles:       []string{config.DefaultWebRole},
 				Env:         map[string]string{},
 				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
 			},
 			"worker": {
-				Kind:  config.ServiceKindWorker,
-				Roles: []string{config.DefaultWorkerRole},
-				Env:   map[string]string{},
+				Kind: config.ServiceKindWorker,
+				Env:  map[string]string{},
 			},
 		},
 	}
@@ -262,7 +256,6 @@ func TestApplySoloRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
 				Kind:        config.ServiceKindWeb,
-				Roles:       []string{config.DefaultWebRole},
 				Env:         map[string]string{},
 				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},

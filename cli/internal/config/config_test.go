@@ -14,7 +14,6 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	project := DefaultProjectConfig("acme", "ShopApp", "staging")
 	project.Services["jobs"] = Service{
 		Kind:       ServiceKindWorker,
-		Roles:      []string{DefaultWorkerRole},
 		Command:    "./bin/jobs",
 		Env:        map[string]string{"QUEUE": "default"},
 		SecretRefs: []SecretRef{{Name: "API_KEY", Secret: "gsm://projects/test/secrets/api-key"}},
@@ -91,7 +90,6 @@ func TestLoadAppliesDefaultBuildPlatforms(t *testing.T) {
 		"services:",
 		"  web:",
 		"    kind: web",
-		"    roles: [web]",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -130,7 +128,6 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 		"services:",
 		"  web:",
 		"    kind: web",
-		"    roles: [web]",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -149,7 +146,7 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsWorkerWithoutRoles(t *testing.T) {
+func TestValidateAcceptsWorkerWithoutExtraPlacementFields(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
@@ -159,8 +156,8 @@ func TestValidateRejectsWorkerWithoutRoles(t *testing.T) {
 	}
 
 	err := Validate(&project)
-	if err == nil || !strings.Contains(err.Error(), "services.jobs.roles") {
-		t.Fatalf("expected worker roles validation error, got %v", err)
+	if err != nil {
+		t.Fatalf("expected worker service to validate, got %v", err)
 	}
 }
 
@@ -180,7 +177,6 @@ func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 		"services:",
 		"  web:",
 		"    kind: web",
-		"    roles: [web]",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",

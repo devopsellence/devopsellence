@@ -307,13 +307,13 @@ func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config
 		service := cfg.Services[serviceName]
 		scheduled := false
 		for _, nodeName := range sortedSoloNodeNames(nodes) {
-			if soloNodeCanRunRoles(nodes[nodeName], service.Roles) {
+			if soloNodeCanRunKind(nodes[nodeName], service.Kind) {
 				scheduled = true
 				break
 			}
 		}
 		if !scheduled {
-			return "", fmt.Errorf("solo deploy requires at least one selected node labeled for service %q (%s)", serviceName, strings.Join(service.Roles, ", "))
+			return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q for service %q", service.Kind, serviceName)
 		}
 	}
 	release := cfg.ReleaseTask()
@@ -321,22 +321,20 @@ func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config
 		return "", nil
 	}
 	for _, nodeName := range sortedSoloNodeNames(nodes) {
-		if soloNodeCanRunRoles(nodes[nodeName], cfg.Services[release.Service].Roles) {
+		if soloNodeCanRunKind(nodes[nodeName], cfg.Services[release.Service].Kind) {
 			return nodeName, nil
 		}
 	}
 	return "", fmt.Errorf("solo deploy requires at least one selected node labeled for release task service %q", release.Service)
 }
 
-func soloNodeCanRunRoles(node config.SoloNode, roles []string) bool {
+func soloNodeCanRunKind(node config.SoloNode, kind string) bool {
 	if node.Labels == nil {
 		return true
 	}
-	for _, role := range roles {
-		for _, nodeLabel := range node.Labels {
-			if strings.TrimSpace(nodeLabel) == strings.TrimSpace(role) {
-				return true
-			}
+	for _, nodeLabel := range node.Labels {
+		if strings.TrimSpace(nodeLabel) == strings.TrimSpace(kind) {
+			return true
 		}
 	}
 	return false
@@ -350,7 +348,7 @@ func soloNodeCanRunIngress(node config.SoloNode, cfg *config.ProjectConfig) bool
 	if !ok {
 		return false
 	}
-	return soloNodeCanRunRoles(node, service.Roles)
+	return soloNodeCanRunKind(node, service.Kind)
 }
 
 func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {

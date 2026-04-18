@@ -351,14 +351,13 @@
         <span class="dot dot-green"></span>
         <span class="terminal-bar-title">devopsellence.yml</span>
       </div>
-      <div class="terminal-body">
+  <div class="terminal-body">
         <pre class="config-pre"><code>nodes:
   prod-1:
-    roles:
+    labels:
       - web
-    public: true
   worker-1:
-    roles:
+    labels:
       - worker
 
 solo:
@@ -587,7 +586,6 @@ build:
 services:
   web:
     kind: web
-    roles: [web]
     command: bundle exec puma -C config/puma.rb
     env:
       RAILS_ENV: production
@@ -605,7 +603,6 @@ services:
 
   worker:
     kind: worker
-    roles: [worker]
     command: bundle exec sidekiq
     env:
       RAILS_ENV: production
@@ -653,11 +650,7 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>services.*.kind</code></dt>
-        <dd>Service kind. Use <code>web</code>, <code>worker</code>, or <code>accessory</code>.</dd>
-      </div>
-      <div class="docs-field">
-        <dt><code>services.*.roles</code></dt>
-        <dd>Placement roles used to match services to nodes.</dd>
+        <dd>Service runtime kind and placement label. Use <code>web</code>, <code>worker</code>, or <code>accessory</code>. A service runs on nodes whose labels include that kind.</dd>
       </div>
       <div class="docs-field">
         <dt><code>services.*.command</code></dt>
@@ -689,7 +682,7 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>solo.nodes.*.labels</code></dt>
-        <dd>Service placement labels for solo and shared mode. Use labels matching your services' roles.</dd>
+        <dd>Service placement labels for solo and shared mode. Use labels matching your services' kinds.</dd>
       </div>
       <div class="docs-field">
         <dt><code>solo.nodes.*.provider</code></dt>

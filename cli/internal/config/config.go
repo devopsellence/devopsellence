@@ -56,7 +56,6 @@ type ServicePort struct {
 
 type ServiceConfig struct {
 	Kind        string            `yaml:"kind" json:"kind"`
-	Roles       []string          `yaml:"roles" json:"roles"`
 	Image       string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Entrypoint  string            `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
 	Command     string            `yaml:"command,omitempty" json:"command,omitempty"`
@@ -269,7 +268,6 @@ func DefaultProjectConfigForType(organization, project, environment, appType str
 		Services: map[string]ServiceConfig{
 			DefaultWebServiceName: {
 				Kind:       ServiceKindWeb,
-				Roles:      []string{DefaultWebRole},
 				Env:        map[string]string{},
 				SecretRefs: []SecretRef{},
 				Volumes:    []Volume{},
@@ -427,7 +425,6 @@ func applyDefaults(cfg *ProjectConfig) {
 		if service.Volumes == nil {
 			service.Volumes = []Volume{}
 		}
-		service.Roles = normalizeStringList(service.Roles)
 		service.Ports = normalizeServicePorts(service.Ports)
 		if service.Kind == ServiceKindWeb {
 			if len(service.Ports) == 0 {
@@ -540,14 +537,6 @@ func validateService(name string, service ServiceConfig) error {
 	default:
 		return fmt.Errorf("services.%s.kind must be one of %q, %q, or %q", name, ServiceKindWeb, ServiceKindWorker, ServiceKindAccessory)
 	}
-	if len(service.Roles) == 0 {
-		return fmt.Errorf("services.%s.roles must include at least one role", name)
-	}
-	for _, role := range service.Roles {
-		if strings.TrimSpace(role) == "" {
-			return fmt.Errorf("services.%s.roles entries must be present", name)
-		}
-	}
 	for key := range service.Env {
 		if strings.TrimSpace(key) == "" {
 			return fmt.Errorf("services.%s.env keys must be present", name)
@@ -611,12 +600,8 @@ func validateTasks(cfg *ProjectConfig) error {
 	if serviceName == "" {
 		return errors.New("tasks.release.service is required")
 	}
-	service, ok := cfg.Services[serviceName]
-	if !ok {
+	if _, ok := cfg.Services[serviceName]; !ok {
 		return fmt.Errorf("tasks.release.service %q not found in services", serviceName)
-	}
-	if len(service.Roles) == 0 {
-		return fmt.Errorf("tasks.release.service %q must declare at least one role", serviceName)
 	}
 	if strings.TrimSpace(release.Entrypoint) == "" && strings.TrimSpace(release.Command) == "" {
 		return errors.New("tasks.release must set entrypoint or command")

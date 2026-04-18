@@ -3965,7 +3965,6 @@ func servicePayload(service *config.Service) map[string]any {
 	}
 	payload := map[string]any{
 		"kind":        service.Kind,
-		"roles":       append([]string(nil), service.Roles...),
 		"image":       strings.TrimSpace(service.Image),
 		"env":         cloneEnv(service.Env),
 		"secret_refs": service.SecretRefs,

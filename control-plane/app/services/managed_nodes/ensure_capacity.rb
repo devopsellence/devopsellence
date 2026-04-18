@@ -90,7 +90,7 @@ module ManagedNodes
     end
 
     def required_labels
-      release.required_roles.presence || [ Node::DEFAULT_LABEL ]
+      release.required_labels.presence || [ Node::DEFAULT_LABEL ]
     end
 
     def update_progress(message)

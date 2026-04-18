@@ -788,6 +788,7 @@ class E2E
       config = YAML.load_file(config_path.to_s)
       config.delete("web")
       config.delete("release")
+      config.delete("release_command")
       config["services"] ||= {}
       config["services"]["web"] ||= { "kind" => "web", "roles" => [ "web" ] }
       config["services"]["web"]["kind"] = "web"
@@ -797,7 +798,8 @@ class E2E
       config["services"]["web"]["env"] ||= {}
       config["services"]["web"]["env"][PLAIN_ENV_NAME] = plain_env_value
       config["services"]["web"]["volumes"] = [ { "source" => "app_storage", "target" => APP_VOLUME_TARGET } ]
-      config["tasks"] ||= {}
+      config["tasks"] = {} unless config["tasks"].is_a?(Hash)
+      config["tasks"].delete("release")
       config["tasks"]["release"] = {
         "service" => "web",
         "command" => "release-task #{APP_VOLUME_TARGET}/#{RELEASE_MARKER_FILENAME} #{Shellwords.escape(release_marker_value)}"

@@ -38,7 +38,13 @@ module Deployments
       return true if deployment.status == Deployment::STATUS_SCHEDULING
 
       deployment.status == Deployment::STATUS_ROLLING_OUT &&
-        deployment.release_task_status == Deployment::RELEASE_TASK_STATUS_SUCCEEDED
+        rollout_publishable?(deployment)
+    end
+
+    def rollout_publishable?(deployment)
+      return true unless deployment.release.has_release_task?
+
+      deployment.release_task_status == Deployment::RELEASE_TASK_STATUS_SUCCEEDED
     end
   end
 end

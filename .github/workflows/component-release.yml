@@ -139,6 +139,14 @@ jobs:
 
             local tag_name="${component}-${version}"
             local dist_dir="${working_dir}/dist/${version}"
+            local release_notes="${release_label} binary release for ${version} from ${source_ref} at ${target_sha}"
+            local release_assets=(
+              "${dist_dir}/linux-amd64"
+              "${dist_dir}/linux-arm64"
+              "${dist_dir}/darwin-amd64"
+              "${dist_dir}/darwin-arm64"
+              "${dist_dir}/SHA256SUMS"
+            )
 
             if git rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
               tag_target="$(git rev-list -n 1 "$tag_name")"
@@ -174,14 +182,19 @@ jobs:
               sha256sum "$output" | sed "s#  ${dist_dir}/#  #" >> "${dist_dir}/SHA256SUMS"
             done
 
+            if gh release view "$tag_name" >/dev/null 2>&1; then
+              gh release edit "$tag_name" \
+                --title "${release_label} ${version}" \
+                --notes "$release_notes" \
+                "${prerelease_flag[@]}"
+              gh release upload "$tag_name" "${release_assets[@]}" --clobber
+              return
+            fi
+
             gh release create "$tag_name" \
-              "${dist_dir}/linux-amd64" \
-              "${dist_dir}/linux-arm64" \
-              "${dist_dir}/darwin-amd64" \
-              "${dist_dir}/darwin-arm64" \
-              "${dist_dir}/SHA256SUMS" \
+              "${release_assets[@]}" \
               --title "${release_label} ${version}" \
-              --notes "${release_label} binary release for ${version} from ${source_ref} at ${target_sha}" \
+              --notes "$release_notes" \
               --target "$target_sha" \
               "${prerelease_flag[@]}"
           }

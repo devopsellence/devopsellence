@@ -15,8 +15,8 @@ module NodeDesiredState
       {
         schemaVersion: 2,
         revision: revision,
-        assignment_sequence: sequence,
-        identity_version: environment.identity_version,
+        assignmentSequence: sequence,
+        identityVersion: environment.identity_version,
         environments: [
           {
             name: environment.name,
@@ -24,10 +24,10 @@ module NodeDesiredState
             tasks: [ release.release_command_task_for(node: node) ].compact
           }.compact
         ],
-        published_at: Time.current.utc.iso8601,
-        organization_bundle_token: bundle&.organization_bundle&.token.to_s,
-        environment_bundle_token: bundle&.environment_bundle&.token.to_s,
-        node_bundle_token: bundle&.token.to_s
+        publishedAt: Time.current.utc.iso8601,
+        organizationBundleToken: bundle&.organization_bundle&.token.to_s,
+        environmentBundleToken: bundle&.environment_bundle&.token.to_s,
+        nodeBundleToken: bundle&.token.to_s
       }.compact
     end
 

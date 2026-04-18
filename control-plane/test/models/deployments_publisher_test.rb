@@ -767,12 +767,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     state_b = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_b.reload.desired_state_object_path)
     assert_equal [ hostname ], state_a.dig("ingress", "hosts")
 
-    assert_equal [ "node-b", "worker-a" ], state_a.fetch("node_peers").map { |peer| peer.fetch("name") }
-    node_b_peer = state_a.fetch("node_peers").find { |peer| peer.fetch("name") == "node-b" }
+    assert_equal [ "node-b", "worker-a" ], state_a.fetch("nodePeers").map { |peer| peer.fetch("name") }
+    node_b_peer = state_a.fetch("nodePeers").find { |peer| peer.fetch("name") == "node-b" }
     assert_equal [ Node::LABEL_WEB ], node_b_peer.fetch("labels")
-    assert_equal "198.51.100.11", node_b_peer.fetch("public_address")
+    assert_equal "198.51.100.11", node_b_peer.fetch("publicAddress")
 
-    assert_equal [ "198.51.100.10" ], state_b.fetch("node_peers").select { |peer| peer.fetch("labels").include?(Node::LABEL_WEB) }.map { |peer| peer.fetch("public_address") }
+    assert_equal [ "198.51.100.10" ], state_b.fetch("nodePeers").select { |peer| peer.fetch("labels").include?(Node::LABEL_WEB) }.map { |peer| peer.fetch("publicAddress") }
   end
 
   test "managed deploy claims a node bundle for a new environment" do

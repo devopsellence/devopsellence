@@ -14,7 +14,7 @@ module NodeDesiredState
       {
         name: node.name.to_s,
         labels: node.labels,
-        public_address: public_address.presence
+        publicAddress: public_address.presence
       }.compact
     end
   end

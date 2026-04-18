@@ -18,8 +18,8 @@ module NodeDesiredState
       {
         schemaVersion: 2,
         revision: revision,
-        assignment_sequence: sequence,
-        identity_version: environment.identity_version,
+        assignmentSequence: sequence,
+        identityVersion: environment.identity_version,
         image: {
           repository: release.image_repository,
           digest: release.image_digest,
@@ -33,11 +33,11 @@ module NodeDesiredState
           }.compact
         ],
         ingress: ingress,
-        node_peers: node_peers_payload(environment:, node:),
-        published_at: Time.current.utc.iso8601,
-        organization_bundle_token: bundle&.organization_bundle&.token.to_s,
-        environment_bundle_token: bundle&.environment_bundle&.token.to_s,
-        node_bundle_token: bundle&.token.to_s
+        nodePeers: node_peers_payload(environment:, node:),
+        publishedAt: Time.current.utc.iso8601,
+        organizationBundleToken: bundle&.organization_bundle&.token.to_s,
+        environmentBundleToken: bundle&.environment_bundle&.token.to_s,
+        nodeBundleToken: bundle&.token.to_s
       }.compact
     end
 

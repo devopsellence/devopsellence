@@ -72,7 +72,7 @@ class AgentInstallScript
           validate_version "$AGENT_VERSION"
         fi
 
-        OS_RAW="$(uname -s | tr [:upper:] [:lower:])"
+        OS_RAW="$(uname -s | tr '[:upper:]' '[:lower:]')"
         ARCH_RAW="$(uname -m)"
 
         case "$OS_RAW" in

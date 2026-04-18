@@ -85,6 +85,15 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, 'validate_version "$CLI_VERSION"'
   end
 
+  test "cli install script derives checksum url after parsing base url overrides" do
+    get "/lfg.sh"
+
+    assert_response :success
+    assert_includes response.body, 'CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"'
+    assert_includes response.body, 'CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"'
+    assert_operator response.body.index('while [[ $# -gt 0 ]]; do'), :<, response.body.index('CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"')
+  end
+
   test "cli install script safely quotes query-string version" do
     get "/lfg.sh", params: { version: "v0.1.0-rc.1$(touch /tmp/pwned)'oops" }
 
@@ -114,6 +123,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-}"'
     assert_includes response.body, "AGENT_VERSION='v0.1.0-rc.1'"
     assert_includes response.body, 'validate_version "$AGENT_VERSION"'
+    assert_includes response.body, "OS_RAW=\"$(uname -s | tr '[:upper:]' '[:lower:]')\""
   end
 
   test "agent install script safely quotes query-string version" do

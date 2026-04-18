@@ -25,7 +25,7 @@ class CliInstallsController < ActionController::Base
       if [[ -z "$CLI_VERSION" ]]; then
         CLI_VERSION=#{default_version}
       fi
-      CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-$BASE_URL/cli/checksums}"
+      CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
       TARGET_NAME="devopsellence"
 
@@ -61,6 +61,10 @@ class CliInstallsController < ActionController::Base
             ;;
         esac
       done
+
+      if [[ -z "$CLI_CHECKSUM_URL" ]]; then
+        CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"
+      fi
 
       if [[ -z "$CLI_VERSION" ]]; then
         echo "missing --version (or use ?version=... or set DEVOPSELLENCE_CLI_VERSION or DEVOPSELLENCE_CLI_STABLE_VERSION)" >&2

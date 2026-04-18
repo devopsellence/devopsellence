@@ -77,7 +77,7 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
       -ldflags "-s -w -X ${module_path}.Version=${version} -X ${module_path}.Commit=${commit} -X ${module_path}.${build_time_field}=${build_time}" \
       -o "$output" \
       ./cmd/devopsellence
-  sha256sum "$output" | sed "s#  ${dist_dir}/#  #" >> "$dist_dir/SHA256SUMS"
+  (cd "$dist_dir" && sha256sum "$artifact") >> "$dist_dir/SHA256SUMS"
 done
 '''
 
@@ -129,7 +129,7 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
       -ldflags "-s -w -X ${module_path}.Version=${version} -X ${module_path}.Commit=${commit} -X ${module_path}.${build_time_field}=${build_time}" \
       -o "$output" \
       ./cmd/devopsellence
-  sha256sum "$output" | sed "s#  ${dist_dir}/#  #" >> "$dist_dir/SHA256SUMS"
+  (cd "$dist_dir" && sha256sum "$artifact") >> "$dist_dir/SHA256SUMS"
 done
 '''
 

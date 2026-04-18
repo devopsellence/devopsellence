@@ -82,6 +82,11 @@ func validateService(environmentName string, index int, service *desiredstatepb.
 	if service.Image == "" {
 		return fmt.Errorf("%s.image required", prefix)
 	}
+	switch strings.TrimSpace(service.Kind) {
+	case "", ServiceKindWeb, ServiceKindWorker:
+	default:
+		return fmt.Errorf("%s.kind unsupported: %q", prefix, service.Kind)
+	}
 	for k := range service.Env {
 		if k == "" {
 			return fmt.Errorf("%s.env key empty", prefix)
@@ -166,7 +171,7 @@ func validateIngress(state *desiredstatepb.DesiredState) error {
 func validateIngressRoutes(state *desiredstatepb.DesiredState) error {
 	targets := map[string]*desiredstatepb.Service{}
 	for _, service := range RuntimeServices(state) {
-		targets[service.EnvironmentName+"/"+service.ServiceName] = service.Service
+		targets[ScopedKey(service.EnvironmentName, service.ServiceName)] = service.Service
 	}
 	seen := map[string]struct{}{}
 	for i, route := range state.Ingress.Routes {
@@ -198,7 +203,7 @@ func validateIngressRoutes(state *desiredstatepb.DesiredState) error {
 		if serviceName == "" {
 			return fmt.Errorf("ingress.routes[%d].target.service required", i)
 		}
-		service := targets[env+"/"+serviceName]
+		service := targets[ScopedKey(env, serviceName)]
 		if service == nil {
 			return fmt.Errorf("ingress.routes[%d].target references missing service %s/%s", i, env, serviceName)
 		}

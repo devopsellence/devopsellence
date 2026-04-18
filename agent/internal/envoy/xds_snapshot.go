@@ -92,9 +92,6 @@ func snapshotClusterNames(p snapshotParams) []string {
 		names = append(names, name)
 	}
 	add(p.clusterName)
-	for name := range p.endpoints {
-		add(name)
-	}
 	if p.publicIngress != nil {
 		for _, route := range p.publicIngress.Routes {
 			add(ingressRouteClusterName(route))
@@ -350,7 +347,7 @@ func buildVirtualHosts(domains []string, defaultClusterName string, ingressRoute
 	for i, ingressRoute := range ingressRoutes {
 		host := strings.TrimSpace(ingressRoute.GetMatch().GetHostname())
 		if host == "" {
-			host = "*"
+			continue
 		}
 		if _, ok := grouped[host]; !ok {
 			hostOrder = append(hostOrder, host)

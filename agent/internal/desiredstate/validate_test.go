@@ -42,6 +42,13 @@ func TestValidateMissingImage(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnknownServiceKind(t *testing.T) {
+	state := desiredState(&desiredstatepb.Service{Name: "worker", Kind: "cron", Image: "busybox"})
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestValidateDuplicateServiceName(t *testing.T) {
 	state := desiredState(workerService("worker"), workerService("worker"))
 	if err := Validate(state); err == nil {

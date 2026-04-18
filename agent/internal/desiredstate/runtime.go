@@ -149,3 +149,12 @@ func EnvoyClusterName(environmentName, serviceName, portName string) string {
 func ServiceKind(service *desiredstatepb.Service) string {
 	return normalizedServiceKind(service)
 }
+
+func ScopedKey(parts ...string) string {
+	var b strings.Builder
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		fmt.Fprintf(&b, "%d:%s|", len(part), part)
+	}
+	return b.String()
+}

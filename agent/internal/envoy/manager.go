@@ -246,17 +246,33 @@ func (m *Manager) applySnapshot(publicIngress *publicIngressListenerConfig) erro
 }
 
 func (m *Manager) snapshotEndpoints() map[string]*endpointState {
-	if len(m.lastEndpoints) == 0 {
-		if m.lastEndpoint == nil {
-			return nil
+	endpoints := map[string]*endpointState{}
+	if endpoint := m.lastEndpoints[m.config.ClusterName]; endpoint != nil {
+		endpoints[m.config.ClusterName] = endpoint
+	} else if m.lastEndpoint != nil {
+		endpoints[m.config.ClusterName] = m.lastEndpoint
+	}
+	if m.lastIngress != nil {
+		for _, route := range m.lastIngress.Routes {
+			clusterName := ingressRouteClusterName(route)
+			if clusterName == "" {
+				continue
+			}
+			if endpoint := m.lastEndpoints[clusterName]; endpoint != nil {
+				endpoints[clusterName] = endpoint
+			}
 		}
-		return map[string]*endpointState{m.config.ClusterName: m.lastEndpoint}
 	}
-	endpoints := make(map[string]*endpointState, len(m.lastEndpoints))
-	for cluster, endpoint := range m.lastEndpoints {
-		endpoints[cluster] = endpoint
+	if len(endpoints) == 0 {
+		m.lastEndpoints = map[string]*endpointState{}
+		return nil
 	}
-	return endpoints
+	m.lastEndpoints = endpoints
+	cloned := make(map[string]*endpointState, len(endpoints))
+	for cluster, endpoint := range endpoints {
+		cloned[cluster] = endpoint
+	}
+	return cloned
 }
 
 func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingress) error {

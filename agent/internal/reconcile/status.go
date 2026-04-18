@@ -49,7 +49,7 @@ func (r *Reconciler) CurrentStatus(ctx context.Context, desired *desiredstatepb.
 				continue
 			}
 			summary.Services++
-			current := pickCurrentContainer(existingByService[environment.GetName()+"/"+service.GetName()])
+			current := pickCurrentContainer(existingByService[runtimeServiceKey(environment.GetName(), service.GetName())])
 			serviceStatus, containerStatus := r.serviceStatus(ctx, multiEnvironment, environment.GetName(), service, current)
 			if serviceStatus.Phase == report.PhaseError {
 				summary.UnhealthyServices++

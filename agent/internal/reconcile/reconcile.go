@@ -429,7 +429,7 @@ func runtimeServiceKey(environmentName, serviceName string) string {
 	if environmentName == "" {
 		environmentName = desiredstate.DefaultEnvironmentName
 	}
-	return environmentName + "/" + strings.TrimSpace(serviceName)
+	return desiredstate.ScopedKey(environmentName, serviceName)
 }
 
 func containerServiceKey(c engine.ContainerState) string {

@@ -250,7 +250,7 @@ func taskStoreName(environmentName, taskName string) string {
 	if environmentName == "" {
 		return taskName
 	}
-	return environmentName + "/" + taskName
+	return desiredstate.ScopedKey(environmentName, taskName)
 }
 
 func (a *Agent) reportStatus(ctx context.Context, status report.Status, sequence int64) {

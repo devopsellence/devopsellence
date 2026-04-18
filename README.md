@@ -27,6 +27,12 @@ Install the CLI:
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 ```
 
+Install the latest `edge` CLI build from `master`:
+
+```bash
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --channel edge
+```
+
 Check local tooling:
 
 ```bash
@@ -200,7 +206,11 @@ cd control-plane
 bin/dev
 ```
 
-GitHub binary releases for the agent and CLI are published from public GitHub Actions workflows on `agent-v*` and `cli-v*` tags.
+GitHub binary releases for the agent and CLI have two channels:
+
+- Stable releases publish from public GitHub Actions workflows on `agent-v*` and `cli-v*` tags.
+- Edge prereleases publish automatically from `master` component commits with commit-stamped versions like `agent-edge-<timestamp>-<sha>` and `cli-edge-<timestamp>-<sha>`.
+- Both edge workflows also support manual `workflow_dispatch` builds from a branch, tag, or SHA and publish prereleases like `agent-branch-<name>-<timestamp>-<sha>` and `cli-branch-<name>-<timestamp>-<sha>`.
 
 ## Contributing
 

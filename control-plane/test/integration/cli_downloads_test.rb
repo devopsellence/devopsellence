@@ -60,6 +60,20 @@ class CliDownloadsTest < ActionDispatch::IntegrationTest
     assert_empty fetcher.calls
   end
 
+  test "redirects unversioned edge requests to the configured edge version without downloading" do
+    fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "devopsellence"))
+
+    with_env("DEVOPSELLENCE_CLI_EDGE_VERSION" => "edge-def456") do
+      with_cli_release_fetcher(fetcher) do
+        get cli_download_path, params: { os: "darwin", arch: "arm64", channel: "edge" }
+      end
+    end
+
+    assert_response :redirect
+    assert_equal "http://www.example.com/cli/download?arch=arm64&channel=edge&os=darwin&version=edge-def456", response.location
+    assert_empty fetcher.calls
+  end
+
   test "returns unprocessable entity for unsupported targets" do
     fetcher = FakeFetcher.new(error: CliReleases::Fetcher::UnsupportedTargetError.new("unsupported target linux/s390x"))
 
@@ -69,5 +83,12 @@ class CliDownloadsTest < ActionDispatch::IntegrationTest
 
     assert_response :unprocessable_entity
     assert_includes response.body, "unsupported target"
+  end
+
+  test "returns unprocessable entity for unsupported channels" do
+    get cli_download_path, params: { channel: "beta" }
+
+    assert_response :unprocessable_entity
+    assert_includes response.body, "unsupported channel"
   end
 end

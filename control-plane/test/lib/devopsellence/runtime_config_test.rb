@@ -37,6 +37,8 @@ module Devopsellence
         assert_equal "", config.cloudflare_zone_id
         assert_equal "devopsellence.io", config.cloudflare_zone_name
         assert_equal "http://devopsellence-envoy:8000", config.cloudflare_envoy_origin
+        assert_equal "", config.agent_edge_version
+        assert_equal "", config.cli_edge_version
         assert_equal "noreply@example.com", config.mail_from_address
         assert_equal "", config.activity_notification_to
       end

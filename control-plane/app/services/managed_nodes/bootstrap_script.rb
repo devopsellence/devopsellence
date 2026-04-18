@@ -51,7 +51,7 @@ module ManagedNodes
     attr_reader :node_name, :bootstrap_token, :base_url, :agent_version
 
     def install_script
-      AgentInstallScript.render(base_url: base_url, stable_version: agent_version)
+      AgentInstallScript.render(base_url: base_url, stable_version: agent_version, edge_version: "")
     end
 
     def indented_install_script

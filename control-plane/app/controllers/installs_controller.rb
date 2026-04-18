@@ -14,7 +14,8 @@ class InstallsController < ActionController::Base
   def install_script
     base_url = PublicBaseUrl.resolve(request)
     stable_version = Devopsellence::RuntimeConfig.current.agent_stable_version
-    AgentInstallScript.render(base_url: base_url, stable_version: stable_version)
+    edge_version = Devopsellence::RuntimeConfig.current.agent_edge_version
+    AgentInstallScript.render(base_url: base_url, stable_version: stable_version, edge_version: edge_version)
   end
 
   def uninstall_script

@@ -51,10 +51,12 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_equal "text/plain", response.media_type
     assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-https://dev.devopsellence.com}"'
+    assert_includes response.body, 'CLI_CHANNEL="${DEVOPSELLENCE_CLI_CHANNEL:-stable}"'
     assert_includes response.body, 'INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"'
     assert_includes response.body, 'if [[ "$OS" == "darwin" ]]; then'
     assert_includes response.body, 'INSTALL_DIR="$HOME/.local/bin"'
     assert_includes response.body, 'INSTALL_DIR="/usr/local/bin"'
+    assert_includes response.body, "--channel"
     assert_includes response.body, "PATH_EXPORT='export PATH=\"'\"$INSTALL_DIR\"':$PATH\"'"
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
@@ -85,6 +87,8 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "/etc/apt/sources.list.d/docker.list"
     assert_includes response.body, "dpkg --print-architecture"
     assert_includes response.body, "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+    assert_includes response.body, 'AGENT_CHANNEL="${DEVOPSELLENCE_AGENT_CHANNEL:-stable}"'
+    assert_includes response.body, "--channel"
   end
 
   test "install script waits for docker at service startup" do

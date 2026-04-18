@@ -2,6 +2,7 @@
 
 class AgentDownloadsController < ActionController::Base
   include PublicArtifactRateLimit
+  include ReleaseVersionSelection
 
   def show
     version = requested_version
@@ -21,6 +22,8 @@ class AgentDownloadsController < ActionController::Base
     render plain: "agent binary unavailable: #{error.message}", status: :service_unavailable
   rescue AgentReleases::Fetcher::UnsupportedTargetError => error
     render plain: error.message, status: :unprocessable_entity
+  rescue ReleaseVersionSelection::UnsupportedChannelError => error
+    render plain: error.message, status: :unprocessable_entity
   end
 
   private
@@ -31,9 +34,12 @@ class AgentDownloadsController < ActionController::Base
   end
 
   def requested_version
-    params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.agent_stable_version.presence || raise(
-      AgentReleases::Fetcher::NotConfiguredError,
-      "set DEVOPSELLENCE_AGENT_STABLE_VERSION or pass ?version="
+    requested_release_version(
+      stable_version: Devopsellence::RuntimeConfig.current.agent_stable_version,
+      edge_version: Devopsellence::RuntimeConfig.current.agent_edge_version,
+      stable_env_name: "DEVOPSELLENCE_AGENT_STABLE_VERSION",
+      edge_env_name: "DEVOPSELLENCE_AGENT_EDGE_VERSION",
+      not_configured_error_class: AgentReleases::Fetcher::NotConfiguredError
     )
   end
 end

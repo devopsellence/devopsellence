@@ -17,11 +17,26 @@ class AgentInstallScriptTest < ActiveSupport::TestCase
   test "render safely embeds default agent version without shell evaluation" do
     script = AgentInstallScript.render(
       base_url: "https://example.com",
-      stable_version: "1.0.0$(rm -rf /)"
+      stable_version: "1.0.0$(rm -rf /)",
+      edge_version: "edge-123"
     )
 
     assert_includes script, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-}"'
-    assert_includes script, "AGENT_VERSION='1.0.0$(rm -rf /)'"
-    refute_includes script, 'AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-1.0.0$(rm -rf /)}"'
+    assert_includes script, "AGENT_STABLE_VERSION='1.0.0$(rm -rf /)'"
+    refute_includes script, 'AGENT_STABLE_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-1.0.0$(rm -rf /)}"'
+  end
+
+  test "render includes channel-aware version defaults" do
+    script = AgentInstallScript.render(
+      base_url: "https://example.com",
+      stable_version: "v1.2.3",
+      edge_version: "edge-abc123"
+    )
+
+    assert_includes script, 'AGENT_CHANNEL="${DEVOPSELLENCE_AGENT_CHANNEL:-stable}"'
+    assert_includes script, "--channel"
+    assert_includes script, 'if [[ "$AGENT_CHANNEL" == "edge" ]]; then'
+    assert_includes script, 'AGENT_VERSION="$AGENT_EDGE_VERSION"'
+    assert_includes script, 'DOWNLOAD_URL="$DOWNLOAD_URL&channel=$AGENT_CHANNEL"'
   end
 end

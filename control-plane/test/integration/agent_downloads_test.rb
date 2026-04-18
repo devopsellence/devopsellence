@@ -60,6 +60,20 @@ class AgentDownloadsTest < ActionDispatch::IntegrationTest
     assert_empty fetcher.calls
   end
 
+  test "redirects unversioned edge requests to the configured edge version without downloading" do
+    fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "devopsellence-agent"))
+
+    with_env("DEVOPSELLENCE_AGENT_EDGE_VERSION" => "edge-abc123") do
+      with_agent_release_fetcher(fetcher) do
+        get agent_download_path, params: { channel: "edge" }
+      end
+    end
+
+    assert_response :redirect
+    assert_equal "http://www.example.com/agent/download?channel=edge&version=edge-abc123", response.location
+    assert_empty fetcher.calls
+  end
+
   test "returns unprocessable entity for unsupported targets" do
     fetcher = FakeFetcher.new(error: AgentReleases::Fetcher::UnsupportedTargetError.new("unsupported target linux/s390x"))
 
@@ -69,5 +83,12 @@ class AgentDownloadsTest < ActionDispatch::IntegrationTest
 
     assert_response :unprocessable_entity
     assert_includes response.body, "unsupported target"
+  end
+
+  test "returns unprocessable entity for unsupported channels" do
+    get agent_download_path, params: { channel: "beta" }
+
+    assert_response :unprocessable_entity
+    assert_includes response.body, "unsupported channel"
   end
 end

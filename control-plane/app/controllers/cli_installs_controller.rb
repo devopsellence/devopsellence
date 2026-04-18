@@ -12,13 +12,17 @@ class CliInstallsController < ActionController::Base
     # the script so callers do not need to pass --base-url explicitly.
     base_url = request.base_url
     stable_version = Devopsellence::RuntimeConfig.current.cli_stable_version
+    edge_version = Devopsellence::RuntimeConfig.current.cli_edge_version
 
     <<~SH
       #!/usr/bin/env bash
       set -euo pipefail
 
       BASE_URL="${DEVOPSELLENCE_BASE_URL:-#{base_url}}"
-      CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-#{stable_version}}"
+      CLI_CHANNEL="${DEVOPSELLENCE_CLI_CHANNEL:-stable}"
+      CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-}"
+      CLI_STABLE_VERSION="#{stable_version}"
+      CLI_EDGE_VERSION="#{edge_version}"
       CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-$BASE_URL/cli/checksums}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
       TARGET_NAME="devopsellence"
@@ -31,6 +35,14 @@ class CliInstallsController < ActionController::Base
             ;;
           --base-url=*)
             BASE_URL="${1#*=}"
+            shift
+            ;;
+          --channel)
+            CLI_CHANNEL="$2"
+            shift 2
+            ;;
+          --channel=*)
+            CLI_CHANNEL="${1#*=}"
             shift
             ;;
           --version)
@@ -53,11 +65,28 @@ class CliInstallsController < ActionController::Base
             echo "unknown argument: $1" >&2
             exit 1
             ;;
-        esac
+          esac
       done
 
+      case "$CLI_CHANNEL" in
+        stable|edge)
+          ;;
+        *)
+          echo "unsupported channel: $CLI_CHANNEL" >&2
+          exit 1
+          ;;
+      esac
+
       if [[ -z "$CLI_VERSION" ]]; then
-        echo "missing --version (or set DEVOPSELLENCE_CLI_VERSION or DEVOPSELLENCE_CLI_STABLE_VERSION)" >&2
+        if [[ "$CLI_CHANNEL" == "edge" ]]; then
+          CLI_VERSION="$CLI_EDGE_VERSION"
+        else
+          CLI_VERSION="$CLI_STABLE_VERSION"
+        fi
+      fi
+
+      if [[ -z "$CLI_VERSION" && "$CLI_CHANNEL" == "stable" ]]; then
+        echo "missing version for stable channel (set DEVOPSELLENCE_CLI_VERSION, DEVOPSELLENCE_CLI_STABLE_VERSION, or pass --version)" >&2
         exit 1
       fi
 
@@ -89,8 +118,20 @@ class CliInstallsController < ActionController::Base
         fi
       fi
 
-      DOWNLOAD_URL="$BASE_URL/cli/download?os=$OS&arch=$ARCH&version=$CLI_VERSION"
-      CHECKSUM_URL="$CLI_CHECKSUM_URL?version=$CLI_VERSION"
+      DOWNLOAD_URL="$BASE_URL/cli/download?os=$OS&arch=$ARCH"
+      CHECKSUM_URL="$CLI_CHECKSUM_URL"
+      if [[ "$CLI_CHANNEL" != "stable" ]]; then
+        DOWNLOAD_URL="$DOWNLOAD_URL&channel=$CLI_CHANNEL"
+        CHECKSUM_URL="$CHECKSUM_URL?channel=$CLI_CHANNEL"
+      fi
+      if [[ -n "$CLI_VERSION" ]]; then
+        DOWNLOAD_URL="$DOWNLOAD_URL&version=$CLI_VERSION"
+        if [[ "$CHECKSUM_URL" == *"?"* ]]; then
+          CHECKSUM_URL="$CHECKSUM_URL&version=$CLI_VERSION"
+        else
+          CHECKSUM_URL="$CHECKSUM_URL?version=$CLI_VERSION"
+        fi
+      fi
       ARTIFACT_NAME="$OS-$ARCH"
       TMP_BIN="$(mktemp)"
       TMP_SUMS="$(mktemp)"

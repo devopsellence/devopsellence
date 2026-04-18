@@ -1,0 +1,97 @@
+name: Agent Edge Release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/agent-edge-release.yml
+      - agent/**
+      - mise.toml
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to build a prerelease from"
+        required: true
+        default: master
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: agent
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ env.SOURCE_REF }}
+
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          working_directory: agent
+
+      - name: Run tests
+        run: mise run test
+
+      - name: Normalize edge version
+        run: |
+          set -euo pipefail
+          ref_name="${SOURCE_REF#refs/heads/}"
+          ref_slug="$(printf '%s' "$ref_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+          target_sha="$(git rev-parse HEAD)"
+          commit_sha="$(git rev-parse --short=12 HEAD)"
+          commit_time="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)"
+          if [[ "$ref_name" == "master" ]]; then
+            version="edge-${commit_time}-${commit_sha}"
+          else
+            version="branch-${ref_slug}-${commit_time}-${commit_sha}"
+          fi
+          echo "TAG_NAME=agent-${version}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "TARGET_SHA=${target_sha}" >> "$GITHUB_ENV"
+
+      - name: Build release artifacts
+        run: |
+          set -euo pipefail
+          commit="${GIT_COMMIT:-$(git rev-parse --short=12 HEAD)}"
+          build_time="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+          dist_dir="dist/${RELEASE_VERSION}"
+          rm -rf "$dist_dir"
+          mkdir -p "$dist_dir" .gocache
+          : > "$dist_dir/SHA256SUMS"
+
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            artifact="${goos}-${goarch}"
+            output="${dist_dir}/${artifact}"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOCACHE="$PWD/.gocache" \
+              go build \
+                -trimpath \
+                -ldflags "-s -w -X github.com/devopsellence/devopsellence/agent/internal/version.Version=${RELEASE_VERSION} -X github.com/devopsellence/devopsellence/agent/internal/version.Commit=${commit} -X github.com/devopsellence/devopsellence/agent/internal/version.BuildTime=${build_time}" \
+                -o "$output" \
+                ./cmd/devopsellence
+            sha256sum "$output" | sed "s#  ${dist_dir}/#  #" >> "$dist_dir/SHA256SUMS"
+          done
+
+      - name: Create or update GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          asset_dir="dist/${RELEASE_VERSION}"
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --title "Agent ${RELEASE_VERSION}" \
+              --notes "Agent prerelease for ${SOURCE_REF} at ${TARGET_SHA}" \
+              --target "$TARGET_SHA" \
+              --prerelease
+          fi
+          gh release upload "$TAG_NAME" "${asset_dir}"/* --clobber

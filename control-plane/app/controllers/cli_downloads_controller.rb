@@ -2,6 +2,7 @@
 
 class CliDownloadsController < ActionController::Base
   include PublicArtifactRateLimit
+  include ReleaseVersionSelection
 
   def show
     version = requested_version
@@ -21,6 +22,8 @@ class CliDownloadsController < ActionController::Base
     render plain: "cli binary unavailable: #{error.message}", status: :service_unavailable
   rescue CliReleases::Fetcher::UnsupportedTargetError => error
     render plain: error.message, status: :unprocessable_entity
+  rescue ReleaseVersionSelection::UnsupportedChannelError => error
+    render plain: error.message, status: :unprocessable_entity
   end
 
   private
@@ -31,9 +34,12 @@ class CliDownloadsController < ActionController::Base
   end
 
   def requested_version
-    params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.cli_stable_version.presence || raise(
-      CliReleases::Fetcher::NotConfiguredError,
-      "set DEVOPSELLENCE_CLI_STABLE_VERSION or pass ?version="
+    requested_release_version(
+      stable_version: Devopsellence::RuntimeConfig.current.cli_stable_version,
+      edge_version: Devopsellence::RuntimeConfig.current.cli_edge_version,
+      stable_env_name: "DEVOPSELLENCE_CLI_STABLE_VERSION",
+      edge_env_name: "DEVOPSELLENCE_CLI_EDGE_VERSION",
+      not_configured_error_class: CliReleases::Fetcher::NotConfiguredError
     )
   end
 end

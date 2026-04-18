@@ -2,9 +2,10 @@
 
 class AgentInstallScript
   class << self
-    def render(base_url:, stable_version:)
+    def render(base_url:, stable_version:, edge_version: "")
       default_base_url = shell_single_quote(base_url)
-      default_agent_version = shell_single_quote(stable_version)
+      default_stable_agent_version = shell_single_quote(stable_version)
+      default_edge_agent_version = shell_single_quote(edge_version)
 
       <<~SH
         #!/usr/bin/env bash
@@ -14,11 +15,11 @@ class AgentInstallScript
         if [[ -z "$BASE_URL" ]]; then
           BASE_URL=#{default_base_url}
         fi
+        AGENT_CHANNEL="${DEVOPSELLENCE_AGENT_CHANNEL:-stable}"
         TOKEN=""
         AGENT_VERSION="${DEVOPSELLENCE_AGENT_VERSION:-}"
-        if [[ -z "$AGENT_VERSION" ]]; then
-          AGENT_VERSION=#{default_agent_version}
-        fi
+        AGENT_STABLE_VERSION=#{default_stable_agent_version}
+        AGENT_EDGE_VERSION=#{default_edge_agent_version}
         AGENT_CHECKSUM_URL="${DEVOPSELLENCE_AGENT_CHECKSUM_URL:-$BASE_URL/agent/checksums}"
 
         while [[ $# -gt 0 ]]; do
@@ -39,6 +40,14 @@ class AgentInstallScript
               BASE_URL="${1#*=}"
               shift
               ;;
+            --channel)
+              AGENT_CHANNEL="$2"
+              shift 2
+              ;;
+            --channel=*)
+              AGENT_CHANNEL="${1#*=}"
+              shift
+              ;;
             --agent-version)
               AGENT_VERSION="$2"
               shift 2
@@ -57,6 +66,23 @@ class AgentInstallScript
         if [[ -z "$TOKEN" ]]; then
           echo "missing --token" >&2
           exit 1
+        fi
+
+        case "$AGENT_CHANNEL" in
+          stable|edge)
+            ;;
+          *)
+            echo "unsupported channel: $AGENT_CHANNEL" >&2
+            exit 1
+            ;;
+        esac
+
+        if [[ -z "$AGENT_VERSION" ]]; then
+          if [[ "$AGENT_CHANNEL" == "edge" ]]; then
+            AGENT_VERSION="$AGENT_EDGE_VERSION"
+          else
+            AGENT_VERSION="$AGENT_STABLE_VERSION"
+          fi
         fi
 
         OS_RAW="$(uname -s | tr [:upper:] [:lower:])"
@@ -157,9 +183,17 @@ class AgentInstallScript
         AGENT_URL="${DEVOPSELLENCE_AGENT_URL:-$BASE_URL/agent/download}"
         DOWNLOAD_URL="$AGENT_URL?os=$OS&arch=$ARCH"
         CHECKSUM_URL="$AGENT_CHECKSUM_URL"
+        if [[ "$AGENT_CHANNEL" != "stable" ]]; then
+          DOWNLOAD_URL="$DOWNLOAD_URL&channel=$AGENT_CHANNEL"
+          CHECKSUM_URL="$CHECKSUM_URL?channel=$AGENT_CHANNEL"
+        fi
         if [[ -n "$AGENT_VERSION" ]]; then
           DOWNLOAD_URL="$DOWNLOAD_URL&version=$AGENT_VERSION"
-          CHECKSUM_URL="$CHECKSUM_URL?version=$AGENT_VERSION"
+          if [[ "$CHECKSUM_URL" == *"?"* ]]; then
+            CHECKSUM_URL="$CHECKSUM_URL&version=$AGENT_VERSION"
+          else
+            CHECKSUM_URL="$CHECKSUM_URL?version=$AGENT_VERSION"
+          fi
         fi
         ARTIFACT_NAME="$OS-$ARCH"
         AGENT_BIN="/usr/local/bin/devopsellence-agent"

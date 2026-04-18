@@ -33,6 +33,8 @@ Everything else is optional convenience around that loop.
 
 The CLI is convenience. The control plane is convenience. Hosted workflows are convenience. Those pieces matter, but they are not the essence of the system. The essence is the contract between desired state and the agent that enforces it.
 
+The product should grow from a shared, fundamental core. The closer code is to that core, the more stable, explicit, and mode-independent it should be. The further a feature sits from the core, the more malleable it can become for solo workflows, hosted workflows, managed infrastructure, user interfaces, and policy choices.
+
 devopsellence also does not try to own the rest of the application stack. It does not come with a mandatory database, cache, message queue, logging backend, metrics backend, or analytics product. Users are free to integrate with existing hosted services such as PlanetScale, or run their own supporting services on infrastructure they control. A major goal is to make that choice easy rather than replace it with a devopsellence-specific answer.
 
 ## Assumptions
@@ -40,19 +42,22 @@ devopsellence also does not try to own the rest of the application stack. It doe
 - The VM is already the right unit of isolation for the target user.
 - Docker-level containerization is already a sufficient packaging format.
 - Most target applications are a small set of cooperating services, not a large microservice graph.
-- The common case is one application environment per machine, not many unrelated tenants packed onto one server.
+- A deployment target may choose one environment per machine, but that should be placement policy, not a hard limit in the runtime model.
 - Teams value debuggability and explicitness more than maximum infrastructure utilization.
 - Provider-native primitives are usually better than rebuilding weaker versions of them inside devopsellence.
 - Users should be able to adopt devopsellence incrementally, starting from just the agent.
 
-These assumptions are visible in the code today. The product has a solo path that reads desired state from local files and a shared path that fetches desired state and secrets from external systems. The CLI already has a solo workflow that builds desired state locally, resolves secrets from `.env`, and writes an override file to remote nodes over SSH. That split is not accidental; it reflects the intended shape of the product.
+These assumptions are visible in the code today. The product has a solo path that reads desired state from local files and a shared path that fetches desired state and secrets from external systems. Over time, those paths should converge on the same planning, validation, and desired-state core, with only ownership, persistence, transport, and policy changing by mode.
 
 ## Invariants
 
-- One VM runs services for one application environment only.
-- A node may run a web service, an optional worker, a release task, and runtime sidecars such as Envoy or `cloudflared`, but they all belong to the same application environment.
+- Solo and shared mode should behave the same at the deployment-model level. They differ in user, organization, project, ownership, persistence, and transport concerns.
+- The core runtime model should allow a node to carry one or more environment instances. Whether a deployment target permits that is placement policy.
+- A node may run multiple services for an environment, including multiple workers. Service identity should be explicit, not inferred from fixed names such as one `web` and one `worker`.
 - The agent is the mandatory runtime component. Everything else is replaceable.
 - Desired state is the control surface. The agent should not need imperative per-deploy shell choreography to know what to run.
+- Desired state should describe node runtime state in a mode-independent shape. Solo should be able to use that shape through local function calls and files; shared should be able to use that shape through service calls and remote stores.
+- Mode is management-plane vocabulary, not agent vocabulary. The agent runtime should not branch on solo or shared; it should be wired with concrete adapters for desired-state source, secret resolution, status reporting, registry auth, and related IO.
 - Solo mode uses the local filesystem as the source of truth for desired state and local status artifacts.
 - Shared mode should use simple external primitives: object storage for desired state, a secret manager for secrets, and a container registry for images.
 - The runtime data plane should stay decoupled from the management plane as much as possible.
@@ -60,7 +65,7 @@ These assumptions are visible in the code today. The product has a solo path tha
 - Local override must always remain possible. Operators need an escape hatch.
 - The system should remain understandable with ordinary tools: SSH, Docker, files, logs, JSON, and cloud CLIs.
 
-The "one app per VM" invariant matters most. devopsellence intentionally gives up multi-tenant packing so it can avoid an entire category of scheduler, quota, noisy-neighbor, and cross-tenant isolation complexity. A node is either unassigned or assigned to exactly one environment. That constraint is a feature.
+Placement policy matters, but it should sit outside the core runtime schema. A hosted shared environment may choose one environment per node for isolation, quota, and operational clarity. Solo mode may allow several small environments on one node. Both should use the same core concepts and validation rules wherever possible.
 
 ## Solo And Shared
 
@@ -87,12 +92,14 @@ In shared mode:
 
 Today the repo's main shared path is GCP-shaped: Cloud Storage, Secret Manager, Artifact Registry, and control-plane-issued identity. That is an implementation of the vision, not the vision itself. The deeper idea is that shared mode should still be made of understandable building blocks rather than a proprietary all-in-one substrate.
 
+The two modes should not grow separate deploy semantics. Eventually the shared deployment core should be Go code that can run in-process for CLI solo workflows and behind an RPC boundary for the Rails control plane. Rails should own product state, accounts, billing, authorization, and persistence. The Go core should own the shared deployment model: config interpretation, validation, planning, desired-state generation, placement constraints, ingress model, and status interpretation.
+
 ## Tradeoffs
 
 devopsellence makes deliberate tradeoffs.
 
 - It chooses simplicity over maximum bin-packing efficiency.
-- It chooses explicit machine boundaries over dense multi-tenancy.
+- It chooses explicit placement policy over hidden scheduling.
 - It chooses provider primitives over cross-provider abstraction layers.
 - It chooses reconciliation over ad hoc deploy scripts.
 - It chooses composability over lock-in to one blessed control surface.
@@ -100,7 +107,7 @@ devopsellence makes deliberate tradeoffs.
 
 This means devopsellence leaves some value on the table on purpose.
 
-- It will not squeeze the highest possible utilization out of a server fleet.
+- It will not squeeze the highest possible utilization out of a server fleet by default.
 - It will not hide the fact that you still own machines, images, files, and networks.
 - It will not erase differences between infrastructure providers.
 - It will not make operational complexity disappear for workloads that are inherently complex.
@@ -124,7 +131,7 @@ devopsellence is not a functions platform.
 devopsellence is not Kubernetes-lite.
 
 - It does not want pods as the core user abstraction.
-- It does not want to bin-pack many tenants onto one server.
+- It does not want hidden bin-packing to be required for the system to make sense.
 - It does not want to grow a cluster control plane, scheduler, CNI stack, or CRD ecosystem.
 
 devopsellence is not an abstraction layer over every IaaS API.
@@ -176,7 +183,8 @@ Good signs:
 - less hidden machinery;
 - clearer contracts;
 - better solo and shared composability;
-- stronger "one app per VM" boundaries;
+- clearer separation between core runtime model and placement policy;
+- fewer solo/shared semantic forks;
 - more leverage from existing infrastructure primitives;
 - easier debugging with normal tools.
 

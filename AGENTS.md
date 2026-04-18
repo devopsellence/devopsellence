@@ -1,90 +1,87 @@
-# AGENTS.md — devopsellence monorepo
+# AGENTS.md - devopsellence monorepo
 
 Always write "devopsellence" in all lowercase.
 
-## Repository layout
+## Layout
 
-This is a monorepo with three independent components plus a root-owned test harness:
-
-| Directory | Language | What it is |
+| Path | Stack | Purpose |
 |---|---|---|
-| `agent/` | Go | Single-node reconciliation daemon. Reads desired state from GCS, pulls images from Artifact Registry, manages local containers via Docker. |
-| `cli/` | Go | End-user CLI (`devopsellence` binary). Handles login, deploy, secrets, node management. Talks to the control plane API. |
-| `control-plane/` | Ruby (Rails 8) | Web app + API. Manages tenants, deployments, nodes, GCP resources. Uses PostgreSQL. |
-| `test/e2e/` | Ruby + shell | Hermetic monorepo integration lane spanning `agent/`, `cli/`, `control-plane/`, and in-tree `test/support/gcp-mock/`. |
-| `test/support/gcp-mock/` | Go | Local emulator for the subset of GCP APIs used by the hermetic e2e lane. |
+| `agent/` | Go | Single-node reconciler: desired state, Docker, Envoy, cloudflared, status. |
+| `cli/` | Go | `devopsellence` CLI: login, deploy, secrets, nodes, solo/shared workflows. |
+| `control-plane/` | Rails 8 | Web/API app: tenants, deployments, nodes, GCP/standalone resources. |
+| `test/e2e/` | Ruby + shell | Root-owned integration harness across agent, CLI, control plane, GCP mock. |
+| `test/support/gcp-mock/` | Go | Local emulator for GCP APIs used by hermetic e2e tests. |
 
-Each directory has its own `go.mod` / `Gemfile`, toolchain, tests, and CI. There is no shared build system — treat them as separate projects that happen to live together.
+Each component has its own toolchain, tests, and CI. No shared build system.
 
-## Toolchain
+## Commands
 
-All components use [mise](https://mise.jdx.dev) for tool versions and task running.
+Use `mise`.
 
-Root-level shortcuts (run from repo root):
-
-```
-mise run test:agent     # run agent tests
-mise run test:cli       # run CLI tests
-mise run test:cp        # run control plane tests
-mise run e2e-shared     # run hermetic shared-mode e2e
-mise run e2e-solo       # run hermetic solo-mode e2e
-mise run test:all       # run all tests
-mise run build:agent    # build agent
-mise run build:cli      # build CLI
-mise run fmt:agent      # format agent Go files
-```
-
-Per-component tasks (cd into the component first):
+From repo root:
 
 ```
-# agent/
-mise run build          # build all Go packages
-mise run test           # run tests
-mise run fmt            # format Go files
-mise run protoc         # generate protobuf Go code
-
-# cli/
-mise run build          # build CLI binary to bin/devopsellence
-mise run test           # run tests
-
-# control-plane/
-mise run test           # run tests (starts Postgres automatically)
-bin/dev                 # start dev server
+mise run test:agent
+mise run test:cli
+mise run test:cp
+mise run e2e-shared
+mise run e2e-solo
+mise run test:all
+mise run build:agent
+mise run build:cli
+mise run fmt:agent
 ```
 
-Local override files and machine-specific templates should stay out of this public monorepo.
+Per component:
 
-## Testing
+```
+cd agent && mise run build && mise run test && mise run fmt
+cd agent && mise run protoc
+cd cli && mise run build && mise run test
+cd control-plane && mise run test
+cd control-plane && bin/dev
+```
 
-- **agent/cli:** `mise run test` (Go tests, no external deps).
-- **control-plane:** `mise run test` (needs Postgres via Docker; mise handles startup). Uses Minitest with mocha (stubs/mocks) and webmock (HTTP interception) — both are required in `test/test_helper.rb`. Run a single file with `mise run test -- test/path/file_test.rb`. Never write tests for static pages with no business logic.
-- **e2e:** `mise run e2e-shared` or `mise run e2e-solo` from the repo root. They use in-tree `agent/`, `cli/`, and `test/support/gcp-mock/`.
+Control-plane tests start Postgres via mise. Single file:
 
-## Code structure
+```
+cd control-plane && mise run test -- test/path/file_test.rb
+```
 
-**agent/** — `cmd/devopsellence/` (entrypoint), `internal/` (all packages: engine, reconcile, envoy, gcp, auth, cloudflared, etc.), `proto/` (protobuf definitions).
+## Structure
 
-**cli/** — `cmd/devopsellence/` (entrypoint), `internal/` (packages: api, app, auth, docker, git, workflow, ui, etc.), `skills/` (OpenClaw skill).
-
-**control-plane/** — standard Rails layout: `app/{models,controllers,services,views,jobs}`, `config/`, `db/` (migrations), `test/`, `script/` (local operational scripts only).
-
-**test/e2e/** — root-owned hermetic integration lane: runner Dockerfile, runner wrapper, and the end-to-end smoke script.
-
-**test/support/gcp-mock/** — in-tree GCP emulator used by the hermetic e2e lane.
+- `agent/cmd/devopsellence/`: agent entrypoint.
+- `agent/internal/`: engine, reconcile, envoy, gcp, auth, cloudflared, etc.
+- `agent/proto/`: desired-state protobuf.
+- `cli/cmd/devopsellence/`: CLI entrypoint.
+- `cli/internal/`: api, app, auth, docker, git, workflow, ui, solo, etc.
+- `control-plane/app/`: Rails models, controllers, services, views, jobs.
+- `control-plane/script/`: local operational scripts only.
+- `.github/workflows/`: public CI/release workflows with path filters.
 
 ## Conventions
 
-- Go code uses `gofmt`. No linter config beyond that.
-- Rails code uses `.rubocop.yml` for style.
-- CI workflows live in `.github/workflows/` (root), with path filters per component.
-- Public GitHub Release workflows for agent/CLI live here; private publishing and deploy automation should live outside this repository.
+- Go: `gofmt`; no extra linter config.
+- Rails: `.rubocop.yml`.
+- Prefer Rails 8 solid stack, no-build CSS/JS, Tailwind, sqlite where appropriate.
+- Never test static pages with no business logic.
+- Keep local override files and machine-specific templates out of this repo.
 
-## Public Repo Boundary
+## Architecture
 
-- Keep this repo public-safe: source, tests, CI, and local development tasks.
-- Treat this repo as effectively public at all times; never add secrets, private identifiers, or operational data you would not publish on GitHub.
-- Keep private deploy infrastructure in a separate private repository outside this tree.
-- Keep private publishing and build/release/deploy automation outside this repository.
-- Keep maintainer-only live e2e flows outside this repository.
-- Keep prod deploy/apply, prod console/log/ssh, runtime-env secret sync, and CDN cache busting out of this public repo.
-- Do not add live credentials, cloud project IDs, or tenant-specific operational data to tracked files here.
+- Solo/shared deploy semantics should match. Differences: user/org/project management, ownership, persistence, transport, policy.
+- Shared core owns config interpretation, validation, planning, desired-state generation, ingress, placement constraints, status interpretation.
+- Prefer Go for reusable deployment core logic. CLI calls it in-process for solo; Rails should eventually call it through service/RPC.
+- Rails owns product state: accounts, authz, billing, hosted persistence, API surfaces.
+- Placement is policy, not schema. Shared may require one environment per node; solo may allow multiple environments per node.
+- Desired state is mode-independent node runtime state. A node may carry multiple environment instances; an environment may have multiple named services/workers.
+- Agent runtime must not know product modes like solo/shared. Wire concrete adapters for desired-state source, secret resolver, status sink, registry auth, etc.
+- Core: solid, explicit. Edges: more malleable.
+
+## Public Boundary
+
+This repo is public.
+
+- Keep source, tests, CI, and local dev tasks here.
+- Keep secrets, private identifiers, tenant data, live credentials, cloud project IDs out.
+- Keep private deploy infra, publishing, maintainer live e2e, prod apply/console/log/ssh, runtime-env secret sync, CDN cache busting out.

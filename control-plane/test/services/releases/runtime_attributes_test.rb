@@ -18,5 +18,24 @@ module Releases
 
       assert_equal "services must be valid JSON", error.message
     end
+
+    test "raises invalid payload when service kind is blank" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                kind: "   "
+              }
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "services.web.kind must be present", error.message
+    end
   end
 end

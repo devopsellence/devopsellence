@@ -80,6 +80,8 @@ module Releases
     def parse_service(value, field:)
       service = parse_hash(value, field:)
       kind = optional_service_string(service["kind"] || service[:kind])
+      raise InvalidPayload, "#{field}.kind must be present" if kind.blank?
+
       unless SERVICE_KINDS.include?(kind)
         raise InvalidPayload, "#{field}.kind must be one of #{SERVICE_KINDS.join(', ')}"
       end

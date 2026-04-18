@@ -64,8 +64,14 @@ cd control-plane && mise run test -- test/path/file_test.rb
 - Go: `gofmt`; no extra linter config.
 - Rails: `.rubocop.yml`.
 - Prefer Rails 8 solid stack, no-build CSS/JS, Tailwind, sqlite where appropriate.
+- Rails migrations: append-only. Once a migration is committed/pushed, do not edit it; add a new migration.
 - Never test static pages with no business logic.
 - Keep local override files and machine-specific templates out of this repo.
+
+## Review Handling
+
+- Explicit user product direction overrides reviewer suggestions.
+- If user says no legacy / no backward compat / clean slate, do not add backfills, shims, or compat code just to satisfy review comments; leave the thread open and note the rationale.
 
 ## Architecture
 

@@ -63,7 +63,7 @@ class CliInstallsController < ActionController::Base
       done
 
       if [[ -z "$CLI_VERSION" ]]; then
-        echo "missing --version (or set DEVOPSELLENCE_CLI_VERSION or DEVOPSELLENCE_CLI_STABLE_VERSION)" >&2
+        echo "missing --version (or use ?version=... or set DEVOPSELLENCE_CLI_VERSION or DEVOPSELLENCE_CLI_STABLE_VERSION)" >&2
         exit 1
       fi
 

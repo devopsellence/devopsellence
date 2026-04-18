@@ -81,6 +81,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_includes response.body, 'CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-}"'
     assert_includes response.body, "CLI_VERSION='v0.1.0-rc.1'"
+    assert_includes response.body, "missing --version (or use ?version=... or set DEVOPSELLENCE_CLI_VERSION or DEVOPSELLENCE_CLI_STABLE_VERSION)"
     assert_includes response.body, 'validate_version "$CLI_VERSION"'
   end
 

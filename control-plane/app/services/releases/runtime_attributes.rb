@@ -80,16 +80,14 @@ module Releases
     def parse_service(value, field:)
       service = parse_hash(value, field:)
       kind = optional_service_string(service["kind"] || service[:kind])
+      raise InvalidPayload, "#{field}.kind must be present" if kind.blank?
+
       unless SERVICE_KINDS.include?(kind)
         raise InvalidPayload, "#{field}.kind must be one of #{SERVICE_KINDS.join(', ')}"
       end
 
-      roles = parse_array(service["roles"] || service[:roles], field: :"#{field}.roles").map { |role| role.to_s.strip }.reject(&:blank?).uniq
-      raise InvalidPayload, "#{field}.roles must include at least one role" if roles.empty?
-
       normalized = {
         "kind" => kind,
-        "roles" => roles,
         "image" => optional_service_string(service["image"] || service[:image]),
         "entrypoint" => optional_service_string(service["entrypoint"] || service[:entrypoint]),
         "command" => optional_service_string(service["command"] || service[:command]),

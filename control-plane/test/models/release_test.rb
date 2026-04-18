@@ -7,8 +7,8 @@ class ReleaseTest < ActiveSupport::TestCase
     release = build_release(
       runtime_json: release_runtime_json(
         services: {
-          "admin" => web_service_runtime(roles: [ "admin" ]),
-          "public" => web_service_runtime(roles: [ "public" ])
+          "admin" => web_service_runtime,
+          "public" => web_service_runtime
         },
         ingress_service: nil
       )
@@ -22,8 +22,8 @@ class ReleaseTest < ActiveSupport::TestCase
     release = build_release(
       runtime_json: release_runtime_json(
         services: {
-          "admin" => web_service_runtime(roles: [ "admin" ]),
-          "web" => web_service_runtime(roles: [ "web" ])
+          "admin" => web_service_runtime,
+          "web" => web_service_runtime
         },
         ingress_service: nil
       )
@@ -49,6 +49,21 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_not release.valid?
     assert_includes release.errors[:runtime_json], "tasks.release.command must be a string"
     assert_includes release.errors[:runtime_json], "tasks.release.entrypoint must be a string"
+  end
+
+  test "blank kind does not contribute required labels and reports one kind error" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        services: {
+          "web" => web_service_runtime.merge("kind" => "")
+        }
+      )
+    )
+
+    assert_equal [], release.required_labels
+    assert_not release.valid?
+    kind_errors = release.errors[:runtime_json].grep(/\Aservices\.web\.kind /)
+    assert_equal [ "services.web.kind must be present" ], kind_errors
   end
 
   private

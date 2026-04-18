@@ -92,8 +92,8 @@ module Deployments
       release.service_names.each do |service_name|
         next if nodes.any? { |node| release.service_scheduled_on?(service_name, node) }
 
-        roles = release.service_roles_for(service_name)
-        raise SchedulingError, "at least one assigned node must match roles for service #{service_name}: #{roles.join(', ')}"
+        label = release.service_label_for(service_name)
+        raise SchedulingError, "at least one assigned node must match label #{label.inspect} for service #{service_name}"
       end
 
       if environment.direct_dns_ingress? && release.ingress_service_name.present?

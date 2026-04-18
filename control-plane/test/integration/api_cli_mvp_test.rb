@@ -1556,7 +1556,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     runtime = JSON.parse(release.runtime_json)
     assert_equal 80, runtime.dig("services", "web", "ports").first.fetch("port")
     assert_not runtime.fetch("services").key?("worker")
-    assert_equal false, release.requires_role?("worker")
+    assert_equal false, release.requires_label?("worker")
   end
 
   test "rejects release create without web runtime config" do

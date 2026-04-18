@@ -790,9 +790,8 @@ class E2E
       config.delete("release")
       config.delete("release_command")
       config["services"] ||= {}
-      config["services"]["web"] ||= { "kind" => "web", "roles" => [ "web" ] }
+      config["services"]["web"] ||= { "kind" => "web" }
       config["services"]["web"]["kind"] = "web"
-      config["services"]["web"]["roles"] = [ "web" ]
       config["services"]["web"]["ports"] = [ { "name" => "http", "port" => APP_PORT } ]
       config["services"]["web"]["healthcheck"] = { "path" => APP_HEALTH_PATH, "port" => APP_PORT }
       config["services"]["web"]["env"] ||= {}

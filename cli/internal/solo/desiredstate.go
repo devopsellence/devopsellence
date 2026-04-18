@@ -143,7 +143,7 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
-		if !shouldScheduleService(labels, service.Roles) {
+		if !shouldScheduleService(labels, service.Kind) {
 			continue
 		}
 		rendered, err := buildService(serviceName, service, imageTag, secrets)
@@ -239,11 +239,11 @@ func normalizedLabels(labels []string) []string {
 	return out
 }
 
-func shouldScheduleService(labels []string, roles []string) bool {
+func shouldScheduleService(labels []string, kind string) bool {
 	if labels == nil {
 		return true
 	}
-	return hasAnyRole(labels, roles)
+	return hasLabel(labels, kind)
 }
 
 func shouldScheduleIngress(labels []string, cfg *config.ProjectConfig) bool {
@@ -254,7 +254,7 @@ func shouldScheduleIngress(labels []string, cfg *config.ProjectConfig) bool {
 	if !ok {
 		return false
 	}
-	return shouldScheduleService(labels, service.Roles)
+	return shouldScheduleService(labels, service.Kind)
 }
 
 func shouldScheduleReleaseTask(labels []string, cfg *config.ProjectConfig) bool {
@@ -266,15 +266,14 @@ func shouldScheduleReleaseTask(labels []string, cfg *config.ProjectConfig) bool 
 	if !ok {
 		return false
 	}
-	return shouldScheduleService(labels, service.Roles)
+	return shouldScheduleService(labels, service.Kind)
 }
 
-func hasAnyRole(labels []string, roles []string) bool {
-	for _, role := range roles {
-		for _, label := range labels {
-			if strings.TrimSpace(label) == strings.TrimSpace(role) {
-				return true
-			}
+func hasLabel(labels []string, want string) bool {
+	want = strings.TrimSpace(want)
+	for _, label := range labels {
+		if strings.TrimSpace(label) == want {
+			return true
 		}
 	}
 	return false

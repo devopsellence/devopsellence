@@ -278,7 +278,6 @@ class SoloE2E
       "services" => {
         "web" => {
           "kind" => "web",
-          "roles" => ["web"],
           "command" => "/server",
           "ports" => [
             { "name" => "http", "port" => APP_PORT }

@@ -72,23 +72,24 @@ class Release < ApplicationRecord
     services_config.values.any? { |service| Array(service["volumes"]).any? }
   end
 
-  def required_roles
-    services_config.values.flat_map { |service| service_roles(service) }.uniq.sort
+  def required_labels
+    services_config.values.filter_map { |service| service_label(service).presence }.uniq.sort
   end
 
-  def requires_role?(label)
-    required_roles.include?(label.to_s.strip)
+  def requires_label?(label)
+    required_labels.include?(label.to_s.strip)
   end
 
-  def service_roles_for(name)
+  def service_label_for(name)
     service = services_config[name.to_s]
-    return [] if service.blank?
+    return nil if service.blank?
 
-    service_roles(service)
+    service_label(service)
   end
 
   def service_scheduled_on?(service_name, node)
-    node.labeled_any?(service_roles_for(service_name))
+    label = service_label_for(service_name)
+    label.present? && node.labeled?(label)
   end
 
   def ingress_service_name
@@ -106,7 +107,7 @@ class Release < ApplicationRecord
     environment = node.environment
     service_names.filter_map do |name|
       service = services_config[name]
-      next unless node.labeled_any?(service_roles(service))
+      next unless node.labeled?(service_label(service))
 
       service_payload(name, service, organization: node.organization, environment: environment)
     end
@@ -119,7 +120,7 @@ class Release < ApplicationRecord
     service_name = task["service"].to_s.strip
     service = services_config[service_name]
     return nil if service.blank?
-    return nil unless node.labeled_any?(service_roles(service))
+    return nil unless node.labeled?(service_label(service))
 
     task_payload(
       "release",
@@ -174,13 +175,13 @@ class Release < ApplicationRecord
     end
 
     kind = service_kind(service)
-    unless SERVICE_KINDS.include?(kind)
-      errors.add(:runtime_json, "services.#{name}.kind must be one of #{SERVICE_KINDS.join(', ')}")
+    if kind.blank?
+      errors.add(:runtime_json, "services.#{name}.kind must be present")
+      return
     end
 
-    roles = service_roles(service)
-    if roles.empty?
-      errors.add(:runtime_json, "services.#{name}.roles must include at least one role")
+    unless SERVICE_KINDS.include?(kind)
+      errors.add(:runtime_json, "services.#{name}.kind must be one of #{SERVICE_KINDS.join(', ')}")
     end
 
     if service["entrypoint"].present? && !service["entrypoint"].is_a?(String)
@@ -267,8 +268,8 @@ class Release < ApplicationRecord
     unless task["env"].nil? || task["env"].is_a?(Hash)
       errors.add(:runtime_json, "tasks.release.env must be an object")
     end
-    if service_roles(service).empty?
-      errors.add(:runtime_json, "tasks.release.service must reference a service with roles")
+    if service_kind(service).blank?
+      errors.add(:runtime_json, "tasks.release.service must reference a service with kind")
     end
   end
 
@@ -386,8 +387,8 @@ class Release < ApplicationRecord
     service["kind"].to_s.strip
   end
 
-  def service_roles(service)
-    Array(service["roles"]).filter_map { |role| role.to_s.strip.presence }
+  def service_label(service)
+    service_kind(service)
   end
 
   def shell_words(value)

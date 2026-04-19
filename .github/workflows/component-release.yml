@@ -197,27 +197,13 @@ jobs:
                 ;;
             esac
 
-            local tag_name="${version}"
-            local dist_dir="${workspace_dir}/${working_dir}/dist/${version}"
-            local upload_dir="${dist_dir}/release-assets"
-            local release_notes="devopsellence binary release for ${version} from ${source_ref} at ${target_sha}"
-            rm -rf "$upload_dir"
-            mkdir -p "$upload_dir"
-            cp "${dist_dir}/linux-amd64" "${upload_dir}/${asset_prefix}-linux-amd64"
-            cp "${dist_dir}/linux-arm64" "${upload_dir}/${asset_prefix}-linux-arm64"
-            cp "${dist_dir}/darwin-amd64" "${upload_dir}/${asset_prefix}-darwin-amd64"
-            cp "${dist_dir}/darwin-arm64" "${upload_dir}/${asset_prefix}-darwin-arm64"
-            cp "${dist_dir}/SHA256SUMS" "${upload_dir}/${asset_prefix}-SHA256SUMS"
-            local release_assets=(
-              "${upload_dir}/${asset_prefix}-linux-amd64"
-              "${upload_dir}/${asset_prefix}-linux-arm64"
-              "${upload_dir}/${asset_prefix}-darwin-amd64"
-              "${upload_dir}/${asset_prefix}-darwin-arm64"
-              "${upload_dir}/${asset_prefix}-SHA256SUMS"
-            )
+	            local tag_name="${version}"
+	            local dist_dir="${workspace_dir}/${working_dir}/dist/${version}"
+	            local upload_dir="${dist_dir}/release-assets"
+	            local release_notes="devopsellence binary release for ${version} from ${source_ref} at ${target_sha}"
 
-            if git rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
-              tag_target="$(git rev-list -n 1 "$tag_name")"
+	            if git rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
+	              tag_target="$(git rev-list -n 1 "$tag_name")"
               if [[ "$tag_target" != "$target_sha" ]]; then
                 echo "tag already exists at a different commit: $tag_name ($tag_target != $target_sha)" >&2
                 exit 1
@@ -227,11 +213,26 @@ jobs:
             DEVOPSELLENCE_RELEASE_VERSION="$version" \
               DEVOPSELLENCE_RELEASE_COMMIT="$short_sha" \
               DEVOPSELLENCE_RELEASE_BUILD_TIME="$build_time" \
-              DEVOPSELLENCE_RELEASE_DIST_DIR="$dist_dir" \
-              mise run "release:build:${component}"
+	              DEVOPSELLENCE_RELEASE_DIST_DIR="$dist_dir" \
+	              mise run "release:build:${component}"
 
-            if gh release view "$tag_name" >/dev/null 2>&1; then
-              gh release edit "$tag_name" \
+	            rm -rf "$upload_dir"
+	            mkdir -p "$upload_dir"
+	            cp "${dist_dir}/linux-amd64" "${upload_dir}/${asset_prefix}-linux-amd64"
+	            cp "${dist_dir}/linux-arm64" "${upload_dir}/${asset_prefix}-linux-arm64"
+	            cp "${dist_dir}/darwin-amd64" "${upload_dir}/${asset_prefix}-darwin-amd64"
+	            cp "${dist_dir}/darwin-arm64" "${upload_dir}/${asset_prefix}-darwin-arm64"
+	            cp "${dist_dir}/SHA256SUMS" "${upload_dir}/${asset_prefix}-SHA256SUMS"
+	            local release_assets=(
+	              "${upload_dir}/${asset_prefix}-linux-amd64"
+	              "${upload_dir}/${asset_prefix}-linux-arm64"
+	              "${upload_dir}/${asset_prefix}-darwin-amd64"
+	              "${upload_dir}/${asset_prefix}-darwin-arm64"
+	              "${upload_dir}/${asset_prefix}-SHA256SUMS"
+	            )
+
+	            if gh release view "$tag_name" >/dev/null 2>&1; then
+	              gh release edit "$tag_name" \
                 --title "devopsellence ${version}" \
                 --notes "$release_notes" \
                 "${prerelease_flag[@]}"

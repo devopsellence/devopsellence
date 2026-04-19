@@ -49,6 +49,9 @@ class SoloE2E
   APP_PROBE_PATH = "/e2e"
   SECRET_VALUE_NAME = "E2E_SECRET"
   PLAIN_ENV_NAME = "E2E_PLAIN_ENV"
+  RELEASE_VERSION_PATTERN = /\Av[0-9A-Za-z][0-9A-Za-z._-]*\z/
+  RELEASE_TARGET_PATTERN = /\A[a-z0-9][a-z0-9_-]*\z/
+  RELEASE_CHECKSUM_NAME = "SHA256SUMS"
   def initialize
     @run_id = ENV.fetch("DEVOPSELLENCE_E2E_RUN_ID", "").to_s.strip
     @run_id = "#{Time.now.utc.strftime('%Y%m%d%H%M%S')}-#{SecureRandom.hex(3)}" if @run_id.empty?
@@ -715,12 +718,12 @@ class SoloE2E
 
     case req.path
     when "/agent/download"
-      os = req.query.fetch("os")
-      arch = req.query.fetch("arch")
+      os = validate_artifact_component!("os", req.query.fetch("os"), RELEASE_TARGET_PATTERN)
+      arch = validate_artifact_component!("arch", req.query.fetch("arch"), RELEASE_TARGET_PATTERN)
       artifact = release_artifact_path(@agent_root, version, "#{os}-#{arch}")
       serve_artifact!(res, artifact, "application/octet-stream")
     when "/agent/checksums"
-      checksums = release_artifact_path(@agent_root, version, "SHA256SUMS")
+      checksums = release_artifact_path(@agent_root, version, RELEASE_CHECKSUM_NAME)
       serve_artifact!(res, checksums, "text/plain; charset=utf-8")
     else
       res.status = 404
@@ -729,16 +732,36 @@ class SoloE2E
   rescue KeyError => e
     res.status = 400
     res.body = "missing query param: #{e.message}\n"
+  rescue ArgumentError => e
+    res.status = 400
+    res.body = "#{e.message}\n"
   rescue StandardError => e
     res.status = 500
     res.body = "#{e.class}: #{e.message}\n"
   end
 
   def release_artifact_path(root, version, name)
-    path = Pathname(root).join("dist", version, name)
+    validated_version = validate_artifact_component!("version", version, RELEASE_VERSION_PATTERN)
+    validated_name =
+      if name == RELEASE_CHECKSUM_NAME
+        name
+      else
+        validate_artifact_component!("target", name, RELEASE_TARGET_PATTERN)
+      end
+
+    dist_root = Pathname(root).join("dist").expand_path
+    path = dist_root.join(validated_version, validated_name).expand_path
+    raise ArgumentError, "invalid artifact path" unless path.to_s.start_with?(dist_root.to_s + File::SEPARATOR)
     raise "artifact not found: #{path}" unless path.file?
 
     path
+  end
+
+  def validate_artifact_component!(name, value, pattern)
+    value = value.to_s.strip
+    raise ArgumentError, "invalid #{name}" unless pattern.match?(value)
+
+    value
   end
 
   def serve_artifact!(res, path, content_type)

@@ -1621,7 +1621,7 @@ else
     arm64|aarch64) ARCH=arm64 ;;
     *) echo "unsupported architecture: $ARCH_RAW" >&2; exit 1 ;;
   esac
-  ARTIFACT_NAME="$OS-$ARCH"
+  ARTIFACT_NAME="agent-$OS-$ARCH"
   DOWNLOAD_URL="$BASE_URL/agent/download?os=$OS&arch=$ARCH"
   CHECKSUM_URL="$BASE_URL/agent/checksums"
   if [ -n "$AGENT_VERSION" ]; then

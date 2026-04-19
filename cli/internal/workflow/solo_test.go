@@ -166,6 +166,7 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 		`--auth-state-path="/var/lib/devopsellence/auth.json"`,
 		`--desired-state-override-path="/var/lib/devopsellence/desired-state-override.json"`,
 		"AGENT_BIN=/usr/local/bin/devopsellence-agent",
+		`ARTIFACT_NAME="agent-$OS-$ARCH"`,
 		"BASE_URL='https://example.test'",
 		"$BASE_URL/agent/download",
 		"$BASE_URL/agent/checksums",

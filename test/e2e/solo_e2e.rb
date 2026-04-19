@@ -49,6 +49,7 @@ class SoloE2E
   APP_PROBE_PATH = "/e2e"
   SECRET_VALUE_NAME = "E2E_SECRET"
   PLAIN_ENV_NAME = "E2E_PLAIN_ENV"
+  AGENT_RELEASE_PREFIX = "agent"
   RELEASE_VERSION_PATTERN = /\Av[0-9A-Za-z][0-9A-Za-z._-]*\z/
   RELEASE_TARGET_PATTERN = /\A[a-z0-9][a-z0-9_-]*\z/
   RELEASE_CHECKSUM_NAME = "SHA256SUMS"
@@ -206,7 +207,7 @@ import shlex
 import subprocess
 import sys
 
-argv = shlex.split(os.environ["EXEC_START"])
+argv = [arg.replace("%%", "%") for arg in shlex.split(os.environ["EXEC_START"])]
 if not argv:
     sys.exit("failed to parse ExecStart")
 
@@ -752,7 +753,7 @@ PY
       serve_artifact!(res, artifact, "application/octet-stream")
     when "/agent/checksums"
       checksums = release_artifact_path(@agent_root, version, RELEASE_CHECKSUM_NAME)
-      serve_artifact!(res, checksums, "text/plain; charset=utf-8")
+      serve_prefixed_checksums!(res, checksums, AGENT_RELEASE_PREFIX)
     else
       res.status = 404
       res.body = "not found\n"
@@ -796,6 +797,19 @@ PY
     res.status = 200
     res["Content-Type"] = content_type
     res.body = File.binread(path)
+  end
+
+  def serve_prefixed_checksums!(res, path, prefix)
+    body = File.read(path).lines.map do |line|
+      checksum, filename = line.strip.split(/\s+/, 2)
+      next line if checksum.to_s.empty? || filename.to_s.empty?
+
+      "#{checksum}  #{prefix}-#{filename}\n"
+    end.join
+
+    res.status = 200
+    res["Content-Type"] = "text/plain; charset=utf-8"
+    res.body = body
   end
 
   def docker_label_args

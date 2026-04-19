@@ -23,7 +23,7 @@ class AgentDownloadsTest < ActionDispatch::IntegrationTest
   end
 
   test "returns service unavailable when no version is requested and no stable version is configured" do
-    with_env("DEVOPSELLENCE_AGENT_STABLE_VERSION" => nil) do
+    with_env("DEVOPSELLENCE_STABLE_VERSION" => nil, "DEVOPSELLENCE_AGENT_STABLE_VERSION" => nil) do
       get agent_download_path
     end
 
@@ -32,14 +32,14 @@ class AgentDownloadsTest < ActionDispatch::IntegrationTest
   end
 
   test "redirects explicit version to the configured release asset url" do
-    fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://github.com/devopsellence/devopsellence/releases/download/agent-v0.1.0/linux-arm64", filename: "devopsellence-agent"))
+    fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://github.com/devopsellence/devopsellence/releases/download/v0.1.0/agent-linux-arm64", filename: "devopsellence-agent"))
 
     with_agent_release_fetcher(fetcher) do
       get agent_download_path, params: { version: "v0.1.0", os: "linux", arch: "arm64" }
     end
 
     assert_response :redirect
-    assert_equal "https://github.com/devopsellence/devopsellence/releases/download/agent-v0.1.0/linux-arm64", response.location
+    assert_equal "https://github.com/devopsellence/devopsellence/releases/download/v0.1.0/agent-linux-arm64", response.location
     assert_equal [{ version: "v0.1.0", os: "linux", arch: "arm64" }], fetcher.calls
     assert_includes response.headers["Cache-Control"], "public"
     assert_includes response.headers["Cache-Control"], "max-age=31536000"
@@ -49,7 +49,7 @@ class AgentDownloadsTest < ActionDispatch::IntegrationTest
   test "redirects unversioned requests to the stable version without downloading" do
     fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "devopsellence-agent"))
 
-    with_env("DEVOPSELLENCE_AGENT_STABLE_VERSION" => "v1.2.3") do
+    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3", "DEVOPSELLENCE_AGENT_STABLE_VERSION" => nil) do
       with_agent_release_fetcher(fetcher) do
         get agent_download_path
       end
@@ -57,6 +57,20 @@ class AgentDownloadsTest < ActionDispatch::IntegrationTest
 
     assert_response :redirect
     assert_equal "http://www.example.com/agent/download?version=v1.2.3", response.location
+    assert_empty fetcher.calls
+  end
+
+  test "component-specific stable version overrides shared stable version" do
+    fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "devopsellence-agent"))
+
+    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3", "DEVOPSELLENCE_AGENT_STABLE_VERSION" => "v1.2.4") do
+      with_agent_release_fetcher(fetcher) do
+        get agent_download_path
+      end
+    end
+
+    assert_response :redirect
+    assert_equal "http://www.example.com/agent/download?version=v1.2.4", response.location
     assert_empty fetcher.calls
   end
 

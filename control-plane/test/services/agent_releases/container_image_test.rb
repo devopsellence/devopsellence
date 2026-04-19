@@ -7,7 +7,7 @@ class AgentReleasesContainerImageTest < ActiveSupport::TestCase
     with_env(
       "DEVOPSELLENCE_AGENT_CONTAINER_IMAGE" => "ghcr.io/devopsellence/agent:v1.2.3",
       "DEVOPSELLENCE_AGENT_CONTAINER_REPOSITORY" => "us-east1-docker.pkg.dev/devopsellence/agents/devopsellence-agent",
-      "DEVOPSELLENCE_AGENT_STABLE_VERSION" => "v9.9.9"
+      "DEVOPSELLENCE_STABLE_VERSION" => "v9.9.9"
     ) do
       assert_equal(
         {
@@ -23,7 +23,7 @@ class AgentReleasesContainerImageTest < ActiveSupport::TestCase
     with_env(
       "DEVOPSELLENCE_AGENT_CONTAINER_IMAGE" => nil,
       "DEVOPSELLENCE_AGENT_CONTAINER_REPOSITORY" => "us-east1-docker.pkg.dev/devopsellence/agents/devopsellence-agent",
-      "DEVOPSELLENCE_AGENT_STABLE_VERSION" => "v1.2.3"
+      "DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3"
     ) do
       assert_equal(
         {
@@ -39,6 +39,7 @@ class AgentReleasesContainerImageTest < ActiveSupport::TestCase
     with_env(
       "DEVOPSELLENCE_AGENT_CONTAINER_IMAGE" => nil,
       "DEVOPSELLENCE_AGENT_CONTAINER_REPOSITORY" => nil,
+      "DEVOPSELLENCE_STABLE_VERSION" => nil,
       "DEVOPSELLENCE_AGENT_STABLE_VERSION" => nil
     ) do
       assert_nil AgentReleases::ContainerImage.metadata

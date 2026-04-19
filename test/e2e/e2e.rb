@@ -382,19 +382,19 @@ class E2E
     def assert_release_downloads!
       assert_artifact_redirect!(
         "/cli/download?version=#{@release_version}&os=linux&arch=amd64",
-        "https://github.com/devopsellence/devopsellence/releases/download/cli-#{@release_version}/linux-amd64"
+        "https://github.com/devopsellence/devopsellence/releases/download/#{@release_version}/cli-linux-amd64"
       )
       assert_artifact_redirect!(
         "/agent/download?version=#{@release_version}&os=linux&arch=amd64",
-        "https://github.com/devopsellence/devopsellence/releases/download/agent-#{@release_version}/linux-amd64"
+        "https://github.com/devopsellence/devopsellence/releases/download/#{@release_version}/agent-linux-amd64"
       )
       assert_artifact_redirect!(
         "/cli/checksums?version=#{@release_version}",
-        "https://github.com/devopsellence/devopsellence/releases/download/cli-#{@release_version}/SHA256SUMS"
+        "https://github.com/devopsellence/devopsellence/releases/download/#{@release_version}/cli-SHA256SUMS"
       )
       assert_artifact_redirect!(
         "/agent/checksums?version=#{@release_version}",
-        "https://github.com/devopsellence/devopsellence/releases/download/agent-#{@release_version}/SHA256SUMS"
+        "https://github.com/devopsellence/devopsellence/releases/download/#{@release_version}/agent-SHA256SUMS"
       )
     end
 
@@ -914,8 +914,7 @@ class E2E
 
     def release_env
       {
-        "DEVOPSELLENCE_AGENT_STABLE_VERSION" => @release_version,
-        "DEVOPSELLENCE_CLI_STABLE_VERSION" => @release_version
+        "DEVOPSELLENCE_STABLE_VERSION" => @release_version
       }
     end
 

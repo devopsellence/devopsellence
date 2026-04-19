@@ -13,6 +13,7 @@ import (
 	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/solo"
+	cliversion "github.com/devopsellence/cli/internal/version"
 )
 
 func TestSoloImageTagSlugifiesProjectName(t *testing.T) {
@@ -179,9 +180,10 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{
 		"--mode=solo",
-		"--auth-state-path=/var/lib/devopsellence/auth.json",
-		"--desired-state-override-path=/var/lib/devopsellence/desired-state-override.json",
+		`--auth-state-path="/var/lib/devopsellence/auth.json"`,
+		`--desired-state-override-path="/var/lib/devopsellence/desired-state-override.json"`,
 		"AGENT_BIN=/usr/local/bin/devopsellence-agent",
+		`ARTIFACT_NAME="agent-$OS-$ARCH"`,
 		"BASE_URL='https://example.test'",
 		"$BASE_URL/agent/download",
 		"$BASE_URL/agent/checksums",
@@ -189,6 +191,83 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q", want)
 		}
+	}
+}
+
+func TestSoloAgentInstallScriptUsesConfiguredStateDir(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{
+		StateDir: "/tmp/devopsellence-test-state",
+		BaseURL:  "https://example.test",
+	})
+
+	for _, want := range []string{
+		"STATE_DIR='/tmp/devopsellence-test-state'",
+		`--auth-state-path="/tmp/devopsellence-test-state/auth.json"`,
+		`--desired-state-override-path="/tmp/devopsellence-test-state/desired-state-override.json"`,
+		`--envoy-bootstrap-path="/tmp/devopsellence-test-state/envoy/envoy.yaml"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestSoloAgentInstallScriptQuotesSystemdExecStartPaths(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{
+		StateDir: `/tmp/devopsellence state/"quoted"%value`,
+		BaseURL:  "https://example.test",
+	})
+
+	for _, want := range []string{
+		`--auth-state-path="/tmp/devopsellence state/\"quoted\"%%value/auth.json"`,
+		`--desired-state-override-path="/tmp/devopsellence state/\"quoted\"%%value/desired-state-override.json"`,
+		`--envoy-bootstrap-path="/tmp/devopsellence state/\"quoted\"%%value/envoy/envoy.yaml"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestSoloAgentInstallScriptPinsReleasedAgentVersionWhenProvided(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{
+		BaseURL:      "https://example.test",
+		AgentVersion: "v0.1.1",
+	})
+
+	for _, want := range []string{
+		`AGENT_VERSION='v0.1.1'`,
+		`DOWNLOAD_URL="$DOWNLOAD_URL&version=$AGENT_VERSION"`,
+		`CHECKSUM_URL="$CHECKSUM_URL?version=$AGENT_VERSION"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestReleasedAgentVersionForInstall(t *testing.T) {
+	original := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = original })
+
+	cliversion.Version = "v0.1.1"
+	if got := releasedAgentVersionForInstall(); got != "v0.1.1" {
+		t.Fatalf("releasedAgentVersionForInstall() = %q, want v0.1.1", got)
+	}
+
+	cliversion.Version = "feature-branch-abc1234"
+	if got := releasedAgentVersionForInstall(); got != "feature-branch-abc1234" {
+		t.Fatalf("releasedAgentVersionForInstall() = %q, want prerelease tag", got)
+	}
+
+	cliversion.Version = "dev"
+	if got := releasedAgentVersionForInstall(); got != "" {
+		t.Fatalf("releasedAgentVersionForInstall() = %q, want empty for dev build", got)
+	}
+
+	cliversion.Version = "bad version?"
+	if got := releasedAgentVersionForInstall(); got != "" {
+		t.Fatalf("releasedAgentVersionForInstall() = %q, want empty for unsafe version", got)
 	}
 }
 

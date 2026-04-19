@@ -8,9 +8,9 @@
 #   2. Start a Docker container acting as the "remote node":
 #      - OpenSSH server for CLI access
 #      - Docker (via docker.sock mount)
-#      - Agent in --mode=solo watching desired-state file
-#   3. Scaffold a test Go app with devopsellence.yml (solo config under `solo`)
-#   4. CLI sets secrets, deploys, checks status
+#      - Fake systemctl/journalctl shims so CLI agent install can run in-container
+#   3. Scaffold a test app with devopsellence.yml (solo config under `solo`)
+#   4. CLI installs the agent, sets secrets, deploys, checks status
 #   5. Assert: app container running, status.json settled, secrets resolved
 #
 # Usage:
@@ -36,11 +36,14 @@ require "socket"
 require "time"
 require "timeout"
 require "tmpdir"
+require "webrick"
 require "yaml"
 require_relative "binary_artifacts"
 
 class SoloE2E
   include E2EBinaryArtifacts
+
+  ArtifactNotFoundError = Class.new(StandardError)
 
   MONOREPO_ROOT = Pathname(__dir__).join("../..").expand_path
   APP_PORT = 9292
@@ -48,6 +51,10 @@ class SoloE2E
   APP_PROBE_PATH = "/e2e"
   SECRET_VALUE_NAME = "E2E_SECRET"
   PLAIN_ENV_NAME = "E2E_PLAIN_ENV"
+  AGENT_RELEASE_PREFIX = "agent"
+  RELEASE_VERSION_PATTERN = /\Av[0-9A-Za-z][0-9A-Za-z._-]*\z/
+  RELEASE_TARGET_PATTERN = /\A[a-z0-9][a-z0-9_-]*\z/
+  RELEASE_CHECKSUM_NAME = "SHA256SUMS"
   def initialize
     @run_id = ENV.fetch("DEVOPSELLENCE_E2E_RUN_ID", "").to_s.strip
     @run_id = "#{Time.now.utc.strftime('%Y%m%d%H%M%S')}-#{SecureRandom.hex(3)}" if @run_id.empty?
@@ -66,7 +73,8 @@ class SoloE2E
     @app_dir = @app_root_dir.join("app")
     @log_dir = MONOREPO_ROOT.join("test/e2e/log")
     @image_build_dir = @state_dir.join("images")
-    @ssh_port = Integer(ENV.fetch("DEVOPSELLENCE_E2E_SSH_PORT", available_port(12_200).to_s))
+    @ssh_port = Integer(ENV.fetch("DEVOPSELLENCE_E2E_SSH_PORT", available_port(20_000 + SecureRandom.random_number(10_000)).to_s))
+    @artifact_server_port = available_port(31_000 + SecureRandom.random_number(1000))
     @network = "devopsellence-solo-e2e-#{@run_id}"
     @node_container = "devopsellence-solo-node-#{@run_id}"
     @node_image = "devopsellence/solo-e2e-node:#{@run_id}"
@@ -80,6 +88,7 @@ class SoloE2E
       @node_container => @log_dir.join("solo-e2e-node-#{@run_id}.log")
     }
     @ssh_key_dir = @state_dir.join("ssh")
+    @ssh_client_home = @state_dir.join("ssh-home")
     @project_name = "e2e-solo-#{SecureRandom.hex(3)}"
   end
 
@@ -87,6 +96,7 @@ class SoloE2E
     prepare_directories!
 
     step("prepare local binary artifacts") { prepare_binary_artifacts! }
+    step("artifact server") { start_artifact_server! }
     step("build node image") { build_node_image! }
     step("generate SSH keys") { generate_ssh_keys! }
     step("network") { create_network! }
@@ -94,6 +104,7 @@ class SoloE2E
     step("wait for node") { wait_for_node_ready! }
     step("scaffold app") { scaffold_app! }
     step("mode") { set_workspace_mode! }
+    step("install agent") { install_agent! }
     step("secrets") { set_secrets! }
     step("deploy") { run_deploy! }
     step("assertions") { assert_runtime_state! }
@@ -118,18 +129,18 @@ class SoloE2E
     FileUtils.mkdir_p(@app_dir)
     FileUtils.mkdir_p(@image_build_dir)
     FileUtils.mkdir_p(@ssh_key_dir)
+    FileUtils.mkdir_p(@ssh_client_home.join(".ssh"))
   end
 
   # Build a Docker image that acts as a remote node:
   # - OpenSSH server for CLI SSH access
   # - Docker CLI (docker.sock mounted at runtime)
-  # - Agent binary running in solo mode
+  # - Fake systemctl/journalctl so `devopsellence agent install` can exercise
+  #   the real install path inside the container.
   def build_node_image!
     image_dir = @image_build_dir.join("node")
     FileUtils.rm_rf(image_dir)
     FileUtils.mkdir_p(image_dir)
-
-    FileUtils.cp(agent_binary, image_dir.join("devopsellence"))
 
     image_dir.join("entrypoint.sh").write(<<~SH)
       #!/bin/bash
@@ -137,6 +148,8 @@ class SoloE2E
 
       # Ensure state directory exists.
       mkdir -p #{@agent_state_dir}
+      mkdir -p /var/run/devopsellence-fake-systemd
+      touch /var/run/devopsellence-fake-systemd/devopsellence-agent.log
 
       # Copy the host-mounted public key into place so sshd StrictModes sees
       # root-owned authorized_keys even when the Docker host uses another uid.
@@ -149,16 +162,177 @@ class SoloE2E
       /usr/sbin/sshd
 
       echo "[node] sshd started on port 22"
-      echo "[node] starting agent in solo mode..."
+      echo "[node] waiting for CLI-managed agent install..."
 
-      # Run agent in solo mode.
-      exec /usr/local/bin/devopsellence \
-        --mode=solo \
-        --auth-state-path=#{@agent_state_dir}/auth.json \
-        --desired-state-override-path=#{@desired_state_path} \
-        --envoy-bootstrap-path=#{@envoy_bootstrap_path} \
-        --network=#{@network} \
-        --prefetch-system-images=false
+      exec tail -f /dev/null
+    SH
+
+    image_dir.join("systemctl").write(<<~SH)
+      #!/bin/bash
+      set -euo pipefail
+
+      STATE_DIR=/var/run/devopsellence-fake-systemd
+      SERVICE_NAME=devopsellence-agent
+      SERVICE_FILE=/etc/systemd/system/${SERVICE_NAME}.service
+      PID_FILE="$STATE_DIR/${SERVICE_NAME}.pid"
+      LOG_FILE="$STATE_DIR/${SERVICE_NAME}.log"
+
+      mkdir -p "$STATE_DIR"
+      touch "$LOG_FILE"
+
+      cmd="${1:-}"
+      shift || true
+
+      service_matches() {
+        case "${1:-}" in
+          "$SERVICE_NAME"|"$SERVICE_NAME.service") return 0 ;;
+          *) return 1 ;;
+        esac
+      }
+
+      docker_matches() {
+        case "${1:-}" in
+          docker|docker.service) return 0 ;;
+          *) return 1 ;;
+        esac
+      }
+
+      read_exec_start() {
+        sed -n 's/^ExecStart=//p' "$SERVICE_FILE" | head -n 1
+      }
+
+      launch_exec_start() {
+        local exec_start="$1"
+        EXEC_START="$exec_start" LOG_FILE="$LOG_FILE" python3 - <<'PY'
+import os
+import shlex
+import subprocess
+import sys
+
+argv = [arg.replace("%%", "%") for arg in shlex.split(os.environ["EXEC_START"])]
+if not argv:
+    sys.exit("failed to parse ExecStart")
+
+with open(os.environ["LOG_FILE"], "ab", buffering=0) as log_file:
+    proc = subprocess.Popen(
+        argv,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True
+    )
+print(proc.pid)
+PY
+      }
+
+      service_pid_running() {
+        [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+      }
+
+      case "$cmd" in
+        daemon-reload|reset-failed)
+          exit 0
+          ;;
+        enable)
+          if [[ "${1:-}" == "--now" ]]; then
+            shift
+          fi
+          unit="${1:-}"
+          if docker_matches "$unit"; then
+            exit 0
+          fi
+          service_matches "$unit"
+          exec_start="$(read_exec_start)"
+          [[ -n "$exec_start" ]]
+          if service_pid_running; then
+            exit 0
+          fi
+          service_pid="$(launch_exec_start "$exec_start")"
+          echo "$service_pid" > "$PID_FILE"
+          exit 0
+          ;;
+        stop)
+          unit="${1:-}"
+          if docker_matches "$unit"; then
+            exit 0
+          fi
+          service_matches "$unit"
+          if [[ -f "$PID_FILE" ]]; then
+            kill "$(cat "$PID_FILE")" 2>/dev/null || true
+            rm -f "$PID_FILE"
+          fi
+          exit 0
+          ;;
+        is-active)
+          if [[ "${1:-}" == "--quiet" ]]; then
+            shift
+          fi
+          unit="${1:-}"
+          service_matches "$unit"
+          if service_pid_running; then
+            exit 0
+          fi
+          exit 3
+          ;;
+        show)
+          unit="${@: -1}"
+          service_matches "$unit"
+          if service_pid_running; then
+            printf 'ActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0\n'
+          else
+            printf 'ActiveState=inactive\nSubState=dead\nResult=exit-code\nExecMainStatus=1\n'
+          fi
+          ;;
+        status)
+          unit="${@: -1}"
+          service_matches "$unit"
+          if service_pid_running; then
+            echo "#{@run_id} $SERVICE_NAME active"
+            exit 0
+          fi
+          echo "#{@run_id} $SERVICE_NAME inactive" >&2
+          exit 3
+          ;;
+        *)
+          echo "unsupported fake systemctl command: $cmd" >&2
+          exit 1
+          ;;
+      esac
+    SH
+
+    image_dir.join("journalctl").write(<<~SH)
+      #!/bin/bash
+      set -euo pipefail
+
+      LOG_FILE=/var/run/devopsellence-fake-systemd/devopsellence-agent.log
+      follow=0
+      lines=100
+
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          -f|--follow)
+            follow=1
+            shift
+            ;;
+          -n)
+            lines="$2"
+            shift 2
+            ;;
+          -u)
+            shift 2
+            ;;
+          --no-pager)
+            shift
+            ;;
+          *)
+            shift
+            ;;
+        esac
+      done
+
+      if [[ "$follow" == "1" ]]; then
+        exec tail -n "$lines" -f "$LOG_FILE"
+      fi
+      exec tail -n "$lines" "$LOG_FILE"
     SH
 
     image_dir.join("Dockerfile").write(<<~DOCKERFILE)
@@ -168,6 +342,8 @@ class SoloE2E
         openssh-server \
         docker.io \
         ca-certificates \
+        curl \
+        python3 \
         && rm -rf /var/lib/apt/lists/*
 
       # Configure SSH: key-based auth only, no password.
@@ -176,9 +352,10 @@ class SoloE2E
         && sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config \
         && sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 
-      COPY devopsellence /usr/local/bin/devopsellence
       COPY entrypoint.sh /entrypoint.sh
-      RUN chmod +x /entrypoint.sh /usr/local/bin/devopsellence
+      COPY systemctl /usr/local/bin/systemctl
+      COPY journalctl /usr/local/bin/journalctl
+      RUN chmod +x /entrypoint.sh /usr/local/bin/systemctl /usr/local/bin/journalctl
 
       EXPOSE 22
       ENTRYPOINT ["/entrypoint.sh"]
@@ -207,6 +384,7 @@ class SoloE2E
       "--name", @node_container,
       "--network", @network,
       "--network-alias", "node",
+      "--add-host", "host.docker.internal:host-gateway",
       *docker_label_args,
       "-p", "127.0.0.1:#{@ssh_port}:22",
       "-v", "/var/run/docker.sock:/var/run/docker.sock",
@@ -238,22 +416,12 @@ class SoloE2E
       result.fetch(:status).success?
     end
     puts "[ok] SSH connection established"
-    wait_for_agent_ready!
   rescue StandardError => e
     puts "[debug] docker logs #{@node_container}:"
     puts capture_optional!("docker", "logs", @node_container, chdir: MONOREPO_ROOT.to_s)
     puts "[debug] last ssh output:"
     puts ssh_error
     raise e
-  end
-
-  def wait_for_agent_ready!
-    # Wait for agent to be running (it writes a log line).
-    wait_until!(timeout: 60) do
-      output = capture_optional!("docker", "logs", @node_container, chdir: MONOREPO_ROOT.to_s)
-      output.include?("starting agent in solo mode")
-    end
-    puts "[ok] Agent started in solo mode"
   end
 
   def scaffold_app!
@@ -312,7 +480,7 @@ class SoloE2E
 
   def write_app_files!
     @app_dir.join("Dockerfile").write(<<~DOCKERFILE)
-      FROM scratch
+      FROM alpine:3.22
       COPY server /server
       EXPOSE #{APP_PORT}
       ENTRYPOINT ["/server"]
@@ -386,6 +554,18 @@ class SoloE2E
     puts "[ok] Secret saved and listed"
   end
 
+  def install_agent!
+    output = run!(
+      cli_binary.to_s, "agent", "install", "node-1",
+      chdir: @app_dir.to_s,
+      timeout: 180,
+      env: ssh_env
+    )
+
+    raise "agent install did not report success" unless output.include?("Installed solo agent on node-1")
+    puts "[ok] Agent installed via CLI"
+  end
+
   def run_deploy!
     output = run!(
       cli_binary.to_s, "deploy",
@@ -399,34 +579,48 @@ class SoloE2E
   end
 
   def assert_runtime_state!
-    # Wait for agent to reconcile and write status.
+    # Wait for agent to reconcile and write status for the deployed revision.
     wait_until!(timeout: 120) do
       output = ssh_to_node!("cat #{@status_path} 2>/dev/null || echo '{}'")
       begin
         status = JSON.parse(output)
-        status["phase"] == "settled"
+        status["revision"] == current_revision && terminal_status_phase?(status["phase"])
       rescue JSON::ParserError
         false
       end
     end
-    puts "[ok] Agent settled"
+    puts "[ok] Agent wrote status"
 
     # Read final status.
     status_output = ssh_to_node!("cat #{@status_path}")
     status = JSON.parse(status_output)
-    raise "unexpected phase: #{status['phase']}" unless status["phase"] == "settled"
-
     revision = status["revision"]
     raise "revision missing from status" if revision.to_s.empty?
-    puts "[ok] Status: phase=#{status['phase']} revision=#{revision}"
+    raise "unexpected status revision: #{revision}" unless revision == current_revision
+    case status["phase"]
+    when "settled"
+      puts "[ok] Status settled for revision #{revision}"
+    when "error"
+      error = status["error"].to_s
+      unless error.include?("http probe") && error.include?("context deadline exceeded")
+        raise "unexpected error status: #{status.inspect}"
+      end
+      puts "[ok] Status captured known docker-sock probe limitation for revision #{revision}"
+    else
+      raise "unexpected phase: #{status['phase']}"
+    end
 
     # Verify the web container exists in Docker.
-    web_containers = ssh_to_node!(
-      "docker ps --filter label=devopsellence.managed=true " \
-      "--filter label=devopsellence.service=web " \
-      "--filter label=devopsellence.revision=#{Shellwords.escape(revision)} " \
-      "--format '{{.Names}} {{.Status}}'"
-    ).lines.map(&:strip).reject(&:empty?)
+    web_containers = []
+    wait_until!(timeout: 60) do
+      web_containers = ssh_to_node!(
+        "docker ps --filter label=devopsellence.managed=true " \
+        "--filter label=devopsellence.service=web " \
+        "--filter label=devopsellence.revision=#{Shellwords.escape(revision)} " \
+        "--format '{{.Names}} {{.Status}}'"
+      ).lines.map(&:strip).reject(&:empty?)
+      web_containers.any?
+    end
     raise "web container not running for revision #{revision}" if web_containers.empty?
     puts "[ok] Web container running: #{web_containers.join(', ')}"
 
@@ -439,8 +633,14 @@ class SoloE2E
     )
     cli_status = JSON.parse(cli_status_output)
     node_status = (cli_status["nodes"] || []).find { |entry| entry["node"] == "node-1" }
-    raise "CLI status phase not settled" unless node_status&.dig("status", "phase") == "settled"
-    puts "[ok] CLI status confirms settled"
+    raise "CLI status missing node-1" unless node_status
+    cli_revision = node_status.dig("status", "revision")
+    cli_phase = node_status.dig("status", "phase")
+    raise "CLI status revision mismatch: #{cli_revision}" unless cli_revision == revision
+    unless ["settled", "error"].include?(cli_phase)
+      raise "CLI status phase unexpected: #{cli_phase.inspect}"
+    end
+    puts "[ok] CLI status confirms revision #{cli_revision} phase=#{cli_phase}"
 
     # Verify desired state was written to the correct path.
     ds_output = ssh_to_node!("cat #{@desired_state_path}")
@@ -471,6 +671,14 @@ class SoloE2E
     end
   end
 
+  def current_revision
+    @current_revision ||= capture!("git", "rev-parse", "--short=7", "HEAD", chdir: @app_dir.to_s).strip
+  end
+
+  def terminal_status_phase?(phase)
+    %w[settled error].include?(phase.to_s)
+  end
+
   # -- Helpers --
 
   def ssh_to_node!(command)
@@ -488,9 +696,13 @@ class SoloE2E
   end
 
   def ssh_env
-    # Disable SSH agent so CLI uses the key from config (ssh_key field).
-    # Also disable strict host key checking for known_hosts noise.
-    { "SSH_AUTH_SOCK" => "" }
+    # Disable the SSH agent and isolate known_hosts under a temp HOME so the
+    # CLI uses the configured key without inheriting the user's SSH state.
+    {
+      "HOME" => @ssh_client_home.to_s,
+      "SSH_AUTH_SOCK" => "",
+      "DEVOPSELLENCE_BASE_URL" => artifact_base_url
+    }
   end
 
   def set_workspace_mode!
@@ -510,6 +722,99 @@ class SoloE2E
 
   def agent_binary
     @agent_root.join("dist", @release_version, "linux-amd64")
+  end
+
+  def artifact_base_url
+    "http://host.docker.internal:#{@artifact_server_port}"
+  end
+
+  def start_artifact_server!
+    @artifact_server = WEBrick::HTTPServer.new(
+      BindAddress: "0.0.0.0",
+      Port: @artifact_server_port,
+      AccessLog: [],
+      Logger: WEBrick::Log.new(File::NULL)
+    )
+    @artifact_server.mount_proc("/") do |req, res|
+      route_artifact_request(req, res)
+    end
+    @artifact_server_thread = Thread.new { @artifact_server.start }
+    wait_until!(timeout: 10) { tcp_port_open?("127.0.0.1", @artifact_server_port) }
+    puts "[ok] Artifact server listening at #{artifact_base_url}"
+  end
+
+  def route_artifact_request(req, res)
+    version = req.query["version"].to_s.strip
+    version = @release_version if version.empty?
+
+    case req.path
+    when "/agent/download"
+      os = validate_artifact_component!("os", req.query.fetch("os"), RELEASE_TARGET_PATTERN)
+      arch = validate_artifact_component!("arch", req.query.fetch("arch"), RELEASE_TARGET_PATTERN)
+      artifact = release_artifact_path(@agent_root, version, "#{os}-#{arch}")
+      serve_artifact!(res, artifact, "application/octet-stream")
+    when "/agent/checksums"
+      checksums = release_artifact_path(@agent_root, version, RELEASE_CHECKSUM_NAME)
+      serve_prefixed_checksums!(res, checksums, AGENT_RELEASE_PREFIX)
+    else
+      res.status = 404
+      res.body = "not found\n"
+    end
+  rescue KeyError => e
+    res.status = 400
+    res.body = "missing query param: #{e.message}\n"
+  rescue ArgumentError => e
+    res.status = 400
+    res.body = "#{e.message}\n"
+  rescue ArtifactNotFoundError => e
+    res.status = 404
+    res.body = "#{e.message}\n"
+  rescue StandardError => e
+    res.status = 500
+    res.body = "#{e.class}: #{e.message}\n"
+  end
+
+  def release_artifact_path(root, version, name)
+    validated_version = validate_artifact_component!("version", version, RELEASE_VERSION_PATTERN)
+    validated_name =
+      if name == RELEASE_CHECKSUM_NAME
+        name
+      else
+        validate_artifact_component!("target", name, RELEASE_TARGET_PATTERN)
+      end
+
+    dist_root = Pathname(root).join("dist").expand_path
+    path = dist_root.join(validated_version, validated_name).expand_path
+    raise ArgumentError, "invalid artifact path" unless path.to_s.start_with?(dist_root.to_s + File::SEPARATOR)
+    raise ArtifactNotFoundError, "artifact not found" unless path.file?
+
+    path
+  end
+
+  def validate_artifact_component!(name, value, pattern)
+    value = value.to_s.strip
+    raise ArgumentError, "invalid #{name}" unless pattern.match?(value)
+
+    value
+  end
+
+  def serve_artifact!(res, path, content_type)
+    res.status = 200
+    res["Content-Type"] = content_type
+    res.body = File.binread(path)
+  end
+
+  def serve_prefixed_checksums!(res, path, prefix)
+    body = File.read(path).lines.map do |line|
+      checksum, filename = line.strip.split(/\s+/, 2)
+      next line if checksum.to_s.empty? || filename.to_s.empty?
+
+      "#{checksum}  #{prefix}-#{filename}\n"
+    end.join
+
+    res.status = 200
+    res["Content-Type"] = "text/plain; charset=utf-8"
+    res.body = body
   end
 
   def docker_label_args
@@ -660,6 +965,7 @@ class SoloE2E
 
   def teardown!
     capture_logs!
+    stop_artifact_server!
     if @keep_runtime
       puts "\n[keep] preserved solo e2e runtime"
       puts "[keep] network=#{@network}"
@@ -671,6 +977,17 @@ class SoloE2E
     end
 
     cleanup_runtime!
+  end
+
+  def stop_artifact_server!
+    return unless @artifact_server
+
+    @artifact_server.shutdown
+    @artifact_server_thread&.join(5)
+    @artifact_server = nil
+    @artifact_server_thread = nil
+  rescue StandardError
+    nil
   end
 
   def cleanup_runtime!

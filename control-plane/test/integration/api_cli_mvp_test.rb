@@ -913,7 +913,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     with_env(
       "DEVOPSELLENCE_AGENT_CONTAINER_IMAGE" => nil,
       "DEVOPSELLENCE_AGENT_CONTAINER_REPOSITORY" => "us-east1-docker.pkg.dev/devopsellence/agents/devopsellence-agent",
-      "DEVOPSELLENCE_AGENT_STABLE_VERSION" => "v1.2.3"
+      "DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3"
     ) do
       post "/api/v1/cli/organizations/#{organization.id}/node_bootstrap_tokens",
         headers: auth_headers_for(user),

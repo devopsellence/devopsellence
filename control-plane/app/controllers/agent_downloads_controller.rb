@@ -33,7 +33,7 @@ class AgentDownloadsController < ActionController::Base
   def requested_version
     params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.agent_stable_version.presence || raise(
       AgentReleases::Fetcher::NotConfiguredError,
-      "set DEVOPSELLENCE_AGENT_STABLE_VERSION or pass ?version="
+      "set DEVOPSELLENCE_STABLE_VERSION (or DEVOPSELLENCE_AGENT_STABLE_VERSION) or pass ?version="
     )
   end
 end

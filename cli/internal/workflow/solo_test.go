@@ -163,8 +163,8 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{
 		"--mode=solo",
-		"--auth-state-path=/var/lib/devopsellence/auth.json",
-		"--desired-state-override-path=/var/lib/devopsellence/desired-state-override.json",
+		`--auth-state-path="/var/lib/devopsellence/auth.json"`,
+		`--desired-state-override-path="/var/lib/devopsellence/desired-state-override.json"`,
 		"AGENT_BIN=/usr/local/bin/devopsellence-agent",
 		"BASE_URL='https://example.test'",
 		"$BASE_URL/agent/download",
@@ -184,9 +184,26 @@ func TestSoloAgentInstallScriptUsesConfiguredStateDir(t *testing.T) {
 
 	for _, want := range []string{
 		"STATE_DIR='/tmp/devopsellence-test-state'",
-		"--auth-state-path=/tmp/devopsellence-test-state/auth.json",
-		"--desired-state-override-path=/tmp/devopsellence-test-state/desired-state-override.json",
-		"--envoy-bootstrap-path=/tmp/devopsellence-test-state/envoy/envoy.yaml",
+		`--auth-state-path="/tmp/devopsellence-test-state/auth.json"`,
+		`--desired-state-override-path="/tmp/devopsellence-test-state/desired-state-override.json"`,
+		`--envoy-bootstrap-path="/tmp/devopsellence-test-state/envoy/envoy.yaml"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestSoloAgentInstallScriptQuotesSystemdExecStartPaths(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{
+		StateDir: `/tmp/devopsellence state/"quoted"`,
+		BaseURL:  "https://example.test",
+	})
+
+	for _, want := range []string{
+		`--auth-state-path="/tmp/devopsellence state/\"quoted\"/auth.json"`,
+		`--desired-state-override-path="/tmp/devopsellence state/\"quoted\"/desired-state-override.json"`,
+		`--envoy-bootstrap-path="/tmp/devopsellence state/\"quoted\"/envoy/envoy.yaml"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q", want)

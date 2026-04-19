@@ -62,6 +62,15 @@ module Devopsellence
       end
     end
 
+    test "blank component-specific stable versions fall back to shared stable version" do
+      with_env("DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3", "DEVOPSELLENCE_AGENT_STABLE_VERSION" => "", "DEVOPSELLENCE_CLI_STABLE_VERSION" => "   ") do
+        config = RuntimeConfig.load!(env: ENV.to_h)
+
+        assert_equal "v1.2.3", config.agent_stable_version
+        assert_equal "v1.2.3", config.cli_stable_version
+      end
+    end
+
     test "development defaults acme directory to letsencrypt staging" do
       with_env("DEVOPSELLENCE_ACME_DIRECTORY_URL" => nil) do
         config = RuntimeConfig.load_current!(env: ENV.to_h, rails_env: "development")

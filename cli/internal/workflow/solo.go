@@ -1664,7 +1664,7 @@ run_root systemctl stop devopsellence-agent || true
 run_root systemctl enable --now devopsellence-agent
 echo "progress: checking devopsellence-agent service"
 run_root systemctl is-active --quiet devopsellence-agent
-`, shellQuote(stateDir), shellQuote(baseURL), shellQuote(agentVersion), shellQuote(localBinary), authStatePath, overridePath, envoyBootstrapPath)
+`, shellQuote(stateDir), shellQuote(baseURL), shellQuote(agentVersion), shellQuote(localBinary), systemdQuoteArg(authStatePath), systemdQuoteArg(overridePath), systemdQuoteArg(envoyBootstrapPath))
 }
 
 func releasedAgentVersionForInstall() string {
@@ -1673,6 +1673,12 @@ func releasedAgentVersionForInstall() string {
 		return version
 	}
 	return ""
+}
+
+func systemdQuoteArg(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
 }
 
 func waitForSoloProviderServer(ctx context.Context, provider providers.Provider, server providers.Server) (providers.Server, error) {

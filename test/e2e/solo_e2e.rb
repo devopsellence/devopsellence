@@ -557,7 +557,7 @@ class SoloE2E
       output = ssh_to_node!("cat #{@status_path} 2>/dev/null || echo '{}'")
       begin
         status = JSON.parse(output)
-        status["revision"] == current_revision && !status["phase"].to_s.empty?
+        status["revision"] == current_revision && terminal_status_phase?(status["phase"])
       rescue JSON::ParserError
         false
       end
@@ -648,6 +648,10 @@ class SoloE2E
     @current_revision ||= capture!("git", "rev-parse", "--short=7", "HEAD", chdir: @app_dir.to_s).strip
   end
 
+  def terminal_status_phase?(phase)
+    %w[settled error].include?(phase.to_s)
+  end
+
   # -- Helpers --
 
   def ssh_to_node!(command)
@@ -665,8 +669,8 @@ class SoloE2E
   end
 
   def ssh_env
-    # Disable SSH agent so CLI uses the key from config (ssh_key field).
-    # Also disable strict host key checking for known_hosts noise.
+    # Disable the SSH agent and isolate known_hosts under a temp HOME so the
+    # CLI uses the configured key without inheriting the user's SSH state.
     {
       "HOME" => @ssh_client_home.to_s,
       "SSH_AUTH_SOCK" => "",

@@ -122,8 +122,8 @@ module Devopsellence
           config[name] = env.fetch(key, fallback).to_s.strip
         end
         stable_version = config.stable_version.to_s.strip
-        config.agent_stable_version = env.fetch("DEVOPSELLENCE_AGENT_STABLE_VERSION", stable_version).to_s.strip
-        config.cli_stable_version = env.fetch("DEVOPSELLENCE_CLI_STABLE_VERSION", stable_version).to_s.strip
+        config.agent_stable_version = env["DEVOPSELLENCE_AGENT_STABLE_VERSION"].to_s.strip.presence || stable_version
+        config.cli_stable_version = env["DEVOPSELLENCE_CLI_STABLE_VERSION"].to_s.strip.presence || stable_version
         config.managed_pool_candidates = build_managed_pool_candidates(config)
         validate_runtime_backend!(config)
         validate_workload_identity_resource_names!(config)

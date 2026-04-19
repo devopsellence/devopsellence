@@ -13,6 +13,7 @@ import (
 	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/solo"
+	cliversion "github.com/devopsellence/cli/internal/version"
 )
 
 func TestSoloImageTagSlugifiesProjectName(t *testing.T) {
@@ -172,6 +173,56 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q", want)
 		}
+	}
+}
+
+func TestSoloAgentInstallScriptUsesConfiguredStateDir(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{
+		StateDir: "/tmp/devopsellence-test-state",
+		BaseURL:  "https://example.test",
+	})
+
+	for _, want := range []string{
+		"STATE_DIR='/tmp/devopsellence-test-state'",
+		"--auth-state-path=/tmp/devopsellence-test-state/auth.json",
+		"--desired-state-override-path=/tmp/devopsellence-test-state/desired-state-override.json",
+		"--envoy-bootstrap-path=/tmp/devopsellence-test-state/envoy/envoy.yaml",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestSoloAgentInstallScriptPinsReleasedAgentVersionWhenProvided(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{
+		BaseURL:      "https://example.test",
+		AgentVersion: "v0.1.1",
+	})
+
+	for _, want := range []string{
+		`AGENT_VERSION='v0.1.1'`,
+		`DOWNLOAD_URL="$DOWNLOAD_URL&version=$AGENT_VERSION"`,
+		`CHECKSUM_URL="$CHECKSUM_URL?version=$AGENT_VERSION"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestReleasedAgentVersionForInstall(t *testing.T) {
+	original := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = original })
+
+	cliversion.Version = "v0.1.1"
+	if got := releasedAgentVersionForInstall(); got != "v0.1.1" {
+		t.Fatalf("releasedAgentVersionForInstall() = %q, want v0.1.1", got)
+	}
+
+	cliversion.Version = "dev"
+	if got := releasedAgentVersionForInstall(); got != "" {
+		t.Fatalf("releasedAgentVersionForInstall() = %q, want empty for dev build", got)
 	}
 }
 

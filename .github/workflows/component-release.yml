@@ -1,4 +1,4 @@
-name: Component Release
+name: devopsellence Release
 
 on:
   workflow_dispatch:
@@ -181,15 +181,15 @@ jobs:
 
           publish_component() {
             local component="$1"
-            local working_dir release_label
+            local working_dir asset_prefix
             case "$component" in
               agent)
                 working_dir="agent"
-                release_label="Agent"
+                asset_prefix="agent"
                 ;;
               cli)
                 working_dir="cli"
-                release_label="CLI"
+                asset_prefix="cli"
                 ;;
               *)
                 echo "unknown component: $component" >&2
@@ -197,15 +197,23 @@ jobs:
                 ;;
             esac
 
-            local tag_name="${component}-${version}"
+            local tag_name="${version}"
             local dist_dir="${workspace_dir}/${working_dir}/dist/${version}"
-            local release_notes="${release_label} binary release for ${version} from ${source_ref} at ${target_sha}"
+            local upload_dir="${dist_dir}/release-assets"
+            local release_notes="devopsellence binary release for ${version} from ${source_ref} at ${target_sha}"
+            rm -rf "$upload_dir"
+            mkdir -p "$upload_dir"
+            cp "${dist_dir}/linux-amd64" "${upload_dir}/${asset_prefix}-linux-amd64"
+            cp "${dist_dir}/linux-arm64" "${upload_dir}/${asset_prefix}-linux-arm64"
+            cp "${dist_dir}/darwin-amd64" "${upload_dir}/${asset_prefix}-darwin-amd64"
+            cp "${dist_dir}/darwin-arm64" "${upload_dir}/${asset_prefix}-darwin-arm64"
+            cp "${dist_dir}/SHA256SUMS" "${upload_dir}/${asset_prefix}-SHA256SUMS"
             local release_assets=(
-              "${dist_dir}/linux-amd64"
-              "${dist_dir}/linux-arm64"
-              "${dist_dir}/darwin-amd64"
-              "${dist_dir}/darwin-arm64"
-              "${dist_dir}/SHA256SUMS"
+              "${upload_dir}/${asset_prefix}-linux-amd64"
+              "${upload_dir}/${asset_prefix}-linux-arm64"
+              "${upload_dir}/${asset_prefix}-darwin-amd64"
+              "${upload_dir}/${asset_prefix}-darwin-arm64"
+              "${upload_dir}/${asset_prefix}-SHA256SUMS"
             )
 
             if git rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
@@ -224,7 +232,7 @@ jobs:
 
             if gh release view "$tag_name" >/dev/null 2>&1; then
               gh release edit "$tag_name" \
-                --title "${release_label} ${version}" \
+                --title "devopsellence ${version}" \
                 --notes "$release_notes" \
                 "${prerelease_flag[@]}"
               gh release upload "$tag_name" "${release_assets[@]}" --clobber
@@ -233,7 +241,7 @@ jobs:
 
             gh release create "$tag_name" \
               "${release_assets[@]}" \
-              --title "${release_label} ${version}" \
+              --title "devopsellence ${version}" \
               --notes "$release_notes" \
               --target "$target_sha" \
               "${prerelease_flag[@]}"

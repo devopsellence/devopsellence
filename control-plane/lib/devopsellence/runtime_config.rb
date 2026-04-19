@@ -76,8 +76,7 @@ module Devopsellence
       acme_account_key_path: ["DEVOPSELLENCE_ACME_ACCOUNT_KEY_PATH", Rails.root.join("tmp/acme-account-key.pem").to_s],
       acme_contact_email: ["DEVOPSELLENCE_ACME_CONTACT_EMAIL", DEFAULT_ACME_CONTACT_EMAIL],
       acme_directory_url: ["DEVOPSELLENCE_ACME_DIRECTORY_URL", DEFAULT_ACME_DIRECTORY_URL],
-      agent_stable_version: ["DEVOPSELLENCE_AGENT_STABLE_VERSION", ""],
-      cli_stable_version: ["DEVOPSELLENCE_CLI_STABLE_VERSION", ""],
+      stable_version: ["DEVOPSELLENCE_STABLE_VERSION", ""],
       agent_container_image: ["DEVOPSELLENCE_AGENT_CONTAINER_IMAGE", ""],
       agent_container_repository: ["DEVOPSELLENCE_AGENT_CONTAINER_REPOSITORY", ""],
       managed_default_provider: ["DEVOPSELLENCE_MANAGED_DEFAULT_PROVIDER", DEFAULT_MANAGED_PROVIDER],
@@ -122,6 +121,9 @@ module Devopsellence
         OPTIONAL_DEFAULTS.each do |name, (key, fallback)|
           config[name] = env.fetch(key, fallback).to_s.strip
         end
+        stable_version = config.stable_version.to_s.strip
+        config.agent_stable_version = env.fetch("DEVOPSELLENCE_AGENT_STABLE_VERSION", stable_version).to_s.strip
+        config.cli_stable_version = env.fetch("DEVOPSELLENCE_CLI_STABLE_VERSION", stable_version).to_s.strip
         config.managed_pool_candidates = build_managed_pool_candidates(config)
         validate_runtime_backend!(config)
         validate_workload_identity_resource_names!(config)

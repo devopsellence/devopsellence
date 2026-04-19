@@ -238,9 +238,19 @@ func TestReleasedAgentVersionForInstall(t *testing.T) {
 		t.Fatalf("releasedAgentVersionForInstall() = %q, want v0.1.1", got)
 	}
 
+	cliversion.Version = "feature-branch-abc1234"
+	if got := releasedAgentVersionForInstall(); got != "feature-branch-abc1234" {
+		t.Fatalf("releasedAgentVersionForInstall() = %q, want prerelease tag", got)
+	}
+
 	cliversion.Version = "dev"
 	if got := releasedAgentVersionForInstall(); got != "" {
 		t.Fatalf("releasedAgentVersionForInstall() = %q, want empty for dev build", got)
+	}
+
+	cliversion.Version = "bad version?"
+	if got := releasedAgentVersionForInstall(); got != "" {
+		t.Fatalf("releasedAgentVersionForInstall() = %q, want empty for unsafe version", got)
 	}
 }
 

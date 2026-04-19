@@ -1520,7 +1520,10 @@ type soloAgentInstallScriptOptions struct {
 	LocalBinaryPath string
 }
 
-var releaseVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
+// Accept stable tags, semver-style prereleases, and workflow-generated
+// prerelease tags such as branch-name-abcdef1 while keeping the value safe
+// for query-string use in the install script.
+var releaseVersionPattern = regexp.MustCompile(`^[0-9A-Za-z._-]+$`)
 
 func soloAgentInstallScript(opts soloAgentInstallScriptOptions) string {
 	stateDir := strings.TrimSpace(opts.StateDir)
@@ -1669,7 +1672,7 @@ run_root systemctl is-active --quiet devopsellence-agent
 
 func releasedAgentVersionForInstall() string {
 	version := strings.TrimSpace(cliversion.Version)
-	if releaseVersionPattern.MatchString(version) {
+	if version != "" && version != "dev" && releaseVersionPattern.MatchString(version) {
 		return version
 	}
 	return ""

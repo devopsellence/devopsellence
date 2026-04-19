@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/solo/providers"
 	"github.com/devopsellence/cli/internal/ui"
+	cliversion "github.com/devopsellence/cli/internal/version"
 )
 
 type SoloDeployOptions struct {
@@ -1496,6 +1498,7 @@ func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentI
 		defer solo.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remotePath), io.Discard, io.Discard)
 		progress("Installing Docker, agent, and systemd service...")
 		return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
+			StateDir:        firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 			LocalBinaryPath: remotePath,
 		}), progress)
 	}
@@ -1503,7 +1506,9 @@ func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentI
 	baseURL := strings.TrimRight(firstNonEmpty(opts.BaseURL, os.Getenv("DEVOPSELLENCE_BASE_URL"), api.DefaultBaseURL), "/")
 	progress("Installing Docker, agent, and systemd service...")
 	return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
-		BaseURL: baseURL,
+		StateDir:     firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
+		BaseURL:      baseURL,
+		AgentVersion: releasedAgentVersionForInstall(),
 	}), progress)
 }
 
@@ -1515,15 +1520,23 @@ func runSoloAgentInstallScript(ctx context.Context, node config.SoloNode, script
 }
 
 type soloAgentInstallScriptOptions struct {
+	StateDir        string
 	BaseURL         string
+	AgentVersion    string
 	LocalBinaryPath string
 }
 
+var releaseVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
+
 func soloAgentInstallScript(opts soloAgentInstallScriptOptions) string {
-	stateDir := "/var/lib/devopsellence"
+	stateDir := strings.TrimSpace(opts.StateDir)
+	if stateDir == "" {
+		stateDir = "/var/lib/devopsellence"
+	}
 	authStatePath := stateDir + "/auth.json"
 	overridePath := stateDir + "/desired-state-override.json"
 	envoyBootstrapPath := stateDir + "/envoy/envoy.yaml"
+	agentVersion := strings.TrimSpace(opts.AgentVersion)
 	localBinary := strings.TrimSpace(opts.LocalBinaryPath)
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	return fmt.Sprintf(`set -euo pipefail
@@ -1532,6 +1545,7 @@ STATE_DIR=%s
 AGENT_BIN=/usr/local/bin/devopsellence-agent
 SERVICE_FILE=/etc/systemd/system/devopsellence-agent.service
 BASE_URL=%s
+AGENT_VERSION=%s
 LOCAL_BINARY=%s
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -1613,9 +1627,15 @@ else
     arm64|aarch64) ARCH=arm64 ;;
     *) echo "unsupported architecture: $ARCH_RAW" >&2; exit 1 ;;
   esac
-  ARTIFACT_NAME="$OS-$ARCH"
-  curl -fsSL "$BASE_URL/agent/download?os=$OS&arch=$ARCH" -o "$TMP_BIN"
-  curl -fsSL "$BASE_URL/agent/checksums" -o "$TMP_SUMS"
+  ARTIFACT_NAME="agent-$OS-$ARCH"
+  DOWNLOAD_URL="$BASE_URL/agent/download?os=$OS&arch=$ARCH"
+  CHECKSUM_URL="$BASE_URL/agent/checksums"
+  if [ -n "$AGENT_VERSION" ]; then
+    DOWNLOAD_URL="$DOWNLOAD_URL&version=$AGENT_VERSION"
+    CHECKSUM_URL="$CHECKSUM_URL?version=$AGENT_VERSION"
+  fi
+  curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BIN"
+  curl -fsSL "$CHECKSUM_URL" -o "$TMP_SUMS"
   expected="$(awk -v name="$ARTIFACT_NAME" '$2 == name { print $1; exit }' "$TMP_SUMS")"
   if [ -z "$expected" ]; then
     echo "missing checksum entry for $ARTIFACT_NAME" >&2
@@ -1650,7 +1670,22 @@ run_root systemctl stop devopsellence-agent || true
 run_root systemctl enable --now devopsellence-agent
 echo "progress: checking devopsellence-agent service"
 run_root systemctl is-active --quiet devopsellence-agent
-`, shellQuote(stateDir), shellQuote(baseURL), shellQuote(localBinary), authStatePath, overridePath, envoyBootstrapPath)
+`, shellQuote(stateDir), shellQuote(baseURL), shellQuote(agentVersion), shellQuote(localBinary), systemdQuoteArg(authStatePath), systemdQuoteArg(overridePath), systemdQuoteArg(envoyBootstrapPath))
+}
+
+func releasedAgentVersionForInstall() string {
+	version := strings.TrimSpace(cliversion.Version)
+	if releaseVersionPattern.MatchString(version) {
+		return version
+	}
+	return ""
+}
+
+func systemdQuoteArg(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, `%`, `%%`)
+	return `"` + escaped + `"`
 }
 
 func waitForSoloProviderServer(ctx context.Context, provider providers.Provider, server providers.Server) (providers.Server, error) {

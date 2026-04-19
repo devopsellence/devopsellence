@@ -38,7 +38,7 @@ run = "mise run build"
 description = "Build multi-platform agent release artifacts"
 dir = "agent"
 run = '''
-set -euo pipefail
+set -eu
 
 version="${DEVOPSELLENCE_RELEASE_VERSION:?}"
 commit="${DEVOPSELLENCE_RELEASE_COMMIT:?}"
@@ -90,7 +90,7 @@ run = "mise run build"
 description = "Build multi-platform CLI release artifacts"
 dir = "cli"
 run = '''
-set -euo pipefail
+set -eu
 
 version="${DEVOPSELLENCE_RELEASE_VERSION:?}"
 commit="${DEVOPSELLENCE_RELEASE_COMMIT:?}"

@@ -119,7 +119,10 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
-	providerSlug := firstNonEmpty(opts.Provider, "hetzner")
+	providerSlug, err := normalizeProvider(firstNonEmpty(opts.Provider, providerHetzner))
+	if err != nil {
+		return providerNodeCreateResult{}, err
+	}
 	if opts.Region == "" {
 		opts.Region = defaultHetznerRegion
 	}

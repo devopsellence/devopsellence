@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -137,6 +138,23 @@ func TestSoloNodePeersUsesOtherConfiguredNodes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("peers = %#v, want %#v", got, want)
+	}
+}
+
+func TestCreateProviderNodeRejectsDeprecatedHetznerSize(t *testing.T) {
+	app := &App{}
+
+	_, err := app.createProviderNode(context.Background(), SoloNodeCreateOptions{
+		Name:     "prod-1",
+		Provider: providerHetzner,
+		Region:   defaultHetznerRegion,
+		Size:     "cx22",
+	}, "")
+	if err == nil {
+		t.Fatal("expected deprecated size error")
+	}
+	if !strings.Contains(err.Error(), `Hetzner size "cx22" is deprecated; use "cpx11"`) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

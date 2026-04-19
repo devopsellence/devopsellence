@@ -13,7 +13,11 @@ import (
 	"github.com/devopsellence/cli/internal/state"
 )
 
-const providerHetzner = "hetzner"
+const (
+	providerHetzner      = "hetzner"
+	defaultHetznerRegion = "ash"
+	defaultHetznerSize   = "cpx11"
+)
 
 type ProviderLoginOptions struct {
 	Provider   string

@@ -121,10 +121,13 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	}
 	providerSlug := firstNonEmpty(opts.Provider, "hetzner")
 	if opts.Region == "" {
-		opts.Region = "ash"
+		opts.Region = defaultHetznerRegion
 	}
 	if opts.Size == "" {
-		opts.Size = "cx22"
+		opts.Size = defaultHetznerSize
+	}
+	if providerSlug == providerHetzner && strings.EqualFold(strings.TrimSpace(opts.Size), "cx22") {
+		return providerNodeCreateResult{}, fmt.Errorf("Hetzner size %q is deprecated; use %q", opts.Size, defaultHetznerSize)
 	}
 	provider, err := a.resolveSoloProvider(providerSlug)
 	if err != nil {
@@ -954,11 +957,11 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 		return err
 	}
 	if strings.EqualFold(strings.TrimSpace(mode), "hetzner") {
-		region, err := a.promptLine("Hetzner region", "ash")
+		region, err := a.promptLine("Hetzner region", defaultHetznerRegion)
 		if err != nil {
 			return err
 		}
-		size, err := a.promptLine("Hetzner size", "cx22")
+		size, err := a.promptLine("Hetzner size", defaultHetznerSize)
 		if err != nil {
 			return err
 		}

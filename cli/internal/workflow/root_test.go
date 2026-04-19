@@ -170,3 +170,20 @@ func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeCreateHelpUsesCurrentHetznerSizeDefault(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"node", "create", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "(default \"cpx11\")") {
+		t.Fatalf("help output = %q, want cpx11 default", stdout.String())
+	}
+}

@@ -734,8 +734,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Provider, "provider", "hetzner", "Provider")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Region, "region", "ash", "Provider region")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Size, "size", "cx22", "Provider machine size")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Region, "region", defaultHetznerRegion, "Provider region")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Size, "size", defaultHetznerSize, "Provider machine size")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Image, "image", "", "Provider image")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Labels, "labels", "", "Comma-separated labels")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")

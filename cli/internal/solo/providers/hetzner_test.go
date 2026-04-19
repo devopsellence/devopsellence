@@ -58,7 +58,7 @@ func TestHetznerCreateServer(t *testing.T) {
 	got, err := provider.CreateServer(context.Background(), CreateServerInput{
 		Name:         "prod-1",
 		Region:       "ash",
-		Size:         "cx22",
+		Size:         "cpx11",
 		SSHPublicKey: "ssh-ed25519 abc",
 		Labels:       map[string]string{"devopsellence_project": "shop"},
 	})
@@ -89,6 +89,40 @@ func TestHetznerCreateServer(t *testing.T) {
 	}
 	if sshKeyPayload["name"] != sshKeyName || sshKeyPayload["public_key"] != "ssh-ed25519 abc" {
 		t.Fatalf("ssh key payload = %#v", sshKeyPayload)
+	}
+}
+
+func TestHetznerCreateServerPreservesLargeNumericID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/firewalls":
+			_ = json.NewEncoder(w).Encode(map[string]any{"firewalls": []map[string]any{{"id": 99, "name": defaultHetznerFirewall}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/servers":
+			_ = json.NewEncoder(w).Encode(map[string]any{"server": map[string]any{
+				"id":     127401013,
+				"name":   "prod-1",
+				"status": "running",
+				"public_net": map[string]any{
+					"ipv4": map[string]any{"ip": "203.0.113.10"},
+				},
+			}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := &Hetzner{baseURL: server.URL, token: "test-token", client: server.Client()}
+	got, err := provider.CreateServer(context.Background(), CreateServerInput{
+		Name:   "prod-1",
+		Region: "ash",
+		Size:   "cpx11",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "127401013" {
+		t.Fatalf("server id = %q, want 127401013", got.ID)
 	}
 }
 
@@ -142,7 +176,7 @@ func TestHetznerReusesContentAddressedSSHKey(t *testing.T) {
 	if _, err := provider.CreateServer(context.Background(), CreateServerInput{
 		Name:         "prod-1",
 		Region:       "ash",
-		Size:         "cx22",
+		Size:         "cpx11",
 		SSHPublicKey: "ssh-ed25519 abc current-comment",
 	}); err != nil {
 		t.Fatal(err)

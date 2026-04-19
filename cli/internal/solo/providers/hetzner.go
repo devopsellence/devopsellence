@@ -256,7 +256,9 @@ func (h *Hetzner) doJSON(ctx context.Context, method, path string, payload any, 
 	if out == nil || len(data) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(data, out); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(out); err != nil {
 		return fmt.Errorf("decode hetzner response: %w", err)
 	}
 	return nil

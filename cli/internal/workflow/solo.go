@@ -1678,6 +1678,7 @@ func releasedAgentVersionForInstall() string {
 func systemdQuoteArg(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, `%`, `%%`)
 	return `"` + escaped + `"`
 }
 

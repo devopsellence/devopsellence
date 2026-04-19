@@ -198,6 +198,29 @@ class SoloE2E
         sed -n 's/^ExecStart=//p' "$SERVICE_FILE" | head -n 1
       }
 
+      launch_exec_start() {
+        local exec_start="$1"
+        EXEC_START="$exec_start" LOG_FILE="$LOG_FILE" python3 - <<'PY'
+import os
+import shlex
+import subprocess
+import sys
+
+argv = shlex.split(os.environ["EXEC_START"])
+if not argv:
+    sys.exit("failed to parse ExecStart")
+
+with open(os.environ["LOG_FILE"], "ab", buffering=0) as log_file:
+    proc = subprocess.Popen(
+        argv,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True
+    )
+print(proc.pid)
+PY
+      }
+
       service_pid_running() {
         [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
       }
@@ -220,8 +243,8 @@ class SoloE2E
           if service_pid_running; then
             exit 0
           fi
-          nohup bash -lc "exec $exec_start" >>"$LOG_FILE" 2>&1 &
-          echo "$!" > "$PID_FILE"
+          service_pid="$(launch_exec_start "$exec_start")"
+          echo "$service_pid" > "$PID_FILE"
           exit 0
           ;;
         stop)
@@ -317,6 +340,7 @@ class SoloE2E
         docker.io \
         ca-certificates \
         curl \
+        python3 \
         && rm -rf /var/lib/apt/lists/*
 
       # Configure SSH: key-based auth only, no password.

@@ -222,7 +222,8 @@ jobs:
 	            cp "${dist_dir}/linux-arm64" "${upload_dir}/${asset_prefix}-linux-arm64"
 	            cp "${dist_dir}/darwin-amd64" "${upload_dir}/${asset_prefix}-darwin-amd64"
 	            cp "${dist_dir}/darwin-arm64" "${upload_dir}/${asset_prefix}-darwin-arm64"
-	            cp "${dist_dir}/SHA256SUMS" "${upload_dir}/${asset_prefix}-SHA256SUMS"
+	            awk -v prefix="${asset_prefix}-" '{ print $1 "  " prefix $2 }' \
+	              "${dist_dir}/SHA256SUMS" > "${upload_dir}/${asset_prefix}-SHA256SUMS"
 	            local release_assets=(
 	              "${upload_dir}/${asset_prefix}-linux-amd64"
 	              "${upload_dir}/${asset_prefix}-linux-arm64"

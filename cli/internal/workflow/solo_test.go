@@ -196,14 +196,14 @@ func TestSoloAgentInstallScriptUsesConfiguredStateDir(t *testing.T) {
 
 func TestSoloAgentInstallScriptQuotesSystemdExecStartPaths(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{
-		StateDir: `/tmp/devopsellence state/"quoted"`,
+		StateDir: `/tmp/devopsellence state/"quoted"%value`,
 		BaseURL:  "https://example.test",
 	})
 
 	for _, want := range []string{
-		`--auth-state-path="/tmp/devopsellence state/\"quoted\"/auth.json"`,
-		`--desired-state-override-path="/tmp/devopsellence state/\"quoted\"/desired-state-override.json"`,
-		`--envoy-bootstrap-path="/tmp/devopsellence state/\"quoted\"/envoy/envoy.yaml"`,
+		`--auth-state-path="/tmp/devopsellence state/\"quoted\"%%value/auth.json"`,
+		`--desired-state-override-path="/tmp/devopsellence state/\"quoted\"%%value/desired-state-override.json"`,
+		`--envoy-bootstrap-path="/tmp/devopsellence state/\"quoted\"%%value/envoy/envoy.yaml"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q", want)

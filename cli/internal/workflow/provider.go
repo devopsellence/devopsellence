@@ -19,6 +19,10 @@ const (
 	defaultHetznerSize   = "cpx11"
 )
 
+var runProviderLogin = func(a *App, ctx context.Context, opts ProviderLoginOptions) error {
+	return a.ProviderLogin(ctx, opts)
+}
+
 type ProviderLoginOptions struct {
 	Provider   string
 	Token      string
@@ -136,6 +140,21 @@ func (a *App) resolveSoloProvider(providerSlug string) (providers.Provider, erro
 		return nil, err
 	}
 	return providers.ResolveWithToken(providerSlug, token)
+}
+
+func (a *App) ensureInteractiveProviderLogin(ctx context.Context, provider string) error {
+	providerSlug, err := normalizeProvider(provider)
+	if err != nil {
+		return err
+	}
+	token, _, err := providerToken(a.ProviderState, providerSlug)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(token) != "" || !a.Printer.Interactive {
+		return nil
+	}
+	return runProviderLogin(a, ctx, ProviderLoginOptions{Provider: providerSlug})
 }
 
 func (a *App) providerLoginToken(opts ProviderLoginOptions) (string, error) {

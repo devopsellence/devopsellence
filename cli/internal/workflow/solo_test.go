@@ -158,6 +158,23 @@ func TestCreateProviderNodeRejectsDeprecatedHetznerSize(t *testing.T) {
 	}
 }
 
+func TestCreateProviderNodeNormalizesHetznerProviderBeforeValidation(t *testing.T) {
+	app := &App{}
+
+	_, err := app.createProviderNode(context.Background(), SoloNodeCreateOptions{
+		Name:     "prod-1",
+		Provider: "Hetzner",
+		Region:   defaultHetznerRegion,
+		Size:     "cx22",
+	}, "")
+	if err == nil {
+		t.Fatal("expected deprecated size error")
+	}
+	if !strings.Contains(err.Error(), `Hetzner size "cx22" is deprecated; use "cpx11"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{

@@ -171,7 +171,7 @@ func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 	}
 }
 
-func TestNodeCreateHelpUsesCurrentHetznerSizeDefault(t *testing.T) {
+func TestNodeCreateHelpUsesCurrentHetznerDefaults(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
@@ -183,7 +183,9 @@ func TestNodeCreateHelpUsesCurrentHetznerSizeDefault(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "(default \"cpx11\")") {
-		t.Fatalf("help output = %q, want cpx11 default", stdout.String())
+	for _, snippet := range []string{`default "` + defaultHetznerRegion + `"`, `default "` + defaultHetznerSize + `"`} {
+		if !strings.Contains(stdout.String(), snippet) {
+			t.Fatalf("help output = %q, want %q", stdout.String(), snippet)
+		}
 	}
 }

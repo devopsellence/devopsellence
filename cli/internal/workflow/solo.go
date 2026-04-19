@@ -129,6 +129,9 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if providerSlug == providerHetzner && strings.EqualFold(strings.TrimSpace(opts.Size), "cx22") {
 		return providerNodeCreateResult{}, fmt.Errorf("Hetzner size %q is deprecated; use %q", opts.Size, defaultHetznerSize)
 	}
+	if err := a.ensureInteractiveProviderLogin(ctx, providerSlug); err != nil {
+		return providerNodeCreateResult{}, err
+	}
 	provider, err := a.resolveSoloProvider(providerSlug)
 	if err != nil {
 		return providerNodeCreateResult{}, err

@@ -43,6 +43,8 @@ require_relative "binary_artifacts"
 class SoloE2E
   include E2EBinaryArtifacts
 
+  ArtifactNotFoundError = Class.new(StandardError)
+
   MONOREPO_ROOT = Pathname(__dir__).join("../..").expand_path
   APP_PORT = 9292
   APP_HEALTH_PATH = "/up"
@@ -764,6 +766,9 @@ PY
   rescue ArgumentError => e
     res.status = 400
     res.body = "#{e.message}\n"
+  rescue ArtifactNotFoundError => e
+    res.status = 404
+    res.body = "#{e.message}\n"
   rescue StandardError => e
     res.status = 500
     res.body = "#{e.class}: #{e.message}\n"
@@ -781,7 +786,7 @@ PY
     dist_root = Pathname(root).join("dist").expand_path
     path = dist_root.join(validated_version, validated_name).expand_path
     raise ArgumentError, "invalid artifact path" unless path.to_s.start_with?(dist_root.to_s + File::SEPARATOR)
-    raise "artifact not found: #{path}" unless path.file?
+    raise ArtifactNotFoundError, "artifact not found" unless path.file?
 
     path
   end

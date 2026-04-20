@@ -9,7 +9,7 @@ module AgentReleases
     def initialize(
       image_reference: Devopsellence::RuntimeConfig.current.agent_container_image,
       image_repository: Devopsellence::RuntimeConfig.current.agent_container_repository,
-      stable_version: Devopsellence::RuntimeConfig.current.agent_stable_version
+      stable_version: Devopsellence::RuntimeConfig.current.stable_version
     )
       @image_reference = image_reference.to_s.strip
       @image_repository = image_repository.to_s.strip

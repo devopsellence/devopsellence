@@ -39,8 +39,7 @@ class AgentReleasesContainerImageTest < ActiveSupport::TestCase
     with_env(
       "DEVOPSELLENCE_AGENT_CONTAINER_IMAGE" => nil,
       "DEVOPSELLENCE_AGENT_CONTAINER_REPOSITORY" => nil,
-      "DEVOPSELLENCE_STABLE_VERSION" => nil,
-      "DEVOPSELLENCE_AGENT_STABLE_VERSION" => nil
+      "DEVOPSELLENCE_STABLE_VERSION" => nil
     ) do
       assert_nil AgentReleases::ContainerImage.metadata
     end

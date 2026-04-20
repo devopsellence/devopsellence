@@ -607,7 +607,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 	if !a.Printer.JSON {
 		a.Printer.Println("Installing solo agent on " + opts.Node + "...")
 	}
-	if err := installSoloAgent(ctx, node, opts, a.soloProgress(opts.Node)); err != nil {
+	if err := a.installSoloAgent(ctx, opts.Node, node, opts); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -790,7 +790,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 		if err := waitForSoloSSH(ctx, created.Node, 3*time.Minute); err != nil {
 			return err
 		}
-		if err := installSoloAgent(ctx, created.Node, SoloAgentInstallOptions{}, a.soloProgress(opts.Name)); err != nil {
+		if err := a.installSoloAgent(ctx, opts.Name, created.Node, SoloAgentInstallOptions{}); err != nil {
 			return err
 		}
 	}
@@ -1020,7 +1020,7 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if err := a.writeSoloNode(workspaceRoot, cfg, name, node); err != nil {
 		return err
 	}
-	if err := installSoloAgent(ctx, node, SoloAgentInstallOptions{}, a.soloProgress(name)); err != nil {
+	if err := a.installSoloAgent(ctx, name, node, SoloAgentInstallOptions{}); err != nil {
 		return err
 	}
 	return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
@@ -1120,6 +1120,12 @@ func (a *App) soloProgress(nodeName string) func(string) {
 	return func(message string) {
 		a.Printer.Println("[" + nodeName + "] " + message)
 	}
+}
+
+func (a *App) installSoloAgent(ctx context.Context, nodeName string, node config.SoloNode, opts SoloAgentInstallOptions) error {
+	reporter := newSoloInstallReporter(ctx, a.Printer, nodeName)
+	defer reporter.Close()
+	return installSoloAgent(ctx, node, opts, reporter)
 }
 
 // loadSoloConfig discovers the workspace root, loads devopsellence.yml,
@@ -1480,13 +1486,10 @@ func addServiceSecretRef(svc *config.ServiceConfig, name string) bool {
 	return true
 }
 
-func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentInstallOptions, progress func(string)) error {
-	if progress == nil {
-		progress = func(string) {}
-	}
+func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentInstallOptions, reporter soloInstallReporter) error {
 	if strings.TrimSpace(opts.AgentBinary) != "" {
 		remotePath := fmt.Sprintf("/tmp/devopsellence-agent-%d", time.Now().UnixNano())
-		progress("Uploading agent binary...")
+		reporter.Progress("Uploading agent binary...")
 		file, err := os.Open(opts.AgentBinary)
 		if err != nil {
 			return fmt.Errorf("open agent binary: %w", err)
@@ -1496,27 +1499,25 @@ func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentI
 			return fmt.Errorf("upload agent binary: %w", err)
 		}
 		defer solo.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remotePath), io.Discard, io.Discard)
-		progress("Installing Docker, agent, and systemd service...")
+		reporter.Progress("Installing Docker, agent, and systemd service...")
 		return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
 			StateDir:        firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 			LocalBinaryPath: remotePath,
-		}), progress)
+		}), reporter)
 	}
 
 	baseURL := strings.TrimRight(firstNonEmpty(opts.BaseURL, os.Getenv("DEVOPSELLENCE_BASE_URL"), api.DefaultBaseURL), "/")
-	progress("Installing Docker, agent, and systemd service...")
+	reporter.Progress("Installing Docker, agent, and systemd service...")
 	return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
 		StateDir:     firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 		BaseURL:      baseURL,
 		AgentVersion: releasedAgentVersionForInstall(),
-	}), progress)
+	}), reporter)
 }
 
-func runSoloAgentInstallScript(ctx context.Context, node config.SoloNode, script string, progress func(string)) error {
-	writer := &lineProgressWriter{progress: progress}
-	err := solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), writer, writer)
-	writer.Flush()
-	return err
+func runSoloAgentInstallScript(ctx context.Context, node config.SoloNode, script string, reporter soloInstallReporter) error {
+	writer := reporter.Stream()
+	return solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), writer, writer)
 }
 
 type soloAgentInstallScriptOptions struct {

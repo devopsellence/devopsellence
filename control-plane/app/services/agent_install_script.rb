@@ -174,7 +174,7 @@ class AgentInstallScript
           DOWNLOAD_URL="$DOWNLOAD_URL&version=$AGENT_VERSION"
           CHECKSUM_URL="$CHECKSUM_URL?version=$AGENT_VERSION"
         fi
-        ARTIFACT_NAME="$OS-$ARCH"
+        ARTIFACT_NAME="agent-$OS-$ARCH"
         AGENT_BIN="/usr/local/bin/devopsellence-agent"
         ENV_DIR="/etc/devopsellence"
         ENV_FILE="$ENV_DIR/agent.env"

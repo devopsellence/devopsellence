@@ -91,6 +91,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_includes response.body, 'CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"'
     assert_includes response.body, 'CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"'
+    assert_includes response.body, 'ARTIFACT_NAME="cli-$OS-$ARCH"'
     assert_operator response.body.index("while [[ $# -gt 0 ]]; do"), :<, response.body.index('CLI_CHECKSUM_URL="$BASE_URL/cli/checksums"')
   end
 
@@ -124,6 +125,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "AGENT_VERSION='v0.1.0-rc.1'"
     assert_includes response.body, 'validate_version "$AGENT_VERSION"'
     assert_includes response.body, "OS_RAW=\"$(uname -s | tr '[:upper:]' '[:lower:]')\""
+    assert_includes response.body, 'ARTIFACT_NAME="agent-$OS-$ARCH"'
   end
 
   test "agent install script safely quotes query-string version" do

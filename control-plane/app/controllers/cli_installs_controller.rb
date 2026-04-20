@@ -112,7 +112,7 @@ class CliInstallsController < ActionController::Base
 
       DOWNLOAD_URL="$BASE_URL/cli/download?os=$OS&arch=$ARCH&version=$CLI_VERSION"
       CHECKSUM_URL="$CLI_CHECKSUM_URL?version=$CLI_VERSION"
-      ARTIFACT_NAME="$OS-$ARCH"
+      ARTIFACT_NAME="cli-$OS-$ARCH"
       TMP_BIN="$(mktemp)"
       TMP_SUMS="$(mktemp)"
       cleanup() { rm -f "$TMP_BIN" "$TMP_SUMS"; }

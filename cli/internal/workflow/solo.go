@@ -1714,18 +1714,33 @@ func waitForSoloProviderServer(ctx context.Context, provider providers.Provider,
 }
 
 func waitForSoloSSH(ctx context.Context, node config.SoloNode, timeout time.Duration) error {
+	return waitForSoloSSHWithProbe(ctx, node, timeout, 10*time.Second, 2*time.Second, func(ctx context.Context) error {
+		_, err := solo.RunSSH(ctx, node, "true", nil)
+		return err
+	})
+}
+
+func waitForSoloSSHWithProbe(ctx context.Context, node config.SoloNode, timeout, probeTimeout, retryInterval time.Duration, probe func(context.Context) error) error {
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	for {
-		if _, err := solo.RunSSH(ctx, node, "true", nil); err == nil {
+		attemptCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+		err := probe(attemptCtx)
+		cancel()
+		if err == nil {
 			return nil
 		}
+		lastErr = err
 		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("timed out waiting for SSH on %s@%s: last error: %w", node.User, node.Host, lastErr)
+			}
 			return fmt.Errorf("timed out waiting for SSH on %s@%s", node.User, node.Host)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(retryInterval):
 		}
 	}
 }

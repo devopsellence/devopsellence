@@ -3,12 +3,14 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
@@ -398,6 +400,37 @@ func TestDefaultSoloSSHPublicKeyCandidates(t *testing.T) {
 		if !strings.HasSuffix(candidate, ".pub") {
 			t.Fatalf("public key candidate = %q, want .pub suffix", candidate)
 		}
+	}
+}
+
+func TestWaitForSoloSSHWithProbeReturnsLastError(t *testing.T) {
+	node := config.SoloNode{User: "root", Host: "203.0.113.10"}
+	wantErr := errors.New("ssh: connect to host 203.0.113.10 port 22: Connection timed out")
+
+	err := waitForSoloSSHWithProbe(context.Background(), node, 30*time.Millisecond, 5*time.Millisecond, 1*time.Millisecond, func(context.Context) error {
+		return wantErr
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "last error: ssh: connect to host 203.0.113.10 port 22: Connection timed out") {
+		t.Fatalf("error = %q, want last ssh error included", err)
+	}
+}
+
+func TestWaitForSoloSSHWithProbeBoundsSingleAttempt(t *testing.T) {
+	node := config.SoloNode{User: "root", Host: "203.0.113.10"}
+
+	start := time.Now()
+	err := waitForSoloSSHWithProbe(context.Background(), node, 20*time.Millisecond, 5*time.Millisecond, 1*time.Millisecond, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("waitForSoloSSHWithProbe() took %s, want bounded retries", elapsed)
 	}
 }
 

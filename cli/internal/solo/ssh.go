@@ -14,6 +14,7 @@ import (
 func sshArgs(node config.SoloNode, command string) []string {
 	args := []string{
 		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-p", strconv.Itoa(node.Port),
 	}

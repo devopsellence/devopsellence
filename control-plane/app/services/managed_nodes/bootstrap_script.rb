@@ -7,7 +7,7 @@ module ManagedNodes
     HEREDOC_MARKER = "DEVOPSELLENCE_INSTALL".freeze
     SSH_HARDENING_CONFIG_PATH = "/etc/ssh/sshd_config.d/60-devopsellence-hardening.conf".freeze
 
-    def initialize(node_name:, bootstrap_token:, base_url:, agent_version: Devopsellence::RuntimeConfig.current.agent_stable_version)
+    def initialize(node_name:, bootstrap_token:, base_url:, agent_version: Devopsellence::RuntimeConfig.current.stable_version)
       @node_name = node_name.to_s.strip
       @bootstrap_token = bootstrap_token.to_s
       @base_url = base_url.to_s.sub(%r{/*$}, "")

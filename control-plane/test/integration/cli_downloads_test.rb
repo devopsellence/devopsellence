@@ -23,7 +23,7 @@ class CliDownloadsTest < ActionDispatch::IntegrationTest
   end
 
   test "returns service unavailable when no version is requested and no stable version is configured" do
-    with_env("DEVOPSELLENCE_STABLE_VERSION" => nil, "DEVOPSELLENCE_CLI_STABLE_VERSION" => nil) do
+    with_env("DEVOPSELLENCE_STABLE_VERSION" => nil) do
       get cli_download_path
     end
 
@@ -49,7 +49,7 @@ class CliDownloadsTest < ActionDispatch::IntegrationTest
   test "redirects unversioned requests to the stable version without downloading" do
     fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "devopsellence"))
 
-    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3", "DEVOPSELLENCE_CLI_STABLE_VERSION" => nil) do
+    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3") do
       with_cli_release_fetcher(fetcher) do
         get cli_download_path, params: { os: "darwin", arch: "arm64" }
       end
@@ -57,20 +57,6 @@ class CliDownloadsTest < ActionDispatch::IntegrationTest
 
     assert_response :redirect
     assert_equal "http://www.example.com/cli/download?arch=arm64&os=darwin&version=v1.2.3", response.location
-    assert_empty fetcher.calls
-  end
-
-  test "component-specific stable version overrides shared stable version" do
-    fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "devopsellence"))
-
-    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3", "DEVOPSELLENCE_CLI_STABLE_VERSION" => "v1.2.4") do
-      with_cli_release_fetcher(fetcher) do
-        get cli_download_path, params: { os: "darwin", arch: "arm64" }
-      end
-    end
-
-    assert_response :redirect
-    assert_equal "http://www.example.com/cli/download?arch=arm64&os=darwin&version=v1.2.4", response.location
     assert_empty fetcher.calls
   end
 

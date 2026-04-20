@@ -22,7 +22,7 @@ class ReleaseChecksumsTest < ActionDispatch::IntegrationTest
   test "cli checksums redirect unversioned requests to the stable version" do
     fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "SHA256SUMS"))
 
-    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3", "DEVOPSELLENCE_CLI_STABLE_VERSION" => nil) do
+    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v1.2.3") do
       with_cli_release_fetcher(fetcher) do
         get cli_checksums_path
       end
@@ -51,7 +51,7 @@ class ReleaseChecksumsTest < ActionDispatch::IntegrationTest
   test "agent checksums redirect unversioned requests to the stable version" do
     fetcher = FakeFetcher.new(result: FakeArtifact.new(url: "https://example.test/unused", filename: "SHA256SUMS"))
 
-    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v2.3.4", "DEVOPSELLENCE_AGENT_STABLE_VERSION" => nil) do
+    with_env("DEVOPSELLENCE_STABLE_VERSION" => "v2.3.4") do
       with_agent_release_fetcher(fetcher) do
         get agent_checksums_path
       end

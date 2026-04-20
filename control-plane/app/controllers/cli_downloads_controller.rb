@@ -31,9 +31,9 @@ class CliDownloadsController < ActionController::Base
   end
 
   def requested_version
-    params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.cli_stable_version.presence || raise(
+    params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.stable_version.presence || raise(
       CliReleases::Fetcher::NotConfiguredError,
-      "set DEVOPSELLENCE_STABLE_VERSION (or DEVOPSELLENCE_CLI_STABLE_VERSION) or pass ?version="
+      "set DEVOPSELLENCE_STABLE_VERSION or pass ?version="
     )
   end
 end

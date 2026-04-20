@@ -76,6 +76,7 @@ cd control-plane && mise run test -- test/path/file_test.rb
 ## Architecture
 
 - Solo/shared deploy semantics should match. Differences: user/org/project management, ownership, persistence, transport, policy.
+- Product intent: one shared stable release version for devopsellence. Use `DEVOPSELLENCE_STABLE_VERSION`; do not add per-component stable version env vars or defaults.
 - Shared core owns config interpretation, validation, planning, desired-state generation, ingress, placement constraints, status interpretation.
 - Prefer Go for reusable deployment core logic. CLI calls it in-process for solo; Rails should eventually call it through service/RPC.
 - Rails owns product state: accounts, authz, billing, hosted persistence, API surfaces.

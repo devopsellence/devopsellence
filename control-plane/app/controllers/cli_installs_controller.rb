@@ -11,7 +11,7 @@ class CliInstallsController < ActionController::Base
     # For curl | bash installs, default the downloader to the exact host serving
     # the script so callers do not need to pass --base-url explicitly.
     default_base_url = ShellQuoting.single_quote(request.base_url)
-    default_version = ShellQuoting.single_quote(params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.cli_stable_version)
+    default_version = ShellQuoting.single_quote(params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.stable_version)
 
     <<~SH
       #!/usr/bin/env bash

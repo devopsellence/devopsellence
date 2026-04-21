@@ -295,6 +295,22 @@ func TestSoloStatusNodesWithoutAttachmentsReturnsEmptySet(t *testing.T) {
 	}
 }
 
+func TestEnsureLocalSoloSnapshotImageReturnsActionableError(t *testing.T) {
+	t.Parallel()
+
+	app := &App{
+		Docker: &fakeDocker{imageMetadataErr: errors.New("Error response from daemon: No such image: demo:missing")},
+	}
+
+	err := app.ensureLocalSoloSnapshotImage(context.Background(), "demo:missing")
+	if err == nil {
+		t.Fatal("expected missing image error")
+	}
+	if !strings.Contains(err.Error(), `local snapshot image "demo:missing" is unavailable`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{

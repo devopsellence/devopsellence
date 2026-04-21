@@ -241,31 +241,124 @@ func (s *State) ensureDefaults() {
 }
 
 func normalizeState(current State) (State, error) {
-	for name, node := range current.Nodes {
+	nodeNames := make([]string, 0, len(current.Nodes))
+	for name := range current.Nodes {
+		nodeNames = append(nodeNames, name)
+	}
+	sort.Strings(nodeNames)
+	normalizedNodes := make(map[string]config.SoloNode, len(current.Nodes))
+	for _, name := range nodeNames {
+		node := current.Nodes[name]
 		normalized, err := normalizeAndValidateNode(name, node)
 		if err != nil {
 			return State{}, err
 		}
-		current.Nodes[name] = normalized
+		normalizedNodes[name] = normalized
 	}
-	for key, attachment := range current.Attachments {
-		current.Attachments[key] = normalizeAttachmentRecord(key, attachment)
+	current.Nodes = normalizedNodes
+
+	attachmentKeys := make([]string, 0, len(current.Attachments))
+	for key := range current.Attachments {
+		attachmentKeys = append(attachmentKeys, key)
 	}
+	sort.Strings(attachmentKeys)
+	normalizedAttachments := make(map[string]AttachmentRecord, len(current.Attachments))
+	for _, key := range attachmentKeys {
+		normalizedKey, attachment, err := normalizeAttachmentRecord(key, current.Attachments[key])
+		if err != nil {
+			return State{}, fmt.Errorf("normalize attachment %q: %w", key, err)
+		}
+		if existing, ok := normalizedAttachments[normalizedKey]; ok {
+			attachment.NodeNames = normalizeNodeNames(append(existing.NodeNames, attachment.NodeNames...))
+			if strings.TrimSpace(attachment.WorkspaceRoot) == "" {
+				attachment.WorkspaceRoot = existing.WorkspaceRoot
+			}
+		}
+		normalizedAttachments[normalizedKey] = attachment
+	}
+	current.Attachments = normalizedAttachments
+
+	snapshotKeys := make([]string, 0, len(current.Snapshots))
+	for key := range current.Snapshots {
+		snapshotKeys = append(snapshotKeys, key)
+	}
+	sort.Strings(snapshotKeys)
+	normalizedSnapshots := make(map[string]DeploySnapshot, len(current.Snapshots))
+	for _, key := range snapshotKeys {
+		normalizedKey, snapshot, err := normalizeSnapshotRecord(key, current.Snapshots[key])
+		if err != nil {
+			return State{}, fmt.Errorf("normalize snapshot %q: %w", key, err)
+		}
+		normalizedSnapshots[normalizedKey] = snapshot
+	}
+	current.Snapshots = normalizedSnapshots
+
 	return current, nil
 }
 
-func normalizeAttachmentRecord(key string, attachment AttachmentRecord) AttachmentRecord {
-	attachment.NodeNames = normalizeNodeNames(attachment.NodeNames)
-	if attachment.WorkspaceKey == "" {
-		attachment.WorkspaceKey = strings.TrimSpace(strings.SplitN(key, "\n", 2)[0])
+func normalizeAttachmentRecord(key string, attachment AttachmentRecord) (string, AttachmentRecord, error) {
+	workspaceRoot, workspaceKey, err := normalizeWorkspaceIdentity(key, attachment.WorkspaceRoot, attachment.WorkspaceKey)
+	if err != nil {
+		return "", AttachmentRecord{}, err
 	}
-	if attachment.Environment == "" {
-		parts := strings.SplitN(key, "\n", 2)
-		if len(parts) == 2 {
-			attachment.Environment = strings.TrimSpace(parts[1])
+	_, keyEnvironment := splitEnvironmentStateKey(key)
+	environment := defaultEnvironmentName(firstNonEmpty(attachment.Environment, keyEnvironment))
+	attachment.NodeNames = normalizeNodeNames(attachment.NodeNames)
+	attachment.WorkspaceRoot = workspaceRoot
+	attachment.WorkspaceKey = workspaceKey
+	attachment.Environment = environment
+	return workspaceKey + "\n" + environment, attachment, nil
+}
+
+func normalizeSnapshotRecord(key string, snapshot DeploySnapshot) (string, DeploySnapshot, error) {
+	workspaceRoot, workspaceKey, err := normalizeWorkspaceIdentity(key, snapshot.WorkspaceRoot, snapshot.WorkspaceKey)
+	if err != nil {
+		return "", DeploySnapshot{}, err
+	}
+	_, keyEnvironment := splitEnvironmentStateKey(key)
+	snapshot.WorkspaceRoot = workspaceRoot
+	snapshot.WorkspaceKey = workspaceKey
+	snapshot.Environment = defaultEnvironmentName(firstNonEmpty(snapshot.Environment, keyEnvironment))
+	return snapshot.WorkspaceKey + "\n" + snapshot.Environment, snapshot, nil
+}
+
+func normalizeWorkspaceIdentity(key, workspaceRoot, workspaceKey string) (string, string, error) {
+	keyWorkspace, _ := splitEnvironmentStateKey(key)
+	workspaceSource := firstNonEmpty(workspaceRoot, workspaceKey, keyWorkspace)
+	if strings.TrimSpace(workspaceSource) == "" {
+		return "", "", errors.New("workspace identity is required")
+	}
+	canonicalKey, err := CanonicalWorkspaceKey(workspaceSource)
+	if err != nil {
+		return "", "", err
+	}
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		workspaceRoot = canonicalKey
+	}
+	return workspaceRoot, canonicalKey, nil
+}
+
+func splitEnvironmentStateKey(key string) (string, string) {
+	parts := strings.SplitN(key, "\n", 2)
+	workspace := ""
+	environment := ""
+	if len(parts) > 0 {
+		workspace = strings.TrimSpace(parts[0])
+	}
+	if len(parts) == 2 {
+		environment = strings.TrimSpace(parts[1])
+	}
+	return workspace, environment
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
 		}
 	}
-	return attachment
+	return ""
 }
 
 func NormalizeNode(node config.SoloNode) config.SoloNode {

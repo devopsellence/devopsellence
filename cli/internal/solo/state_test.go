@@ -123,6 +123,39 @@ func TestStateStoreReadNormalizesLegacyData(t *testing.T) {
 	}
 }
 
+func TestStateStoreReadNormalizesLegacySnapshots(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "solo-state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "snapshots": {
+    "/workspace/demo\nproduction": {
+      "workspace_root": "/workspace/demo",
+      "revision": "abc1234",
+      "image": "demo:abc1234"
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := NewStateStore(path).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, ok := loaded.Snapshots["/workspace/demo\nproduction"]
+	if !ok {
+		t.Fatalf("normalized snapshot missing: %#v", loaded.Snapshots)
+	}
+	if snapshot.WorkspaceKey != "/workspace/demo" {
+		t.Fatalf("workspace_key = %q, want /workspace/demo", snapshot.WorkspaceKey)
+	}
+	if snapshot.Environment != "production" {
+		t.Fatalf("environment = %q, want production", snapshot.Environment)
+	}
+}
+
 func TestAttachmentKeysForNodeDoesNotMutateState(t *testing.T) {
 	t.Parallel()
 

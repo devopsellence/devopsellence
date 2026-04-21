@@ -3360,14 +3360,15 @@ func newTestAppWithTransport(t *testing.T, cwd string, transport http.RoundTripp
 }
 
 type fakeDocker struct {
-	digest         string
-	buildPlatforms []string
-	buildTarget    string
-	configDir      string
-	loginRegistry  string
-	updates        []string
-	delay          time.Duration
-	imageMetadata  docker.ImageMetadata
+	digest           string
+	buildPlatforms   []string
+	buildTarget      string
+	configDir        string
+	loginRegistry    string
+	updates          []string
+	delay            time.Duration
+	imageMetadata    docker.ImageMetadata
+	imageMetadataErr error
 }
 
 func (f *fakeDocker) Installed() bool { return true }
@@ -3399,7 +3400,7 @@ func (f *fakeDocker) BuildAndPush(_ context.Context, _contextPath, _dockerfile, 
 }
 
 func (f *fakeDocker) ImageMetadata(_ context.Context, _ string) (docker.ImageMetadata, error) {
-	return f.imageMetadata, nil
+	return f.imageMetadata, f.imageMetadataErr
 }
 
 type dockerUnavailableStub struct{}

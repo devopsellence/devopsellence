@@ -413,6 +413,12 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 				return
 			}
 			for _, image := range images {
+				if err := a.ensureLocalSoloSnapshotImage(ctx, image); err != nil {
+					mu.Lock()
+					errs = append(errs, fmt.Sprintf("[%s] image transfer: %s", name, err))
+					mu.Unlock()
+					return
+				}
 				if !a.Printer.JSON {
 					a.Printer.Println(fmt.Sprintf("[%s] Transferring image %s...", name, image))
 				}
@@ -446,6 +452,19 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	wg.Wait()
 	if len(errs) > 0 {
 		return fmt.Errorf("republish errors:\n  %s", strings.Join(errs, "\n  "))
+	}
+	return nil
+}
+
+func (a *App) ensureLocalSoloSnapshotImage(ctx context.Context, imageTag string) error {
+	if strings.TrimSpace(imageTag) == "" {
+		return nil
+	}
+	if a.Docker == nil {
+		return errors.New("docker client is not configured")
+	}
+	if _, err := a.Docker.ImageMetadata(ctx, imageTag); err != nil {
+		return fmt.Errorf("local snapshot image %q is unavailable; rebuild or redeploy the attached workspace before republishing solo node state: %w", imageTag, err)
 	}
 	return nil
 }

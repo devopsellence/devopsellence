@@ -259,6 +259,42 @@ func TestSoloAffectedNodesForNodeIncludesCoHostedNodes(t *testing.T) {
 	}
 }
 
+func TestSoloStatusNodesWithoutAttachmentsReturnsEmptySet(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.SoloNode{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]solo.DeploySnapshot{},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard, true),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	nodes, err := app.soloStatusNodes(SoloStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 0 {
+		t.Fatalf("nodes = %#v, want empty", nodes)
+	}
+}
+
 func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{

@@ -224,12 +224,12 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
+	if len(attachedNodeNames) == 0 {
+		return fmt.Errorf("no nodes attached to %s; run `devopsellence node attach <name>`", environmentName)
+	}
 	nodes, err := a.resolveSoloNodes(current, attachedNodeNames)
 	if err != nil {
 		return err
-	}
-	if len(nodes) == 0 {
-		return fmt.Errorf("no nodes attached to %s; run `devopsellence node attach <name>`", environmentName)
 	}
 	if _, err := validateSoloNodeSchedule(cfg, nodes); err != nil {
 		return err
@@ -1392,6 +1392,9 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 	if err != nil {
 		return err
 	}
+	if len(nodeNames) == 0 {
+		return fmt.Errorf("no nodes are attached to the current environment")
+	}
 	nodes, err := a.resolveSoloNodes(current, nodeNames)
 	if err != nil {
 		return err
@@ -1494,6 +1497,9 @@ func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.SoloNod
 	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
 	if err != nil {
 		return nil, err
+	}
+	if len(nodeNames) == 0 {
+		return map[string]config.SoloNode{}, nil
 	}
 	return a.resolveSoloNodes(current, nodeNames)
 }

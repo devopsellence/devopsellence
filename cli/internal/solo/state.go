@@ -442,7 +442,7 @@ func (s *State) SaveSnapshot(snapshot DeploySnapshot) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	snapshot.WorkspaceKey, _ = CanonicalWorkspaceKey(snapshot.WorkspaceRoot)
+	snapshot.WorkspaceKey, _ = splitEnvironmentStateKey(key)
 	s.Snapshots[key] = snapshot
 	return key, nil
 }

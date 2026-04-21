@@ -736,12 +736,17 @@ PY
 
   def attach_node!
     output = run!(
-      cli_binary.to_s, "node", "attach", "node-1",
+      cli_binary.to_s, "node", "attach", "node-1", "--json",
       chdir: @app_dir.to_s,
       timeout: 30,
       env: ssh_env
     )
-    raise "node attach did not report success" unless output.include?("Attached solo node node-1 to production")
+    result = JSON.parse(output)
+    unless result["node"] == "node-1" &&
+           result["environment"] == "production" &&
+           result["changed"]
+      raise "node attach returned unexpected result: #{output}"
+    end
     puts "[ok] Solo node attached"
   end
 

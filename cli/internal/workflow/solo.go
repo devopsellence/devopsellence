@@ -419,6 +419,26 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 					mu.Unlock()
 					return
 				}
+			}
+			if len(images) > 0 {
+				if _, err := solo.RunSSH(ctx, node, remoteDockerCheckCommand(), nil); err != nil {
+					mu.Lock()
+					errs = append(errs, fmt.Sprintf("[%s] remote docker check: %s", name, err))
+					mu.Unlock()
+					return
+				}
+			}
+			for _, image := range images {
+				present, err := remoteNodeHasImage(ctx, node, image)
+				if err != nil {
+					mu.Lock()
+					errs = append(errs, fmt.Sprintf("[%s] remote image check: %s", name, err))
+					mu.Unlock()
+					return
+				}
+				if present {
+					continue
+				}
 				if !a.Printer.JSON {
 					a.Printer.Println(fmt.Sprintf("[%s] Transferring image %s...", name, image))
 				}
@@ -477,6 +497,14 @@ func desiredStateRevision(data []byte) (string, error) {
 		return "", errors.New("revision is missing")
 	}
 	return payload.Revision, nil
+}
+
+func remoteNodeHasImage(ctx context.Context, node config.SoloNode, imageTag string) (bool, error) {
+	out, err := solo.RunSSH(ctx, node, remoteDockerImageInspectCommand(imageTag), nil)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "present", nil
 }
 
 func (a *App) ensureLocalSoloSnapshotImage(ctx context.Context, imageTag string) error {
@@ -2302,6 +2330,11 @@ func remoteDockerCheckCommand() string {
 
 func remoteDockerLoadCommand() string {
 	return "if docker info >/dev/null 2>&1; then gunzip | docker load; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then gunzip | sudo -n docker load; else echo 'Docker is not reachable. Add this SSH user to the docker group or enable passwordless sudo for docker.' >&2; docker info >/dev/null 2>&1; exit 1; fi"
+}
+
+func remoteDockerImageInspectCommand(imageTag string) string {
+	quotedImage := shellQuote(imageTag)
+	return fmt.Sprintf("if docker image inspect %s >/dev/null 2>&1; then echo present; elif command -v sudo >/dev/null 2>&1 && sudo -n docker image inspect %s >/dev/null 2>&1; then echo present; else echo missing; fi", quotedImage, quotedImage)
 }
 
 func remoteReadFileCommand(path string) string {

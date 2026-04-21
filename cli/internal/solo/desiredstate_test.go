@@ -2,6 +2,8 @@ package solo
 
 import (
 	"encoding/json"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -341,7 +343,7 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 		},
 	}
 
-	merged, err := mergeIngressForNode([]string{config.DefaultWebRole}, snapshots)
+	merged, err := mergeIngressForNode([]string{config.DefaultWebRole}, snapshots, aggregatedEnvironmentNames(snapshots))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,5 +352,73 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 	}
 	if merged.Routes[0].Target.Port != "http" || merged.Routes[1].Target.Port != "metrics" {
 		t.Fatalf("route order = %#v", merged.Routes)
+	}
+}
+
+func TestBuildAggregatedDesiredStateNamespacesDuplicateEnvironmentNames(t *testing.T) {
+	t.Parallel()
+
+	currentNode := config.SoloNode{Labels: []string{config.DefaultWebRole}}
+	snapshots := []DeploySnapshot{
+		{
+			WorkspaceRoot: "/workspace/a",
+			WorkspaceKey:  "/workspace/a",
+			Environment:   "production",
+			Revision:      "aaa1111",
+			Metadata:      SnapshotMetadata{Project: "alpha"},
+			Services:      []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "alpha:aaa1111"}},
+			Ingress: &ingressJSON{
+				Mode:  "public",
+				TLS:   ingressTLSJSON{Mode: "auto"},
+				Hosts: []string{"a.example.com"},
+				Routes: []ingressRouteJSON{{
+					Match:  ingressMatchJSON{Hostname: "a.example.com"},
+					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				}},
+			},
+			IngressService:     "web",
+			IngressServiceKind: config.ServiceKindWeb,
+		},
+		{
+			WorkspaceRoot: "/workspace/b",
+			WorkspaceKey:  "/workspace/b",
+			Environment:   "production",
+			Revision:      "bbb2222",
+			Metadata:      SnapshotMetadata{Project: "bravo"},
+			Services:      []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "bravo:bbb2222"}},
+			Ingress: &ingressJSON{
+				Mode:  "public",
+				TLS:   ingressTLSJSON{Mode: "auto"},
+				Hosts: []string{"b.example.com"},
+				Routes: []ingressRouteJSON{{
+					Match:  ingressMatchJSON{Hostname: "b.example.com"},
+					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				}},
+			},
+			IngressService:     "web",
+			IngressServiceKind: config.ServiceKindWeb,
+		},
+	}
+
+	data, err := BuildAggregatedDesiredState("web-a", currentNode, snapshots, map[string]string{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ds desiredStateJSON
+	if err := json.Unmarshal(data, &ds); err != nil {
+		t.Fatal(err)
+	}
+	if len(ds.Environments) != 2 {
+		t.Fatalf("environments = %#v", ds.Environments)
+	}
+	gotNames := []string{ds.Environments[0].Name, ds.Environments[1].Name}
+	if gotNames[0] == gotNames[1] {
+		t.Fatalf("environment names should be unique: %#v", gotNames)
+	}
+	gotTargets := []string{ds.Ingress.Routes[0].Target.Environment, ds.Ingress.Routes[1].Target.Environment}
+	sort.Strings(gotNames)
+	sort.Strings(gotTargets)
+	if !reflect.DeepEqual(gotNames, gotTargets) {
+		t.Fatalf("ingress targets = %#v, want %#v", gotTargets, gotNames)
 	}
 }

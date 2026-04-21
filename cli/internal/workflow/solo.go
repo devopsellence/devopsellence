@@ -445,7 +445,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	}
 	wg.Wait()
 	if len(errs) > 0 {
-		return fmt.Errorf("deploy errors:\n  %s", strings.Join(errs, "\n  "))
+		return fmt.Errorf("republish errors:\n  %s", strings.Join(errs, "\n  "))
 	}
 	return nil
 }
@@ -687,7 +687,8 @@ func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"schema_version": outputSchemaVersion,
-			"nodes":          items,
+			"nodes":          current.Nodes,
+			"node_items":     items,
 		})
 	}
 	if len(items) == 0 {

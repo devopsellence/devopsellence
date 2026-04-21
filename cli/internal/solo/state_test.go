@@ -259,3 +259,33 @@ func TestSaveSnapshotPersistsWorkspaceEnvironmentIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestDetachNodeDoesNotMutatePreviouslyReturnedAttachments(t *testing.T) {
+	t.Parallel()
+
+	current := newState()
+	if err := current.SetNode("web-a", config.SoloNode{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.SetNode("worker-a", config.SoloNode{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWorkerRole}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode("/workspace/demo", "production", "web-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode("/workspace/demo", "production", "worker-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	attachments := current.AttachmentsForNode("web-a")
+	if len(attachments) != 1 {
+		t.Fatalf("attachments = %#v", attachments)
+	}
+	before := attachments[0]
+	if _, _, err := current.DetachNode("/workspace/demo", "production", "worker-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := before.NodeNames; !reflect.DeepEqual(got, []string{"web-a", "worker-a"}) {
+		t.Fatalf("returned attachment mutated to %#v", got)
+	}
+}

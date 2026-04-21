@@ -384,7 +384,7 @@ func (s *State) DetachNode(workspaceRoot, environment, nodeName string) (Attachm
 	if !ok {
 		return AttachmentRecord{}, false, nil
 	}
-	filtered := attachment.NodeNames[:0]
+	filtered := make([]string, 0, len(attachment.NodeNames))
 	changed := false
 	for _, current := range attachment.NodeNames {
 		if strings.TrimSpace(current) == strings.TrimSpace(nodeName) {

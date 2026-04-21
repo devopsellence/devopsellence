@@ -281,6 +281,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"schema_version":          outputSchemaVersion,
+			"revision":                shortSHA,
 			"workload_revision":       shortSHA,
 			"desired_state_revisions": desiredStateRevisions,
 			"image":                   imageTag,

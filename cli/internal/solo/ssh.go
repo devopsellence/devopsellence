@@ -5,10 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 
 	"github.com/devopsellence/cli/internal/config"
+	"github.com/devopsellence/cli/internal/state"
 )
 
 func sshArgs(node config.SoloNode, command string) []string {
@@ -18,6 +21,9 @@ func sshArgs(node config.SoloNode, command string) []string {
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-p", strconv.Itoa(node.Port),
 	}
+	if knownHostsPath := managedKnownHostsPath(node); knownHostsPath != "" {
+		args = append(args, "-o", "UserKnownHostsFile="+knownHostsPath)
+	}
 	if node.SSHKey != "" {
 		args = append(args, "-i", node.SSHKey)
 	}
@@ -25,10 +31,31 @@ func sshArgs(node config.SoloNode, command string) []string {
 	return args
 }
 
+func managedKnownHostsPath(node config.SoloNode) string {
+	if node.Provider == "" || node.ProviderServerID == "" {
+		return ""
+	}
+	return filepath.Join(state.DefaultPath(filepath.Join("devopsellence", "ssh_known_hosts")), node.Provider+"-"+node.ProviderServerID)
+}
+
+func prepareSSH(node config.SoloNode) error {
+	knownHostsPath := managedKnownHostsPath(node)
+	if knownHostsPath == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(knownHostsPath), 0o755); err != nil {
+		return fmt.Errorf("prepare ssh known_hosts for %s@%s: %w", node.User, node.Host, err)
+	}
+	return nil
+}
+
 // RunSSH executes a command on a remote node via ssh.
 // It inherits the user's ~/.ssh/config, agent forwarding, and known hosts.
 // If stdin is non-nil it is piped to the remote command.
 func RunSSH(ctx context.Context, node config.SoloNode, command string, stdin io.Reader) (string, error) {
+	if err := prepareSSH(node); err != nil {
+		return "", err
+	}
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs(node, command)...)
 	if stdin != nil {
 		cmd.Stdin = stdin
@@ -48,6 +75,9 @@ func RunSSH(ctx context.Context, node config.SoloNode, command string, stdin io.
 // stderr directly to the provided writers. Use this for long-running streaming
 // commands like `journalctl -f` where output must not be buffered.
 func RunSSHInteractive(ctx context.Context, node config.SoloNode, command string, stdout, stderr io.Writer) error {
+	if err := prepareSSH(node); err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs(node, command)...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -59,6 +89,9 @@ func RunSSHInteractive(ctx context.Context, node config.SoloNode, command string
 }
 
 func RunSSHInteractiveWithStdin(ctx context.Context, node config.SoloNode, command string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if err := prepareSSH(node); err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs(node, command)...)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
@@ -74,6 +107,9 @@ func RunSSHInteractiveWithStdin(ctx context.Context, node config.SoloNode, comma
 // from the provided reader. Unlike RunSSH it does not capture stdout.
 // This is used for piping docker save output to docker load on the remote.
 func RunSSHStream(ctx context.Context, node config.SoloNode, command string, stdin io.Reader) error {
+	if err := prepareSSH(node); err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs(node, command)...)
 	cmd.Stdin = stdin
 

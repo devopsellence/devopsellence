@@ -312,7 +312,10 @@ func mergeIngressForNode(labels []string, snapshots []DeploySnapshot) (*ingressJ
 		if left.Target.Service != right.Target.Service {
 			return left.Target.Service < right.Target.Service
 		}
-		return left.Match.PathPrefix < right.Match.PathPrefix
+		if left.Match.PathPrefix != right.Match.PathPrefix {
+			return left.Match.PathPrefix < right.Match.PathPrefix
+		}
+		return left.Target.Port < right.Target.Port
 	})
 	return merged, nil
 }

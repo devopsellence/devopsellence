@@ -81,6 +81,73 @@ func TestStateStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateStoreReadNormalizesLegacyData(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "solo-state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "nodes": {
+    "web-a": {
+      "host": "203.0.113.10",
+      "user": "root",
+      "labels": ["web", "web"]
+    }
+  },
+  "attachments": {
+    "/workspace/demo\nproduction": {
+      "workspace_root": "/workspace/demo",
+      "node_names": ["web-b", "web-a", "web-a"]
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := NewStateStore(path).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Nodes["web-a"].AgentStateDir; got != "/var/lib/devopsellence" {
+		t.Fatalf("agent_state_dir = %q, want default", got)
+	}
+	if got := loaded.Attachments["/workspace/demo\nproduction"].WorkspaceKey; got != "/workspace/demo" {
+		t.Fatalf("workspace_key = %q, want /workspace/demo", got)
+	}
+	if got := loaded.Attachments["/workspace/demo\nproduction"].Environment; got != "production" {
+		t.Fatalf("environment = %q, want production", got)
+	}
+	if got := loaded.Attachments["/workspace/demo\nproduction"].NodeNames; !reflect.DeepEqual(got, []string{"web-a", "web-b"}) {
+		t.Fatalf("node_names = %#v", got)
+	}
+}
+
+func TestAttachmentKeysForNodeDoesNotMutateState(t *testing.T) {
+	t.Parallel()
+
+	current := State{
+		SchemaVersion: soloStateSchemaVersion,
+		Nodes: map[string]config.SoloNode{
+			"web-a": {Host: "203.0.113.10", User: "root"},
+		},
+		Attachments: map[string]AttachmentRecord{
+			"/workspace/demo\nproduction": {
+				WorkspaceRoot: "/workspace/demo",
+				NodeNames:     []string{"web-a", "web-a"},
+			},
+		},
+		Snapshots: map[string]DeploySnapshot{},
+	}
+
+	keys := current.AttachmentKeysForNode("web-a")
+	if want := []string{"/workspace/demo\nproduction"}; !reflect.DeepEqual(keys, want) {
+		t.Fatalf("AttachmentKeysForNode() = %#v, want %#v", keys, want)
+	}
+	if got := current.Attachments["/workspace/demo\nproduction"].NodeNames; !reflect.DeepEqual(got, []string{"web-a", "web-a"}) {
+		t.Fatalf("AttachmentKeysForNode() mutated attachment nodes: %#v", got)
+	}
+}
+
 func TestAttachmentCRUD(t *testing.T) {
 	t.Parallel()
 

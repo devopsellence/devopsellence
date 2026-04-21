@@ -83,8 +83,8 @@ Shared mode secrets:
 	- `+"`devopsellence secret set NAME --value ...`"+`
 	- `+"`devopsellence node list`"+`
 	- `+"`devopsellence node logs NODE --follow`"+`
-- `+"`devopsellence node create prod-1`"+`
-- `+"`devopsellence node attach prod-1`"+`
+	- `+"`devopsellence node create prod-1`"+`
+	- `+"`devopsellence node attach prod-1`"+`
 
 Shared mode:
 - `+"`devopsellence mode use shared`"+`

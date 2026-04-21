@@ -84,6 +84,7 @@ func (s *StateStore) Read() (State, error) {
 		current.SchemaVersion = soloStateSchemaVersion
 	}
 	current.ensureDefaults()
+	current = normalizeState(current)
 	return current, nil
 }
 
@@ -92,6 +93,7 @@ func (s *StateStore) Write(current State) error {
 		return errors.New("solo state store path is required")
 	}
 	current.ensureDefaults()
+	current = normalizeState(current)
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
 		return err
 	}
@@ -215,22 +217,30 @@ func (s *State) ensureDefaults() {
 	if s.Snapshots == nil {
 		s.Snapshots = map[string]DeploySnapshot{}
 	}
-	for name, node := range s.Nodes {
-		s.Nodes[name] = NormalizeNode(node)
+}
+
+func normalizeState(current State) State {
+	for name, node := range current.Nodes {
+		current.Nodes[name] = NormalizeNode(node)
 	}
-	for key, attachment := range s.Attachments {
-		attachment.NodeNames = normalizeNodeNames(attachment.NodeNames)
-		if attachment.WorkspaceKey == "" {
-			attachment.WorkspaceKey = strings.TrimSpace(strings.SplitN(key, "\n", 2)[0])
-		}
-		if attachment.Environment == "" {
-			parts := strings.SplitN(key, "\n", 2)
-			if len(parts) == 2 {
-				attachment.Environment = strings.TrimSpace(parts[1])
-			}
-		}
-		s.Attachments[key] = attachment
+	for key, attachment := range current.Attachments {
+		current.Attachments[key] = normalizeAttachmentRecord(key, attachment)
 	}
+	return current
+}
+
+func normalizeAttachmentRecord(key string, attachment AttachmentRecord) AttachmentRecord {
+	attachment.NodeNames = normalizeNodeNames(attachment.NodeNames)
+	if attachment.WorkspaceKey == "" {
+		attachment.WorkspaceKey = strings.TrimSpace(strings.SplitN(key, "\n", 2)[0])
+	}
+	if attachment.Environment == "" {
+		parts := strings.SplitN(key, "\n", 2)
+		if len(parts) == 2 {
+			attachment.Environment = strings.TrimSpace(parts[1])
+		}
+	}
+	return attachment
 }
 
 func NormalizeNode(node config.SoloNode) config.SoloNode {

@@ -310,3 +310,45 @@ func TestBuildAggregatedDesiredStateMergesEnvironmentsIngressAndPeers(t *testing
 		t.Fatalf("tasks = %#v", ds.Environments)
 	}
 }
+
+func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
+	t.Parallel()
+
+	snapshots := []DeploySnapshot{
+		{
+			Ingress: &ingressJSON{
+				Mode: "public",
+				TLS:  ingressTLSJSON{Mode: "auto"},
+				Routes: []ingressRouteJSON{{
+					Match:  ingressMatchJSON{Hostname: "app.example.com"},
+					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "metrics"},
+				}},
+			},
+			IngressService:     "web",
+			IngressServiceKind: config.ServiceKindWeb,
+		},
+		{
+			Ingress: &ingressJSON{
+				Mode: "public",
+				TLS:  ingressTLSJSON{Mode: "auto"},
+				Routes: []ingressRouteJSON{{
+					Match:  ingressMatchJSON{Hostname: "app.example.com"},
+					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				}},
+			},
+			IngressService:     "web",
+			IngressServiceKind: config.ServiceKindWeb,
+		},
+	}
+
+	merged, err := mergeIngressForNode([]string{config.DefaultWebRole}, snapshots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged == nil || len(merged.Routes) != 2 {
+		t.Fatalf("routes = %#v", merged)
+	}
+	if merged.Routes[0].Target.Port != "http" || merged.Routes[1].Target.Port != "metrics" {
+		t.Fatalf("route order = %#v", merged.Routes)
+	}
+}

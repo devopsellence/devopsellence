@@ -62,6 +62,7 @@ cd control-plane && mise run test -- test/path/file_test.rb
 ## Conventions
 
 - Go: `gofmt`; no extra linter config.
+- For `agent/` and `cli/` API and documentation inspection, prefer `go doc` and `gopls` (for example, workspace symbol/definition lookups) before ad-hoc text searches.
 - Rails: `.rubocop.yml`.
 - Prefer Rails 8 solid stack, no-build CSS/JS, Tailwind, sqlite where appropriate.
 - Rails migrations: append-only. Once a migration is committed/pushed, do not edit it; add a new migration.

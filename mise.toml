@@ -133,6 +133,10 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
 done
 '''
 
+[tasks."release:cli:local"]
+description = "Build the CLI from current HEAD and install it locally like the public installer"
+run = "./cli/scripts/release-local.sh"
+
 [tasks."fmt:agent"]
 description = "Format agent Go files"
 dir = "agent"

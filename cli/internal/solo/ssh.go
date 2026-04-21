@@ -38,7 +38,7 @@ func managedKnownHostsPath(node config.SoloNode) string {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(node.Provider + "\x00" + node.ProviderServerID))
-	filename := node.Provider + "-" + hex.EncodeToString(sum[:])[:16]
+	filename := "managed-" + hex.EncodeToString(sum[:])[:16]
 	return filepath.Join(state.DefaultPath(filepath.Join("devopsellence", "ssh_known_hosts")), filename)
 }
 

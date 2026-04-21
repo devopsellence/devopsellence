@@ -52,7 +52,7 @@ func TestSSHArgsUseManagedKnownHostsForProviderNodes(t *testing.T) {
 		"-o", "ConnectTimeout=10",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-p", "22",
-		"-o", "UserKnownHostsFile=" + filepath.Join(stateDir, "devopsellence", "ssh_known_hosts", node.Provider+"-"+hex.EncodeToString(sum[:])[:16]),
+		"-o", "UserKnownHostsFile=" + filepath.Join(stateDir, "devopsellence", "ssh_known_hosts", "managed-"+hex.EncodeToString(sum[:])[:16]),
 		"-i", "/tmp/id_ed25519",
 		"root@203.0.113.10",
 		"true",
@@ -75,7 +75,7 @@ func TestManagedKnownHostsPathHashesUntrustedServerID(t *testing.T) {
 	if filepath.Dir(path) != base {
 		t.Fatalf("managedKnownHostsPath() dir = %q, want %q", filepath.Dir(path), base)
 	}
-	if filepath.Base(path) == node.Provider+"-"+node.ProviderServerID {
+	if filepath.Base(path) == node.Provider+"-"+node.ProviderServerID || filepath.Base(path) == "managed-"+node.ProviderServerID {
 		t.Fatalf("managedKnownHostsPath() base = %q, want hashed filename", filepath.Base(path))
 	}
 }

@@ -1,8 +1,6 @@
 package solo
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -45,14 +43,13 @@ func TestSSHArgsUseManagedKnownHostsForProviderNodes(t *testing.T) {
 		ProviderServerID: "123456",
 	}
 
-	sum := sha256.Sum256([]byte(node.Provider + "\x00" + node.ProviderServerID))
 	got := sshArgs(node, "true")
 	want := []string{
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-p", "22",
-		"-o", "UserKnownHostsFile=" + filepath.Join(stateDir, "devopsellence", "ssh_known_hosts", "managed-"+hex.EncodeToString(sum[:])[:16]),
+		"-o", "UserKnownHostsFile=" + managedKnownHostsPath(node),
 		"-i", "/tmp/id_ed25519",
 		"root@203.0.113.10",
 		"true",

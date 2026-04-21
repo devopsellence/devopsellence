@@ -59,10 +59,10 @@ devopsellence deploy
 devopsellence status
 ```
 
-Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each web node, then configure hostnames:
+Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each web node, then configure hostnames. Pass `--service` when the target web service is not already obvious:
 
 ```bash
-devopsellence ingress set --host app.example.com --tls-email ops@example.com
+devopsellence ingress set --service web --host app.example.com --tls-email ops@example.com
 devopsellence ingress check --wait 5m
 devopsellence deploy
 ```

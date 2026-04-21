@@ -189,3 +189,22 @@ func TestNodeCreateHelpUsesCurrentHetznerDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestIngressSetHelpShowsServiceFlag(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"ingress", "set", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	for _, snippet := range []string{"--service string", "Ingress service name"} {
+		if !strings.Contains(stdout.String(), snippet) {
+			t.Fatalf("help output = %q, want %q", stdout.String(), snippet)
+		}
+	}
+}

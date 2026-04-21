@@ -340,12 +340,24 @@ func TestRepublishSoloNodesReportsLocalImagePrecheck(t *testing.T) {
 		},
 	}
 
-	err := app.republishSoloNodes(context.Background(), current, []string{"web-a"})
+	_, err := app.republishSoloNodes(context.Background(), current, []string{"web-a"})
 	if err == nil {
 		t.Fatal("expected republish error")
 	}
 	if !strings.Contains(err.Error(), "[web-a] local image precheck:") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDesiredStateRevisionReadsRevision(t *testing.T) {
+	t.Parallel()
+
+	revision, err := desiredStateRevision([]byte(`{"revision":"abc123"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision != "abc123" {
+		t.Fatalf("revision = %q, want abc123", revision)
 	}
 }
 

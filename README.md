@@ -60,6 +60,8 @@ devopsellence deploy
 devopsellence status
 ```
 
+Solo deploy scope comes from the nodes attached to the current workspace/environment. Use `devopsellence node attach <name>` and `devopsellence node detach <name>` to change which nodes receive the deploy.
+
 Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each web node, then configure hostnames. Pass `--service` when the target web service is not already obvious:
 
 ```bash

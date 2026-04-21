@@ -273,16 +273,19 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return err
 	}
 
-	if err := a.republishSoloNodes(ctx, current, attachedNodeNames); err != nil {
+	desiredStateRevisions, err := a.republishSoloNodes(ctx, current, attachedNodeNames)
+	if err != nil {
 		return err
 	}
 
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
-			"revision":    shortSHA,
-			"image":       imageTag,
-			"environment": environmentName,
-			"nodes":       sortedSoloNodeNames(nodes),
+			"schema_version":          outputSchemaVersion,
+			"workload_revision":       shortSHA,
+			"desired_state_revisions": desiredStateRevisions,
+			"image":                   imageTag,
+			"environment":             environmentName,
+			"nodes":                   sortedSoloNodeNames(nodes),
 		})
 	}
 	a.Printer.Println(fmt.Sprintf("Deployed revision %s to %d node(s)", shortSHA, len(nodes)))
@@ -384,17 +387,18 @@ func (a *App) resolveSoloNodes(current solo.State, names []string) (map[string]c
 	return result, nil
 }
 
-func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNames []string) error {
+func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNames []string) (map[string]string, error) {
 	if len(nodeNames) == 0 {
-		return nil
+		return map[string]string{}, nil
 	}
 	var mu sync.Mutex
 	var errs []string
+	revisions := map[string]string{}
 	var wg sync.WaitGroup
 
 	nodes, err := a.resolveSoloNodes(current, nodeNames)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, nodeName := range sortedSoloNodeNames(nodes) {
 		node := nodes[nodeName]
@@ -443,13 +447,36 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 				mu.Unlock()
 				return
 			}
+			revision, err := desiredStateRevision(desiredStateJSON)
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Sprintf("[%s] parse desired state revision: %s", name, err))
+				mu.Unlock()
+				return
+			}
+			mu.Lock()
+			revisions[name] = revision
+			mu.Unlock()
 		}(nodeName, node)
 	}
 	wg.Wait()
 	if len(errs) > 0 {
-		return fmt.Errorf("republish errors:\n  %s", strings.Join(errs, "\n  "))
+		return nil, fmt.Errorf("republish errors:\n  %s", strings.Join(errs, "\n  "))
 	}
-	return nil
+	return revisions, nil
+}
+
+func desiredStateRevision(data []byte) (string, error) {
+	var payload struct {
+		Revision string `json:"revision"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(payload.Revision) == "" {
+		return "", errors.New("revision is missing")
+	}
+	return payload.Revision, nil
 }
 
 func (a *App) ensureLocalSoloSnapshotImage(ctx context.Context, imageTag string) error {
@@ -738,7 +765,7 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 		return err
 	}
 	if _, ok := current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment]; ok {
-		if err := a.republishSoloNodes(ctx, current, attachment.NodeNames); err != nil {
+		if _, err := a.republishSoloNodes(ctx, current, attachment.NodeNames); err != nil {
 			return err
 		}
 	}
@@ -784,7 +811,7 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if err := a.republishSoloNodes(ctx, current, affectedNodeNames); err != nil {
+	if _, err := a.republishSoloNodes(ctx, current, affectedNodeNames); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -854,7 +881,7 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if err := a.republishSoloNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if _, err := a.republishSoloNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
 		return err
 	}
 	if a.Printer.JSON {

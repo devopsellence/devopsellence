@@ -521,6 +521,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	deployCommand := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy the current app using the selected workspace mode",
+		Long: strings.Join([]string{
+			"Deploy the current app using the selected workspace mode.",
+			"  solo   - deploys to nodes attached to the current workspace/environment; use `devopsellence node attach|detach` to change scope",
+			"  shared - deploys through the control plane using org/project/environment context",
+		}, "\n"),
 		RunE: runByMode(func(ctx context.Context) error {
 			return app.SoloDeploy(ctx, deploySoloOpts)
 		}, func(ctx context.Context) error {

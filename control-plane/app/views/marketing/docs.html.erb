@@ -395,6 +395,7 @@ tasks:
         <div class="tl"><span class="tp">$</span> devopsellence doctor</div>
       </div>
     </div>
+    <p>Solo deploy scope comes from workspace/environment attachments, not a deploy flag. Use <code>devopsellence node attach &lt;name&gt;</code> and <code>devopsellence node detach &lt;name&gt;</code> to choose which attached nodes receive the rollout.</p>
     <p>During deploy, the CLI shows image transfer phases and compressed bytes sent. Remote Docker access uses plain <code>docker</code> when available and falls back to passwordless <code>sudo</code> for Docker, desired-state writes, status reads, and agent logs.</p>
 
     <h3>Solo secrets and Rails</h3>

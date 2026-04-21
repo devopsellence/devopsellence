@@ -49,6 +49,16 @@ type SoloSecretsDeleteOptions struct {
 
 type SoloNodeListOptions struct{}
 
+type SoloNodeAttachOptions struct {
+	Node        string
+	Environment string
+}
+
+type SoloNodeDetachOptions struct {
+	Node        string
+	Environment string
+}
+
 type SoloLogsOptions struct {
 	Node   string
 	Follow bool
@@ -198,27 +208,36 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 }
 
 func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
-	cfg, workspaceRoot, err := a.loadSoloConfig()
+	if len(opts.Nodes) > 0 {
+		return fmt.Errorf("solo deploy --nodes is no longer supported; attach or detach nodes instead")
+	}
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
-
-	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	environmentName := soloEnvironmentName(cfg, "")
+	attachedNodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	nodes, err := a.resolveSoloNodes(current, attachedNodeNames)
 	if err != nil {
 		return err
 	}
 	if len(nodes) == 0 {
-		return fmt.Errorf("no nodes configured; add solo.nodes to devopsellence.yml")
+		return fmt.Errorf("no nodes attached to %s; run `devopsellence node attach <name>`", environmentName)
 	}
-	releaseNode, err := validateSoloNodeSchedule(cfg, nodes)
-	if err != nil {
+	if _, err := validateSoloNodeSchedule(cfg, nodes); err != nil {
 		return err
 	}
 	if err := a.checkIngressBeforeDeploy(ctx, cfg, nodes, opts.SkipDNSCheck); err != nil {
 		return err
 	}
 
-	// Get git SHA for revision and image tag.
 	sha, err := a.Git.CurrentSHA(workspaceRoot)
 	if err != nil {
 		return fmt.Errorf("get git SHA: %w", err)
@@ -228,8 +247,6 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		shortSHA = shortSHA[:7]
 	}
 	imageTag := soloImageTag(cfg.Project, shortSHA)
-
-	// Build Docker image.
 	if !a.Printer.JSON {
 		a.Printer.Println("Building image " + imageTag + " ...")
 	}
@@ -239,7 +256,6 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return fmt.Errorf("docker build: %w", err)
 	}
 
-	// Load local secrets and build desired state.
 	secrets, err := solo.LoadSecrets(workspaceRoot)
 	if err != nil {
 		return fmt.Errorf("load secrets: %w", err)
@@ -250,64 +266,27 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		a.Printer.Println("Rails: " + notice)
 	}
 
-	// Deploy to each node in parallel.
-	var mu sync.Mutex
-	var errs []string
-	var wg sync.WaitGroup
-
-	for _, name := range sortedSoloNodeNames(nodes) {
-		node := nodes[name]
-		wg.Add(1)
-		go func(name string, node config.SoloNode) {
-			defer wg.Done()
-			desiredStateJSON, err := solo.BuildDesiredStateForNode(cfg, imageTag, shortSHA, secrets, node.Labels, soloNodeCanRunIngress(node, cfg), name == releaseNode, soloNodePeers(cfg, name))
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
-				mu.Unlock()
-				return
-			}
-
-			if !a.Printer.JSON {
-				a.Printer.Println(fmt.Sprintf("[%s] Transferring image...", name))
-			}
-			if err := transferImage(ctx, node, imageTag, a.soloProgress(name)); err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] image transfer: %s", name, err))
-				mu.Unlock()
-				return
-			}
-
-			if !a.Printer.JSON {
-				a.Printer.Println(fmt.Sprintf("[%s] Writing desired state...", name))
-			}
-			overridePath := filepath.Join(node.AgentStateDir, "desired-state-override.json")
-			cmd := remoteDesiredStateOverrideCommand(overridePath)
-			if _, err := solo.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] write desired state: %s", name, err))
-				mu.Unlock()
-				return
-			}
-
-			if !a.Printer.JSON {
-				a.Printer.Println(fmt.Sprintf("[%s] Deployed %s", name, shortSHA))
-			}
-		}(name, node)
+	snapshot, err := solo.BuildDeploySnapshot(cfg, workspaceRoot, a.ConfigStore.PathFor(workspaceRoot), imageTag, shortSHA, secrets)
+	if err != nil {
+		return err
+	}
+	if _, err := current.SaveSnapshot(snapshot); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
 	}
 
-	wg.Wait()
-	if len(errs) > 0 {
-		return fmt.Errorf("deploy errors:\n  %s", strings.Join(errs, "\n  "))
+	if err := a.republishSoloNodes(ctx, current, attachedNodeNames); err != nil {
+		return err
 	}
 
 	if a.Printer.JSON {
-		nodeNames := make([]string, 0, len(nodes))
-		nodeNames = append(nodeNames, sortedSoloNodeNames(nodes)...)
 		return a.Printer.PrintJSON(map[string]any{
-			"revision": shortSHA,
-			"image":    imageTag,
-			"nodes":    nodeNames,
+			"revision":    shortSHA,
+			"image":       imageTag,
+			"environment": environmentName,
+			"nodes":       sortedSoloNodeNames(nodes),
 		})
 	}
 	a.Printer.Println(fmt.Sprintf("Deployed revision %s to %d node(s)", shortSHA, len(nodes)))
@@ -372,18 +351,187 @@ func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
 	return names
 }
 
-func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
-	cfg, _, err := a.loadSoloConfig()
+func (a *App) readSoloState() (solo.State, error) {
+	if a.SoloState == nil {
+		return solo.State{}, fmt.Errorf("solo state store is required")
+	}
+	return a.SoloState.Read()
+}
+
+func (a *App) writeSoloState(current solo.State) error {
+	if a.SoloState == nil {
+		return fmt.Errorf("solo state store is required")
+	}
+	return a.SoloState.Write(current)
+}
+
+func (a *App) resolveSoloNodes(current solo.State, names []string) (map[string]config.SoloNode, error) {
+	if len(names) == 0 {
+		result := make(map[string]config.SoloNode, len(current.Nodes))
+		for name, node := range current.Nodes {
+			result[name] = node
+		}
+		return result, nil
+	}
+	result := make(map[string]config.SoloNode, len(names))
+	unknown := []string{}
+	for _, name := range names {
+		if node, ok := current.Nodes[name]; ok {
+			result[name] = node
+		} else {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("unknown node(s): %s (available: %s)", strings.Join(unknown, ", "), strings.Join(current.NodeNames(), ", "))
+	}
+	return result, nil
+}
+
+func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNames []string) error {
+	if len(nodeNames) == 0 {
+		return nil
+	}
+	var mu sync.Mutex
+	var errs []string
+	var wg sync.WaitGroup
+
+	nodes, err := a.resolveSoloNodes(current, nodeNames)
 	if err != nil {
 		return err
 	}
+	for _, nodeName := range sortedSoloNodeNames(nodes) {
+		node := nodes[nodeName]
+		wg.Add(1)
+		go func(name string, node config.SoloNode) {
+			defer wg.Done()
+			snapshots, releaseNodes, peers, images, err := soloNodeDesiredStateInputs(current, name)
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Sprintf("[%s] build desired state inputs: %s", name, err))
+				mu.Unlock()
+				return
+			}
+			for _, image := range images {
+				if !a.Printer.JSON {
+					a.Printer.Println(fmt.Sprintf("[%s] Transferring image %s...", name, image))
+				}
+				if err := transferImage(ctx, node, image, a.soloProgress(name)); err != nil {
+					mu.Lock()
+					errs = append(errs, fmt.Sprintf("[%s] image transfer: %s", name, err))
+					mu.Unlock()
+					return
+				}
+			}
+			desiredStateJSON, err := solo.BuildAggregatedDesiredState(name, node, snapshots, releaseNodes, peers)
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
+				mu.Unlock()
+				return
+			}
+			if !a.Printer.JSON {
+				a.Printer.Println(fmt.Sprintf("[%s] Writing desired state...", name))
+			}
+			overridePath := filepath.Join(node.AgentStateDir, "desired-state-override.json")
+			cmd := remoteDesiredStateOverrideCommand(overridePath)
+			if _, err := solo.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Sprintf("[%s] write desired state: %s", name, err))
+				mu.Unlock()
+				return
+			}
+		}(nodeName, node)
+	}
+	wg.Wait()
+	if len(errs) > 0 {
+		return fmt.Errorf("deploy errors:\n  %s", strings.Join(errs, "\n  "))
+	}
+	return nil
+}
 
-	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
+func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]solo.DeploySnapshot, map[string]string, []solo.NodePeer, []string, error) {
+	snapshots := []solo.DeploySnapshot{}
+	releaseNodes := map[string]string{}
+	peerMap := map[string]solo.NodePeer{}
+	imageSet := map[string]bool{}
+
+	for _, key := range current.AttachmentKeysForNode(nodeName) {
+		attachment := current.Attachments[key]
+		snapshot, ok := current.Snapshots[key]
+		if !ok {
+			continue
+		}
+		snapshots = append(snapshots, snapshot)
+		if image := strings.TrimSpace(snapshot.Image); image != "" && !imageSet[image] {
+			imageSet[image] = true
+		}
+		releaseNode, err := releaseNodeForSnapshot(snapshot, attachment, current.Nodes)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if releaseNode != "" {
+			releaseNodes[key] = releaseNode
+		}
+		for _, peerName := range attachment.NodeNames {
+			if peerName == nodeName {
+				continue
+			}
+			peerNode, ok := current.Nodes[peerName]
+			if !ok || strings.TrimSpace(peerNode.Host) == "" {
+				continue
+			}
+			peerMap[peerName] = solo.NodePeer{
+				Name:          peerName,
+				Labels:        append([]string(nil), peerNode.Labels...),
+				PublicAddress: peerNode.Host,
+			}
+		}
+	}
+
+	peers := make([]solo.NodePeer, 0, len(peerMap))
+	for _, name := range sortedSoloPeerNames(peerMap) {
+		peers = append(peers, peerMap[name])
+	}
+	images := make([]string, 0, len(imageSet))
+	for image := range imageSet {
+		images = append(images, image)
+	}
+	sort.Strings(images)
+	return snapshots, releaseNodes, peers, images, nil
+}
+
+func releaseNodeForSnapshot(snapshot solo.DeploySnapshot, attachment solo.AttachmentRecord, nodes map[string]config.SoloNode) (string, error) {
+	if snapshot.ReleaseTask == nil {
+		return "", nil
+	}
+	nodeNames := append([]string(nil), attachment.NodeNames...)
+	sort.Strings(nodeNames)
+	for _, nodeName := range nodeNames {
+		node, ok := nodes[nodeName]
+		if ok && soloNodeCanRunKind(node, snapshot.ReleaseServiceKind) {
+			return nodeName, nil
+		}
+	}
+	return "", fmt.Errorf("environment %s in %s requires at least one attached node labeled %q for release task service %q", snapshot.Environment, snapshot.WorkspaceKey, snapshot.ReleaseServiceKind, snapshot.ReleaseService)
+}
+
+func sortedSoloPeerNames(peers map[string]solo.NodePeer) []string {
+	names := make([]string, 0, len(peers))
+	for name := range peers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
+	nodes, err := a.soloStatusNodes(opts)
 	if err != nil {
 		return err
 	}
 	if len(nodes) == 0 {
-		return fmt.Errorf("no nodes configured")
+		return fmt.Errorf("no nodes attached to the current environment")
 	}
 
 	var jsonResults []map[string]any
@@ -466,7 +614,7 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if strings.TrimSpace(opts.Value) == "" {
 		return ExitError{Code: 2, Err: errors.New("secret value is required")}
 	}
-	_, workspaceRoot, err := a.loadSoloConfig()
+	_, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
@@ -481,7 +629,7 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 }
 
 func (a *App) SoloSecretsList(_ context.Context, _ SoloSecretsListOptions) error {
-	_, workspaceRoot, err := a.loadSoloConfig()
+	_, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
@@ -503,30 +651,139 @@ func (a *App) SoloSecretsList(_ context.Context, _ SoloSecretsListOptions) error
 }
 
 func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {
-	cfg, _, err := a.loadSoloConfig()
+	current, err := a.readSoloState()
 	if err != nil {
 		return err
+	}
+	currentWorkspaceKey := ""
+	currentEnvironment := ""
+	if discovered, cfg, cfgErr := a.optionalWorkspaceConfig(); cfgErr == nil && cfg != nil {
+		currentWorkspaceKey, _ = solo.CanonicalWorkspaceKey(discovered.WorkspaceRoot)
+		currentEnvironment = soloEnvironmentName(cfg, "")
+	}
+	type nodeListItem struct {
+		Name                    string                  `json:"name"`
+		Node                    config.SoloNode         `json:"node"`
+		Attachments             []solo.AttachmentRecord `json:"attachments,omitempty"`
+		CurrentEnvironmentBound bool                    `json:"current_environment_bound,omitempty"`
+	}
+	items := make([]nodeListItem, 0, len(current.Nodes))
+	for _, name := range current.NodeNames() {
+		attachments := current.AttachmentsForNode(name)
+		bound := false
+		for _, attachment := range attachments {
+			if attachment.WorkspaceKey == currentWorkspaceKey && attachment.Environment == currentEnvironment {
+				bound = true
+				break
+			}
+		}
+		items = append(items, nodeListItem{
+			Name:                    name,
+			Node:                    current.Nodes[name],
+			Attachments:             attachments,
+			CurrentEnvironmentBound: bound,
+		})
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"schema_version": outputSchemaVersion,
-			"nodes":          cfg.Solo.Nodes,
+			"nodes":          items,
 		})
 	}
-	names := sortedSoloNodeNames(cfg.Solo.Nodes)
-	if len(names) == 0 {
+	if len(items) == 0 {
 		a.Printer.Println("No nodes.")
 		return nil
 	}
-	for _, name := range names {
-		node := cfg.Solo.Nodes[name]
-		a.Printer.Println(fmt.Sprintf("%s  host=%s  labels=%s", name, node.Host, strings.Join(node.Labels, ",")))
+	for _, item := range items {
+		line := fmt.Sprintf("%s  host=%s  labels=%s  attachments=%d", item.Name, item.Node.Host, strings.Join(item.Node.Labels, ","), len(item.Attachments))
+		if item.CurrentEnvironmentBound {
+			line += "  current=yes"
+		}
+		a.Printer.Println(line)
 	}
 	return nil
 }
 
+func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) error {
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	attachment, changed, err := a.attachSoloNode(&current, workspaceRoot, environmentName, opts.Node)
+	if err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	if _, ok := current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment]; ok {
+		if err := a.republishSoloNodes(ctx, current, attachment.NodeNames); err != nil {
+			return err
+		}
+	}
+	if a.Printer.JSON {
+		return a.Printer.PrintJSON(map[string]any{
+			"node":        opts.Node,
+			"environment": environmentName,
+			"changed":     changed,
+		})
+	}
+	if changed {
+		a.Printer.Println("Attached solo node " + opts.Node + " to " + environmentName)
+	} else {
+		a.Printer.Println("Solo node " + opts.Node + " already attached to " + environmentName)
+	}
+	return nil
+}
+
+func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) error {
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	nodeNamesBefore, err := current.AttachedNodeNames(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	if len(nodeNamesBefore) == 0 {
+		return fmt.Errorf("environment %s has no attached nodes", environmentName)
+	}
+	if _, changed, err := current.DetachNode(workspaceRoot, environmentName, opts.Node); err != nil {
+		return err
+	} else if !changed {
+		return fmt.Errorf("node %q is not attached to %s", opts.Node, environmentName)
+	}
+	affectedNodeNames := append([]string{opts.Node}, nodeNamesBefore...)
+	affectedNodeNames = normalizeSoloNames(affectedNodeNames)
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	if err := a.republishSoloNodes(ctx, current, affectedNodeNames); err != nil {
+		return err
+	}
+	if a.Printer.JSON {
+		return a.Printer.PrintJSON(map[string]any{
+			"node":        opts.Node,
+			"environment": environmentName,
+			"changed":     true,
+		})
+	}
+	a.Printer.Println("Detached solo node " + opts.Node + " from " + environmentName)
+	return nil
+}
+
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
-	_, workspaceRoot, err := a.loadSoloConfig()
+	_, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
@@ -541,16 +798,14 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 }
 
 func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
-	cfg, _, err := a.loadSoloConfig()
+	current, err := a.readSoloState()
 	if err != nil {
 		return err
 	}
-
-	soloNode, ok := cfg.Solo.Nodes[opts.Node]
+	node, ok := current.Nodes[opts.Node]
 	if !ok {
-		return fmt.Errorf("node %q not found in config", opts.Node)
+		return fmt.Errorf("node %q not found", opts.Node)
 	}
-	node := soloNodeFromConfig(soloNode)
 
 	if opts.Follow {
 		// Stream directly to the user's terminal — do not buffer.
@@ -565,30 +820,31 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 	return nil
 }
 
-func (a *App) SoloNodeLabelSet(_ context.Context, opts SoloNodeLabelSetOptions) error {
-	cfg, workspaceRoot, err := a.loadSoloConfig()
+func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {
+	current, err := a.readSoloState()
 	if err != nil {
 		return err
 	}
-	soloNode, ok := cfg.Solo.Nodes[opts.Node]
+	node, ok := current.Nodes[opts.Node]
 	if !ok {
-		return fmt.Errorf("node %q not found in config", opts.Node)
+		return fmt.Errorf("node %q not found", opts.Node)
 	}
-	node := soloNodeFromConfig(soloNode)
 	labels, err := parseSoloLabels(opts.Labels)
 	if err != nil {
 		return err
 	}
 	node.Labels = labels
-	cfg.Solo.Nodes[opts.Node] = config.SoloNode(node)
-	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
+	current.Nodes[opts.Node] = solo.NormalizeNode(node)
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	if err := a.republishSoloNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
-			"node":        opts.Node,
-			"labels":      labels,
-			"config_path": a.ConfigStore.PathFor(workspaceRoot),
+			"node":   opts.Node,
+			"labels": labels,
 		})
 	}
 	a.Printer.Println("Updated solo node " + opts.Node + " labels: " + strings.Join(labels, ","))
@@ -596,15 +852,14 @@ func (a *App) SoloNodeLabelSet(_ context.Context, opts SoloNodeLabelSetOptions) 
 }
 
 func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions) error {
-	cfg, _, err := a.loadSoloConfig()
+	current, err := a.readSoloState()
 	if err != nil {
 		return err
 	}
-	soloNode, ok := cfg.Solo.Nodes[opts.Node]
+	node, ok := current.Nodes[opts.Node]
 	if !ok {
-		return fmt.Errorf("node %q not found in config", opts.Node)
+		return fmt.Errorf("node %q not found", opts.Node)
 	}
-	node := soloNodeFromConfig(soloNode)
 	if !a.Printer.JSON {
 		a.Printer.Println("Installing solo agent on " + opts.Node + "...")
 	}
@@ -619,11 +874,11 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 }
 
 func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
-	cfg, _, err := a.loadSoloConfig()
+	current, err := a.readSoloState()
 	if err != nil {
 		return err
 	}
-	nodes, err := a.resolveNodes(cfg.Solo, opts.Nodes)
+	nodes, err := a.resolveSoloNodes(current, opts.Nodes)
 	if err != nil {
 		return err
 	}
@@ -708,6 +963,7 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 	})
 
 	var cfg *config.ProjectConfig
+	var current solo.State
 	addCheck("config", func() (string, error) {
 		if discoveryErr != nil {
 			return "", discoveryErr
@@ -724,13 +980,15 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 	})
 
 	addCheck("nodes", func() (string, error) {
-		if cfg == nil {
-			return "", errors.New("No solo nodes configured yet. Run `devopsellence setup`.")
+		var err error
+		current, err = a.readSoloState()
+		if err != nil {
+			return "", err
 		}
-		if cfg.Solo == nil || len(cfg.Solo.Nodes) == 0 {
-			return "", errors.New("No solo nodes configured yet. Run `devopsellence setup`.")
+		if len(current.Nodes) == 0 {
+			return "", errors.New("No solo nodes registered yet. Run `devopsellence node create` or `devopsellence setup`.")
 		}
-		return fmt.Sprintf("%d node(s) configured", len(cfg.Solo.Nodes)), nil
+		return fmt.Sprintf("%d node(s) registered", len(current.Nodes)), nil
 	})
 
 	ok := true
@@ -755,7 +1013,7 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		}
 		a.Printer.Println(prefix, fmt.Sprintf("%v:", check["name"]), check["detail"])
 	}
-	if ok && cfg != nil && cfg.Solo != nil && len(cfg.Solo.Nodes) > 0 {
+	if ok && len(current.Nodes) > 0 {
 		return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{})
 	}
 	return nil
@@ -766,22 +1024,27 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if err != nil {
 		return err
 	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
 	if opts.Name == "" {
 		return fmt.Errorf("node name is required")
 	}
 	if opts.Deploy && a.Printer.JSON {
 		return fmt.Errorf("node create --deploy is not supported with --json")
 	}
-	if cfg.Solo != nil {
-		if _, ok := cfg.Solo.Nodes[opts.Name]; ok {
-			return fmt.Errorf("solo node %q already exists", opts.Name)
-		}
+	if _, ok := current.Nodes[opts.Name]; ok {
+		return fmt.Errorf("solo node %q already exists", opts.Name)
 	}
 	created, err := a.createProviderNode(ctx, opts, cfg.Project)
 	if err != nil {
 		return err
 	}
-	if err := a.writeSoloNode(workspaceRoot, cfg, opts.Name, created.Node); err != nil {
+	if err := current.SetNode(opts.Name, created.Node); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if !opts.NoInstall || opts.Deploy {
@@ -796,7 +1059,13 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 		}
 	}
 	if opts.Deploy {
-		if err := a.SoloDeploy(ctx, SoloDeployOptions{Nodes: []string{opts.Name}}); err != nil {
+		if _, _, err := a.attachSoloNode(&current, workspaceRoot, soloEnvironmentName(cfg, ""), opts.Name); err != nil {
+			return err
+		}
+		if err := a.writeSoloState(current); err != nil {
+			return err
+		}
+		if err := a.SoloDeploy(ctx, SoloDeployOptions{}); err != nil {
 			return err
 		}
 	}
@@ -919,15 +1188,17 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	if !opts.Yes {
 		return fmt.Errorf("node remove requires --yes")
 	}
-	cfg, workspaceRoot, err := a.loadSoloConfig()
+	current, err := a.readSoloState()
 	if err != nil {
 		return err
 	}
-	soloNode, ok := cfg.Solo.Nodes[opts.Name]
+	node, ok := current.Nodes[opts.Name]
 	if !ok {
-		return fmt.Errorf("node %q not found in config", opts.Name)
+		return fmt.Errorf("node %q not found", opts.Name)
 	}
-	node := soloNodeFromConfig(soloNode)
+	if current.NodeHasAttachments(opts.Name) {
+		return fmt.Errorf("node %q still has attached environments; detach it first", opts.Name)
+	}
 	if node.Provider == "" || node.ProviderServerID == "" {
 		return fmt.Errorf("node %q does not have provider metadata; refusing provider delete", opts.Name)
 	}
@@ -938,8 +1209,8 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	if err := provider.DeleteServer(ctx, node.ProviderServerID); err != nil {
 		return err
 	}
-	delete(cfg.Solo.Nodes, opts.Name)
-	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
+	current.RemoveNode(opts.Name)
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -988,6 +1259,9 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 		}); err != nil {
 			return err
 		}
+		if err := a.SoloNodeAttach(ctx, SoloNodeAttachOptions{Node: name}); err != nil {
+			return err
+		}
 		return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
 	}
 	host, err := a.promptLine("Host", "")
@@ -1006,6 +1280,10 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if err != nil {
 		return err
 	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
 	parsedLabels, err := parseSoloLabels(labels)
 	if err != nil {
 		return err
@@ -1018,7 +1296,13 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 		AgentStateDir: "/var/lib/devopsellence",
 		Labels:        parsedLabels,
 	}
-	if err := a.writeSoloNode(workspaceRoot, cfg, name, node); err != nil {
+	if err := current.SetNode(name, node); err != nil {
+		return err
+	}
+	if _, _, err := a.attachSoloNode(&current, workspaceRoot, soloEnvironmentName(cfg, ""), name); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if err := a.installSoloAgent(ctx, name, node, SoloAgentInstallOptions{}); err != nil {
@@ -1095,13 +1379,25 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 }
 
 func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {
-	cfg, _, err := a.loadSoloConfig()
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
+	if err != nil {
+		return err
+	}
+	nodes, err := a.resolveSoloNodes(current, nodeNames)
 	if err != nil {
 		return err
 	}
 	deadline := time.Now().Add(opts.Wait)
 	for {
-		report, err := ingressDNSReport(ctx, cfg, nil)
+		report, err := ingressDNSReport(ctx, cfg, nodes)
 		if err != nil {
 			return err
 		}
@@ -1141,9 +1437,7 @@ func (a *App) installSoloAgent(ctx context.Context, nodeName string, node config
 	return installSoloAgent(ctx, node, opts, reporter)
 }
 
-// loadSoloConfig discovers the workspace root, loads devopsellence.yml,
-// and validates that solo config is present.
-func (a *App) loadSoloConfig() (*config.ProjectConfig, string, error) {
+func (a *App) loadSoloProjectConfig() (*config.ProjectConfig, string, error) {
 	discovered, err := discovery.Discover(a.Cwd)
 	if err != nil {
 		return nil, "", err
@@ -1155,9 +1449,6 @@ func (a *App) loadSoloConfig() (*config.ProjectConfig, string, error) {
 	}
 	if cfg == nil {
 		return nil, "", fmt.Errorf("no devopsellence.yml found; run `devopsellence setup --mode solo`")
-	}
-	if cfg.Solo == nil || len(cfg.Solo.Nodes) == 0 {
-		return nil, "", fmt.Errorf("no solo.nodes configured in devopsellence.yml")
 	}
 	return cfg, workspaceRoot, nil
 }
@@ -1177,6 +1468,51 @@ func (a *App) loadProjectConfigForSoloUpdate() (*config.ProjectConfig, string, e
 	return cfg, discovered.WorkspaceRoot, nil
 }
 
+func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
+	if strings.TrimSpace(override) != "" {
+		return strings.TrimSpace(override)
+	}
+	if cfg == nil || strings.TrimSpace(cfg.DefaultEnvironment) == "" {
+		return config.DefaultEnvironment
+	}
+	return strings.TrimSpace(cfg.DefaultEnvironment)
+}
+
+func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.SoloNode, error) {
+	current, err := a.readSoloState()
+	if err != nil {
+		return nil, err
+	}
+	if len(opts.Nodes) > 0 {
+		return a.resolveSoloNodes(current, opts.Nodes)
+	}
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return nil, err
+	}
+	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
+	if err != nil {
+		return nil, err
+	}
+	return a.resolveSoloNodes(current, nodeNames)
+}
+
+func (a *App) attachSoloNode(current *solo.State, workspaceRoot, environmentName, nodeName string) (solo.AttachmentRecord, bool, error) {
+	if current == nil {
+		return solo.AttachmentRecord{}, false, fmt.Errorf("solo state is required")
+	}
+	return current.AttachNode(workspaceRoot, environmentName, nodeName)
+}
+
+func soloAffectedNodesForNode(current solo.State, nodeName string) []string {
+	affected := []string{nodeName}
+	for _, key := range current.AttachmentKeysForNode(nodeName) {
+		attachment := current.Attachments[key]
+		affected = append(affected, attachment.NodeNames...)
+	}
+	return normalizeSoloNames(affected)
+}
+
 func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig {
 	cfg := config.DefaultProjectConfigForType("solo", discovered.ProjectName, config.DefaultEnvironment, discovered.AppType)
 	if discovered.InferredWebPort > 0 {
@@ -1194,56 +1530,6 @@ func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig
 		}
 	}
 	return &cfg
-}
-
-func (a *App) writeSoloNode(workspaceRoot string, cfg *config.ProjectConfig, name string, node config.SoloNode) error {
-	labels := node.Labels
-	if len(labels) == 0 {
-		labels = append([]string(nil), config.SoloDefaultLabels...)
-	}
-	if cfg.Solo == nil {
-		cfg.Solo = &config.SoloConfig{Nodes: map[string]config.SoloNode{}}
-	}
-	if cfg.Solo.Nodes == nil {
-		cfg.Solo.Nodes = map[string]config.SoloNode{}
-	}
-	node.Labels = labels
-	cfg.Solo.Nodes[name] = config.SoloNode(node)
-	_, err := a.ConfigStore.Write(workspaceRoot, *cfg)
-	return err
-}
-
-// resolveNodes filters nodes by the given names, or returns all if names is empty.
-// Returns an error if any requested name is not present in the config.
-func (a *App) resolveNodes(dc *config.SoloConfig, names []string) (map[string]config.SoloNode, error) {
-	if len(names) == 0 {
-		result := make(map[string]config.SoloNode, len(dc.Nodes))
-		for name, node := range dc.Nodes {
-			result[name] = soloNodeFromConfig(node)
-		}
-		return result, nil
-	}
-	result := make(map[string]config.SoloNode, len(names))
-	var unknown []string
-	for _, name := range names {
-		if node, ok := dc.Nodes[name]; ok {
-			result[name] = soloNodeFromConfig(node)
-		} else {
-			unknown = append(unknown, name)
-		}
-	}
-	if len(unknown) > 0 {
-		available := make([]string, 0, len(dc.Nodes))
-		for name := range dc.Nodes {
-			available = append(available, name)
-		}
-		return nil, fmt.Errorf("unknown node(s): %s (available: %s)", strings.Join(unknown, ", "), strings.Join(available, ", "))
-	}
-	return result, nil
-}
-
-func soloNodeFromConfig(node config.SoloNode) config.SoloNode {
-	return config.SoloNode(node)
 }
 
 type ingressDNSReportResult struct {
@@ -1335,18 +1621,13 @@ func printIngressDNSReport(printer output.Printer, report ingressDNSReportResult
 }
 
 func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.SoloNode) []string {
-	if cfg == nil || cfg.Solo == nil {
+	if cfg == nil {
 		return nil
 	}
 	seen := map[string]bool{}
 	ips := []string{}
-	for _, name := range sortedSoloNodeNames(cfg.Solo.Nodes) {
-		if selected != nil {
-			if _, ok := selected[name]; !ok {
-				continue
-			}
-		}
-		node := cfg.Solo.Nodes[name]
+	for _, name := range sortedSoloNodeNames(selected) {
+		node := selected[name]
 		if !soloNodeCanRunIngress(node, cfg) {
 			continue
 		}
@@ -1361,29 +1642,6 @@ func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.SoloNode) 
 	return ips
 }
 
-func soloNodePeers(cfg *config.ProjectConfig, currentNode string) []solo.NodePeer {
-	if cfg == nil || cfg.Solo == nil {
-		return nil
-	}
-	peers := []solo.NodePeer{}
-	for _, name := range sortedSoloNodeNames(cfg.Solo.Nodes) {
-		if name == currentNode {
-			continue
-		}
-		node := cfg.Solo.Nodes[name]
-		host := strings.TrimSpace(node.Host)
-		if host == "" {
-			continue
-		}
-		peers = append(peers, solo.NodePeer{
-			Name:          name,
-			Labels:        append([]string(nil), node.Labels...),
-			PublicAddress: host,
-		})
-	}
-	return peers
-}
-
 func normalizeIngressHosts(values []string) []string {
 	seen := map[string]bool{}
 	normalized := []string{}
@@ -1396,6 +1654,21 @@ func normalizeIngressHosts(values []string) []string {
 			seen[part] = true
 			normalized = append(normalized, part)
 		}
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+func normalizeSoloNames(values []string) []string {
+	seen := map[string]bool{}
+	normalized := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		normalized = append(normalized, value)
 	}
 	sort.Strings(normalized)
 	return normalized

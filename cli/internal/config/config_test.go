@@ -198,14 +198,40 @@ func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 	}
 }
 
-func TestValidateAllowsArbitraryNodeLabels(t *testing.T) {
+func TestLoadRejectsLegacySoloConfigBlock(t *testing.T) {
 	t.Parallel()
 
-	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Solo = &SoloConfig{Nodes: map[string]SoloNode{"prod-1": {Host: "203.0.113.10", User: "root", Labels: []string{"edge"}}}}
-	err := Validate(&project)
-	if err != nil {
-		t.Fatalf("expected arbitrary label support, got %v", err)
+	root := t.TempDir()
+	path := filepath.Join(root, FilePath)
+	content := strings.Join([]string{
+		"schema_version: 5",
+		"organization: solo",
+		"project: ShopApp",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    kind: web",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+		"solo:",
+		"  nodes:",
+		"    prod-1:",
+		"      host: 203.0.113.10",
+		"      user: root",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "field solo not found") {
+		t.Fatalf("expected unknown solo field error, got %v", err)
 	}
 }
 

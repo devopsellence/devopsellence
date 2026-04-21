@@ -217,3 +217,96 @@ func TestBuildDesiredState_MissingSecretErrors(t *testing.T) {
 		t.Errorf("expected error to mention DATABASE_URL, got: %s", got)
 	}
 }
+
+func TestBuildAggregatedDesiredStateMergesEnvironmentsIngressAndPeers(t *testing.T) {
+	webNode := config.SoloNode{Labels: []string{config.DefaultWebRole}}
+	snapshots := []DeploySnapshot{
+		{
+			WorkspaceRoot:      "/workspace/a",
+			WorkspaceKey:       "/workspace/a",
+			Environment:        "production",
+			Revision:           "aaa1111",
+			Image:              "demo-a:aaa1111",
+			Services:           []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo-a:aaa1111"}},
+			ReleaseTask:        &taskJSON{Name: "release", Image: "demo-a:aaa1111"},
+			ReleaseService:     "web",
+			ReleaseServiceKind: config.ServiceKindWeb,
+			Ingress: &ingressJSON{
+				Mode:         "public",
+				Hosts:        []string{"a.example.com"},
+				TLS:          ingressTLSJSON{Mode: "auto"},
+				RedirectHTTP: true,
+				Routes: []ingressRouteJSON{{
+					Match:  ingressMatchJSON{Hostname: "a.example.com"},
+					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				}},
+			},
+			IngressService:     "web",
+			IngressServiceKind: config.ServiceKindWeb,
+		},
+		{
+			WorkspaceRoot:      "/workspace/b",
+			WorkspaceKey:       "/workspace/b",
+			Environment:        "production",
+			Revision:           "bbb2222",
+			Image:              "demo-b:bbb2222",
+			Services:           []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo-b:bbb2222"}},
+			ReleaseService:     "web",
+			ReleaseServiceKind: config.ServiceKindWeb,
+			Ingress: &ingressJSON{
+				Mode:         "public",
+				Hosts:        []string{"b.example.com"},
+				TLS:          ingressTLSJSON{Mode: "auto"},
+				RedirectHTTP: true,
+				Routes: []ingressRouteJSON{{
+					Match:  ingressMatchJSON{Hostname: "b.example.com"},
+					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				}},
+			},
+			IngressService:     "web",
+			IngressServiceKind: config.ServiceKindWeb,
+		},
+	}
+	releaseNodes := map[string]string{
+		"/workspace/a\nproduction": "shared-1",
+	}
+	peers := []NodePeer{
+		{Name: "shared-2", Labels: []string{config.DefaultWebRole}, PublicAddress: "203.0.113.12"},
+		{Name: "shared-3", Labels: []string{config.DefaultWorkerRole}, PublicAddress: "203.0.113.13"},
+	}
+
+	first, err := BuildAggregatedDesiredState("shared-1", webNode, snapshots, releaseNodes, peers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := BuildAggregatedDesiredState("shared-1", webNode, snapshots, releaseNodes, peers)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var ds desiredStateJSON
+	if err := json.Unmarshal(first, &ds); err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Fatal("expected deterministic aggregated desired state output")
+	}
+	if len(ds.Environments) != 2 || ds.Environments[0].Revision != "aaa1111" || ds.Environments[1].Revision != "bbb2222" {
+		t.Fatalf("environments = %#v", ds.Environments)
+	}
+	if ds.Ingress == nil || len(ds.Ingress.Routes) != 2 {
+		t.Fatalf("ingress = %#v", ds.Ingress)
+	}
+	if strings.Join(ds.Ingress.Hosts, ",") != "a.example.com,b.example.com" {
+		t.Fatalf("hosts = %#v", ds.Ingress.Hosts)
+	}
+	if len(ds.NodePeers) != 2 || ds.NodePeers[0].Name != "shared-2" || ds.NodePeers[1].Name != "shared-3" {
+		t.Fatalf("node peers = %#v", ds.NodePeers)
+	}
+	if ds.Revision == "" {
+		t.Fatal("synthetic revision empty")
+	}
+	if len(ds.Environments[0].Tasks) != 1 || len(ds.Environments[1].Tasks) != 0 {
+		t.Fatalf("tasks = %#v", ds.Environments)
+	}
+}

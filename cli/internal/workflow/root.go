@@ -759,8 +759,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	nodeListCommand.Flags().StringVar(&nodeListSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
 	nodeAttachCommand := &cobra.Command{
-		Use:   "attach <target>",
-		Short: "Attach a node to the current environment",
+		Use:   "attach <name|id>",
+		Short: "Attach a node to the current environment (solo: name, shared: numeric id)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeAttachSoloOpts.Node = args[0]
@@ -782,8 +782,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeAttachCommand.Flags().StringVar(&nodeAttachOpts.Organization, "org", "", "Organization name override")
 	nodeAttachCommand.Flags().StringVar(&nodeAttachOpts.Project, "project", "", "Project name override")
 	nodeDetachCommand := &cobra.Command{
-		Use:   "detach <target>",
-		Short: "Detach a node from the current environment",
+		Use:   "detach <name|id>",
+		Short: "Detach a node from the current environment (solo: name, shared: numeric id)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeDetachSoloOpts.Node = args[0]

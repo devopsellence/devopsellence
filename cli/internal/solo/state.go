@@ -457,13 +457,17 @@ func (s *State) AttachNode(workspaceRoot, environment, nodeName string) (Attachm
 	if err != nil {
 		return AttachmentRecord{}, false, err
 	}
-	workspaceKey, _ := CanonicalWorkspaceKey(workspaceRoot)
-	attachment.WorkspaceRoot = workspaceRoot
+	workspaceKey, keyEnvironment := splitEnvironmentStateKey(key)
+	attachment.WorkspaceRoot = firstNonEmpty(attachment.WorkspaceRoot, strings.TrimSpace(workspaceRoot), workspaceKey)
 	attachment.WorkspaceKey = workspaceKey
 	attachment.Environment = defaultEnvironmentName(environment)
+	if strings.TrimSpace(environment) == "" {
+		attachment.Environment = defaultEnvironmentName(keyEnvironment)
+	}
 	before := len(attachment.NodeNames)
-	attachment.NodeNames = append(attachment.NodeNames, nodeName)
-	attachment.NodeNames = normalizeNodeNames(attachment.NodeNames)
+	nodeNames := append([]string(nil), attachment.NodeNames...)
+	nodeNames = append(nodeNames, nodeName)
+	attachment.NodeNames = normalizeNodeNames(nodeNames)
 	s.Attachments[key] = attachment
 	return attachment, len(attachment.NodeNames) != before, nil
 }

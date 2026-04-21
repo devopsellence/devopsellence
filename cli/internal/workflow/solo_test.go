@@ -311,6 +311,44 @@ func TestEnsureLocalSoloSnapshotImageReturnsActionableError(t *testing.T) {
 	}
 }
 
+func TestRepublishSoloNodesReportsLocalImagePrecheck(t *testing.T) {
+	t.Parallel()
+
+	app := &App{
+		Printer: output.New(io.Discard, io.Discard, false),
+		Docker:  &fakeDocker{imageMetadataErr: errors.New("Error response from daemon: No such image: demo:missing")},
+	}
+	current := solo.State{
+		Nodes: map[string]config.SoloNode{
+			"web-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			"/workspace/demo\nproduction": {
+				WorkspaceRoot: "/workspace/demo",
+				WorkspaceKey:  "/workspace/demo",
+				Environment:   "production",
+				NodeNames:     []string{"web-a"},
+			},
+		},
+		Snapshots: map[string]solo.DeploySnapshot{
+			"/workspace/demo\nproduction": {
+				WorkspaceRoot: "/workspace/demo",
+				WorkspaceKey:  "/workspace/demo",
+				Environment:   "production",
+				Image:         "demo:missing",
+			},
+		},
+	}
+
+	err := app.republishSoloNodes(context.Background(), current, []string{"web-a"})
+	if err == nil {
+		t.Fatal("expected republish error")
+	}
+	if !strings.Contains(err.Error(), "[web-a] local image precheck:") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{

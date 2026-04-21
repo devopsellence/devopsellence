@@ -27,7 +27,6 @@ import (
 )
 
 type SoloDeployOptions struct {
-	Nodes        []string
 	SkipDNSCheck bool
 }
 
@@ -208,9 +207,6 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 }
 
 func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
-	if len(opts.Nodes) > 0 {
-		return fmt.Errorf("solo deploy --nodes is no longer supported; attach or detach nodes instead")
-	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -415,7 +411,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 			for _, image := range images {
 				if err := a.ensureLocalSoloSnapshotImage(ctx, image); err != nil {
 					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] image transfer: %s", name, err))
+					errs = append(errs, fmt.Sprintf("[%s] local image precheck: %s", name, err))
 					mu.Unlock()
 					return
 				}

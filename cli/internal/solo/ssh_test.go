@@ -1,6 +1,8 @@
 package solo
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -32,7 +34,8 @@ func TestSSHArgsIncludeConnectTimeoutAndKey(t *testing.T) {
 }
 
 func TestSSHArgsUseManagedKnownHostsForProviderNodes(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", "/tmp/devopsellence-test-state")
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
 	node := config.SoloNode{
 		User:             "root",
 		Host:             "203.0.113.10",
@@ -42,18 +45,37 @@ func TestSSHArgsUseManagedKnownHostsForProviderNodes(t *testing.T) {
 		ProviderServerID: "123456",
 	}
 
+	sum := sha256.Sum256([]byte(node.Provider + "\x00" + node.ProviderServerID))
 	got := sshArgs(node, "true")
 	want := []string{
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-p", "22",
-		"-o", "UserKnownHostsFile=" + filepath.Join("/tmp/devopsellence-test-state", "devopsellence", "ssh_known_hosts", "hetzner-123456"),
+		"-o", "UserKnownHostsFile=" + filepath.Join(stateDir, "devopsellence", "ssh_known_hosts", node.Provider+"-"+hex.EncodeToString(sum[:])[:16]),
 		"-i", "/tmp/id_ed25519",
 		"root@203.0.113.10",
 		"true",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sshArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestManagedKnownHostsPathHashesUntrustedServerID(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+	node := config.SoloNode{
+		Provider:         "hetzner",
+		ProviderServerID: "../../escape",
+	}
+
+	path := managedKnownHostsPath(node)
+	base := filepath.Join(stateDir, "devopsellence", "ssh_known_hosts")
+	if filepath.Dir(path) != base {
+		t.Fatalf("managedKnownHostsPath() dir = %q, want %q", filepath.Dir(path), base)
+	}
+	if filepath.Base(path) == node.Provider+"-"+node.ProviderServerID {
+		t.Fatalf("managedKnownHostsPath() base = %q, want hashed filename", filepath.Base(path))
 	}
 }

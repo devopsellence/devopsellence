@@ -1252,6 +1252,10 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if err != nil {
 		return err
 	}
+	cfg, workspaceRoot, err := a.ensureSoloProjectConfig()
+	if err != nil {
+		return err
+	}
 	if strings.EqualFold(strings.TrimSpace(mode), "hetzner") {
 		region, err := a.promptLine("Hetzner region", defaultHetznerRegion)
 		if err != nil {
@@ -1292,10 +1296,6 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if err != nil {
 		return err
 	}
-	cfg, workspaceRoot, err := a.loadProjectConfigForSoloUpdate()
-	if err != nil {
-		return err
-	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -1325,6 +1325,26 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 		return err
 	}
 	return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
+}
+
+func (a *App) ensureSoloProjectConfig() (*config.ProjectConfig, string, error) {
+	discovered, err := discovery.Discover(a.Cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
+	if err != nil {
+		return nil, "", err
+	}
+	if cfg != nil {
+		return cfg, discovered.WorkspaceRoot, nil
+	}
+	defaultCfg := soloDefaultProjectConfig(discovered)
+	written, err := a.ConfigStore.Write(discovered.WorkspaceRoot, *defaultCfg)
+	if err != nil {
+		return nil, "", err
+	}
+	return &written, discovered.WorkspaceRoot, nil
 }
 
 func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {

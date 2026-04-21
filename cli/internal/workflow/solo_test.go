@@ -349,6 +349,37 @@ func TestRepublishSoloNodesReportsLocalImagePrecheck(t *testing.T) {
 	}
 }
 
+func TestEnsureSoloProjectConfigWritesDefaultConfig(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	cfg, gotRoot, err := app.ensureSoloProjectConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRoot != workspaceRoot {
+		t.Fatalf("workspace root = %q, want %q", gotRoot, workspaceRoot)
+	}
+	if cfg == nil {
+		t.Fatal("config is nil")
+	}
+	if cfg.Organization != "solo" {
+		t.Fatalf("organization = %q, want solo", cfg.Organization)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "devopsellence.yml")); err != nil {
+		t.Fatalf("expected config file: %v", err)
+	}
+}
+
 func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{

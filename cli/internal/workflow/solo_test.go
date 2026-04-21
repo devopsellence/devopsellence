@@ -14,6 +14,7 @@ import (
 
 	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
+	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	cliversion "github.com/devopsellence/cli/internal/version"
 )
@@ -449,6 +450,79 @@ func TestSoloDefaultProjectConfigUsesDiscovery(t *testing.T) {
 	web := cfg.Services[config.DefaultWebServiceName]
 	if web.HTTPPort(0) != 8080 || web.Healthcheck.Port != 8080 {
 		t.Fatalf("web port = %d healthcheck port = %d, want 8080", web.HTTPPort(0), web.Healthcheck.Port)
+	}
+}
+
+func TestIngressSetInfersPrimaryWebService(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := config.DefaultProjectConfigForType("solo", "demo", config.DefaultEnvironment, config.AppTypeGeneric)
+	if _, err := config.Write(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		Cwd:         dir,
+		ConfigStore: config.NewStore(),
+		Printer:     output.New(io.Discard, io.Discard, false),
+	}
+	if err := app.IngressSet(context.Background(), IngressSetOptions{
+		Hosts:   []string{"demo.devopsellence.io"},
+		TLSMode: "auto",
+	}); err != nil {
+		t.Fatalf("IngressSet() error = %v", err)
+	}
+
+	written, err := config.Load(filepath.Join(dir, config.FilePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written.Ingress == nil {
+		t.Fatal("ingress = nil, want populated ingress config")
+	}
+	if written.Ingress.Service != config.DefaultWebServiceName {
+		t.Fatalf("ingress.service = %q, want %q", written.Ingress.Service, config.DefaultWebServiceName)
+	}
+}
+
+func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := config.DefaultProjectConfigForType("solo", "demo", config.DefaultEnvironment, config.AppTypeGeneric)
+	cfg.Services["frontend"] = cfg.Services[config.DefaultWebServiceName]
+	delete(cfg.Services, config.DefaultWebServiceName)
+	cfg.Ingress = &config.IngressConfig{
+		Service: "frontend",
+		Hosts:   []string{"old.devopsellence.io"},
+		TLS:     config.IngressTLSConfig{Mode: "manual"},
+	}
+	if _, err := config.Write(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		Cwd:         dir,
+		ConfigStore: config.NewStore(),
+		Printer:     output.New(io.Discard, io.Discard, false),
+	}
+	if err := app.IngressSet(context.Background(), IngressSetOptions{
+		Hosts:   []string{"new.devopsellence.io"},
+		TLSMode: "auto",
+	}); err != nil {
+		t.Fatalf("IngressSet() error = %v", err)
+	}
+
+	written, err := config.Load(filepath.Join(dir, config.FilePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written.Ingress == nil {
+		t.Fatal("ingress = nil, want populated ingress config")
+	}
+	if written.Ingress.Service != "frontend" {
+		t.Fatalf("ingress.service = %q, want frontend", written.Ingress.Service)
 	}
 }
 

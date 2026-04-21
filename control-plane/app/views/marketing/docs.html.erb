@@ -304,7 +304,7 @@
   <section class="prose-section" id="solo-mode">
     <h2>Solo mode <span class="mode-badge mode-badge--solo">solo</span></h2>
     <p>Solo mode deploys over SSH without the control plane. The CLI builds the image locally, streams it to each configured node, writes desired state on the node, and the agent reconciles containers from local files.</p>
-    <p>Public ingress uses Envoy in solo and shared mode. Add hostnames with <code>devopsellence ingress set</code>; the agent answers HTTP-01 challenges and keeps HTTPS certificates on the node.</p>
+    <p>Public ingress uses Envoy in solo and shared mode. Add hostnames with <code>devopsellence ingress set</code>; pass <code>--service</code> when the target web service is not already obvious. The agent answers HTTP-01 challenges and keeps HTTPS certificates on the node.</p>
 
     <h3>Set up a node</h3>
     <p>Use the setup wizard for an existing SSH node or a Hetzner node created by the CLI:</p>
@@ -965,7 +965,7 @@ tasks:
         <dd>In solo mode, read agent status from configured nodes over SSH.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>devopsellence ingress set --host app.example.com</code></dt>
+        <dt><code>devopsellence ingress set --service web --host app.example.com</code></dt>
         <dd>Set public ingress hostnames and TLS policy. The command surface is shared by solo and shared mode.</dd>
       </div>
       <div class="docs-field">

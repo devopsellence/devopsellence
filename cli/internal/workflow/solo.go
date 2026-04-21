@@ -102,6 +102,7 @@ type SoloSetupOptions struct{}
 
 type IngressSetOptions struct {
 	Hosts               []string
+	Service             string
 	TLSMode             string
 	TLSEmail            string
 	TLSCADirectoryURL   string
@@ -1042,6 +1043,17 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 	if len(hosts) == 0 {
 		return fmt.Errorf("ingress set requires at least one --host")
 	}
+	serviceName := strings.TrimSpace(opts.Service)
+	if serviceName == "" && cfg.Ingress != nil {
+		serviceName = strings.TrimSpace(cfg.Ingress.Service)
+	}
+	if serviceName == "" {
+		var ok bool
+		serviceName, ok = cfg.PrimaryWebServiceName()
+		if !ok {
+			return fmt.Errorf("ingress set requires --service when the primary web service cannot be inferred")
+		}
+	}
 	tlsMode := strings.TrimSpace(opts.TLSMode)
 	if tlsMode == "" {
 		tlsMode = "auto"
@@ -1056,7 +1068,8 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		redirectHTTP = opts.RedirectHTTP
 	}
 	cfg.Ingress = &config.IngressConfig{
-		Hosts: hosts,
+		Hosts:   hosts,
+		Service: serviceName,
 		TLS: config.IngressTLSConfig{
 			Mode:           tlsMode,
 			Email:          strings.TrimSpace(opts.TLSEmail),

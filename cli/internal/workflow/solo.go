@@ -1223,7 +1223,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 
 func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if !a.Printer.Interactive {
-		return fmt.Errorf("solo setup requires an interactive terminal; use node create or edit devopsellence.yml")
+		return fmt.Errorf("solo setup requires an interactive terminal; use `devopsellence node create`, or add a node to %s and run `devopsellence node attach`", solo.DefaultStatePath())
 	}
 	mode, err := a.promptLine("Node source (existing/hetzner)", "existing")
 	if err != nil {

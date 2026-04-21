@@ -80,11 +80,15 @@ func (s *StateStore) Read() (State, error) {
 	if err := json.Unmarshal(data, &current); err != nil {
 		return State{}, err
 	}
-	if current.SchemaVersion == 0 {
-		current.SchemaVersion = soloStateSchemaVersion
+	if err := validateStateSchemaVersion(current.SchemaVersion); err != nil {
+		return State{}, err
 	}
+	current.SchemaVersion = soloStateSchemaVersion
 	current.ensureDefaults()
-	current = normalizeState(current)
+	current, err = normalizeState(current)
+	if err != nil {
+		return State{}, err
+	}
 	return current, nil
 }
 
@@ -92,8 +96,16 @@ func (s *StateStore) Write(current State) error {
 	if s == nil || strings.TrimSpace(s.Path) == "" {
 		return errors.New("solo state store path is required")
 	}
+	if err := validateStateSchemaVersion(current.SchemaVersion); err != nil {
+		return err
+	}
+	current.SchemaVersion = soloStateSchemaVersion
 	current.ensureDefaults()
-	current = normalizeState(current)
+	var err error
+	current, err = normalizeState(current)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
 		return err
 	}
@@ -116,6 +128,15 @@ func (s *StateStore) Update(fn func(*State) error) error {
 		return err
 	}
 	return s.Write(current)
+}
+
+func validateStateSchemaVersion(version int) error {
+	switch version {
+	case 0, soloStateSchemaVersion:
+		return nil
+	default:
+		return fmt.Errorf("unsupported solo state schema_version %d", version)
+	}
 }
 
 func CanonicalWorkspaceKey(workspaceRoot string) (string, error) {
@@ -219,14 +240,18 @@ func (s *State) ensureDefaults() {
 	}
 }
 
-func normalizeState(current State) State {
+func normalizeState(current State) (State, error) {
 	for name, node := range current.Nodes {
-		current.Nodes[name] = NormalizeNode(node)
+		normalized, err := normalizeAndValidateNode(name, node)
+		if err != nil {
+			return State{}, err
+		}
+		current.Nodes[name] = normalized
 	}
 	for key, attachment := range current.Attachments {
 		current.Attachments[key] = normalizeAttachmentRecord(key, attachment)
 	}
-	return current
+	return current, nil
 }
 
 func normalizeAttachmentRecord(key string, attachment AttachmentRecord) AttachmentRecord {
@@ -285,10 +310,11 @@ func (s *State) NodeNames() []string {
 func (s *State) SetNode(name string, node config.SoloNode) error {
 	s.ensureDefaults()
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("node name is required")
+	normalized, err := normalizeAndValidateNode(name, node)
+	if err != nil {
+		return err
 	}
-	s.Nodes[name] = NormalizeNode(node)
+	s.Nodes[name] = normalized
 	return nil
 }
 
@@ -436,4 +462,22 @@ func defaultEnvironmentName(name string) string {
 		return config.DefaultEnvironment
 	}
 	return name
+}
+
+func normalizeAndValidateNode(name string, node config.SoloNode) (config.SoloNode, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return config.SoloNode{}, fmt.Errorf("node name is required")
+	}
+	node = NormalizeNode(node)
+	if strings.TrimSpace(node.Host) == "" {
+		return config.SoloNode{}, fmt.Errorf("node %q host is required", name)
+	}
+	if strings.TrimSpace(node.User) == "" {
+		return config.SoloNode{}, fmt.Errorf("node %q user is required", name)
+	}
+	if node.Port <= 0 || node.Port > 65535 {
+		return config.SoloNode{}, fmt.Errorf("node %q port must be between 1 and 65535", name)
+	}
+	return node, nil
 }

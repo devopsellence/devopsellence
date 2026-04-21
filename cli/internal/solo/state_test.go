@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/devopsellence/cli/internal/config"
@@ -145,6 +146,32 @@ func TestAttachmentKeysForNodeDoesNotMutateState(t *testing.T) {
 	}
 	if got := current.Attachments["/workspace/demo\nproduction"].NodeNames; !reflect.DeepEqual(got, []string{"web-a", "web-a"}) {
 		t.Fatalf("AttachmentKeysForNode() mutated attachment nodes: %#v", got)
+	}
+}
+
+func TestSetNodeRejectsMissingConnectionFields(t *testing.T) {
+	t.Parallel()
+
+	current := newState()
+	if err := current.SetNode("web-a", config.SoloNode{User: "root"}); err == nil || !strings.Contains(err.Error(), "host is required") {
+		t.Fatalf("expected host validation error, got %v", err)
+	}
+	if err := current.SetNode("web-a", config.SoloNode{Host: "203.0.113.10"}); err == nil || !strings.Contains(err.Error(), "user is required") {
+		t.Fatalf("expected user validation error, got %v", err)
+	}
+}
+
+func TestStateStoreReadRejectsUnsupportedSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "solo-state.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version": 2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewStateStore(path).Read()
+	if err == nil || !strings.Contains(err.Error(), "unsupported solo state schema_version 2") {
+		t.Fatalf("expected schema version error, got %v", err)
 	}
 }
 

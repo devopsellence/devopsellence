@@ -115,7 +115,6 @@ build:
 services:
   web:
     kind: web
-    roles: [web]
     ports:
       - name: http
         port: 3000

@@ -62,7 +62,7 @@ class AgentInstallScript
         validate_version() {
           local version="$1"
 
-          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
             echo "invalid version: $version" >&2
             exit 1
           fi

@@ -593,6 +593,9 @@ func TestRemoteReadOptionalFileCommandSupportsPasswordlessSudo(t *testing.T) {
 	for _, want := range []string{
 		"sudo -n test -r '/var/lib/devopsellence/status.json'",
 		"exec sudo -n cat '/var/lib/devopsellence/status.json'",
+		"[ -e '/var/lib/devopsellence/status.json' ]",
+		"sudo -n test -e '/var/lib/devopsellence/status.json'",
+		"File exists but is not readable",
 		"printf '%s\\n' '__DEVOPSELLENCE_STATUS_MISSING__'",
 	} {
 		if !strings.Contains(command, want) {

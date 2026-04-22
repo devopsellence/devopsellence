@@ -2474,7 +2474,7 @@ func remoteReadFileCommand(path string) string {
 func remoteReadOptionalFileCommand(path, missingSentinel string) string {
 	quotedPath := shellQuote(path)
 	quotedSentinel := shellQuote(missingSentinel)
-	return fmt.Sprintf("if [ -r %[1]s ]; then exec cat %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n test -r %[1]s >/dev/null 2>&1; then exec sudo -n cat %[1]s; fi; printf '%%s\\n' %[2]s", quotedPath, quotedSentinel)
+	return fmt.Sprintf("if [ -r %[1]s ]; then exec cat %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n test -r %[1]s >/dev/null 2>&1; then exec sudo -n cat %[1]s; fi; if [ -e %[1]s ]; then echo 'File exists but is not readable; grant read access or enable passwordless sudo.' >&2; exit 1; fi; if command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then echo 'File exists but is not readable; grant read access or enable passwordless sudo.' >&2; exit 1; fi; printf '%%s\\n' %[2]s", quotedPath, quotedSentinel)
 }
 
 func remoteJournalctlCommand(args string) string {

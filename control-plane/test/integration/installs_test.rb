@@ -259,6 +259,25 @@ class InstallsTest < ActionDispatch::IntegrationTest
       SH
       FileUtils.chmod("u+x", curl_path)
 
+      uname_path = File.join(fakebin_dir, "uname")
+      File.write(uname_path, <<~SH)
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        case "${1:-}" in
+          -s)
+            printf 'Linux\n'
+            ;;
+          -m)
+            printf 'x86_64\n'
+            ;;
+          *)
+            exec /usr/bin/uname "$@"
+            ;;
+        esac
+      SH
+      FileUtils.chmod("u+x", uname_path)
+
       env = {
         "PATH" => "#{fakebin_dir}:#{ENV.fetch("PATH")}",
         "HOME" => tmpdir,

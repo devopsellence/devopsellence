@@ -3,7 +3,6 @@
 require "digest"
 require "fileutils"
 require "open3"
-require "tempfile"
 require "test_helper"
 
 class InstallsTest < ActionDispatch::IntegrationTest

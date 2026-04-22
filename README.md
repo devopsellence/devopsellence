@@ -195,7 +195,7 @@ cd control-plane
 bin/dev
 ```
 
-GitHub binary releases for the agent and CLI are published from a manual public GitHub Actions workflow. Trigger `Component Release`, pick `agent`, `cli`, or `both`, choose a branch/tag/SHA, and provide the release version.
+GitHub binary releases for the agent and CLI are published from a manual public GitHub Actions workflow. Trigger `devopsellence release`, choose a branch/tag/SHA, and provide the release version. The workflow always rebuilds and republishes both binaries for the same shared release tag; prereleases can be rerun to replace an existing prerelease tag.
 
 ## Contributing
 

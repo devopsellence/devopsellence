@@ -109,6 +109,7 @@ class SoloE2E
     step("mode") { set_workspace_mode! }
     step("attach node") { attach_node! }
     step("install agent") { install_agent! }
+    step("pre-deploy status") { assert_status_before_first_deploy! }
     step("secrets") { set_secrets! }
     step("deploy") { run_deploy! }
     step("assertions") { assert_runtime_state! }
@@ -569,6 +570,25 @@ PY
 
     raise "deploy did not report success" unless output.include?("Deployed revision")
     puts "[ok] Deploy completed"
+  end
+
+  def assert_status_before_first_deploy!
+    cli_status_output = run!(
+      cli_binary.to_s, "--json", "status",
+      chdir: @app_dir.to_s,
+      timeout: 60,
+      env: ssh_env
+    )
+    cli_status = JSON.parse(cli_status_output)
+    node_status = (cli_status["nodes"] || []).find { |entry| entry["node"] == "node-1" }
+    raise "CLI status missing node-1 before deploy" unless node_status
+    raise "CLI status should not include runtime status before deploy" unless node_status["status"].nil?
+
+    message = node_status["message"].to_s
+    unless message.include?("no deploy status yet") && message.include?("devopsellence deploy")
+      raise "unexpected pre-deploy status message: #{node_status.inspect}"
+    end
+    puts "[ok] CLI status reports no deploy status before first deploy"
   end
 
   def assert_runtime_state!

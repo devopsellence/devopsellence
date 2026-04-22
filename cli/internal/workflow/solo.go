@@ -721,7 +721,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 
 	for name, node := range nodes {
 		statusPath := filepath.Join(node.AgentStateDir, "status.json")
-		out, err := solo.RunSSH(ctx, node, remoteReadFileCommand(statusPath), nil)
+		out, err := solo.RunSSH(ctx, node, remoteReadOptionalFileCommand(statusPath, soloStatusMissingSentinel), nil)
 		if err != nil {
 			if a.Printer.JSON {
 				jsonResults = append(jsonResults, map[string]any{
@@ -730,6 +730,20 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				})
 			} else {
 				a.Printer.Printf("[%s] error: %s\n", name, err)
+			}
+			continue
+		}
+
+		if strings.TrimSpace(out) == soloStatusMissingSentinel {
+			message := "no deploy status yet; run `devopsellence deploy`"
+			if a.Printer.JSON {
+				jsonResults = append(jsonResults, map[string]any{
+					"node":    name,
+					"status":  nil,
+					"message": message,
+				})
+			} else {
+				a.Printer.Printf("[%s] status=missing message=%s\n", name, message)
 			}
 			continue
 		}
@@ -1757,6 +1771,8 @@ type ingressDNSHostResult struct {
 	Error    string   `json:"error,omitempty"`
 }
 
+const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
+
 func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.SoloNode, skip bool) error {
 	if skip || cfg == nil || cfg.Ingress == nil || cfg.Ingress.TLS.Mode != "auto" {
 		return nil
@@ -2453,6 +2469,12 @@ func remoteDockerImageInspectCommand(imageTag string) string {
 func remoteReadFileCommand(path string) string {
 	quotedPath := shellQuote(path)
 	return fmt.Sprintf("if [ -r %[1]s ]; then exec cat %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n cat %[1]s; fi; exec cat %[1]s", quotedPath)
+}
+
+func remoteReadOptionalFileCommand(path, missingSentinel string) string {
+	quotedPath := shellQuote(path)
+	quotedSentinel := shellQuote(missingSentinel)
+	return fmt.Sprintf("if [ -r %[1]s ]; then exec cat %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n test -r %[1]s >/dev/null 2>&1; then exec sudo -n cat %[1]s; fi; if [ -e %[1]s ]; then echo 'File exists but is not readable; grant read access or enable passwordless sudo.' >&2; exit 1; fi; if command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then echo 'File exists but is not readable; grant read access or enable passwordless sudo.' >&2; exit 1; fi; printf '%%s\\n' %[2]s", quotedPath, quotedSentinel)
 }
 
 func remoteJournalctlCommand(args string) string {

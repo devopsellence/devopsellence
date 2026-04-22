@@ -77,7 +77,7 @@ printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --st
 devopsellence secret list
 ```
 
-Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest deployed environment snapshots live in `$XDG_STATE_HOME/devopsellence/solo/state.json` (default: `~/.local/state/devopsellence/solo/state.json` when `XDG_STATE_HOME` is unset).
+Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest desired environment snapshots live in `$XDG_STATE_HOME/devopsellence/solo/state.json` (default: `~/.local/state/devopsellence/solo/state.json` when `XDG_STATE_HOME` is unset).
 
 ## Shared mode
 

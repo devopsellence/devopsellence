@@ -344,7 +344,7 @@
     <p>Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in local solo state at <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). The provider API token and SSH private key value are not written to app config.</p>
 
     <h3>Solo config</h3>
-    <p><code>devopsellence.yml</code> stays workload-only in solo mode. Solo nodes, workspace/environment attachments, and the latest deployed environment snapshots live in <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). SSH private key material stays in your SSH agent, local filesystem, or CI secrets.</p>
+    <p><code>devopsellence.yml</code> stays workload-only in solo mode. Solo nodes, workspace/environment attachments, and the latest desired environment snapshots live in <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). SSH private key material stays in your SSH agent, local filesystem, or CI secrets.</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -685,7 +685,7 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>$XDG_STATE_HOME/devopsellence/solo/state.json</code></dt>
-        <dd>Solo mode local state. Stores the global node registry, workspace/environment attachments, and the latest deployed environment snapshots. Defaults to <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is not set.</dd>
+        <dd>Solo mode local state. Stores the global node registry, workspace/environment attachments, and the latest desired environment snapshots. Defaults to <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is not set.</dd>
       </div>
     </dl>
   </section>

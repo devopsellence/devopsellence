@@ -400,7 +400,7 @@ func TestEnsureSoloProjectConfigWritesDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestSoloNodeAttachDoesNotPersistOnRepublishError(t *testing.T) {
+func TestSoloNodeAttachPersistsDesiredStateOnRepublishError(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoot := t.TempDir()
@@ -446,8 +446,8 @@ func TestSoloNodeAttachDoesNotPersistOnRepublishError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Attachments) != 0 {
-		t.Fatalf("attachments persisted on republish error: %#v", loaded.Attachments)
+	if len(loaded.Attachments) != 1 {
+		t.Fatalf("attachments = %#v, want persisted desired attachment", loaded.Attachments)
 	}
 }
 

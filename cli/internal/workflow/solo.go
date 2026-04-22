@@ -269,11 +269,13 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if _, err := current.SaveSnapshot(solo.RedactDeploySnapshotSecrets(snapshot, cfg)); err != nil {
 		return err
 	}
-	desiredStateRevisions, err := a.republishSoloNodes(ctx, current, attachedNodeNames)
-	if err != nil {
+	// Persist desired local state first so follow-up republish operations can
+	// recover cleanly from partial remote updates.
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if err := a.writeSoloState(current); err != nil {
+	desiredStateRevisions, err := a.republishSoloNodes(ctx, current, attachedNodeNames)
+	if err != nil {
 		return err
 	}
 
@@ -821,13 +823,13 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	if err != nil {
 		return err
 	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
 	if _, ok := current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment]; ok {
 		if _, err := a.republishSoloNodes(ctx, current, attachment.NodeNames); err != nil {
 			return err
 		}
-	}
-	if err := a.writeSoloState(current); err != nil {
-		return err
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
@@ -868,10 +870,10 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	}
 	affectedNodeNames := append([]string{opts.Node}, nodeNamesBefore...)
 	affectedNodeNames = normalizeSoloNames(affectedNodeNames)
-	if _, err := a.republishSoloNodes(ctx, current, affectedNodeNames); err != nil {
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if err := a.writeSoloState(current); err != nil {
+	if _, err := a.republishSoloNodes(ctx, current, affectedNodeNames); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -938,10 +940,10 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	}
 	node.Labels = labels
 	current.Nodes[opts.Node] = solo.NormalizeNode(node)
-	if _, err := a.republishSoloNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if err := a.writeSoloState(current); err != nil {
+	if _, err := a.republishSoloNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
 		return err
 	}
 	if a.Printer.JSON {

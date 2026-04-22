@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+require "digest"
+require "fileutils"
+require "open3"
+require "tempfile"
 require "test_helper"
 
 class InstallsTest < ActionDispatch::IntegrationTest
@@ -83,6 +87,21 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "CLI_VERSION='v0.1.0-rc.1'"
     assert_includes response.body, "missing --version (or use ?version=... or set DEVOPSELLENCE_CLI_VERSION)"
     assert_includes response.body, 'validate_version "$CLI_VERSION"'
+  end
+
+  test "cli install script executes successfully for prerelease tags" do
+    get "/lfg.sh", params: { version: "master-0053792f6aec" }
+
+    assert_response :success
+
+    stdout, stderr, status, installed_cli = run_cli_install_script(
+      response.body,
+      version: "master-0053792f6aec"
+    )
+
+    assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
+    assert_includes stdout, "devopsellence CLI installed"
+    assert_equal "prerelease build\n", installed_cli
   end
 
   test "cli install script derives checksum url after parsing base url overrides" do
@@ -180,5 +199,78 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "docker ps -aq --filter label=devopsellence.system"
     assert_includes response.body, "run_root docker rm -f \"${container_ids[@]}\""
     assert_includes response.body, "run_root docker network rm \"$NETWORK_NAME\" >/dev/null 2>&1 || true"
+  end
+
+  private
+
+  def run_cli_install_script(script_body, version:)
+    Dir.mktmpdir("devopsellence-cli-install-test") do |tmpdir|
+      fixtures_dir = File.join(tmpdir, "fixtures")
+      fakebin_dir = File.join(tmpdir, "fakebin")
+      install_dir = File.join(tmpdir, "install")
+      script_path = File.join(tmpdir, "lfg.sh")
+      artifact_path = File.join(fixtures_dir, "cli-linux-amd64")
+      checksums_path = File.join(fixtures_dir, "cli-SHA256SUMS")
+
+      FileUtils.mkdir_p(fixtures_dir)
+      FileUtils.mkdir_p(fakebin_dir)
+      FileUtils.mkdir_p(install_dir)
+
+      File.write(artifact_path, "prerelease build\n")
+      digest = Digest::SHA256.file(artifact_path).hexdigest
+      File.write(checksums_path, "#{digest}  cli-linux-amd64\n")
+      File.write(script_path, script_body)
+      FileUtils.chmod("u+x", script_path)
+
+      curl_path = File.join(fakebin_dir, "curl")
+      File.write(curl_path, <<~SH)
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        output=""
+        url=""
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            -o)
+              output="$2"
+              shift 2
+              ;;
+            -fsSL|-f|-s|-S|-L)
+              shift
+              ;;
+            *)
+              url="$1"
+              shift
+              ;;
+          esac
+        done
+
+        case "$url" in
+          *"/cli/download?"*)
+            cp #{artifact_path.inspect} "$output"
+            ;;
+          *"/cli/checksums?"*)
+            cp #{checksums_path.inspect} "$output"
+            ;;
+          *)
+            echo "unexpected curl url: $url" >&2
+            exit 1
+            ;;
+        esac
+      SH
+      FileUtils.chmod("u+x", curl_path)
+
+      env = {
+        "PATH" => "#{fakebin_dir}:#{ENV.fetch("PATH")}",
+        "HOME" => tmpdir,
+        "DEVOPSELLENCE_CLI_VERSION" => version,
+        "DEVOPSELLENCE_CLI_INSTALL_DIR" => install_dir,
+        "DEVOPSELLENCE_BASE_URL" => "https://downloads.devopsellence.test"
+      }
+
+      stdout, stderr, status = Open3.capture3(env, script_path)
+      installed_cli = File.exist?(File.join(install_dir, "devopsellence")) ? File.read(File.join(install_dir, "devopsellence")) : nil
+      [ stdout, stderr, status, installed_cli ]
+    end
   end
 end

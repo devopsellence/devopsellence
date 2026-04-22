@@ -272,3 +272,44 @@ func TestWriteGenericConfigUsesRepoRootPath(t *testing.T) {
 		t.Fatalf("loaded generic config mismatch: %#v", loaded)
 	}
 }
+
+func TestReadmeExampleConfigParses(t *testing.T) {
+	t.Parallel()
+
+	readmePath := filepath.Join("..", "..", "..", "README.md")
+	content, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", readmePath, err)
+	}
+
+	marker := "`devopsellence` reads `devopsellence.yml` from the app root:"
+	start := strings.Index(string(content), marker)
+	if start == -1 {
+		t.Fatalf("README marker %q not found", marker)
+	}
+
+	section := string(content[start:])
+	fenceStart := strings.Index(section, "```yaml\n")
+	if fenceStart == -1 {
+		t.Fatal("README yaml fence not found after example config marker")
+	}
+	section = section[fenceStart+len("```yaml\n"):]
+	fenceEnd := strings.Index(section, "\n```")
+	if fenceEnd == -1 {
+		t.Fatal("README yaml closing fence not found")
+	}
+
+	root := t.TempDir()
+	path := filepath.Join(root, FilePath)
+	if err := os.WriteFile(path, []byte(section[:fenceEnd]+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load(%q) error = %v", path, err)
+	}
+	if cfg == nil {
+		t.Fatal("Load() returned nil config")
+	}
+}

@@ -25,7 +25,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       image_digest: "sha256:abc",
       image_repository: "api",
       runtime_json: release_runtime_json(tasks: {
-        "release" => { "service" => "web", "command" => "bundle exec rails db:migrate" }
+        "release" => { "service" => "web", "command" => ["bundle", "exec", "rails", "db:migrate"] }
       }),
       revision: "rel-1"
     )
@@ -314,7 +314,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       image_repository: "api",
       runtime_json: release_runtime_json(services: {
         "web" => web_service_runtime(port: 80, env: { "RAILS_ENV" => "production" }),
-        "worker" => worker_service_runtime(command: "./bin/jobs")
+        "worker" => worker_service_runtime(command: ["./bin/jobs"])
       }),
       revision: "rel-1"
     )
@@ -344,7 +344,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
     services = desired_state_services(desired_state)
     assert_equal %w[web worker], services.map { |entry| entry.fetch("name") }
-    assert_equal "./bin/jobs", services.second.dig("command", 0)
+    assert_equal "./bin/jobs", services.second.dig("entrypoint", 0)
     assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
   end
 
@@ -368,7 +368,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       image_repository: "api",
       runtime_json: release_runtime_json(services: {
         "web" => web_service_runtime(volumes: [ { "source" => "app_storage", "target" => "/rails/storage" } ]),
-        "worker" => worker_service_runtime(command: "./bin/jobs", volumes: [ { "source" => "app_storage", "target" => "/rails/storage" } ])
+        "worker" => worker_service_runtime(command: ["./bin/jobs"], volumes: [ { "source" => "app_storage", "target" => "/rails/storage" } ])
       }),
       revision: "rel-1"
     )

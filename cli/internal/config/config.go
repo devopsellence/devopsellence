@@ -57,8 +57,8 @@ type ServicePort struct {
 type ServiceConfig struct {
 	Kind        string            `yaml:"kind" json:"kind"`
 	Image       string            `yaml:"image,omitempty" json:"image,omitempty"`
-	Entrypoint  string            `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
-	Command     string            `yaml:"command,omitempty" json:"command,omitempty"`
+	Command     []string          `yaml:"command,omitempty" json:"command,omitempty"`
+	Args        []string          `yaml:"args,omitempty" json:"args,omitempty"`
 	Env         map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 	SecretRefs  []SecretRef       `yaml:"secret_refs,omitempty" json:"secret_refs,omitempty"`
 	Ports       []ServicePort     `yaml:"ports,omitempty" json:"ports,omitempty"`
@@ -69,10 +69,10 @@ type ServiceConfig struct {
 type Service = ServiceConfig
 
 type TaskConfig struct {
-	Service    string            `yaml:"service" json:"service"`
-	Entrypoint string            `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
-	Command    string            `yaml:"command,omitempty" json:"command,omitempty"`
-	Env        map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Service string            `yaml:"service" json:"service"`
+	Command []string          `yaml:"command,omitempty" json:"command,omitempty"`
+	Args    []string          `yaml:"args,omitempty" json:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 }
 
 type TasksConfig struct {
@@ -492,6 +492,16 @@ func validateService(name string, service ServiceConfig) error {
 	default:
 		return fmt.Errorf("services.%s.kind must be one of %q, %q, or %q", name, ServiceKindWeb, ServiceKindWorker, ServiceKindAccessory)
 	}
+	for _, arg := range service.Command {
+		if strings.TrimSpace(arg) == "" {
+			return fmt.Errorf("services.%s.command entries must be present", name)
+		}
+	}
+	for _, arg := range service.Args {
+		if strings.TrimSpace(arg) == "" {
+			return fmt.Errorf("services.%s.args entries must be present", name)
+		}
+	}
 	for key := range service.Env {
 		if strings.TrimSpace(key) == "" {
 			return fmt.Errorf("services.%s.env keys must be present", name)
@@ -558,8 +568,18 @@ func validateTasks(cfg *ProjectConfig) error {
 	if _, ok := cfg.Services[serviceName]; !ok {
 		return fmt.Errorf("tasks.release.service %q not found in services", serviceName)
 	}
-	if strings.TrimSpace(release.Entrypoint) == "" && strings.TrimSpace(release.Command) == "" {
-		return errors.New("tasks.release must set entrypoint or command")
+	if len(release.Command) == 0 && len(release.Args) == 0 {
+		return errors.New("tasks.release must set command or args")
+	}
+	for _, arg := range release.Command {
+		if strings.TrimSpace(arg) == "" {
+			return errors.New("tasks.release.command entries must be present")
+		}
+	}
+	for _, arg := range release.Args {
+		if strings.TrimSpace(arg) == "" {
+			return errors.New("tasks.release.args entries must be present")
+		}
 	}
 	for key := range release.Env {
 		if strings.TrimSpace(key) == "" {

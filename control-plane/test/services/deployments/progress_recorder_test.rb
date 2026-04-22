@@ -24,7 +24,7 @@ module Deployments
         image_digest: "sha256:abc",
         image_repository: "api",
         runtime_json: release_runtime_json(tasks: {
-          "release" => { "service" => "web", "command" => "bundle exec rails db:migrate" }
+          "release" => { "service" => "web", "command" => ["bundle", "exec", "rails", "db:migrate"] }
         }),
         revision: "rel-1"
       )

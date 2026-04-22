@@ -184,12 +184,8 @@ class Release < ApplicationRecord
       errors.add(:runtime_json, "services.#{name}.kind must be one of #{SERVICE_KINDS.join(', ')}")
     end
 
-    if service["entrypoint"].present? && !service["entrypoint"].is_a?(String)
-      errors.add(:runtime_json, "services.#{name}.entrypoint must be a string")
-    end
-    if service["command"].present? && !service["command"].is_a?(String)
-      errors.add(:runtime_json, "services.#{name}.command must be a string")
-    end
+    validate_string_array(service, name:, field: "command")
+    validate_string_array(service, name:, field: "args")
     unless service["env"].nil? || service["env"].is_a?(Hash)
       errors.add(:runtime_json, "services.#{name}.env must be an object")
     end
@@ -260,10 +256,10 @@ class Release < ApplicationRecord
       errors.add(:runtime_json, "tasks.release.service must reference an existing service")
       return
     end
-    validate_release_task_string(task, "entrypoint")
-    validate_release_task_string(task, "command")
-    if !release_task_string_present?(task["entrypoint"]) && !release_task_string_present?(task["command"])
-      errors.add(:runtime_json, "tasks.release must set entrypoint or command")
+    validate_release_task_array(task, "command")
+    validate_release_task_array(task, "args")
+    if !release_task_array_present?(task["command"]) && !release_task_array_present?(task["args"])
+      errors.add(:runtime_json, "tasks.release must set command or args")
     end
     unless task["env"].nil? || task["env"].is_a?(Hash)
       errors.add(:runtime_json, "tasks.release.env must be an object")
@@ -291,15 +287,26 @@ class Release < ApplicationRecord
     end
   end
 
-  def validate_release_task_string(task, field)
-    value = task[field]
-    return if value.nil? || value.is_a?(String)
+  def validate_string_array(service, name:, field:)
+    value = service[field]
+    return if value.nil? || string_array?(value)
 
-    errors.add(:runtime_json, "tasks.release.#{field} must be a string")
+    errors.add(:runtime_json, "services.#{name}.#{field} must be an array of strings")
   end
 
-  def release_task_string_present?(value)
-    value.is_a?(String) && value.strip.present?
+  def validate_release_task_array(task, field)
+    value = task[field]
+    return if value.nil? || string_array?(value)
+
+    errors.add(:runtime_json, "tasks.release.#{field} must be an array of strings")
+  end
+
+  def release_task_array_present?(value)
+    string_array?(value) && value.present?
+  end
+
+  def string_array?(value)
+    value.is_a?(Array) && value.all? { |entry| entry.is_a?(String) && entry.strip.present? }
   end
 
   def service_payload(name, service, organization:, environment:)
@@ -308,8 +315,8 @@ class Release < ApplicationRecord
       name: name,
       kind: service_kind(service),
       image: image,
-      entrypoint: shell_words(service["entrypoint"]),
-      command: shell_words(service["command"]),
+      entrypoint: string_array(service["command"]),
+      command: string_array(service["args"]),
       env: service["env"].presence,
       secretRefs: merged_secret_refs_for_agent(service, service_name: name, environment: environment).presence,
       volumeMounts: service_volume_mounts(service, environment: environment).presence
@@ -329,8 +336,8 @@ class Release < ApplicationRecord
     {
       name: name,
       image: image,
-      entrypoint: shell_words(service["entrypoint"]),
-      command: shell_words(service["command"]),
+      entrypoint: string_array(service["command"]),
+      command: string_array(service["args"]),
       env: service["env"].presence,
       secretRefs: resolved_task_secret_refs(service, secret_service_name:, environment:).presence,
       volumeMounts: service_volume_mounts(service, environment: environment).presence
@@ -339,8 +346,8 @@ class Release < ApplicationRecord
 
   def merged_task_service(service, task)
     stringify_hash(service).merge(
-      "entrypoint" => task["entrypoint"].presence || service["entrypoint"],
       "command" => task["command"].presence || service["command"],
+      "args" => task["args"].presence || service["args"],
       "env" => stringify_hash(service["env"]).merge(stringify_hash(task["env"]))
     )
   end
@@ -391,11 +398,10 @@ class Release < ApplicationRecord
     service_kind(service)
   end
 
-  def shell_words(value)
-    text = value.to_s.strip
-    return nil if text.empty?
+  def string_array(value)
+    return nil unless string_array?(value)
 
-    Shellwords.split(text)
+    value.map(&:dup)
   end
 
   def service_secret_refs_for_agent(service)

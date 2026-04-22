@@ -328,7 +328,7 @@ func TestRedactDeploySnapshotSecretsRemovesSecretValues(t *testing.T) {
 			Port: 3000,
 		},
 	}
-	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: "bin/rails db:migrate"}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"bin/rails", "db:migrate"}}
 
 	snapshot, err := BuildDeploySnapshot(&cfg, "/workspace/demo", "/workspace/demo/devopsellence.yml", "demo:abc1234", "abc1234", map[string]string{"DATABASE_URL": "postgres://secret"})
 	if err != nil {

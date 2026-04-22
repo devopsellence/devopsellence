@@ -1515,7 +1515,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
             volumes: [{ source: "app_storage", target: "/rails/storage" }]
           ),
           worker: worker_service_runtime(
-            command: "./bin/jobs",
+            command: ["./bin/jobs"],
             volumes: [{ source: "app_storage", target: "/rails/storage" }]
           )
         },
@@ -1527,7 +1527,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_response :created
     release = project.releases.order(:id).last
     runtime = JSON.parse(release.runtime_json)
-    assert_equal "./bin/jobs", runtime.dig("services", "worker", "command")
+    assert_equal ["./bin/jobs"], runtime.dig("services", "worker", "command")
     assert_equal 80, runtime.dig("services", "web", "ports").first.fetch("port")
     assert_equal 80, runtime.dig("services", "web", "healthcheck", "port")
   end

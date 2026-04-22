@@ -89,8 +89,8 @@ module Releases
       normalized = {
         "kind" => kind,
         "image" => optional_service_string(service["image"] || service[:image]),
-        "entrypoint" => optional_service_string(service["entrypoint"] || service[:entrypoint]),
-        "command" => optional_service_string(service["command"] || service[:command]),
+        "command" => optional_service_array(service["command"] || service[:command], field: :"#{field}.command"),
+        "args" => optional_service_array(service["args"] || service[:args], field: :"#{field}.args"),
         "env" => parse_hash(service["env"] || service[:env], field: :"#{field}.env"),
         "secret_refs" => parse_array(service["secret_refs"] || service[:secret_refs], field: :"#{field}.secret_refs"),
         "volumes" => parse_array(service["volumes"] || service[:volumes], field: :"#{field}.volumes"),
@@ -113,8 +113,8 @@ module Releases
       task = parse_hash(value, field: :"tasks.release")
       {
         "service" => required_service_string(task["service"] || task[:service], field: :"tasks.release.service"),
-        "entrypoint" => optional_service_string(task["entrypoint"] || task[:entrypoint]),
-        "command" => optional_service_string(task["command"] || task[:command]),
+        "command" => optional_service_array(task["command"] || task[:command], field: :"tasks.release.command"),
+        "args" => optional_service_array(task["args"] || task[:args], field: :"tasks.release.args"),
         "env" => parse_hash(task["env"] || task[:env], field: :"tasks.release.env")
       }.compact
     end
@@ -173,6 +173,16 @@ module Releases
 
     def optional_service_string(value)
       value.to_s.strip.presence
+    end
+
+    def optional_service_array(value, field:)
+      array = parse_array(value, field: field)
+      array.each_with_index.map do |entry, index|
+        text = entry.to_s.strip
+        raise InvalidPayload, "#{field}[#{index}] must be present" if text.blank?
+
+        text
+      end.presence
     end
 
     def required_service_string(value, field:)

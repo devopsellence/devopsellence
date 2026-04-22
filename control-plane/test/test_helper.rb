@@ -172,12 +172,12 @@ module ActiveSupport
       bundle
     end
 
-    def web_service_runtime(port: 3000, healthcheck_path: "/up", healthcheck_port: nil, command: nil, entrypoint: nil, env: {}, secret_refs: [], volumes: [], image: nil)
+    def web_service_runtime(port: 3000, healthcheck_path: "/up", healthcheck_port: nil, command: nil, args: nil, env: {}, secret_refs: [], volumes: [], image: nil)
       {
         "kind" => "web",
         "image" => image,
-        "entrypoint" => entrypoint,
         "command" => command,
+        "args" => args,
         "env" => env,
         "secret_refs" => secret_refs,
         "ports" => [ { "name" => "http", "port" => port } ],
@@ -186,12 +186,12 @@ module ActiveSupport
       }.compact
     end
 
-    def worker_service_runtime(command: nil, entrypoint: nil, env: {}, secret_refs: [], volumes: [], image: nil)
+    def worker_service_runtime(command: nil, args: nil, env: {}, secret_refs: [], volumes: [], image: nil)
       {
         "kind" => "worker",
         "image" => image,
-        "entrypoint" => entrypoint,
         "command" => command,
+        "args" => args,
         "env" => env,
         "secret_refs" => secret_refs,
         "volumes" => volumes

@@ -33,22 +33,22 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_equal "web", release.ingress_service_name
   end
 
-  test "release task command and entrypoint must be strings" do
+  test "release task command and args must be arrays" do
     release = build_release(
       runtime_json: release_runtime_json(
         tasks: {
           "release" => {
             "service" => "web",
-            "command" => [ "bin/rails", "db:migrate" ],
-            "entrypoint" => [ "/bin/sh" ]
+            "command" => "bin/rails",
+            "args" => "db:migrate"
           }
         }
       )
     )
 
     assert_not release.valid?
-    assert_includes release.errors[:runtime_json], "tasks.release.command must be a string"
-    assert_includes release.errors[:runtime_json], "tasks.release.entrypoint must be a string"
+    assert_includes release.errors[:runtime_json], "tasks.release.command must be an array of strings"
+    assert_includes release.errors[:runtime_json], "tasks.release.args must be an array of strings"
   end
 
   test "blank kind does not contribute required labels and reports one kind error" do

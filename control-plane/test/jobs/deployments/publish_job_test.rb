@@ -24,7 +24,7 @@ module Deployments
         runtime_json: release_runtime_json(tasks: {
           "release" => {
             "service" => "web",
-            "command" => "bin/rails db:migrate"
+            "command" => ["bin/rails", "db:migrate"]
           }
         }),
         release_task_status: Deployment::RELEASE_TASK_STATUS_PENDING

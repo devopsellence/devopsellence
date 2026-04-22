@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestWriteAndLoadFromRoot(t *testing.T) {
@@ -174,8 +177,12 @@ func TestLoadRejectsStringCommandSyntax(t *testing.T) {
 	}
 
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "cannot unmarshal !!str") || !strings.Contains(err.Error(), "[]string") {
-		t.Fatalf("expected string command type error, got %v", err)
+	if err == nil {
+		t.Fatal("expected string command type error, got nil")
+	}
+	var typeErr *yaml.TypeError
+	if !errors.As(err, &typeErr) {
+		t.Fatalf("expected yaml.TypeError, got %T (%v)", err, err)
 	}
 }
 

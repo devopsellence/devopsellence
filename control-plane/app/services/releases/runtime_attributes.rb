@@ -79,6 +79,7 @@ module Releases
 
     def parse_service(value, field:)
       service = parse_hash(value, field:)
+      reject_deprecated_key!(service, deprecated_key: :entrypoint, field: :"#{field}.entrypoint")
       kind = optional_service_string(service["kind"] || service[:kind])
       raise InvalidPayload, "#{field}.kind must be present" if kind.blank?
 
@@ -111,6 +112,7 @@ module Releases
 
     def parse_release_task(value)
       task = parse_hash(value, field: :"tasks.release")
+      reject_deprecated_key!(task, deprecated_key: :entrypoint, field: :"tasks.release.entrypoint")
       {
         "service" => required_service_string(task["service"] || task[:service], field: :"tasks.release.service"),
         "command" => optional_service_array(task["command"] || task[:command], field: :"tasks.release.command"),
@@ -178,11 +180,19 @@ module Releases
     def optional_service_array(value, field:)
       array = parse_array(value, field: field)
       array.each_with_index.map do |entry, index|
-        text = entry.to_s.strip
+        raise InvalidPayload, "#{field}[#{index}] must be a string" unless entry.is_a?(String)
+
+        text = entry.strip
         raise InvalidPayload, "#{field}[#{index}] must be present" if text.blank?
 
         text
       end.presence
+    end
+
+    def reject_deprecated_key!(hash, deprecated_key:, field:)
+      return unless hash.key?(deprecated_key) || hash.key?(deprecated_key.to_s)
+
+      raise InvalidPayload, "#{field} is no longer supported; use command or args"
     end
 
     def required_service_string(value, field:)

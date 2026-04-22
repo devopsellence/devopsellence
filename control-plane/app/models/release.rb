@@ -400,6 +400,7 @@ class Release < ApplicationRecord
 
   def string_array(value)
     return nil unless string_array?(value)
+    return nil if value.empty?
 
     value.map(&:dup)
   end

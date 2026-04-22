@@ -460,7 +460,6 @@ PY
       "services" => {
         "web" => {
           "kind" => "web",
-          "command" => "/server",
           "ports" => [
             { "name" => "http", "port" => APP_PORT }
           ],

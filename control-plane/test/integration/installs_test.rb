@@ -263,6 +263,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
       env = {
         "PATH" => "#{fakebin_dir}:#{ENV.fetch("PATH")}",
         "HOME" => tmpdir,
+        "SHELL" => ENV.fetch("SHELL", "/bin/bash"),
         "DEVOPSELLENCE_CLI_VERSION" => version,
         "DEVOPSELLENCE_CLI_INSTALL_DIR" => install_dir,
         "DEVOPSELLENCE_BASE_URL" => "https://downloads.devopsellence.test"

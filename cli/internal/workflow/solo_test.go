@@ -352,7 +352,7 @@ func TestRepublishSoloNodesReportsLocalImagePrecheck(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected republish error")
 	}
-	if !strings.Contains(err.Error(), "[web-a] local image precheck:") {
+	if !strings.Contains(err.Error(), `local snapshot image "demo:missing" is unavailable`) {
 		t.Fatalf("error = %v", err)
 	}
 }

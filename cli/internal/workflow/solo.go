@@ -392,6 +392,12 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	if len(nodeNames) == 0 {
 		return map[string]string{}, nil
 	}
+	type preparedSoloNodeState struct {
+		snapshots    []solo.DeploySnapshot
+		releaseNodes map[string]string
+		peers        []solo.NodePeer
+		images       []string
+	}
 	var mu sync.Mutex
 	var errs []string
 	revisions := map[string]string{}
@@ -401,38 +407,37 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	if err != nil {
 		return nil, err
 	}
-	for _, nodeName := range sortedSoloNodeNames(nodes) {
+	sortedNodeNames := sortedSoloNodeNames(nodes)
+	prepared := make(map[string]preparedSoloNodeState, len(sortedNodeNames))
+	resolvedSnapshotCache := map[string]solo.DeploySnapshot{}
+	allImages := map[string]bool{}
+	for _, nodeName := range sortedNodeNames {
+		inputs, err := a.preparedSoloNodeDesiredStateInputs(current, nodeName, nodes[nodeName], resolvedSnapshotCache)
+		if err != nil {
+			return nil, err
+		}
+		prepared[nodeName] = inputs
+		for _, image := range inputs.images {
+			allImages[image] = true
+		}
+	}
+	images := make([]string, 0, len(allImages))
+	for image := range allImages {
+		images = append(images, image)
+	}
+	sort.Strings(images)
+	for _, image := range images {
+		if err := a.ensureLocalSoloSnapshotImage(ctx, image); err != nil {
+			return nil, err
+		}
+	}
+	for _, nodeName := range sortedNodeNames {
 		node := nodes[nodeName]
+		inputs := prepared[nodeName]
 		wg.Add(1)
-		go func(name string, node config.SoloNode) {
+		go func(name string, node config.SoloNode, inputs preparedSoloNodeState) {
 			defer wg.Done()
-			snapshots, releaseNodes, peers, images, err := soloNodeDesiredStateInputs(current, name)
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] build desired state inputs: %s", name, err))
-				mu.Unlock()
-				return
-			}
-			resolvedSnapshots := make([]solo.DeploySnapshot, 0, len(snapshots))
-			for _, snapshot := range snapshots {
-				resolvedSnapshot, err := a.resolveStoredDeploySnapshot(snapshot)
-				if err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] hydrate snapshot: %s", name, err))
-					mu.Unlock()
-					return
-				}
-				resolvedSnapshots = append(resolvedSnapshots, resolvedSnapshot)
-			}
-			for _, image := range images {
-				if err := a.ensureLocalSoloSnapshotImage(ctx, image); err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] local image precheck: %s", name, err))
-					mu.Unlock()
-					return
-				}
-			}
-			if len(images) > 0 {
+			if len(inputs.images) > 0 {
 				if _, err := solo.RunSSH(ctx, node, remoteDockerCheckCommand(), nil); err != nil {
 					mu.Lock()
 					errs = append(errs, fmt.Sprintf("[%s] remote docker check: %s", name, err))
@@ -440,7 +445,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 					return
 				}
 			}
-			for _, image := range images {
+			for _, image := range inputs.images {
 				present, err := remoteNodeHasImage(ctx, node, image)
 				if err != nil {
 					mu.Lock()
@@ -461,7 +466,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 					return
 				}
 			}
-			desiredStateJSON, err := solo.BuildAggregatedDesiredState(name, node, resolvedSnapshots, releaseNodes, peers)
+			desiredStateJSON, err := solo.BuildAggregatedDesiredState(name, node, inputs.snapshots, inputs.releaseNodes, inputs.peers)
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
@@ -489,7 +494,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 			mu.Lock()
 			revisions[name] = revision
 			mu.Unlock()
-		}(nodeName, node)
+		}(nodeName, node, inputs)
 	}
 	wg.Wait()
 	if len(errs) > 0 {
@@ -518,6 +523,72 @@ func (a *App) resolveStoredDeploySnapshot(snapshot solo.DeploySnapshot) (solo.De
 		configPath = a.ConfigStore.PathFor(snapshot.WorkspaceRoot)
 	}
 	return solo.BuildDeploySnapshot(cfg, snapshot.WorkspaceRoot, configPath, snapshot.Image, snapshot.Revision, secrets)
+}
+
+func (a *App) preparedSoloNodeDesiredStateInputs(current solo.State, nodeName string, node config.SoloNode, resolvedSnapshotCache map[string]solo.DeploySnapshot) (struct {
+	snapshots    []solo.DeploySnapshot
+	releaseNodes map[string]string
+	peers        []solo.NodePeer
+	images       []string
+}, error) {
+	storedSnapshots, releaseNodes, peers, _, err := soloNodeDesiredStateInputs(current, nodeName)
+	if err != nil {
+		return struct {
+			snapshots    []solo.DeploySnapshot
+			releaseNodes map[string]string
+			peers        []solo.NodePeer
+			images       []string
+		}{}, fmt.Errorf("build desired state inputs: %w", err)
+	}
+	resolvedSnapshots := make([]solo.DeploySnapshot, 0, len(storedSnapshots))
+	imageSet := map[string]bool{}
+	for _, snapshot := range storedSnapshots {
+		key := strings.TrimSpace(snapshot.WorkspaceKey) + "\n" + strings.TrimSpace(snapshot.Environment)
+		resolvedSnapshot, ok := resolvedSnapshotCache[key]
+		if !ok {
+			resolvedSnapshot, err = a.resolveStoredDeploySnapshot(snapshot)
+			if err != nil {
+				return struct {
+					snapshots    []solo.DeploySnapshot
+					releaseNodes map[string]string
+					peers        []solo.NodePeer
+					images       []string
+				}{}, fmt.Errorf("hydrate snapshot: %w", err)
+			}
+			resolvedSnapshotCache[key] = resolvedSnapshot
+		}
+		resolvedSnapshots = append(resolvedSnapshots, resolvedSnapshot)
+		if snapshotNeedsImageOnNode(resolvedSnapshot, node, releaseNodes[key] == nodeName) {
+			if image := strings.TrimSpace(resolvedSnapshot.Image); image != "" {
+				imageSet[image] = true
+			}
+		}
+	}
+	images := make([]string, 0, len(imageSet))
+	for image := range imageSet {
+		images = append(images, image)
+	}
+	sort.Strings(images)
+	return struct {
+		snapshots    []solo.DeploySnapshot
+		releaseNodes map[string]string
+		peers        []solo.NodePeer
+		images       []string
+	}{
+		snapshots:    resolvedSnapshots,
+		releaseNodes: releaseNodes,
+		peers:        peers,
+		images:       images,
+	}, nil
+}
+
+func snapshotNeedsImageOnNode(snapshot solo.DeploySnapshot, node config.SoloNode, runReleaseTask bool) bool {
+	for _, service := range snapshot.Services {
+		if soloNodeCanRunKind(node, service.Kind) {
+			return true
+		}
+	}
+	return snapshot.ReleaseTask != nil && runReleaseTask
 }
 
 func desiredStateRevision(data []byte) (string, error) {

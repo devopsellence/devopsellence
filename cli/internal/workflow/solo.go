@@ -398,6 +398,10 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 		peers        []solo.NodePeer
 		images       []string
 	}
+	type localImageCheck struct {
+		once sync.Once
+		err  error
+	}
 	var mu sync.Mutex
 	var errs []string
 	revisions := map[string]string{}
@@ -410,27 +414,15 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	sortedNodeNames := sortedSoloNodeNames(nodes)
 	prepared := make(map[string]preparedSoloNodeState, len(sortedNodeNames))
 	resolvedSnapshotCache := map[string]solo.DeploySnapshot{}
-	allImages := map[string]bool{}
 	for _, nodeName := range sortedNodeNames {
 		inputs, err := a.preparedSoloNodeDesiredStateInputs(current, nodeName, nodes[nodeName], resolvedSnapshotCache)
 		if err != nil {
 			return nil, err
 		}
 		prepared[nodeName] = inputs
-		for _, image := range inputs.images {
-			allImages[image] = true
-		}
 	}
-	images := make([]string, 0, len(allImages))
-	for image := range allImages {
-		images = append(images, image)
-	}
-	sort.Strings(images)
-	for _, image := range images {
-		if err := a.ensureLocalSoloSnapshotImage(ctx, image); err != nil {
-			return nil, err
-		}
-	}
+	var localImageChecksMu sync.Mutex
+	localImageChecks := map[string]*localImageCheck{}
 	for _, nodeName := range sortedNodeNames {
 		node := nodes[nodeName]
 		inputs := prepared[nodeName]
@@ -455,6 +447,22 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 				}
 				if present {
 					continue
+				}
+				localImageChecksMu.Lock()
+				check, ok := localImageChecks[image]
+				if !ok {
+					check = &localImageCheck{}
+					localImageChecks[image] = check
+				}
+				localImageChecksMu.Unlock()
+				check.once.Do(func() {
+					check.err = a.ensureLocalSoloSnapshotImage(ctx, image)
+				})
+				if check.err != nil {
+					mu.Lock()
+					errs = append(errs, fmt.Sprintf("[%s] local image precheck: %s", name, check.err))
+					mu.Unlock()
+					return
 				}
 				if !a.Printer.JSON {
 					a.Printer.Println(fmt.Sprintf("[%s] Transferring image %s...", name, image))

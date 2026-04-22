@@ -311,7 +311,7 @@ func TestEnsureLocalSoloSnapshotImageReturnsActionableError(t *testing.T) {
 	}
 }
 
-func TestRepublishSoloNodesReportsLocalImagePrecheck(t *testing.T) {
+func TestRepublishSoloNodesReportsRemoteDockerCheck(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoot := t.TempDir()
@@ -352,7 +352,7 @@ func TestRepublishSoloNodesReportsLocalImagePrecheck(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected republish error")
 	}
-	if !strings.Contains(err.Error(), `local snapshot image "demo:missing" is unavailable`) {
+	if !strings.Contains(err.Error(), "[web-a] remote docker check:") {
 		t.Fatalf("error = %v", err)
 	}
 }

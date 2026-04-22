@@ -182,6 +182,25 @@ func TestAttachmentKeysForNodeDoesNotMutateState(t *testing.T) {
 	}
 }
 
+func TestAttachmentKeysForNodeTrimsInput(t *testing.T) {
+	t.Parallel()
+
+	current := State{
+		SchemaVersion: soloStateSchemaVersion,
+		Attachments: map[string]AttachmentRecord{
+			"/workspace/demo\nproduction": {
+				WorkspaceRoot: "/workspace/demo",
+				NodeNames:     []string{"web-a"},
+			},
+		},
+	}
+
+	keys := current.AttachmentKeysForNode("  web-a  ")
+	if want := []string{"/workspace/demo\nproduction"}; !reflect.DeepEqual(keys, want) {
+		t.Fatalf("AttachmentKeysForNode() = %#v, want %#v", keys, want)
+	}
+}
+
 func TestSetNodeRejectsMissingConnectionFields(t *testing.T) {
 	t.Parallel()
 

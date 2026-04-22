@@ -535,6 +535,7 @@ func (s *State) DetachNode(workspaceRoot, environment, nodeName string) (Attachm
 
 func (s *State) AttachmentKeysForNode(nodeName string) []string {
 	s.ensureDefaults()
+	nodeName = strings.TrimSpace(nodeName)
 	keys := []string{}
 	for key, attachment := range s.Attachments {
 		for _, current := range attachment.NodeNames {

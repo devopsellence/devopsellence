@@ -314,28 +314,36 @@ func TestEnsureLocalSoloSnapshotImageReturnsActionableError(t *testing.T) {
 func TestRepublishSoloNodesReportsLocalImagePrecheck(t *testing.T) {
 	t.Parallel()
 
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
 	app := &App{
-		Printer: output.New(io.Discard, io.Discard, false),
-		Docker:  &fakeDocker{imageMetadataErr: errors.New("Error response from daemon: No such image: demo:missing")},
+		Printer:     output.New(io.Discard, io.Discard, false),
+		Docker:      &fakeDocker{imageMetadataErr: errors.New("Error response from daemon: No such image: demo:missing")},
+		ConfigStore: config.NewStore(),
 	}
 	current := solo.State{
 		Nodes: map[string]config.SoloNode{
 			"web-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{
-			"/workspace/demo\nproduction": {
-				WorkspaceRoot: "/workspace/demo",
-				WorkspaceKey:  "/workspace/demo",
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
 				Environment:   "production",
 				NodeNames:     []string{"web-a"},
 			},
 		},
 		Snapshots: map[string]solo.DeploySnapshot{
-			"/workspace/demo\nproduction": {
-				WorkspaceRoot: "/workspace/demo",
-				WorkspaceKey:  "/workspace/demo",
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
 				Environment:   "production",
 				Image:         "demo:missing",
+				Metadata:      solo.SnapshotMetadata{ConfigPath: filepath.Join(workspaceRoot, "devopsellence.yml")},
 			},
 		},
 	}
@@ -389,6 +397,57 @@ func TestEnsureSoloProjectConfigWritesDefaultConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "devopsellence.yml")); err != nil {
 		t.Fatalf("expected config file: %v", err)
+	}
+}
+
+func TestSoloNodeAttachDoesNotPersistOnRepublishError(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.SoloNode{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots: map[string]solo.DeploySnapshot{
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				Revision:      "abc1234",
+				Image:         "demo:missing",
+				Metadata:      solo.SnapshotMetadata{ConfigPath: filepath.Join(workspaceRoot, "devopsellence.yml")},
+			},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard, false),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+		Docker:      &fakeDocker{imageMetadataErr: errors.New("Error response from daemon: No such image: demo:missing")},
+	}
+
+	if err := app.SoloNodeAttach(context.Background(), SoloNodeAttachOptions{Node: "node-a"}); err == nil {
+		t.Fatal("expected attach to fail")
+	}
+
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Attachments) != 0 {
+		t.Fatalf("attachments persisted on republish error: %#v", loaded.Attachments)
 	}
 }
 

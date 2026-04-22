@@ -266,15 +266,14 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if _, err := current.SaveSnapshot(snapshot); err != nil {
+	if _, err := current.SaveSnapshot(solo.RedactDeploySnapshotSecrets(snapshot, cfg)); err != nil {
+		return err
+	}
+	desiredStateRevisions, err := a.republishSoloNodes(ctx, current, attachedNodeNames)
+	if err != nil {
 		return err
 	}
 	if err := a.writeSoloState(current); err != nil {
-		return err
-	}
-
-	desiredStateRevisions, err := a.republishSoloNodes(ctx, current, attachedNodeNames)
-	if err != nil {
 		return err
 	}
 
@@ -412,6 +411,17 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 				mu.Unlock()
 				return
 			}
+			resolvedSnapshots := make([]solo.DeploySnapshot, 0, len(snapshots))
+			for _, snapshot := range snapshots {
+				resolvedSnapshot, err := a.resolveStoredDeploySnapshot(snapshot)
+				if err != nil {
+					mu.Lock()
+					errs = append(errs, fmt.Sprintf("[%s] hydrate snapshot: %s", name, err))
+					mu.Unlock()
+					return
+				}
+				resolvedSnapshots = append(resolvedSnapshots, resolvedSnapshot)
+			}
 			for _, image := range images {
 				if err := a.ensureLocalSoloSnapshotImage(ctx, image); err != nil {
 					mu.Lock()
@@ -449,7 +459,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 					return
 				}
 			}
-			desiredStateJSON, err := solo.BuildAggregatedDesiredState(name, node, snapshots, releaseNodes, peers)
+			desiredStateJSON, err := solo.BuildAggregatedDesiredState(name, node, resolvedSnapshots, releaseNodes, peers)
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
@@ -484,6 +494,28 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 		return nil, fmt.Errorf("republish errors:\n  %s", strings.Join(errs, "\n  "))
 	}
 	return revisions, nil
+}
+
+func (a *App) resolveStoredDeploySnapshot(snapshot solo.DeploySnapshot) (solo.DeploySnapshot, error) {
+	cfg, err := a.ConfigStore.Read(snapshot.WorkspaceRoot)
+	if err != nil {
+		return solo.DeploySnapshot{}, err
+	}
+	if cfg == nil {
+		return solo.DeploySnapshot{}, fmt.Errorf("missing devopsellence.yml for %s", snapshot.WorkspaceRoot)
+	}
+	secrets, err := solo.LoadSecrets(snapshot.WorkspaceRoot)
+	if err != nil {
+		return solo.DeploySnapshot{}, fmt.Errorf("load secrets for %s: %w", snapshot.WorkspaceRoot, err)
+	}
+	if _, err := applySoloRailsMasterKey(snapshot.WorkspaceRoot, cfg, secrets); err != nil {
+		return solo.DeploySnapshot{}, err
+	}
+	configPath := strings.TrimSpace(snapshot.Metadata.ConfigPath)
+	if configPath == "" {
+		configPath = a.ConfigStore.PathFor(snapshot.WorkspaceRoot)
+	}
+	return solo.BuildDeploySnapshot(cfg, snapshot.WorkspaceRoot, configPath, snapshot.Image, snapshot.Revision, secrets)
 }
 
 func desiredStateRevision(data []byte) (string, error) {
@@ -789,13 +821,13 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	if err != nil {
 		return err
 	}
-	if err := a.writeSoloState(current); err != nil {
-		return err
-	}
 	if _, ok := current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment]; ok {
 		if _, err := a.republishSoloNodes(ctx, current, attachment.NodeNames); err != nil {
 			return err
 		}
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
@@ -836,10 +868,10 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	}
 	affectedNodeNames := append([]string{opts.Node}, nodeNamesBefore...)
 	affectedNodeNames = normalizeSoloNames(affectedNodeNames)
-	if err := a.writeSoloState(current); err != nil {
+	if _, err := a.republishSoloNodes(ctx, current, affectedNodeNames); err != nil {
 		return err
 	}
-	if _, err := a.republishSoloNodes(ctx, current, affectedNodeNames); err != nil {
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -906,10 +938,10 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	}
 	node.Labels = labels
 	current.Nodes[opts.Node] = solo.NormalizeNode(node)
-	if err := a.writeSoloState(current); err != nil {
+	if _, err := a.republishSoloNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
 		return err
 	}
-	if _, err := a.republishSoloNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if a.Printer.JSON {

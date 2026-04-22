@@ -293,6 +293,43 @@ func TestSaveSnapshotPersistsWorkspaceEnvironmentIdentity(t *testing.T) {
 	}
 }
 
+func TestRedactDeploySnapshotSecretsRemovesSecretValues(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["web"] = config.ServiceConfig{
+		Kind: config.ServiceKindWeb,
+		Env:  map[string]string{"PLAIN": "value"},
+		SecretRefs: []config.SecretRef{
+			{Name: "DATABASE_URL"},
+		},
+		Ports: []config.ServicePort{{Name: "http", Port: 3000}},
+		Healthcheck: &config.HTTPHealthcheck{
+			Path: "/up",
+			Port: 3000,
+		},
+	}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: "bin/rails db:migrate"}
+
+	snapshot, err := BuildDeploySnapshot(&cfg, "/workspace/demo", "/workspace/demo/devopsellence.yml", "demo:abc1234", "abc1234", map[string]string{"DATABASE_URL": "postgres://secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redacted := RedactDeploySnapshotSecrets(snapshot, &cfg)
+	if _, ok := redacted.Services[0].Env["DATABASE_URL"]; ok {
+		t.Fatalf("service env still includes DATABASE_URL: %#v", redacted.Services[0].Env)
+	}
+	if redacted.ReleaseTask == nil {
+		t.Fatal("release task missing")
+	}
+	if _, ok := redacted.ReleaseTask.Env["DATABASE_URL"]; ok {
+		t.Fatalf("release env still includes DATABASE_URL: %#v", redacted.ReleaseTask.Env)
+	}
+	if got := redacted.Services[0].Env["PLAIN"]; got != "value" {
+		t.Fatalf("plain env = %q, want value", got)
+	}
+}
+
 func TestDetachNodeDoesNotMutatePreviouslyReturnedAttachments(t *testing.T) {
 	t.Parallel()
 

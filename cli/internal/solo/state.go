@@ -216,6 +216,40 @@ func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 	return snapshot, nil
 }
 
+func RedactDeploySnapshotSecrets(snapshot DeploySnapshot, cfg *config.ProjectConfig) DeploySnapshot {
+	if cfg == nil {
+		return snapshot
+	}
+	serviceSecretRefs := map[string][]string{}
+	for _, serviceName := range cfg.ServiceNames() {
+		service := cfg.Services[serviceName]
+		for _, ref := range service.SecretRefs {
+			serviceSecretRefs[serviceName] = append(serviceSecretRefs[serviceName], ref.Name)
+		}
+	}
+	for i := range snapshot.Services {
+		snapshot.Services[i].Env = redactedEnv(snapshot.Services[i].Env, serviceSecretRefs[snapshot.Services[i].Name])
+	}
+	if snapshot.ReleaseTask != nil && cfg.ReleaseTask() != nil {
+		snapshot.ReleaseTask.Env = redactedEnv(snapshot.ReleaseTask.Env, serviceSecretRefs[cfg.ReleaseTask().Service])
+	}
+	return snapshot
+}
+
+func redactedEnv(env map[string]string, secretNames []string) map[string]string {
+	if len(env) == 0 || len(secretNames) == 0 {
+		return env
+	}
+	redacted := make(map[string]string, len(env))
+	for key, value := range env {
+		redacted[key] = value
+	}
+	for _, name := range secretNames {
+		delete(redacted, name)
+	}
+	return redacted
+}
+
 func newState() State {
 	return State{
 		SchemaVersion: soloStateSchemaVersion,

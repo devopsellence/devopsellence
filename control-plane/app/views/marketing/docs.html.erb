@@ -190,7 +190,7 @@
       </div>
       <div class="terminal-body">
         <div class="tl"><span class="tp">$</span> devopsellence setup</div>
-        <div class="tl tl-muted"># solo: initialize config if needed, add a server, and install the agent.</div>
+        <div class="tl tl-muted"># solo: initialize config if needed, register or create a node, attach it, and install the agent.</div>
         <div class="tl tl-muted"># shared: sign in, create or select org/project/env, and write workspace config.</div>
       </div>
     </div>
@@ -321,7 +321,7 @@
         <div class="tl tl-muted"># Hetzner: prompts for region, size, labels, and SSH public key path.</div>
       </div>
     </div>
-    <p>The wizard creates <code>devopsellence.yml</code> when needed, writes the solo node inventory, installs Docker when supported, installs <code>devopsellence-agent</code>, starts the <code>devopsellence-agent</code> systemd service, and runs <code>doctor</code>.</p>
+    <p>The wizard creates <code>devopsellence.yml</code> when needed, records the node and attachment in local solo state, installs Docker when supported, installs <code>devopsellence-agent</code>, starts the <code>devopsellence-agent</code> systemd service, and runs <code>doctor</code>.</p>
 
     <h3>Create a Hetzner node</h3>
     <p>Provider tokens stay outside the config file. Save a Hetzner token locally, or set <code>DEVOPSELLENCE_HETZNER_API_TOKEN</code> or <code>HCLOUD_TOKEN</code>:</p>
@@ -338,12 +338,13 @@
         <div class="tl">    --region ash \</div>
         <div class="tl">    --size cpx11 \</div>
         <div class="tl">    --ssh-public-key ~/.ssh/id_ed25519.pub</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node attach prod-1</div>
       </div>
     </div>
-    <p>Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in <code>devopsellence.yml</code>. The provider API token and SSH private key value are not written to config.</p>
+    <p>Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in local solo state at <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). The provider API token and SSH private key value are not written to app config.</p>
 
     <h3>Solo config</h3>
-    <p>Solo node inventory is part of <code>devopsellence.yml</code>, so it can be committed and used from CI. SSH private key material stays in your SSH agent, local filesystem, or CI secrets.</p>
+    <p><code>devopsellence.yml</code> stays workload-only in solo mode. Solo nodes, workspace/environment attachments, and the latest desired environment snapshots live in <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). SSH private key material stays in your SSH agent, local filesystem, or CI secrets.</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -352,24 +353,33 @@
         <span class="terminal-bar-title">devopsellence.yml</span>
       </div>
       <div class="terminal-body">
-        <pre class="config-pre"><code>solo:
-  nodes:
-    prod-1:
-      host: 203.0.113.10
-      user: ubuntu
-      port: 22
-      ssh_key: ~/.ssh/id_ed25519
-      agent_state_dir: /var/lib/devopsellence
-      labels:
-        - web
-    worker-1:
-      host: 203.0.113.11
-      user: ubuntu
-      labels:
-        - worker</code></pre>
+        <pre class="config-pre"><code>schema_version: 5
+app:
+  type: rails
+organization: solo
+project: myapp
+default_environment: production
+build:
+  context: .
+  dockerfile: Dockerfile
+  platforms:
+    - linux/amd64
+services:
+  web:
+    kind: web
+    ports:
+      - name: http
+        port: 3000
+    healthcheck:
+      path: /up
+      port: 3000
+tasks:
+  release:
+    service: web
+    command: bin/rails db:migrate</code></pre>
       </div>
     </div>
-    <p>Labels control placement in solo mode too. <code>web</code> nodes run web services. <code>worker</code> nodes run worker services. A node can have both labels. <code>tasks.release</code> runs once on one node labeled for its configured service.</p>
+    <p>Labels still control placement in solo mode. Use <code>devopsellence node attach &lt;name&gt;</code> and <code>devopsellence node label set &lt;name&gt; --labels ...</code> to assign environments and placement roles. <code>tasks.release</code> runs once on the first attached node, sorted by node name, that matches its configured service.</p>
 
     <h3>Deploy and inspect</h3>
     <div class="terminal">
@@ -385,6 +395,7 @@
         <div class="tl"><span class="tp">$</span> devopsellence doctor</div>
       </div>
     </div>
+    <p>Solo deploy scope comes from workspace/environment attachments, not a deploy flag. Use <code>devopsellence node attach &lt;name&gt;</code> and <code>devopsellence node detach &lt;name&gt;</code> to choose which attached nodes receive the rollout.</p>
     <p>During deploy, the CLI shows image transfer phases and compressed bytes sent. Remote Docker access uses plain <code>docker</code> when available and falls back to passwordless <code>sudo</code> for Docker, desired-state writes, status reads, and agent logs.</p>
 
     <h3>Solo secrets and Rails</h3>
@@ -673,16 +684,8 @@ tasks:
         <dd>Runs once on a node matching its configured service before the rollout proceeds. Use for migrations. Failure stops the deploy.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>solo.nodes</code></dt>
-        <dd>Solo mode connection inventory keyed by node name. Each node has <code>host</code>, <code>user</code>, optional <code>port</code>, optional <code>ssh_key</code>, and optional <code>agent_state_dir</code>.</dd>
-      </div>
-      <div class="docs-field">
-        <dt><code>solo.nodes.*.labels</code></dt>
-        <dd>Service placement labels for solo mode. Use labels matching your services' kinds.</dd>
-      </div>
-      <div class="docs-field">
-        <dt><code>solo.nodes.*.provider</code></dt>
-        <dd>Provider metadata for CLI-created solo servers. Values like provider server ID, region, size, and image are non-secret and can be committed.</dd>
+        <dt><code>$XDG_STATE_HOME/devopsellence/solo/state.json</code></dt>
+        <dd>Solo mode local state. Stores the global node registry, workspace/environment attachments, and the latest desired environment snapshots. Defaults to <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is not set.</dd>
       </div>
     </dl>
   </section>

@@ -29,6 +29,7 @@ import (
 	"github.com/devopsellence/cli/internal/docker"
 	"github.com/devopsellence/cli/internal/git"
 	"github.com/devopsellence/cli/internal/output"
+	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/cli/internal/ui"
 
@@ -69,6 +70,7 @@ type App struct {
 	State              *state.Store
 	WorkspaceState     *state.Store
 	ProviderState      *state.Store
+	SoloState          *solo.StateStore
 	ConfigStore        config.Store
 	Docker             DockerClient
 	Git                git.Client
@@ -337,6 +339,7 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 	store := state.New(state.DefaultPath(filepath.Join("devopsellence", "auth.json")))
 	workspaceStore := state.New(state.DefaultPath(filepath.Join("devopsellence", "workspace.json")))
 	providerStore := state.New(state.DefaultPath(filepath.Join("devopsellence", "providers.json")))
+	soloStateStore := solo.NewStateStore(solo.DefaultStatePath())
 	return &App{
 		In:                 in,
 		Printer:            output.New(out, err, jsonMode),
@@ -345,6 +348,7 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 		State:              store,
 		WorkspaceState:     workspaceStore,
 		ProviderState:      providerStore,
+		SoloState:          soloStateStore,
 		ConfigStore:        config.NewStore(),
 		Docker:             docker.Runner{},
 		Git:                git.Client{},
@@ -3326,7 +3330,6 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 		projectConfig.Services = existing.Services
 		projectConfig.Tasks = existing.Tasks
 		projectConfig.Ingress = existing.Ingress
-		projectConfig.Solo = existing.Solo
 		projectConfig.App = existing.App
 		projectConfig.Organization = org.Name
 		projectConfig.Project = project.Name

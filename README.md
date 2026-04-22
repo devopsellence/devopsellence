@@ -50,6 +50,7 @@ Or create a Hetzner-backed node from the provider:
 
 ```bash
 devopsellence node create prod-1 --provider hetzner
+devopsellence node attach prod-1
 ```
 
 Deploy over SSH:
@@ -58,6 +59,8 @@ Deploy over SSH:
 devopsellence deploy
 devopsellence status
 ```
+
+Solo deploy scope comes from the nodes attached to the current workspace/environment. Use `devopsellence node attach <name>` and `devopsellence node detach <name>` to change which nodes receive the deploy.
 
 Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each web node, then configure hostnames. Pass `--service` when the target web service is not already obvious:
 
@@ -74,7 +77,7 @@ printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --st
 devopsellence secret list
 ```
 
-Solo mode keeps the mental model simple: build locally, transfer the image, write desired state, let the agent reconcile.
+Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest desired environment snapshots live in `$XDG_STATE_HOME/devopsellence/solo/state.json` (default: `~/.local/state/devopsellence/solo/state.json` when `XDG_STATE_HOME` is unset).
 
 ## Shared mode
 
@@ -131,14 +134,6 @@ ingress:
     mode: auto
     email: ops@example.com
   redirect_http: true
-solo:
-  nodes:
-    prod-1:
-      host: 203.0.113.10
-      user: root
-      ssh_key: ~/.ssh/id_ed25519
-      labels:
-        - web
 ```
 
 ## Need more than solo mode?

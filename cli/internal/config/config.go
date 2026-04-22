@@ -116,10 +116,6 @@ type SoloNode struct {
 	ProviderImage    string   `yaml:"provider_image,omitempty" json:"provider_image,omitempty"`
 }
 
-type SoloConfig struct {
-	Nodes map[string]SoloNode `yaml:"nodes" json:"nodes"`
-}
-
 type ProjectConfig struct {
 	SchemaVersion      int                      `yaml:"schema_version" json:"schema_version"`
 	App                AppConfig                `yaml:"app,omitempty" json:"app,omitempty"`
@@ -130,7 +126,6 @@ type ProjectConfig struct {
 	Services           map[string]ServiceConfig `yaml:"services" json:"services"`
 	Tasks              TasksConfig              `yaml:"tasks,omitempty" json:"tasks,omitempty"`
 	Ingress            *IngressConfig           `yaml:"ingress,omitempty" json:"ingress,omitempty"`
-	Solo               *SoloConfig              `yaml:"solo,omitempty" json:"solo,omitempty"`
 }
 
 type Project = ProjectConfig
@@ -369,27 +364,6 @@ func Validate(cfg *ProjectConfig) error {
 			return fmt.Errorf("ingress.tls.mode must be auto, off, or manual")
 		}
 	}
-	if cfg.Solo != nil {
-		for name, node := range cfg.Solo.Nodes {
-			if strings.TrimSpace(name) == "" {
-				return errors.New("solo.nodes keys must be present")
-			}
-			if strings.TrimSpace(node.Host) == "" {
-				return fmt.Errorf("solo.nodes.%s.host is required", name)
-			}
-			if strings.TrimSpace(node.User) == "" {
-				return fmt.Errorf("solo.nodes.%s.user is required", name)
-			}
-			if len(node.Labels) == 0 {
-				return fmt.Errorf("solo.nodes.%s.labels must include at least one label", name)
-			}
-			for _, label := range node.Labels {
-				if strings.TrimSpace(label) == "" {
-					return fmt.Errorf("solo.nodes.%s.labels entries must be present", name)
-				}
-			}
-		}
-	}
 	return nil
 }
 
@@ -460,25 +434,6 @@ func applyDefaults(cfg *ProjectConfig) {
 		cfg.Ingress.TLS.CADirectoryURL = strings.TrimSpace(cfg.Ingress.TLS.CADirectoryURL)
 		if cfg.Ingress.TLS.Mode == "auto" {
 			cfg.Ingress.RedirectHTTP = true
-		}
-	}
-	if cfg.Solo != nil {
-		if cfg.Solo.Nodes == nil {
-			cfg.Solo.Nodes = map[string]SoloNode{}
-		}
-		for name, node := range cfg.Solo.Nodes {
-			if node.Port == 0 {
-				node.Port = 22
-			}
-			if node.AgentStateDir == "" {
-				node.AgentStateDir = "/var/lib/devopsellence"
-			}
-			labels := normalizeNodeLabels(node.Labels)
-			if len(labels) == 0 {
-				labels = append([]string(nil), SoloDefaultLabels...)
-			}
-			node.Labels = append([]string(nil), labels...)
-			cfg.Solo.Nodes[name] = node
 		}
 	}
 }

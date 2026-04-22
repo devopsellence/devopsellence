@@ -1,8 +1,11 @@
 package solo
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/devopsellence/cli/internal/config"
@@ -173,6 +176,113 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	return data, nil
 }
 
+func BuildAggregatedDesiredState(nodeName string, currentNode config.SoloNode, snapshots []DeploySnapshot, releaseNodes map[string]string, nodePeers []NodePeer) ([]byte, error) {
+	ds := desiredStateJSON{
+		SchemaVersion: 2,
+	}
+	if len(nodePeers) > 0 {
+		ds.NodePeers = buildNodePeers(nodePeers)
+	}
+
+	attached := append([]DeploySnapshot(nil), snapshots...)
+	sort.Slice(attached, func(i, j int) bool {
+		if attached[i].WorkspaceKey != attached[j].WorkspaceKey {
+			return attached[i].WorkspaceKey < attached[j].WorkspaceKey
+		}
+		return attached[i].Environment < attached[j].Environment
+	})
+	environmentNames := aggregatedEnvironmentNames(attached)
+
+	mergedIngress, err := mergeIngressForNode(currentNode.Labels, attached, environmentNames)
+	if err != nil {
+		return nil, err
+	}
+	ds.Ingress = mergedIngress
+
+	for _, snapshot := range attached {
+		environmentName := environmentNames[snapshotKey(snapshot)]
+		environment := environmentJSON{
+			Name:     environmentName,
+			Revision: strings.TrimSpace(snapshot.Revision),
+		}
+		for _, service := range snapshot.Services {
+			if !shouldScheduleService(currentNode.Labels, service.Kind) {
+				continue
+			}
+			environment.Services = append(environment.Services, service)
+		}
+		if snapshot.ReleaseTask != nil && strings.TrimSpace(releaseNodes[snapshotKey(snapshot)]) == nodeName && shouldScheduleService(currentNode.Labels, snapshot.ReleaseServiceKind) {
+			environment.Tasks = append(environment.Tasks, *snapshot.ReleaseTask)
+		}
+		ds.Environments = append(ds.Environments, environment)
+	}
+
+	revision, err := syntheticRevision(ds)
+	if err != nil {
+		return nil, err
+	}
+	ds.Revision = revision
+
+	data, err := json.MarshalIndent(ds, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal desired state: %w", err)
+	}
+	return data, nil
+}
+
+func aggregatedEnvironmentNames(snapshots []DeploySnapshot) map[string]string {
+	counts := map[string]int{}
+	names := map[string]string{}
+	for _, snapshot := range snapshots {
+		counts[defaultEnvironmentName(snapshot.Environment)]++
+	}
+	for _, snapshot := range snapshots {
+		key := snapshotKey(snapshot)
+		base := defaultEnvironmentName(snapshot.Environment)
+		if counts[base] == 1 {
+			names[key] = base
+			continue
+		}
+		names[key] = uniqueAggregatedEnvironmentName(snapshot, base)
+	}
+	return names
+}
+
+func uniqueAggregatedEnvironmentName(snapshot DeploySnapshot, base string) string {
+	hashSource := strings.TrimSpace(snapshot.WorkspaceKey)
+	if hashSource == "" {
+		hashSource = strings.TrimSpace(snapshot.WorkspaceRoot)
+	}
+	sum := sha256.Sum256([]byte(hashSource))
+	suffix := hex.EncodeToString(sum[:4])
+	project := normalizeEnvironmentNameToken(snapshot.Metadata.Project)
+	if project == "" {
+		return base + "-" + suffix
+	}
+	return project + "-" + base + "-" + suffix
+}
+
+func normalizeEnvironmentNameToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 func buildIngress(ingress *config.IngressConfig, environmentName string) *ingressJSON {
 	if ingress == nil || len(ingress.Hosts) == 0 {
 		return nil
@@ -205,6 +315,93 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 		RedirectHTTP: ingress.RedirectHTTP,
 		Routes:       routes,
 	}
+}
+
+func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmentNames map[string]string) (*ingressJSON, error) {
+	var merged *ingressJSON
+	hostSet := map[string]bool{}
+	routeSet := map[string]bool{}
+
+	for _, snapshot := range snapshots {
+		if snapshot.Ingress == nil || !shouldScheduleService(labels, snapshot.IngressServiceKind) {
+			continue
+		}
+		if merged == nil {
+			merged = &ingressJSON{
+				Mode:         snapshot.Ingress.Mode,
+				TLS:          snapshot.Ingress.TLS,
+				RedirectHTTP: snapshot.Ingress.RedirectHTTP,
+			}
+		} else if merged.TLS != snapshot.Ingress.TLS || merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP || merged.Mode != snapshot.Ingress.Mode {
+			differingSettings := []string{}
+			if merged.TLS != snapshot.Ingress.TLS {
+				differingSettings = append(differingSettings, "TLS")
+			}
+			if merged.Mode != snapshot.Ingress.Mode {
+				differingSettings = append(differingSettings, "mode")
+			}
+			if merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP {
+				differingSettings = append(differingSettings, "redirect_http")
+			}
+			return nil, fmt.Errorf("cannot merge ingress for co-hosted environments with different settings: %s", strings.Join(differingSettings, ", "))
+		}
+		for _, host := range snapshot.Ingress.Hosts {
+			if hostSet[host] {
+				continue
+			}
+			hostSet[host] = true
+			merged.Hosts = append(merged.Hosts, host)
+		}
+		for _, route := range snapshot.Ingress.Routes {
+			routeCopy := route
+			if environmentName := environmentNames[snapshotKey(snapshot)]; environmentName != "" {
+				routeCopy.Target.Environment = environmentName
+			}
+			key := routeCopy.Match.Hostname + "\n" + routeCopy.Match.PathPrefix + "\n" + routeCopy.Target.Environment + "\n" + routeCopy.Target.Service + "\n" + routeCopy.Target.Port
+			if routeSet[key] {
+				continue
+			}
+			routeSet[key] = true
+			merged.Routes = append(merged.Routes, routeCopy)
+		}
+	}
+	if merged == nil {
+		return nil, nil
+	}
+	sort.Strings(merged.Hosts)
+	sort.Slice(merged.Routes, func(i, j int) bool {
+		left := merged.Routes[i]
+		right := merged.Routes[j]
+		if left.Match.Hostname != right.Match.Hostname {
+			return left.Match.Hostname < right.Match.Hostname
+		}
+		if left.Target.Environment != right.Target.Environment {
+			return left.Target.Environment < right.Target.Environment
+		}
+		if left.Target.Service != right.Target.Service {
+			return left.Target.Service < right.Target.Service
+		}
+		if left.Match.PathPrefix != right.Match.PathPrefix {
+			return left.Match.PathPrefix < right.Match.PathPrefix
+		}
+		return left.Target.Port < right.Target.Port
+	})
+	return merged, nil
+}
+
+func syntheticRevision(ds desiredStateJSON) (string, error) {
+	copyValue := ds
+	copyValue.Revision = ""
+	data, err := json.Marshal(copyValue)
+	if err != nil {
+		return "", fmt.Errorf("marshal synthetic revision input: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func snapshotKey(snapshot DeploySnapshot) string {
+	return strings.TrimSpace(snapshot.WorkspaceKey) + "\n" + defaultEnvironmentName(snapshot.Environment)
 }
 
 func buildNodePeers(peers []NodePeer) []nodePeerJSON {

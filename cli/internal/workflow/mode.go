@@ -8,6 +8,7 @@ import (
 
 	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
+	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/ui"
 )
 
@@ -84,11 +85,35 @@ func (a *App) suggestedMode() Mode {
 	if err != nil {
 		return ModeSolo
 	}
-	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
-	if err == nil && cfg != nil && cfg.Solo != nil && len(cfg.Solo.Nodes) > 0 {
+	if a.workspaceHasSoloState(discovered.WorkspaceRoot) {
 		return ModeSolo
 	}
 	return ModeShared
+}
+
+func (a *App) workspaceHasSoloState(workspaceRoot string) bool {
+	if a.SoloState == nil {
+		return false
+	}
+	current, err := a.SoloState.Read()
+	if err != nil {
+		return false
+	}
+	workspaceKey, err := solo.CanonicalWorkspaceKey(workspaceRoot)
+	if err != nil {
+		return false
+	}
+	for _, attachment := range current.Attachments {
+		if attachment.WorkspaceKey == workspaceKey {
+			return true
+		}
+	}
+	for _, snapshot := range current.Snapshots {
+		if snapshot.WorkspaceKey == workspaceKey {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) ResolveMode(explicit string, interactive bool) (Mode, error) {

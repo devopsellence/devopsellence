@@ -501,7 +501,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Short: "Prepare the current workspace for its selected mode",
 		Long: strings.Join([]string{
 			"Mode-driven workspace setup.",
-			"  solo   - initialize config if needed, add a node, and install the agent",
+			"  solo   - initialize config if needed, register or create a node, attach it, and install the agent",
 			"  shared - sign in, create/select org/project/env, and write workspace config",
 		}, "\n"),
 		RunE: runByMode(func(ctx context.Context) error {
@@ -521,13 +521,17 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	deployCommand := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy the current app using the selected workspace mode",
+		Long: strings.Join([]string{
+			"Deploy the current app using the selected workspace mode.",
+			"  solo   - deploys to nodes attached to the current workspace/environment; use `devopsellence node attach|detach` to change scope",
+			"  shared - deploys through the control plane using org/project/environment context",
+		}, "\n"),
 		RunE: runByMode(func(ctx context.Context) error {
 			return app.SoloDeploy(ctx, deploySoloOpts)
 		}, func(ctx context.Context) error {
 			return app.Deploy(ctx, deploySharedOpts)
 		}),
 	}
-	deployCommand.Flags().StringSliceVar(&deploySoloOpts.Nodes, "nodes", nil, "Comma-separated node names (solo mode)")
 	deployCommand.Flags().BoolVar(&deploySoloOpts.SkipDNSCheck, "skip-dns-check", false, "Skip ingress DNS readiness check before deploy (solo mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Organization, "org", os.Getenv("DEVOPSELLENCE_ORGANIZATION"), "Organization name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Project, "project", os.Getenv("DEVOPSELLENCE_PROJECT"), "Project name override (shared mode)")
@@ -693,7 +697,9 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var nodeCreateBootstrapOpts NodeBootstrapOptions
 	var nodeListSharedOpts NodeListOptions
 	var nodeListSoloOpts SoloNodeListOptions
+	var nodeAttachSoloOpts SoloNodeAttachOptions
 	var nodeAttachOpts NodeAssignOptions
+	var nodeDetachSoloOpts SoloNodeDetachOptions
 	var nodeDetachOpts NodeUnassignOptions
 	var nodeRemoveSoloOpts SoloNodeRemoveOptions
 	var nodeRemoveSharedOpts NodeDeleteOptions
@@ -702,6 +708,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var nodeDiagnoseOpts NodeDiagnoseOptions
 	var nodeLogsOpts SoloLogsOptions
 	var nodeLabels string
+	var nodeAttachEnvironment string
 	nodeCommand := &cobra.Command{
 		Use:   "node",
 		Short: "Manage nodes for the selected workspace mode",
@@ -757,38 +764,47 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	nodeListCommand.Flags().StringVar(&nodeListSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
 	nodeAttachCommand := &cobra.Command{
-		Use:   "attach <id>",
-		Short: "Attach an unassigned shared node to the current environment",
+		Use:   "attach <name|id>",
+		Short: "Attach a node to the current environment (solo: name, shared: numeric id)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, parseErr := strconv.Atoi(args[0])
-			if parseErr != nil {
-				return ExitError{Code: 2, Err: fmt.Errorf("invalid node id %q: must be a number", args[0])}
-			}
-			nodeAttachOpts.NodeID = id
-			return runSharedOnly("node attach", func(ctx context.Context) error {
+			nodeAttachSoloOpts.Node = args[0]
+			nodeAttachSoloOpts.Environment = nodeAttachEnvironment
+			nodeAttachOpts.Environment = nodeAttachEnvironment
+			return runByMode(func(ctx context.Context) error {
+				return app.SoloNodeAttach(ctx, nodeAttachSoloOpts)
+			}, func(ctx context.Context) error {
+				id, parseErr := strconv.Atoi(args[0])
+				if parseErr != nil {
+					return ExitError{Code: 2, Err: fmt.Errorf("invalid node id %q: must be a number", args[0])}
+				}
+				nodeAttachOpts.NodeID = id
 				return app.NodeAssign(ctx, nodeAttachOpts)
 			})(cmd, args)
 		},
 	}
+	nodeAttachCommand.Flags().StringVar(&nodeAttachEnvironment, "env", "", "Environment name override (solo/shared)")
 	nodeAttachCommand.Flags().StringVar(&nodeAttachOpts.Organization, "org", "", "Organization name override")
 	nodeAttachCommand.Flags().StringVar(&nodeAttachOpts.Project, "project", "", "Project name override")
-	nodeAttachCommand.Flags().StringVar(&nodeAttachOpts.Environment, "env", "", "Environment name override")
 	nodeDetachCommand := &cobra.Command{
-		Use:   "detach <id>",
-		Short: "Detach a shared node from its current environment",
+		Use:   "detach <name|id>",
+		Short: "Detach a node from the current environment (solo: name, shared: numeric id)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, parseErr := strconv.Atoi(args[0])
-			if parseErr != nil {
-				return ExitError{Code: 2, Err: fmt.Errorf("invalid node id %q: must be a number", args[0])}
-			}
-			nodeDetachOpts.NodeID = id
-			return runSharedOnly("node detach", func(ctx context.Context) error {
+			nodeDetachSoloOpts.Node = args[0]
+			return runByMode(func(ctx context.Context) error {
+				return app.SoloNodeDetach(ctx, nodeDetachSoloOpts)
+			}, func(ctx context.Context) error {
+				id, parseErr := strconv.Atoi(args[0])
+				if parseErr != nil {
+					return ExitError{Code: 2, Err: fmt.Errorf("invalid node id %q: must be a number", args[0])}
+				}
+				nodeDetachOpts.NodeID = id
 				return app.NodeUnassign(ctx, nodeDetachOpts)
 			})(cmd, args)
 		},
 	}
+	nodeDetachCommand.Flags().StringVar(&nodeDetachSoloOpts.Environment, "env", "", "Environment name override (solo mode)")
 	nodeRemoveCommand := &cobra.Command{
 		Use:   "remove <target>",
 		Short: "Remove a node",

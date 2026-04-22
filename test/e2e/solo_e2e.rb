@@ -9,8 +9,9 @@
 #      - OpenSSH server for CLI access
 #      - Docker (via docker.sock mount)
 #      - Fake systemctl/journalctl shims so CLI agent install can run in-container
-#   3. Scaffold a test app with devopsellence.yml (solo config under `solo`)
-#   4. CLI installs the agent, sets secrets, deploys, checks status
+#   3. Scaffold a test app with a solo-mode devopsellence.yml
+#   4. Seed global solo state, attach the node, install the agent, set secrets,
+#      deploy, check status
 #   5. Assert: app container running, status.json settled, secrets resolved
 #
 # Usage:
@@ -89,6 +90,7 @@ class SoloE2E
     }
     @ssh_key_dir = @state_dir.join("ssh")
     @ssh_client_home = @state_dir.join("ssh-home")
+    @xdg_state_home = @state_dir.join("xdg-state")
     @project_name = "e2e-solo-#{SecureRandom.hex(3)}"
   end
 
@@ -103,7 +105,9 @@ class SoloE2E
     step("start node") { start_node_container! }
     step("wait for node") { wait_for_node_ready! }
     step("scaffold app") { scaffold_app! }
+    step("seed solo state") { seed_solo_state! }
     step("mode") { set_workspace_mode! }
+    step("attach node") { attach_node! }
     step("install agent") { install_agent! }
     step("secrets") { set_secrets! }
     step("deploy") { run_deploy! }
@@ -130,6 +134,7 @@ class SoloE2E
     FileUtils.mkdir_p(@image_build_dir)
     FileUtils.mkdir_p(@ssh_key_dir)
     FileUtils.mkdir_p(@ssh_client_home.join(".ssh"))
+    FileUtils.mkdir_p(@xdg_state_home)
   end
 
   # Build a Docker image that acts as a remote node:
@@ -436,7 +441,7 @@ PY
   def write_devopsellence_yml!
     config = {
       "schema_version" => 5,
-      "organization" => "e2e-org",
+      "organization" => "solo",
       "project" => @project_name,
       "build" => {
         "context" => ".",
@@ -460,18 +465,6 @@ PY
           "secret_refs" => [
             { "name" => SECRET_VALUE_NAME, "secret" => "projects/x/secrets/e2e" }
           ]
-        }
-      },
-      "solo" => {
-        "nodes" => {
-          "node-1" => {
-            "labels" => ["web"],
-            "host" => "127.0.0.1",
-            "user" => "root",
-            "port" => @ssh_port,
-            "ssh_key" => @ssh_private_key.to_s,
-            "agent_state_dir" => @agent_state_dir
-          }
         }
       }
     }
@@ -579,12 +572,19 @@ PY
   end
 
   def assert_runtime_state!
+    desired = JSON.parse(ssh_to_node!("cat #{@desired_state_path}"))
+    expected_runtime_revision = desired["revision"].to_s
+    raise "desired state missing revision" if expected_runtime_revision.empty?
+    environment_revisions = desired.fetch("environments").map { |environment| environment["revision"] }.compact.uniq
+    raise "unexpected environment revisions: #{environment_revisions.inspect}" unless environment_revisions == [current_revision]
+    workload_revision = environment_revisions.first
+
     # Wait for agent to reconcile and write status for the deployed revision.
     wait_until!(timeout: 120) do
       output = ssh_to_node!("cat #{@status_path} 2>/dev/null || echo '{}'")
       begin
         status = JSON.parse(output)
-        status["revision"] == current_revision && terminal_status_phase?(status["phase"])
+        status["revision"] == expected_runtime_revision && terminal_status_phase?(status["phase"])
       rescue JSON::ParserError
         false
       end
@@ -596,7 +596,7 @@ PY
     status = JSON.parse(status_output)
     revision = status["revision"]
     raise "revision missing from status" if revision.to_s.empty?
-    raise "unexpected status revision: #{revision}" unless revision == current_revision
+    raise "unexpected status revision: #{revision}" unless revision == expected_runtime_revision
     case status["phase"]
     when "settled"
       puts "[ok] Status settled for revision #{revision}"
@@ -616,12 +616,12 @@ PY
       web_containers = ssh_to_node!(
         "docker ps --filter label=devopsellence.managed=true " \
         "--filter label=devopsellence.service=web " \
-        "--filter label=devopsellence.revision=#{Shellwords.escape(revision)} " \
+        "--filter label=devopsellence.revision=#{Shellwords.escape(workload_revision)} " \
         "--format '{{.Names}} {{.Status}}'"
       ).lines.map(&:strip).reject(&:empty?)
       web_containers.any?
     end
-    raise "web container not running for revision #{revision}" if web_containers.empty?
+    raise "web container not running for revision #{workload_revision}" if web_containers.empty?
     puts "[ok] Web container running: #{web_containers.join(', ')}"
 
     # Verify via CLI status command.
@@ -643,9 +643,6 @@ PY
     puts "[ok] CLI status confirms revision #{cli_revision} phase=#{cli_phase}"
 
     # Verify desired state was written to the correct path.
-    ds_output = ssh_to_node!("cat #{@desired_state_path}")
-    desired = JSON.parse(ds_output)
-    raise "desired state missing revision" if desired["revision"].to_s.empty?
     services = desired.fetch("environments").flat_map { |environment| environment.fetch("services", []) }
     raise "desired state missing services" if services.empty?
 
@@ -701,8 +698,29 @@ PY
     {
       "HOME" => @ssh_client_home.to_s,
       "SSH_AUTH_SOCK" => "",
-      "DEVOPSELLENCE_BASE_URL" => artifact_base_url
+      "DEVOPSELLENCE_BASE_URL" => artifact_base_url,
+      "XDG_STATE_HOME" => @xdg_state_home.to_s
     }
+  end
+
+  def seed_solo_state!
+    state_path = @xdg_state_home.join("devopsellence/solo/state.json")
+    FileUtils.mkdir_p(state_path.dirname)
+    state = {
+      "schema_version" => 1,
+      "nodes" => {
+        "node-1" => {
+          "labels" => ["web"],
+          "host" => "127.0.0.1",
+          "user" => "root",
+          "port" => @ssh_port,
+          "ssh_key" => @ssh_private_key.to_s,
+          "agent_state_dir" => @agent_state_dir
+        }
+      }
+    }
+    state_path.write(JSON.pretty_generate(state))
+    puts "[ok] Seeded solo state for node-1"
   end
 
   def set_workspace_mode!
@@ -714,6 +732,22 @@ PY
     )
     raise "mode use solo did not confirm solo mode" unless output.include?("Mode: solo")
     puts "[ok] Workspace mode set to solo"
+  end
+
+  def attach_node!
+    output = run!(
+      cli_binary.to_s, "node", "attach", "node-1", "--json",
+      chdir: @app_dir.to_s,
+      timeout: 30,
+      env: ssh_env
+    )
+    result = JSON.parse(output)
+    unless result["node"] == "node-1" &&
+           result["environment"] == "production" &&
+           result["changed"]
+      raise "node attach returned unexpected result: #{output}"
+    end
+    puts "[ok] Solo node attached"
   end
 
   def cli_binary

@@ -588,6 +588,19 @@ func TestRemoteReadAndJournalCommandsSupportPasswordlessSudo(t *testing.T) {
 	}
 }
 
+func TestRemoteReadOptionalFileCommandSupportsPasswordlessSudo(t *testing.T) {
+	command := remoteReadOptionalFileCommand("/var/lib/devopsellence/status.json", soloStatusMissingSentinel)
+	for _, want := range []string{
+		"sudo -n test -r '/var/lib/devopsellence/status.json'",
+		"exec sudo -n cat '/var/lib/devopsellence/status.json'",
+		"printf '%s\\n' '__DEVOPSELLENCE_STATUS_MISSING__'",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("optional read command missing %q: %s", want, command)
+		}
+	}
+}
+
 func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {

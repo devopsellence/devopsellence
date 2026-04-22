@@ -1,17 +1,8 @@
-name: devopsellence Release
+name: devopsellence release
 
 on:
   workflow_dispatch:
     inputs:
-      component:
-        description: "Which component to release"
-        required: true
-        type: choice
-        options:
-          - both
-          - agent
-          - cli
-        default: both
       source_ref:
         description: "Branch, tag, or commit SHA to build from; blank uses the selected workflow branch/tag"
         required: false
@@ -132,32 +123,8 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Resolved release version: $version"
 
-      - name: Run selected tests
+      - name: Build and publish release
         env:
-          COMPONENT_INPUT: ${{ inputs.component }}
-        run: |
-          set -euo pipefail
-
-          case "$COMPONENT_INPUT" in
-            both)
-              mise run test:agent
-              mise run test:cli
-              ;;
-            agent)
-              mise run test:agent
-              ;;
-            cli)
-              mise run test:cli
-              ;;
-            *)
-              echo "unknown component: $COMPONENT_INPUT" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Build and publish selected release(s)
-        env:
-          COMPONENT_INPUT: ${{ inputs.component }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_KIND_INPUT: ${{ inputs.release_kind }}
           SOURCE_REF_INPUT: ${{ steps.resolve_source_ref.outputs.source_ref }}
@@ -165,7 +132,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          component="$COMPONENT_INPUT"
           version="$VERSION_INPUT"
           release_kind="$RELEASE_KIND_INPUT"
           source_ref="$SOURCE_REF_INPUT"
@@ -173,11 +139,56 @@ jobs:
           short_sha="$(git rev-parse --short=12 HEAD)"
           build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           workspace_dir="$PWD"
+          tag_name="$version"
+          release_notes="devopsellence binary release for ${version} from ${source_ref} at ${target_sha}"
 
           prerelease_flag=()
           if [[ "$release_kind" == "prerelease" ]]; then
             prerelease_flag=(--prerelease)
           fi
+
+          delete_tag_if_present() {
+            local tag_name="$1"
+
+            if git rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
+              git tag -d "$tag_name"
+            fi
+
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag_name" >/dev/null 2>&1; then
+              git push origin ":refs/tags/$tag_name"
+            fi
+          }
+
+          prepare_release_target() {
+            local tag_name="$1"
+
+            if [[ "$release_kind" == "prerelease" ]]; then
+              if gh release view "$tag_name" >/dev/null 2>&1; then
+                gh release delete "$tag_name" --yes --cleanup-tag
+              else
+                delete_tag_if_present "$tag_name"
+              fi
+              return
+            fi
+
+            if git rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
+              local tag_target
+              tag_target="$(git rev-list -n 1 "$tag_name")"
+              if [[ "$tag_target" != "$target_sha" ]]; then
+                echo "stable release tag already exists at a different commit: $tag_name ($tag_target != $target_sha)" >&2
+                exit 1
+              fi
+            fi
+
+            if gh release view "$tag_name" >/dev/null 2>&1; then
+              local release_is_prerelease
+              release_is_prerelease="$(gh release view "$tag_name" --json isPrerelease --jq '.isPrerelease')"
+              if [[ "$release_is_prerelease" == "true" ]]; then
+                echo "stable release version already exists as a prerelease: $tag_name" >&2
+                exit 1
+              fi
+            fi
+          }
 
           publish_component() {
             local component="$1"
@@ -197,18 +208,8 @@ jobs:
                 ;;
             esac
 
-            local tag_name="${version}"
             local dist_dir="${workspace_dir}/${working_dir}/dist/${version}"
             local upload_dir="${dist_dir}/release-assets"
-            local release_notes="devopsellence binary release for ${version} from ${source_ref} at ${target_sha}"
-
-            if git rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
-              tag_target="$(git rev-list -n 1 "$tag_name")"
-              if [[ "$tag_target" != "$target_sha" ]]; then
-                echo "tag already exists at a different commit: $tag_name ($tag_target != $target_sha)" >&2
-                exit 1
-              fi
-            fi
 
             DEVOPSELLENCE_RELEASE_VERSION="$version" \
               DEVOPSELLENCE_RELEASE_COMMIT="$short_sha" \
@@ -224,41 +225,37 @@ jobs:
             cp "${dist_dir}/darwin-arm64" "${upload_dir}/${asset_prefix}-darwin-arm64"
             awk -v prefix="${asset_prefix}-" '{ print $1 "  " prefix $2 }' \
               "${dist_dir}/SHA256SUMS" > "${upload_dir}/${asset_prefix}-SHA256SUMS"
-            local release_assets=(
-              "${upload_dir}/${asset_prefix}-linux-amd64"
-              "${upload_dir}/${asset_prefix}-linux-arm64"
-              "${upload_dir}/${asset_prefix}-darwin-amd64"
-              "${upload_dir}/${asset_prefix}-darwin-arm64"
-              "${upload_dir}/${asset_prefix}-SHA256SUMS"
-            )
-
-            if gh release view "$tag_name" >/dev/null 2>&1; then
-              gh release edit "$tag_name" \
-                --title "devopsellence ${version}" \
-                --notes "$release_notes" \
-                "${prerelease_flag[@]}"
-              gh release upload "$tag_name" "${release_assets[@]}" --clobber
-              return
-            fi
-
-            gh release create "$tag_name" \
-              "${release_assets[@]}" \
-              --title "devopsellence ${version}" \
-              --notes "$release_notes" \
-              --target "$target_sha" \
-              "${prerelease_flag[@]}"
           }
 
-          case "$component" in
-            both)
-              publish_component agent
-              publish_component cli
-              ;;
-            agent|cli)
-              publish_component "$component"
-              ;;
-            *)
-              echo "unknown component: $component" >&2
-              exit 1
-              ;;
-          esac
+          publish_component agent
+          publish_component cli
+          prepare_release_target "$tag_name"
+
+          release_assets=(
+            "${workspace_dir}/agent/dist/${version}/release-assets/agent-linux-amd64"
+            "${workspace_dir}/agent/dist/${version}/release-assets/agent-linux-arm64"
+            "${workspace_dir}/agent/dist/${version}/release-assets/agent-darwin-amd64"
+            "${workspace_dir}/agent/dist/${version}/release-assets/agent-darwin-arm64"
+            "${workspace_dir}/agent/dist/${version}/release-assets/agent-SHA256SUMS"
+            "${workspace_dir}/cli/dist/${version}/release-assets/cli-linux-amd64"
+            "${workspace_dir}/cli/dist/${version}/release-assets/cli-linux-arm64"
+            "${workspace_dir}/cli/dist/${version}/release-assets/cli-darwin-amd64"
+            "${workspace_dir}/cli/dist/${version}/release-assets/cli-darwin-arm64"
+            "${workspace_dir}/cli/dist/${version}/release-assets/cli-SHA256SUMS"
+          )
+
+          if gh release view "$tag_name" >/dev/null 2>&1; then
+            gh release edit "$tag_name" \
+              --title "devopsellence ${version}" \
+              --notes "$release_notes" \
+              "${prerelease_flag[@]}"
+            gh release upload "$tag_name" "${release_assets[@]}" --clobber
+            exit 0
+          fi
+
+          gh release create "$tag_name" \
+            "${release_assets[@]}" \
+            --title "devopsellence ${version}" \
+            --notes "$release_notes" \
+            --target "$target_sha" \
+            "${prerelease_flag[@]}"

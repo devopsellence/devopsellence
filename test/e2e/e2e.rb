@@ -801,7 +801,7 @@ class E2E
       config["tasks"].delete("release")
       config["tasks"]["release"] = {
         "service" => "web",
-        "command" => "release-task #{APP_VOLUME_TARGET}/#{RELEASE_MARKER_FILENAME} #{Shellwords.escape(release_marker_value)}"
+        "args" => ["release-task", "#{APP_VOLUME_TARGET}/#{RELEASE_MARKER_FILENAME}", release_marker_value]
       }
       File.write(config_path, YAML.dump(config))
     end

@@ -57,13 +57,13 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 			},
 			"worker": {
 				Kind:    config.ServiceKindWorker,
-				Command: "sidekiq",
+				Command: []string{"sidekiq"},
 			},
 		},
 		Tasks: config.TasksConfig{
 			Release: &config.TaskConfig{
 				Service: config.DefaultWebServiceName,
-				Command: "rails db:migrate",
+				Command: []string{"rails", "db:migrate"},
 			},
 		},
 	}
@@ -94,7 +94,7 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 			},
 			"worker": {
 				Kind:    config.ServiceKindWorker,
-				Command: "sidekiq",
+				Command: []string{"sidekiq"},
 			},
 		},
 	}
@@ -206,7 +206,7 @@ func TestCreateProviderNodeNormalizesHetznerProviderBeforeValidation(t *testing.
 
 func TestReleaseNodeForSnapshotSelectsSortedEligibleNode(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
-	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: "bin/rails db:migrate"}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"bin/rails", "db:migrate"}}
 	snapshot, err := solo.BuildDeploySnapshot(&cfg, "/workspace/demo", "/workspace/demo/devopsellence.yml", "demo:abc1234", "abc1234", map[string]string{})
 	if err != nil {
 		t.Fatal(err)

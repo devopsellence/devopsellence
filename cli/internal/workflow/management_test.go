@@ -1285,7 +1285,7 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 	project.Services[config.DefaultWebServiceName] = web
 	project.Services["worker"] = config.Service{
 		Kind:    config.ServiceKindWorker,
-		Command: "./bin/jobs",
+		Command: []string{"./bin/jobs"},
 		Env:     map[string]string{"WORKER_FROM_CONFIG": "1"},
 	}
 	if _, err := config.Write(root, project); err != nil {
@@ -1903,7 +1903,7 @@ func TestDeployRailsSyncsMasterKeySecret(t *testing.T) {
 
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Command: "bin/jobs"}
+	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Command: []string{"bin/jobs"}}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -3092,7 +3092,7 @@ func TestDeployRailsSecretSyncRunsConcurrently(t *testing.T) {
 
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Command: "bin/jobs"}
+	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Command: []string{"bin/jobs"}}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

@@ -492,11 +492,11 @@ func buildService(serviceName string, svc config.ServiceConfig, imageTag string,
 		Env:   env,
 	}
 
-	if svc.Entrypoint != "" {
-		c.Entrypoint = shellCommand(svc.Entrypoint)
+	if len(svc.Command) > 0 {
+		c.Entrypoint = append([]string(nil), svc.Command...)
 	}
-	if svc.Command != "" {
-		c.Command = shellCommand(svc.Command)
+	if len(svc.Args) > 0 {
+		c.Command = append([]string(nil), svc.Args...)
 	}
 
 	if svc.Healthcheck != nil {
@@ -547,15 +547,15 @@ func buildReleaseTask(cfg *config.ProjectConfig, imageTag string, secrets map[st
 		Image: image,
 		Env:   env,
 	}
-	if strings.TrimSpace(release.Entrypoint) != "" {
-		task.Entrypoint = shellCommand(release.Entrypoint)
-	} else if strings.TrimSpace(service.Entrypoint) != "" {
-		task.Entrypoint = shellCommand(service.Entrypoint)
+	if len(release.Command) > 0 {
+		task.Entrypoint = append([]string(nil), release.Command...)
+	} else if len(service.Command) > 0 {
+		task.Entrypoint = append([]string(nil), service.Command...)
 	}
-	if strings.TrimSpace(release.Command) != "" {
-		task.Command = shellCommand(release.Command)
-	} else if strings.TrimSpace(service.Command) != "" {
-		task.Command = shellCommand(service.Command)
+	if len(release.Args) > 0 {
+		task.Command = append([]string(nil), release.Args...)
+	} else if len(service.Args) > 0 {
+		task.Command = append([]string(nil), service.Args...)
 	}
 	for _, v := range service.Volumes {
 		task.VolumeMounts = append(task.VolumeMounts, volumeMountJSON{Source: v.Source, Target: v.Target})
@@ -593,13 +593,4 @@ func mergeStringMaps(parts ...map[string]string) map[string]string {
 		}
 	}
 	return merged
-}
-
-// shellCommand wraps a command string as shell -c invocation.
-func shellCommand(cmd string) []string {
-	cmd = strings.TrimSpace(cmd)
-	if cmd == "" {
-		return nil
-	}
-	return []string{"sh", "-c", cmd}
 }

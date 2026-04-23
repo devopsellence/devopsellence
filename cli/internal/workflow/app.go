@@ -3974,11 +3974,11 @@ func servicePayload(service *config.Service) map[string]any {
 		"ports":       service.Ports,
 		"volumes":     service.Volumes,
 	}
-	if strings.TrimSpace(service.Entrypoint) != "" {
-		payload["entrypoint"] = service.Entrypoint
-	}
-	if strings.TrimSpace(service.Command) != "" {
+	if len(service.Command) > 0 {
 		payload["command"] = service.Command
+	}
+	if len(service.Args) > 0 {
+		payload["args"] = service.Args
 	}
 	if service.Healthcheck != nil && strings.TrimSpace(service.Healthcheck.Path) != "" {
 		payload["healthcheck"] = map[string]any{
@@ -4010,11 +4010,11 @@ func taskPayloads(tasks config.TasksConfig) map[string]any {
 			"service": strings.TrimSpace(tasks.Release.Service),
 			"env":     cloneEnv(tasks.Release.Env),
 		}
-		if strings.TrimSpace(tasks.Release.Entrypoint) != "" {
-			payload["entrypoint"] = tasks.Release.Entrypoint
-		}
-		if strings.TrimSpace(tasks.Release.Command) != "" {
+		if len(tasks.Release.Command) > 0 {
 			payload["command"] = tasks.Release.Command
+		}
+		if len(tasks.Release.Args) > 0 {
+			payload["args"] = tasks.Release.Args
 		}
 		payloads["release"] = payload
 	}

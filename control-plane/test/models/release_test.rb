@@ -33,22 +33,22 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_equal "web", release.ingress_service_name
   end
 
-  test "release task command and entrypoint must be strings" do
+  test "release task command and args must be arrays" do
     release = build_release(
       runtime_json: release_runtime_json(
         tasks: {
           "release" => {
             "service" => "web",
-            "command" => [ "bin/rails", "db:migrate" ],
-            "entrypoint" => [ "/bin/sh" ]
+            "command" => "bin/rails",
+            "args" => "db:migrate"
           }
         }
       )
     )
 
     assert_not release.valid?
-    assert_includes release.errors[:runtime_json], "tasks.release.command must be a string"
-    assert_includes release.errors[:runtime_json], "tasks.release.entrypoint must be a string"
+    assert_includes release.errors[:runtime_json], "tasks.release.command must be an array of strings"
+    assert_includes release.errors[:runtime_json], "tasks.release.args must be an array of strings"
   end
 
   test "blank kind does not contribute required labels and reports one kind error" do
@@ -66,6 +66,42 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_equal [ "services.web.kind must be present" ], kind_errors
   end
 
+  test "scheduled_services_for fails fast for stored legacy string command" do
+    release = persisted_release(
+      runtime_json: release_runtime_json(
+        services: {
+          "web" => web_service_runtime(command: "./bin/server")
+        }
+      )
+    )
+
+    error = assert_raises(Release::InvalidRuntimeConfig) do
+      release.scheduled_services_for(node: build_node_for(release:))
+    end
+
+    assert_equal "services.web.command must be an array of strings", error.message
+  end
+
+  test "release_task_for fails fast for stored deprecated entrypoint" do
+    release = persisted_release(
+      runtime_json: release_runtime_json(
+        tasks: {
+          "release" => {
+            "service" => "web",
+            "entrypoint" => [ "/bin/sh" ],
+            "command" => [ "bundle", "exec", "rails", "db:migrate" ]
+          }
+        }
+      )
+    )
+
+    error = assert_raises(Release::InvalidRuntimeConfig) do
+      release.release_task_for(node: build_node_for(release:))
+    end
+
+    assert_equal "tasks.release.entrypoint is no longer supported; use command or args", error.message
+  end
+
   private
 
   def build_release(runtime_json:)
@@ -77,5 +113,28 @@ class ReleaseTest < ActiveSupport::TestCase
       image_digest: "sha256:#{"b" * 64}",
       runtime_json: runtime_json
     )
+  end
+
+  def persisted_release(runtime_json:)
+    release = build_release(runtime_json:)
+    release.save!(validate: false)
+    release
+  end
+
+  def build_node_for(release:)
+    organization = release.project.organization
+    ensure_test_organization_runtime!(organization)
+    environment = release.project.environments.create!(
+      name: "Production",
+      gcp_project_id: "gcp-proj-#{SecureRandom.hex(3)}",
+      gcp_project_number: SecureRandom.random_number(10**12).to_s,
+      service_account_email: "svc-#{SecureRandom.hex(4)}@example.test",
+      workload_identity_pool: "pool-#{SecureRandom.hex(3)}",
+      workload_identity_provider: "provider-#{SecureRandom.hex(3)}",
+      runtime_kind: Environment::RUNTIME_CUSTOMER_NODES
+    )
+    node, _access, _refresh = issue_test_node!(organization:, name: "node-#{SecureRandom.hex(3)}")
+    node.update!(environment:)
+    node
   end
 end

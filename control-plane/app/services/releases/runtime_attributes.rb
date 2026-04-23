@@ -79,6 +79,7 @@ module Releases
 
     def parse_service(value, field:)
       service = parse_hash(value, field:)
+      reject_deprecated_key!(service, deprecated_key: :entrypoint, field: :"#{field}.entrypoint")
       kind = optional_service_string(service["kind"] || service[:kind])
       raise InvalidPayload, "#{field}.kind must be present" if kind.blank?
 
@@ -89,8 +90,8 @@ module Releases
       normalized = {
         "kind" => kind,
         "image" => optional_service_string(service["image"] || service[:image]),
-        "entrypoint" => optional_service_string(service["entrypoint"] || service[:entrypoint]),
-        "command" => optional_service_string(service["command"] || service[:command]),
+        "command" => optional_service_array(service["command"] || service[:command], field: :"#{field}.command"),
+        "args" => optional_service_array(service["args"] || service[:args], field: :"#{field}.args"),
         "env" => parse_hash(service["env"] || service[:env], field: :"#{field}.env"),
         "secret_refs" => parse_array(service["secret_refs"] || service[:secret_refs], field: :"#{field}.secret_refs"),
         "volumes" => parse_array(service["volumes"] || service[:volumes], field: :"#{field}.volumes"),
@@ -111,10 +112,11 @@ module Releases
 
     def parse_release_task(value)
       task = parse_hash(value, field: :"tasks.release")
+      reject_deprecated_key!(task, deprecated_key: :entrypoint, field: :"tasks.release.entrypoint")
       {
         "service" => required_service_string(task["service"] || task[:service], field: :"tasks.release.service"),
-        "entrypoint" => optional_service_string(task["entrypoint"] || task[:entrypoint]),
-        "command" => optional_service_string(task["command"] || task[:command]),
+        "command" => optional_service_array(task["command"] || task[:command], field: :"tasks.release.command"),
+        "args" => optional_service_array(task["args"] || task[:args], field: :"tasks.release.args"),
         "env" => parse_hash(task["env"] || task[:env], field: :"tasks.release.env")
       }.compact
     end
@@ -173,6 +175,24 @@ module Releases
 
     def optional_service_string(value)
       value.to_s.strip.presence
+    end
+
+    def optional_service_array(value, field:)
+      array = parse_array(value, field: field)
+      array.each_with_index.map do |entry, index|
+        raise InvalidPayload, "#{field}[#{index}] must be a string" unless entry.is_a?(String)
+
+        text = entry.strip
+        raise InvalidPayload, "#{field}[#{index}] must be present" if text.blank?
+
+        text
+      end.presence
+    end
+
+    def reject_deprecated_key!(hash, deprecated_key:, field:)
+      return unless hash.key?(deprecated_key) || hash.key?(deprecated_key.to_s)
+
+      raise InvalidPayload, "#{field} is no longer supported; use command or args"
     end
 
     def required_service_string(value, field:)

@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestWriteAndLoadFromRoot(t *testing.T) {
@@ -14,12 +17,12 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	project := DefaultProjectConfig("acme", "ShopApp", "staging")
 	project.Services["jobs"] = Service{
 		Kind:       ServiceKindWorker,
-		Command:    "./bin/jobs",
+		Command:    []string{"./bin/jobs"},
 		Env:        map[string]string{"QUEUE": "default"},
 		SecretRefs: []SecretRef{{Name: "API_KEY", Secret: "gsm://projects/test/secrets/api-key"}},
 		Volumes:    []Volume{{Source: "app_storage", Target: "/rails/storage"}},
 	}
-	project.Tasks.Release = &TaskConfig{Service: "web", Command: "bundle exec rails db:migrate"}
+	project.Tasks.Release = &TaskConfig{Service: "web", Command: []string{"bundle", "exec", "rails", "db:migrate"}}
 
 	written, err := Write(root, project)
 	if err != nil {
@@ -38,7 +41,7 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	if loaded.Organization != "acme" || loaded.Project != "ShopApp" || loaded.DefaultEnvironment != "staging" {
 		t.Fatalf("loaded core fields mismatch: %#v", loaded)
 	}
-	if loaded.Services["jobs"].Command != "./bin/jobs" {
+	if got := loaded.Services["jobs"].Command; len(got) != 1 || got[0] != "./bin/jobs" {
 		t.Fatalf("jobs service mismatch: %#v", loaded.Services["jobs"])
 	}
 	if written.Build.Context != DefaultBuildContext {
@@ -51,7 +54,7 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	if strings.Join(loaded.Build.Platforms, ",") != strings.Join(DefaultBuildPlatforms, ",") {
 		t.Fatalf("build platforms = %#v, want %#v", loaded.Build.Platforms, DefaultBuildPlatforms)
 	}
-	if loaded.Tasks.Release == nil || loaded.Tasks.Release.Command != "bundle exec rails db:migrate" {
+	if loaded.Tasks.Release == nil || strings.Join(loaded.Tasks.Release.Command, " ") != "bundle exec rails db:migrate" {
 		t.Fatalf("release task = %#v", loaded.Tasks.Release)
 	}
 	if _, err := os.Stat(filepath.Join(root, FilePath)); err != nil {
@@ -146,13 +149,50 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsStringCommandSyntax(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, FilePath)
+	content := strings.Join([]string{
+		"schema_version: 5",
+		"organization: acme",
+		"project: ShopApp",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    kind: web",
+		"    command: ./bin/server",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected string command type error, got nil")
+	}
+	var typeErr *yaml.TypeError
+	if !errors.As(err, &typeErr) {
+		t.Fatalf("expected yaml.TypeError, got %T (%v)", err, err)
+	}
+}
+
 func TestValidateAcceptsWorkerWithoutExtraPlacementFields(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
 	project.Services["jobs"] = Service{
 		Kind:    ServiceKindWorker,
-		Command: "./bin/jobs",
+		Command: []string{"./bin/jobs"},
 	}
 
 	err := Validate(&project)

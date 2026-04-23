@@ -124,7 +124,9 @@ services:
 tasks:
   release:
     service: web
-    command: bin/rails db:migrate
+    command:
+      - bin/rails
+      - db:migrate
 ingress:
   service: web
   hosts:

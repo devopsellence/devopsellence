@@ -12,7 +12,7 @@
 #   3. Scaffold a test app with a solo-mode devopsellence.yml
 #   4. Seed global solo state, attach the node, install the agent, set secrets,
 #      deploy, check status
-#   5. Assert: app container running, status.json settled, secrets resolved
+#   5. Assert: app container running, status.json terminal, secrets resolved
 #
 # Usage:
 #   ruby test/e2e/solo_e2e.rb
@@ -568,15 +568,25 @@ PY
   end
 
   def run_deploy!
-    output = run!(
+    result = run_command(
       cli_binary.to_s, "deploy",
       chdir: @app_dir.to_s,
       timeout: 600,
       env: ssh_env
     )
+    output = result.fetch(:output)
+    status = result.fetch(:status)
 
-    raise "deploy did not report success" unless output.include?("Deployed revision")
-    puts "[ok] Deploy completed"
+    if status.success?
+      raise "deploy did not report success" unless output.include?("Deployed revision")
+      puts "[ok] Deploy completed"
+      return
+    end
+
+    unless output.include?("rollout failed on node-1:") && known_probe_error?(output)
+      raise "deploy failed unexpectedly (#{status.exitstatus})\n#{excerpt(output, 20)}"
+    end
+    puts "[ok] Deploy surfaced known rollout failure in solo e2e"
   end
 
   def assert_status_before_first_deploy!
@@ -629,7 +639,7 @@ PY
       puts "[ok] Status settled for revision #{revision}"
     when "error"
       error = status["error"].to_s
-      unless error.include?("http probe") && error.include?("context deadline exceeded")
+      unless known_probe_error?(error)
         raise "unexpected error status: #{status.inspect}"
       end
       puts "[ok] Status captured known docker-sock probe limitation for revision #{revision}"
@@ -701,6 +711,10 @@ PY
 
   def terminal_status_phase?(phase)
     %w[settled error].include?(phase.to_s)
+  end
+
+  def known_probe_error?(text)
+    text.include?("http probe") && text.include?("context deadline exceeded")
   end
 
   # -- Helpers --

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/charmbracelet/keygen"
 	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
+	"github.com/devopsellence/cli/internal/git"
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	cliversion "github.com/devopsellence/cli/internal/version"
@@ -449,6 +452,213 @@ func TestSoloNodeAttachPersistsDesiredStateOnRepublishError(t *testing.T) {
 	}
 	if len(loaded.Attachments) != 1 {
 		t.Fatalf("attachments = %#v, want persisted desired attachment", loaded.Attachments)
+	}
+}
+
+func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.SoloNode{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]solo.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	statusCountPath := installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: soloStatusMissingSentinel + "\n"},
+		{stdout: `{"revision":"__REVISION__","phase":"reconciling"}` + "\n"},
+		{stdout: `{"revision":"__REVISION__","phase":"settled"}` + "\n"},
+	})
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:            output.New(&stdout, io.Discard, false),
+		SoloState:          soloState,
+		ConfigStore:        config.NewStore(),
+		Git:                git.Client{},
+		Cwd:                workspaceRoot,
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      200 * time.Millisecond,
+	}
+
+	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readFakeSSHStatusCount(t, statusCountPath); got != 3 {
+		t.Fatalf("status poll count = %d, want 3", got)
+	}
+	outputText := stdout.String()
+	if !strings.Contains(outputText, "Deployed revision") {
+		t.Fatalf("stdout = %q, want deploy success line", outputText)
+	}
+}
+
+func TestWaitForSoloRolloutIgnoresMissingAndStaleStatusUntilExpectedRevisionSettles(t *testing.T) {
+	statusCountPath := installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: soloStatusMissingSentinel + "\n"},
+		{stdout: `{"revision":"stale-revision","phase":"settled"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"reconciling"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"settled"}` + "\n"},
+	})
+
+	app := &App{
+		Printer:            output.New(io.Discard, io.Discard, false),
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      200 * time.Millisecond,
+	}
+
+	err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
+		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
+	}, map[string]string{
+		"node-a": "expected-revision",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFakeSSHStatusCount(t, statusCountPath); got != 4 {
+		t.Fatalf("status poll count = %d, want 4", got)
+	}
+}
+
+func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: `{"revision":"expected-revision","phase":"error","error":"image pull failed"}` + "\n"},
+	})
+
+	app := &App{
+		Printer:            output.New(io.Discard, io.Discard, false),
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      100 * time.Millisecond,
+	}
+
+	err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
+		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
+	}, map[string]string{
+		"node-a": "expected-revision",
+	})
+	if err == nil {
+		t.Fatal("expected rollout failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want ExitError", err, err)
+	}
+	if !strings.Contains(err.Error(), "rollout failed on node-a: image pull failed") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWaitForSoloRolloutTimesOutWhenExpectedRevisionNeverSettles(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: `{"revision":"expected-revision","phase":"reconciling"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"reconciling"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"reconciling"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"reconciling"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"reconciling"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"reconciling"}` + "\n"},
+	})
+
+	app := &App{
+		Printer:            output.New(io.Discard, io.Discard, false),
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      20 * time.Millisecond,
+	}
+
+	err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
+		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
+	}, map[string]string{
+		"node-a": "expected-revision",
+	})
+	if err == nil {
+		t.Fatal("expected timeout")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want ExitError", err, err)
+	}
+	if !strings.Contains(err.Error(), "timed out waiting for solo rollout") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWaitForSoloRolloutFailsClearlyOnStatusReadAndParseErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		responses []fakeSSHResponse
+		want      string
+	}{
+		{
+			name: "read error",
+			responses: []fakeSSHResponse{
+				{stderr: "permission denied\n", exitCode: 1},
+			},
+			want: "[node-a] read status: ssh root@203.0.113.10:",
+		},
+		{
+			name: "invalid json",
+			responses: []fakeSSHResponse{
+				{stdout: "{not-json}\n"},
+			},
+			want: "[node-a] read status: invalid status JSON:",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			installFakeSoloCommands(t, tt.responses)
+
+			app := &App{
+				Printer:            output.New(io.Discard, io.Discard, false),
+				DeployPollInterval: 5 * time.Millisecond,
+				DeployTimeout:      100 * time.Millisecond,
+			}
+
+			err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
+				"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
+			}, map[string]string{
+				"node-a": "expected-revision",
+			})
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseSoloNodeStatusPayload(t *testing.T) {
+	payload := []byte(`{"phase":"settled","revision":"abc123","environments":[{"name":"production","services":[{"name":"web","state":"running"}]}]}`)
+
+	status, raw, err := parseSoloNodeStatusPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "settled" || status.Revision != "abc123" {
+		t.Fatalf("status = %#v", status)
+	}
+	if string(raw) != string(payload) {
+		t.Fatalf("raw = %q, want %q", raw, payload)
 	}
 }
 
@@ -992,6 +1202,138 @@ func TestIngressSetInfersPrimaryWebService(t *testing.T) {
 	if written.Ingress.Service != config.DefaultWebServiceName {
 		t.Fatalf("ingress.service = %q, want %q", written.Ingress.Service, config.DefaultWebServiceName)
 	}
+}
+
+type fakeSSHResponse struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+func installFakeSoloCommands(t *testing.T, statusResponses []fakeSSHResponse) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	statusDir := filepath.Join(t.TempDir(), "status")
+	if err := os.MkdirAll(statusDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for idx, response := range statusResponses {
+		base := filepath.Join(statusDir, fmt.Sprintf("%d", idx+1))
+		if response.stdout != "" {
+			if err := os.WriteFile(base+".stdout", []byte(response.stdout), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if response.stderr != "" {
+			if err := os.WriteFile(base+".stderr", []byte(response.stderr), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		code := response.exitCode
+		if err := os.WriteFile(base+".code", []byte(fmt.Sprintf("%d\n", code)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	statusCountPath := filepath.Join(t.TempDir(), "status-count")
+	revisionPath := filepath.Join(t.TempDir(), "desired-state.json")
+	writeExecutable(t, filepath.Join(binDir, "docker"), "#!/usr/bin/env bash\nset -euo pipefail\nif [ \"$1\" = \"build\" ]; then exit 0; fi\necho \"unexpected docker command: $*\" >&2\nexit 1\n")
+	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
+set -euo pipefail
+command="${!#}"
+
+if [[ "$command" == *"desired-state set-override"* ]]; then
+  cat >"$DEVOPSELLENCE_FAKE_SSH_REVISION_FILE"
+  exit 0
+fi
+
+if [[ "$command" == *"docker image inspect"* ]]; then
+  printf 'present\n'
+  exit 0
+fi
+
+if [[ "$command" == *"docker info"* ]]; then
+  exit 0
+fi
+
+if [[ "$command" == *"status.json"* ]]; then
+  index=0
+  if [[ -f "$DEVOPSELLENCE_FAKE_SSH_STATUS_COUNT" ]]; then
+    index="$(cat "$DEVOPSELLENCE_FAKE_SSH_STATUS_COUNT")"
+  fi
+  index=$((index + 1))
+  printf '%s' "$index" >"$DEVOPSELLENCE_FAKE_SSH_STATUS_COUNT"
+  base="$DEVOPSELLENCE_FAKE_SSH_STATUS_DIR/$index"
+  revision=''
+  if [[ -f "$DEVOPSELLENCE_FAKE_SSH_REVISION_FILE" ]]; then
+    revision="$(sed -n 's/.*"revision"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DEVOPSELLENCE_FAKE_SSH_REVISION_FILE" | head -n1)"
+  fi
+  if [[ -f "$base.stdout" ]]; then
+    if [[ -n "$revision" ]]; then
+      sed "s/__REVISION__/$revision/g" "$base.stdout"
+    else
+      cat "$base.stdout"
+    fi
+  fi
+  if [[ -f "$base.stderr" ]]; then
+    cat "$base.stderr" >&2
+  fi
+  code=0
+  if [[ -f "$base.code" ]]; then
+    code="$(cat "$base.code")"
+  fi
+  exit "$code"
+fi
+
+echo "unexpected ssh command: $command" >&2
+exit 1
+`)
+
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_STATUS_DIR", statusDir)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_STATUS_COUNT", statusCountPath)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_REVISION_FILE", revisionPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return statusCountPath
+}
+
+func readFakeSSHStatusCount(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read status count: %v", err)
+	}
+	var count int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &count); err != nil {
+		t.Fatalf("parse status count %q: %v", data, err)
+	}
+	return count
+}
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func commitTestRepo(t *testing.T, dir string) string {
+	t.Helper()
+	runTestCommand(t, dir, "git", "init")
+	runTestCommand(t, dir, "git", "add", ".")
+	runTestCommand(t, dir, "git", "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	return strings.TrimSpace(runTestCommand(t, dir, "git", "rev-parse", "HEAD"))
+}
+
+func runTestCommand(t *testing.T, dir, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
+	}
+	return string(out)
 }
 
 func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {

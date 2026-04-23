@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -121,6 +122,29 @@ type IngressSetOptions struct {
 
 type IngressCheckOptions struct {
 	Wait time.Duration
+}
+
+type soloNodeStatus struct {
+	Phase        string                      `json:"phase"`
+	Revision     string                      `json:"revision"`
+	Error        string                      `json:"error,omitempty"`
+	Environments []soloNodeStatusEnvironment `json:"environments"`
+}
+
+type soloNodeStatusEnvironment struct {
+	Name     string                  `json:"name"`
+	Services []soloNodeStatusService `json:"services"`
+}
+
+type soloNodeStatusService struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+type soloNodeStatusResult struct {
+	Missing bool
+	Raw     json.RawMessage
+	Status  soloNodeStatus
 }
 
 func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions, projectName string) (providerNodeCreateResult, error) {
@@ -278,6 +302,9 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions); err != nil {
+		return err
+	}
 
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
@@ -349,6 +376,115 @@ func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func parseSoloNodeStatusPayload(data []byte) (soloNodeStatus, json.RawMessage, error) {
+	var status soloNodeStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		return soloNodeStatus{}, nil, err
+	}
+	return status, json.RawMessage(data), nil
+}
+
+func readSoloNodeStatus(ctx context.Context, node config.SoloNode) (soloNodeStatusResult, error) {
+	statusPath := path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "status.json")
+	out, err := solo.RunSSH(ctx, node, remoteReadOptionalFileCommand(statusPath, soloStatusMissingSentinel), nil)
+	if err != nil {
+		return soloNodeStatusResult{}, err
+	}
+	if strings.TrimSpace(out) == soloStatusMissingSentinel {
+		return soloNodeStatusResult{Missing: true}, nil
+	}
+	status, raw, err := parseSoloNodeStatusPayload([]byte(out))
+	if err != nil {
+		return soloNodeStatusResult{}, fmt.Errorf("invalid status JSON: %w", err)
+	}
+	return soloNodeStatusResult{
+		Raw:    raw,
+		Status: status,
+	}, nil
+}
+
+func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.SoloNode, expectedRevisions map[string]string) error {
+	timeout := a.DeployTimeout
+	if timeout <= 0 {
+		timeout = defaultDeployProgressTimeout
+	}
+	pollInterval := a.DeployPollInterval
+	if pollInterval <= 0 {
+		pollInterval = defaultDeployProgressPollInterval
+	}
+
+	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	lastSummary := ""
+	latestSummary := "rollout pending"
+	nodeNames := sortedSoloNodeNames(nodes)
+	for {
+		pendingCount := 0
+		reconcilingCount := 0
+		settledCount := 0
+		details := []string{}
+
+		for _, name := range nodeNames {
+			expectedRevision := strings.TrimSpace(expectedRevisions[name])
+			if expectedRevision == "" {
+				return fmt.Errorf("missing desired state revision for node %s", name)
+			}
+
+			result, err := readSoloNodeStatus(rolloutCtx, nodes[name])
+			if err != nil {
+				if errors.Is(rolloutCtx.Err(), context.DeadlineExceeded) {
+					return ExitError{Code: 1, Err: fmt.Errorf("timed out waiting for solo rollout: %s", latestSummary)}
+				}
+				return fmt.Errorf("[%s] read status: %w", name, err)
+			}
+
+			switch {
+			case result.Missing:
+				pendingCount++
+				details = append(details, name+"=missing")
+			case strings.TrimSpace(result.Status.Revision) != expectedRevision:
+				pendingCount++
+				details = append(details, fmt.Sprintf("%s=revision:%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Revision), "none")))
+			default:
+				switch strings.TrimSpace(result.Status.Phase) {
+				case "settled":
+					settledCount++
+				case "error":
+					message := firstNonEmpty(strings.TrimSpace(result.Status.Error), "node reported phase=error")
+					return ExitError{Code: 1, Err: fmt.Errorf("rollout failed on %s: %s", name, message)}
+				default:
+					reconcilingCount++
+					details = append(details, fmt.Sprintf("%s=%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Phase), "reconciling")))
+				}
+			}
+		}
+
+		latestSummary = fmt.Sprintf("rollout pending=%d reconciling=%d settled=%d", pendingCount, reconcilingCount, settledCount)
+		if len(details) > 0 {
+			latestSummary += " - " + strings.Join(details, ", ")
+		}
+		if !a.Printer.JSON && latestSummary != lastSummary {
+			a.Printer.Println(latestSummary)
+			lastSummary = latestSummary
+		}
+		if pendingCount == 0 && reconcilingCount == 0 {
+			return nil
+		}
+
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-rolloutCtx.Done():
+			timer.Stop()
+			if errors.Is(rolloutCtx.Err(), context.DeadlineExceeded) {
+				return ExitError{Code: 1, Err: fmt.Errorf("timed out waiting for solo rollout: %s", latestSummary)}
+			}
+			return rolloutCtx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (a *App) readSoloState() (solo.State, error) {
@@ -720,8 +856,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	var jsonResults []map[string]any
 
 	for name, node := range nodes {
-		statusPath := filepath.Join(node.AgentStateDir, "status.json")
-		out, err := solo.RunSSH(ctx, node, remoteReadOptionalFileCommand(statusPath, soloStatusMissingSentinel), nil)
+		result, err := readSoloNodeStatus(ctx, node)
 		if err != nil {
 			if a.Printer.JSON {
 				jsonResults = append(jsonResults, map[string]any{
@@ -734,7 +869,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			continue
 		}
 
-		if strings.TrimSpace(out) == soloStatusMissingSentinel {
+		if result.Missing {
 			message := "no deploy status yet; run `devopsellence deploy`"
 			if a.Printer.JSON {
 				jsonResults = append(jsonResults, map[string]any{
@@ -749,40 +884,16 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		}
 
 		if a.Printer.JSON {
-			var raw json.RawMessage
-			if err := json.Unmarshal([]byte(out), &raw); err != nil {
-				jsonResults = append(jsonResults, map[string]any{
-					"node":  name,
-					"error": fmt.Sprintf("invalid status JSON: %s", err),
-				})
-				continue
-			}
 			jsonResults = append(jsonResults, map[string]any{
 				"node":   name,
-				"status": raw,
+				"status": result.Raw,
 			})
 		} else {
-			var status struct {
-				Phase        string `json:"phase"`
-				Revision     string `json:"revision"`
-				Error        string `json:"error,omitempty"`
-				Environments []struct {
-					Name     string `json:"name"`
-					Services []struct {
-						Name  string `json:"name"`
-						State string `json:"state"`
-					} `json:"services"`
-				} `json:"environments"`
+			line := fmt.Sprintf("[%s] phase=%s revision=%s", name, result.Status.Phase, result.Status.Revision)
+			if result.Status.Error != "" {
+				line += " error=" + result.Status.Error
 			}
-			if err := json.Unmarshal([]byte(out), &status); err != nil {
-				a.Printer.Printf("[%s] parse error: %s\n", name, err)
-				continue
-			}
-			line := fmt.Sprintf("[%s] phase=%s revision=%s", name, status.Phase, status.Revision)
-			if status.Error != "" {
-				line += " error=" + status.Error
-			}
-			for _, environment := range status.Environments {
+			for _, environment := range result.Status.Environments {
 				for _, service := range environment.Services {
 					line += fmt.Sprintf(" %s/%s=%s", environment.Name, service.Name, service.State)
 				}

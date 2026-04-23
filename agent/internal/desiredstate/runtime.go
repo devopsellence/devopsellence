@@ -94,6 +94,94 @@ func RuntimeTasks(state *desiredstatepb.DesiredState) []RuntimeTask {
 	return tasks
 }
 
+func EffectiveIngress(state *desiredstatepb.DesiredState) *desiredstatepb.Ingress {
+	if state == nil {
+		return nil
+	}
+	if state.Ingress != nil {
+		return cloneIngress(state.Ingress)
+	}
+	environmentCount := 0
+	for _, env := range state.Environments {
+		if env != nil {
+			environmentCount++
+		}
+	}
+	if environmentCount != 1 {
+		return nil
+	}
+	webTargets := []RuntimeService{}
+	for _, service := range RuntimeServices(state) {
+		if service.ServiceKind == ServiceKindWeb {
+			webTargets = append(webTargets, service)
+		}
+	}
+	if len(webTargets) != 1 {
+		return nil
+	}
+	target := webTargets[0]
+	environmentName := strings.TrimSpace(target.EnvironmentName)
+	if environmentName == "" {
+		environmentName = DefaultEnvironmentName
+	}
+	return &desiredstatepb.Ingress{
+		Mode: "public",
+		Tls:  &desiredstatepb.IngressTLS{Mode: "off"},
+		Routes: []*desiredstatepb.IngressRoute{{
+			Match: &desiredstatepb.IngressMatch{PathPrefix: "/"},
+			Target: &desiredstatepb.IngressTarget{
+				Environment: environmentName,
+				Service:     strings.TrimSpace(target.ServiceName),
+				Port:        DefaultHTTPPortName,
+			},
+		}},
+	}
+}
+
+func cloneIngress(ingress *desiredstatepb.Ingress) *desiredstatepb.Ingress {
+	if ingress == nil {
+		return nil
+	}
+	cloned := &desiredstatepb.Ingress{
+		Hosts:                append([]string(nil), ingress.Hosts...),
+		Mode:                 ingress.Mode,
+		TunnelToken:          ingress.TunnelToken,
+		TunnelTokenSecretRef: ingress.TunnelTokenSecretRef,
+		RedirectHttp:         ingress.RedirectHttp,
+	}
+	if ingress.Tls != nil {
+		cloned.Tls = &desiredstatepb.IngressTLS{
+			Mode:           ingress.Tls.Mode,
+			Email:          ingress.Tls.Email,
+			CaDirectoryUrl: ingress.Tls.CaDirectoryUrl,
+		}
+	}
+	if len(ingress.Routes) > 0 {
+		cloned.Routes = make([]*desiredstatepb.IngressRoute, 0, len(ingress.Routes))
+		for _, route := range ingress.Routes {
+			if route == nil {
+				continue
+			}
+			clonedRoute := &desiredstatepb.IngressRoute{}
+			if route.Match != nil {
+				clonedRoute.Match = &desiredstatepb.IngressMatch{
+					Hostname:   route.Match.Hostname,
+					PathPrefix: route.Match.PathPrefix,
+				}
+			}
+			if route.Target != nil {
+				clonedRoute.Target = &desiredstatepb.IngressTarget{
+					Environment: route.Target.Environment,
+					Service:     route.Target.Service,
+					Port:        route.Target.Port,
+				}
+			}
+			cloned.Routes = append(cloned.Routes, clonedRoute)
+		}
+	}
+	return cloned
+}
+
 func normalizedServiceKind(service *desiredstatepb.Service) string {
 	if service == nil {
 		return ""

@@ -344,34 +344,37 @@ func buildVirtualHosts(domains []string, defaultClusterName string, ingressRoute
 	}
 	hostOrder := []string{}
 	grouped := map[string][]routeEntry{}
+	wildcardEntries := []routeEntry{}
 	for i, ingressRoute := range ingressRoutes {
 		host := strings.TrimSpace(ingressRoute.GetMatch().GetHostname())
+		prefix := strings.TrimSpace(ingressRoute.GetMatch().GetPathPrefix())
+		if prefix == "" {
+			prefix = "/"
+		}
+		entry := routeEntry{
+			prefix:  prefix,
+			cluster: ingressRouteClusterName(ingressRoute),
+			index:   i,
+		}
 		if host == "" {
+			wildcardEntries = append(wildcardEntries, entry)
 			continue
 		}
 		if _, ok := grouped[host]; !ok {
 			hostOrder = append(hostOrder, host)
 		}
-		prefix := strings.TrimSpace(ingressRoute.GetMatch().GetPathPrefix())
-		if prefix == "" {
-			prefix = "/"
-		}
-		grouped[host] = append(grouped[host], routeEntry{
-			prefix:  prefix,
-			cluster: ingressRouteClusterName(ingressRoute),
-			index:   i,
-		})
+		grouped[host] = append(grouped[host], entry)
 	}
 
-	virtualHosts := make([]*routev3.VirtualHost, 0, len(hostOrder))
-	for _, host := range hostOrder {
-		entries := grouped[host]
+	sortEntries := func(entries []routeEntry) {
 		sort.SliceStable(entries, func(i, j int) bool {
 			if len(entries[i].prefix) != len(entries[j].prefix) {
 				return len(entries[i].prefix) > len(entries[j].prefix)
 			}
 			return entries[i].index < entries[j].index
 		})
+	}
+	buildRoutes := func(entries []routeEntry) []*routev3.Route {
 		routes := []*routev3.Route{}
 		if challenge {
 			routes = append(routes, acmeChallengeRoute())
@@ -379,10 +382,29 @@ func buildVirtualHosts(domains []string, defaultClusterName string, ingressRoute
 		for _, entry := range entries {
 			routes = append(routes, clusterRoute(entry.prefix, entry.cluster))
 		}
+		return routes
+	}
+
+	virtualHosts := make([]*routev3.VirtualHost, 0, len(hostOrder)+1)
+	if len(wildcardEntries) > 0 {
+		sortEntries(wildcardEntries)
+		virtualHost := &routev3.VirtualHost{
+			Name:    "public_wildcard",
+			Domains: routeDomains(domains),
+			Routes:  buildRoutes(wildcardEntries),
+		}
+		if len(requestHeaders) > 0 {
+			virtualHost.RequestHeadersToAdd = requestHeaders
+		}
+		virtualHosts = append(virtualHosts, virtualHost)
+	}
+	for _, host := range hostOrder {
+		entries := grouped[host]
+		sortEntries(entries)
 		virtualHost := &routev3.VirtualHost{
 			Name:    sanitizeRouteName("public_" + host),
 			Domains: []string{host},
-			Routes:  routes,
+			Routes:  buildRoutes(entries),
 		}
 		if len(requestHeaders) > 0 {
 			virtualHost.RequestHeadersToAdd = requestHeaders

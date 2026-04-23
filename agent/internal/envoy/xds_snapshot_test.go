@@ -20,13 +20,22 @@ func TestSnapshotClusterNamesIgnoresStaleEndpointClusters(t *testing.T) {
 	}
 }
 
-func TestBuildVirtualHostsSkipsBlankHostnameRoutes(t *testing.T) {
+func TestBuildVirtualHostsMapsBlankHostnameRoutesToWildcardDomains(t *testing.T) {
 	virtualHosts := buildVirtualHosts(nil, "default", []*desiredstatepb.IngressRoute{{
 		Match:  &desiredstatepb.IngressMatch{Hostname: "", PathPrefix: "/"},
 		Target: &desiredstatepb.IngressTarget{Environment: "prod", Service: "web", Port: "http"},
 	}}, false, nil)
 
-	if len(virtualHosts) != 0 {
-		t.Fatalf("unexpected virtual hosts: %+v", virtualHosts)
+	if len(virtualHosts) != 1 {
+		t.Fatalf("virtual hosts = %+v", virtualHosts)
+	}
+	if got := virtualHosts[0].GetDomains(); len(got) != 1 || got[0] != "*" {
+		t.Fatalf("domains = %#v, want wildcard", got)
+	}
+	if len(virtualHosts[0].GetRoutes()) != 1 {
+		t.Fatalf("routes = %#v", virtualHosts[0].GetRoutes())
+	}
+	if cluster := virtualHosts[0].GetRoutes()[0].GetRoute().GetCluster(); cluster != "env-prod-web-http" {
+		t.Fatalf("cluster = %q", cluster)
 	}
 }

@@ -299,6 +299,100 @@ func TestReconcileWebUsesDesiredPortWhenPresent(t *testing.T) {
 	}
 }
 
+func TestReconcileSynthesizesIngressForSingleEnvironmentWeb(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["httpbin"] = true
+	envoyManager := &fakeEnvoyManager{engine: eng}
+	cloudflared := &fakeCloudflaredManager{}
+	rec := New(eng, Options{
+		Network:     "devopsellence",
+		StopTimeout: 2 * time.Second,
+		WebPort:     3000,
+		Envoy:       envoyManager,
+		Cloudflared: cloudflared,
+		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
+	})
+
+	if _, err := rec.Reconcile(context.Background(), desiredState(webService(80, "/up"))); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if envoyManager.ingress == nil {
+		t.Fatal("expected synthesized ingress")
+	}
+	if envoyManager.ingress.GetMode() != "public" {
+		t.Fatalf("mode = %q, want public", envoyManager.ingress.GetMode())
+	}
+	if envoyManager.ingress.GetTls().GetMode() != "off" {
+		t.Fatalf("tls mode = %q, want off", envoyManager.ingress.GetTls().GetMode())
+	}
+	if len(envoyManager.ingress.GetRoutes()) != 1 || envoyManager.ingress.GetRoutes()[0].GetMatch().GetHostname() != "" {
+		t.Fatalf("unexpected synthesized routes: %+v", envoyManager.ingress.GetRoutes())
+	}
+	if len(cloudflared.ingresses) != 1 || cloudflared.ingresses[0] != nil {
+		t.Fatalf("expected no tunnel reconcile for synthesized ingress, got %+v", cloudflared.ingresses)
+	}
+}
+
+func TestReconcileSynthesizedIngressSkipsExplicitCertManagement(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["httpbin"] = true
+	envoyManager := &fakeEnvoyManager{engine: eng}
+	ingressCertManager := &fakeIngressCertManager{}
+	rec := New(eng, Options{
+		Network:     "devopsellence",
+		StopTimeout: 2 * time.Second,
+		WebPort:     3000,
+		Envoy:       envoyManager,
+		IngressCert: ingressCertManager,
+		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
+	})
+
+	if _, err := rec.Reconcile(context.Background(), desiredState(webService(80, "/up"))); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if ingressCertManager.calls != 1 {
+		t.Fatalf("expected one cert-manager call, got %d", ingressCertManager.calls)
+	}
+	if ingressCertManager.ingress != nil {
+		t.Fatalf("expected nil explicit ingress for synthesized case, got %+v", ingressCertManager.ingress)
+	}
+}
+
+func TestReconcileDoesNotSynthesizeIngressForMultipleEnvironments(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["httpbin"] = true
+	envoyManager := &fakeEnvoyManager{engine: eng}
+	rec := New(eng, Options{
+		Network:     "devopsellence",
+		StopTimeout: 2 * time.Second,
+		WebPort:     3000,
+		Envoy:       envoyManager,
+		HTTPProber:  &fakeHTTPProber{statuses: []int{200, 200}},
+	})
+
+	state := &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      "node-plan-1",
+		Environments: []*desiredstatepb.Environment{
+			{Name: "production", Revision: "rev-1", Services: []*desiredstatepb.Service{webService(80, "/up")}},
+			{Name: "staging", Revision: "rev-2", Services: []*desiredstatepb.Service{{
+				Name:        "web",
+				Kind:        "web",
+				Image:       "httpbin",
+				Ports:       []*desiredstatepb.ServicePort{{Name: "http", Port: 8080}},
+				Healthcheck: &desiredstatepb.Healthcheck{Path: "/up", Port: 8080, Retries: 1, TimeoutSeconds: 1},
+			}}},
+		},
+	}
+
+	if _, err := rec.Reconcile(context.Background(), state); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if envoyManager.ingress != nil {
+		t.Fatalf("expected no synthesized ingress, got %+v", envoyManager.ingress)
+	}
+}
+
 func TestReconcileEnsuresIngressCertificateForPublicIngress(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["httpbin"] = true

@@ -145,8 +145,8 @@ func TestEnsureCreatesEnvoyWithDefaults(t *testing.T) {
 	if eng.createdSpec.Restart == nil || eng.createdSpec.Restart.Name != "unless-stopped" {
 		t.Fatalf("unexpected restart policy: %+v", eng.createdSpec.Restart)
 	}
-	if len(eng.createdSpec.Ports) != 1 {
-		t.Fatalf("expected envoy host port published, got %+v", eng.createdSpec.Ports)
+	if len(eng.createdSpec.Ports) != 0 {
+		t.Fatalf("expected envoy host port publish disabled without ingress, got %+v", eng.createdSpec.Ports)
 	}
 	if eng.pulledImage != "docker.io/envoyproxy/envoy:v1.37.0" {
 		t.Fatalf("expected image pull, got %q", eng.pulledImage)

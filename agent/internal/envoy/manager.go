@@ -508,7 +508,7 @@ func cloneIngressRoutes(ingress *desiredstatepb.Ingress) []*desiredstatepb.Ingre
 	return append([]*desiredstatepb.IngressRoute(nil), ingress.Routes...)
 }
 
-func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress, publicIngress *publicIngressListenerConfig) []engine.PortBinding {
+func portBindingsForIngress(_ uint16, ingress *desiredstatepb.Ingress, publicIngress *publicIngressListenerConfig) []engine.PortBinding {
 	switch normalizedIngressMode(ingress) {
 	case ingressModePublic:
 		ports := []engine.PortBinding{{
@@ -525,17 +525,7 @@ func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress,
 		}
 		return ports
 	case ingressModeTunnel:
-		if ingress != nil {
-			return nil
-		}
-		if defaultPort == 0 {
-			return nil
-		}
-		return []engine.PortBinding{{
-			ContainerPort: defaultPort,
-			HostPort:      defaultPort,
-			Protocol:      "tcp",
-		}}
+		return nil
 	default:
 		return nil
 	}

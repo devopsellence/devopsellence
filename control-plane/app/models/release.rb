@@ -66,7 +66,12 @@ class Release < ApplicationRecord
 
   def ingress_config
     ingress = runtime_payload["ingress"]
-    ingress.is_a?(Hash) ? ingress : nil
+    return ingress if ingress.is_a?(Hash)
+
+    legacy_service = runtime_payload["ingress_service"].to_s.strip
+    return nil if legacy_service.blank?
+
+    { "service" => legacy_service }
   end
 
   def has_release_task?

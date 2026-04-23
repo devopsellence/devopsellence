@@ -99,7 +99,7 @@ type IngressConfig struct {
 	Hosts        []string         `yaml:"hosts,omitempty" json:"hosts,omitempty"`
 	Service      string           `yaml:"service,omitempty" json:"service,omitempty"`
 	TLS          IngressTLSConfig `yaml:"tls,omitempty" json:"tls,omitempty"`
-	RedirectHTTP bool             `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
+	RedirectHTTP *bool            `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
 }
 
 type HTTPHealthcheckOverlay struct {
@@ -497,6 +497,9 @@ func applyDefaults(cfg *ProjectConfig) {
 		}
 		cfg.Ingress.TLS.Email = strings.TrimSpace(cfg.Ingress.TLS.Email)
 		cfg.Ingress.TLS.CADirectoryURL = strings.TrimSpace(cfg.Ingress.TLS.CADirectoryURL)
+		if cfg.Ingress.TLS.Mode == "auto" && cfg.Ingress.RedirectHTTP == nil {
+			cfg.Ingress.RedirectHTTP = boolPtr(true)
+		}
 	}
 }
 
@@ -834,6 +837,9 @@ func cloneProjectConfig(cfg ProjectConfig) ProjectConfig {
 	if cfg.Ingress != nil {
 		ingress := *cfg.Ingress
 		ingress.Hosts = append([]string(nil), cfg.Ingress.Hosts...)
+		if cfg.Ingress.RedirectHTTP != nil {
+			ingress.RedirectHTTP = boolPtr(*cfg.Ingress.RedirectHTTP)
+		}
 		cloned.Ingress = &ingress
 	}
 	cloned.Environments = cfg.Environments
@@ -931,6 +937,9 @@ func mergeIngressConfig(base *IngressConfig, overlay *IngressConfigOverlay) *Ing
 	if base != nil {
 		*merged = *base
 		merged.Hosts = append([]string(nil), base.Hosts...)
+		if base.RedirectHTTP != nil {
+			merged.RedirectHTTP = boolPtr(*base.RedirectHTTP)
+		}
 	}
 	if overlay.Hosts != nil {
 		merged.Hosts = append([]string(nil), overlay.Hosts...)
@@ -950,7 +959,7 @@ func mergeIngressConfig(base *IngressConfig, overlay *IngressConfigOverlay) *Ing
 		}
 	}
 	if overlay.RedirectHTTP != nil {
-		merged.RedirectHTTP = *overlay.RedirectHTTP
+		merged.RedirectHTTP = boolPtr(*overlay.RedirectHTTP)
 	}
 	return merged
 }
@@ -964,4 +973,8 @@ func cloneStringMap(values map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }

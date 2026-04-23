@@ -146,5 +146,29 @@ module Releases
 
       assert_equal "ingress.redirect_http must be a boolean", error.message
     end
+
+    test "preserves explicit false ingress redirect_http" do
+      attrs = RuntimeAttributes.new(
+        params: {
+          git_sha: "a" * 40,
+          image_repository: "api",
+          image_digest: "sha256:#{"b" * 64}",
+          services: {
+            web: {
+              kind: "web",
+              ports: [{ name: "http", port: 3000 }],
+              healthcheck: { path: "/up", port: 3000 }
+            }
+          },
+          ingress: {
+            service: "web",
+            redirect_http: false
+          }
+        }
+      ).to_h
+
+      runtime = JSON.parse(attrs.fetch(:runtime_json))
+      assert_equal false, runtime.dig("ingress", "redirect_http")
+    end
   end
 end

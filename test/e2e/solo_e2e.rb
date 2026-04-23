@@ -449,9 +449,10 @@ PY
 
   def write_devopsellence_yml!
     config = {
-      "schema_version" => 5,
+      "schema_version" => 6,
       "organization" => "solo",
       "project" => @project_name,
+      "default_environment" => "production",
       "build" => {
         "context" => ".",
         "dockerfile" => "Dockerfile",

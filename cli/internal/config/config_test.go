@@ -427,8 +427,8 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 	if resolved.Ingress.TLS.Mode != "auto" || resolved.Ingress.TLS.Email != "staging@example.test" {
 		t.Fatalf("ingress tls = %#v", resolved.Ingress.TLS)
 	}
-	if resolved.Ingress.RedirectHTTP {
-		t.Fatalf("ingress.redirect_http = true, want false")
+	if resolved.Ingress.RedirectHTTP == nil || *resolved.Ingress.RedirectHTTP {
+		t.Fatalf("ingress.redirect_http = %#v, want false", resolved.Ingress.RedirectHTTP)
 	}
 	web := resolved.Services["web"]
 	if got := strings.Join(web.Command, " "); got != "./bin/staging-web" {

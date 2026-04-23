@@ -1733,7 +1733,7 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 			Email:          strings.TrimSpace(opts.TLSEmail),
 			CADirectoryURL: strings.TrimSpace(opts.TLSCADirectoryURL),
 		},
-		RedirectHTTP: redirectHTTP,
+		RedirectHTTP: configBoolPtr(redirectHTTP),
 	}
 	written, err := a.ConfigStore.Write(discovered.WorkspaceRoot, *cfg)
 	if err != nil {
@@ -1910,6 +1910,10 @@ func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig
 		}
 	}
 	return &cfg
+}
+
+func configBoolPtr(value bool) *bool {
+	return &value
 }
 
 type ingressDNSReportResult struct {

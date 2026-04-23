@@ -51,6 +51,22 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_includes release.errors[:runtime_json], "tasks.release.args must be an array of strings"
   end
 
+  test "legacy ingress_service remains readable for existing releases" do
+    release = build_release(
+      runtime_json: JSON.generate(
+        {
+          "services" => { "web" => web_service_runtime },
+          "tasks" => {},
+          "ingress_service" => "web"
+        }
+      )
+    )
+
+    assert_predicate release, :valid?
+    assert_equal "web", release.ingress_service_name
+    assert_equal({ "service" => "web" }, release.ingress_config)
+  end
+
   test "blank kind does not contribute required labels and reports one kind error" do
     release = build_release(
       runtime_json: release_runtime_json(

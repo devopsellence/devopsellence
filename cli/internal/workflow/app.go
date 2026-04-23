@@ -4099,7 +4099,9 @@ func ingressPayload(cfg config.ProjectConfig) map[string]any {
 	if len(cfg.Ingress.Hosts) > 0 {
 		payload["hosts"] = append([]string(nil), cfg.Ingress.Hosts...)
 	}
-	payload["redirect_http"] = cfg.Ingress.RedirectHTTP
+	if cfg.Ingress.RedirectHTTP != nil {
+		payload["redirect_http"] = *cfg.Ingress.RedirectHTTP
+	}
 	if tls := map[string]any{
 		"mode":             strings.TrimSpace(cfg.Ingress.TLS.Mode),
 		"email":            strings.TrimSpace(cfg.Ingress.TLS.Email),

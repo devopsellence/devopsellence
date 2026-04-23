@@ -10,6 +10,10 @@ import (
 	"github.com/devopsellence/cli/internal/config"
 )
 
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func baseProject() *config.ProjectConfig {
 	cfg := config.DefaultProjectConfig("solo", "myapp", config.DefaultEnvironment)
 	cfg.Services["web"] = config.Service{
@@ -194,7 +198,7 @@ func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 			Email:          "ops@example.com",
 			CADirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
 		},
-		RedirectHTTP: true,
+		RedirectHTTP: boolPtr(true),
 	}
 
 	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWebRole}, true, false, []NodePeer{{

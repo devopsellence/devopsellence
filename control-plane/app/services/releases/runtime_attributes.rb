@@ -125,11 +125,18 @@ module Releases
       ingress = parse_hash(value, field: :ingress)
       return nil if ingress.blank?
 
+      redirect_http =
+        if ingress.key?("redirect_http")
+          ingress["redirect_http"]
+        elsif ingress.key?(:redirect_http)
+          ingress[:redirect_http]
+        end
+
       tls = ingress["tls"] || ingress[:tls]
       parsed = {
         "hosts" => optional_service_array(ingress["hosts"] || ingress[:hosts], field: :"ingress.hosts"),
         "service" => optional_service_string(ingress["service"] || ingress[:service]),
-        "redirect_http" => optional_boolean(ingress["redirect_http"] || ingress[:redirect_http], field: :"ingress.redirect_http")
+        "redirect_http" => optional_boolean(redirect_http, field: :"ingress.redirect_http")
       }.compact
       if tls.present?
         tls = parse_hash(tls, field: :"ingress.tls")

@@ -63,24 +63,29 @@ func (e ExitError) Error() string {
 }
 
 type App struct {
-	In                 io.Reader
-	Printer            output.Printer
-	Auth               *auth.Manager
-	API                *api.Client
-	State              *state.Store
-	WorkspaceState     *state.Store
-	ProviderState      *state.Store
-	SoloState          *solo.StateStore
-	ConfigStore        config.Store
-	Docker             DockerClient
-	Git                git.Client
-	Cwd                string
-	Verbose            bool
-	ExecutablePath     func() (string, error)
-	LookPath           func(string) (string, error)
-	Symlink            func(string, string) error
-	DeployPollInterval time.Duration
-	DeployTimeout      time.Duration
+	In                  io.Reader
+	Printer             output.Printer
+	Auth                *auth.Manager
+	API                 *api.Client
+	State               *state.Store
+	WorkspaceState      *state.Store
+	ProviderState       *state.Store
+	SoloState           *solo.StateStore
+	ConfigStore         config.Store
+	Docker              DockerClient
+	Git                 git.Client
+	Cwd                 string
+	Verbose             bool
+	ExecutablePath      func() (string, error)
+	LookPath            func(string) (string, error)
+	Symlink             func(string, string) error
+	DeployPollInterval  time.Duration
+	DeployTimeout       time.Duration
+	soloNodeCreateFn    func(context.Context, SoloNodeCreateOptions) error
+	soloNodeAttachFn    func(context.Context, SoloNodeAttachOptions) error
+	soloRuntimeDoctorFn func(context.Context, SoloDoctorOptions) error
+	promptReaderSource  io.Reader
+	promptReader        *bufio.Reader
 }
 
 type deployTimings struct {
@@ -3694,7 +3699,11 @@ func (a *App) promptLine(label, fallback string) (string, error) {
 		a.Printer.Printf(" [%s]", fallback)
 	}
 	a.Printer.Printf(": ")
-	reader := bufio.NewReader(a.In)
+	if a.promptReader == nil || a.promptReaderSource != a.In {
+		a.promptReaderSource = a.In
+		a.promptReader = bufio.NewReader(a.In)
+	}
+	reader := a.promptReader
 	line, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err

@@ -83,6 +83,7 @@ module EnvironmentBundles
         ingress.last_error = nil
         ingress.provisioned_at = bundle.provisioned_at || Time.current
         ingress.save!
+        ingress.assign_hosts!([ bundle.hostname ])
       end
     end
   end

@@ -34,6 +34,7 @@ import (
 	"github.com/devopsellence/cli/internal/ui"
 
 	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 )
 
 const outputSchemaVersion = 1
@@ -131,6 +132,10 @@ type InitOptions struct {
 	ProjectName    string
 	Environment    string
 	NonInteractive bool
+}
+
+type ConfigResolveOptions struct {
+	Environment string
 }
 
 type DeployOptions struct {
@@ -659,6 +664,12 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 			update("Loading config…")
 			cfg = *existing
 		}
+		selectedEnvironment := a.effectiveEnvironment(opts.Environment, &cfg)
+		resolvedCfg, err := config.ResolveEnvironmentConfig(cfg, selectedEnvironment)
+		if err != nil {
+			return ExitError{Code: 1, Err: err}
+		}
+		cfg = resolvedCfg
 		a.warnAboutPrebuiltImageConfig(opts, discovered, cfg)
 		a.API.BaseURL = firstNonEmpty(preflight.Tokens.APIBase, a.API.BaseURL)
 
@@ -692,7 +703,7 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 			target, err := a.resolveDeployTarget(ctx, withAuth, resolveDeployTargetInput{
 				Organization:   firstNonEmpty(opts.Organization, cfg.Organization),
 				Project:        firstNonEmpty(opts.Project, cfg.Project),
-				Environment:    firstNonEmpty(opts.Environment, cfg.DefaultEnvironment),
+				Environment:    cfg.DefaultEnvironment,
 				Interactive:    !opts.NonInteractive,
 				NonInteractive: opts.NonInteractive,
 			}, update)
@@ -751,7 +762,7 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 				ImageDigest:     digest,
 				Services:        servicePayloads(cfg.Services),
 				Tasks:           taskPayloads(cfg.Tasks),
-				IngressService:  ingressServicePayload(cfg),
+				Ingress:         ingressPayload(cfg),
 			})
 			return callErr
 		}); err != nil {
@@ -1282,6 +1293,7 @@ func (a *App) Doctor(ctx context.Context) error {
 	})
 
 	var cfg config.Project
+	var selectedEnvironment string
 	addCheck("config", func() (string, error) {
 		if discoveryErr != nil {
 			return "", discoveryErr
@@ -1291,7 +1303,13 @@ func (a *App) Doctor(ctx context.Context) error {
 			return "", err
 		}
 		cfg = loaded
-		return cfg.Organization + " / " + cfg.Project + " / " + cfg.DefaultEnvironment, nil
+		selectedEnvironment = a.effectiveEnvironment("", &cfg)
+		resolved, err := config.ResolveEnvironmentConfig(cfg, selectedEnvironment)
+		if err != nil {
+			return "", err
+		}
+		cfg = resolved
+		return cfg.Organization + " / " + cfg.Project + " / " + selectedEnvironment, nil
 	})
 
 	var tokens auth.Tokens
@@ -1334,7 +1352,7 @@ func (a *App) Doctor(ctx context.Context) error {
 		if err != nil {
 			return "", err
 		}
-		_, env, err := a.findProjectEnvironment(ctx, tokens.AccessToken, org.ID, cfg.Project, cfg.DefaultEnvironment)
+		_, env, err := a.findProjectEnvironment(ctx, tokens.AccessToken, org.ID, cfg.Project, selectedEnvironment)
 		if err != nil {
 			return "", err
 		}
@@ -1364,6 +1382,26 @@ func (a *App) Doctor(ctx context.Context) error {
 		}
 		a.Printer.Println(prefix, fmt.Sprintf("%v:", check["name"]), check["detail"])
 	}
+	return nil
+}
+
+func (a *App) ConfigResolve(opts ConfigResolveOptions) error {
+	_, resolved, selectedEnvironment, err := a.resolvedWorkspaceConfig(opts.Environment)
+	if err != nil {
+		return wrapError(err)
+	}
+	if a.Printer.JSON {
+		return a.Printer.PrintJSON(map[string]any{
+			"schema_version":       outputSchemaVersion,
+			"selected_environment": selectedEnvironment,
+			"config":               resolved,
+		})
+	}
+	data, err := yaml.Marshal(resolved)
+	if err != nil {
+		return ExitError{Code: 1, Err: err}
+	}
+	fmt.Fprint(a.Printer.Out, string(data))
 	return nil
 }
 
@@ -2347,7 +2385,7 @@ func (a *App) EnvironmentUse(ctx context.Context, opts EnvironmentUseOptions) er
 	if strings.TrimSpace(opts.Name) == "" {
 		return ExitError{Code: 2, Err: errors.New("environment name required: env use <name>")}
 	}
-	discovered, cfg, err := a.requiredWorkspaceConfig()
+	_, cfg, err := a.requiredWorkspaceConfig()
 	if err != nil {
 		return wrapError(err)
 	}
@@ -2363,21 +2401,19 @@ func (a *App) EnvironmentUse(ctx context.Context, opts EnvironmentUseOptions) er
 	if err != nil {
 		return wrapError(err)
 	}
-	cfg.Organization = organization.Name
-	cfg.Project = project.Name
-	cfg.DefaultEnvironment = environment.Name
-	if _, err := a.ConfigStore.Write(discovered.WorkspaceRoot, cfg); err != nil {
+	if err := a.SetEnvironment(environment.Name); err != nil {
 		return wrapError(err)
 	}
 	_ = a.rememberOrganization(organization.ID)
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   organization,
-			"project":        project,
-			"environment":    environment,
-			"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
+			"schema_version":      outputSchemaVersion,
+			"ok":                  true,
+			"organization":        organization,
+			"project":             project,
+			"environment":         environment,
+			"workspace_key":       a.modeWorkspaceKey(),
+			"default_environment": cfg.DefaultEnvironment,
 		})
 	}
 	a.Printer.Println("Using environment", environment.Name+".")
@@ -3206,13 +3242,7 @@ func (a *App) resolveWorkspace(ctx context.Context, token, organizationInput, pr
 	if orgInput == "" && existing != nil {
 		orgInput = existing.Organization
 	}
-	resolvedEnvironmentName := strings.TrimSpace(environmentName)
-	if resolvedEnvironmentName == "" && existing != nil {
-		resolvedEnvironmentName = strings.TrimSpace(existing.DefaultEnvironment)
-	}
-	if resolvedEnvironmentName == "" {
-		resolvedEnvironmentName = config.DefaultEnvironment
-	}
+	resolvedEnvironmentName := a.effectiveEnvironment(environmentName, existing)
 
 	var organization api.Organization
 	if autoCreateDefault {
@@ -3307,7 +3337,7 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 	}
 
 	projectName := firstNonEmpty(opts.ProjectName, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Project }), discovered.ProjectName)
-	environmentName := firstNonEmpty(opts.Environment, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.DefaultEnvironment }), config.DefaultEnvironment)
+	environmentName := a.effectiveEnvironment(opts.Environment, existing)
 	orgInput := firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization }))
 
 	update("Resolving deploy target…")
@@ -3572,6 +3602,22 @@ func (a *App) requiredWorkspaceConfig() (discovery.Result, config.Project, error
 		return discovery.Result{}, config.Project{}, errors.New("project not initialized. run `devopsellence setup` first")
 	}
 	return discovered, *loaded, nil
+}
+
+func (a *App) resolvedWorkspaceConfig(explicitEnvironment string) (discovery.Result, config.Project, string, error) {
+	discovered, loaded, err := a.optionalWorkspaceConfig()
+	if err != nil {
+		return discovery.Result{}, config.Project{}, "", err
+	}
+	if loaded == nil {
+		return discovery.Result{}, config.Project{}, "", errors.New("project not initialized. run `devopsellence setup` first")
+	}
+	selectedEnvironment := a.effectiveEnvironment(explicitEnvironment, loaded)
+	resolved, err := config.ResolveEnvironmentConfig(*loaded, selectedEnvironment)
+	if err != nil {
+		return discovery.Result{}, config.Project{}, "", err
+	}
+	return discovered, resolved, selectedEnvironment, nil
 }
 
 func (a *App) applyInferredHealthcheckConfig(workspaceRoot string, cfg config.ProjectConfig, initialized *initializedWorkspace, inferredPort int) (config.ProjectConfig, string, string, error) {
@@ -4033,15 +4079,35 @@ func taskPayloads(tasks config.TasksConfig) map[string]any {
 	return payloads
 }
 
-func ingressServicePayload(cfg config.ProjectConfig) string {
+func ingressPayload(cfg config.ProjectConfig) map[string]any {
+	serviceName := ""
 	if cfg.Ingress != nil && strings.TrimSpace(cfg.Ingress.Service) != "" {
-		return strings.TrimSpace(cfg.Ingress.Service)
+		serviceName = strings.TrimSpace(cfg.Ingress.Service)
+	} else if name, ok := cfg.PrimaryWebServiceName(); ok {
+		serviceName = name
 	}
-	name, ok := cfg.PrimaryWebServiceName()
-	if !ok {
-		return ""
+	if serviceName == "" {
+		return nil
 	}
-	return name
+
+	payload := map[string]any{
+		"service": serviceName,
+	}
+	if cfg.Ingress == nil {
+		return payload
+	}
+	if len(cfg.Ingress.Hosts) > 0 {
+		payload["hosts"] = append([]string(nil), cfg.Ingress.Hosts...)
+	}
+	payload["redirect_http"] = cfg.Ingress.RedirectHTTP
+	if tls := map[string]any{
+		"mode":             strings.TrimSpace(cfg.Ingress.TLS.Mode),
+		"email":            strings.TrimSpace(cfg.Ingress.TLS.Email),
+		"ca_directory_url": strings.TrimSpace(cfg.Ingress.TLS.CADirectoryURL),
+	}; tls["mode"] != "" || tls["email"] != "" || tls["ca_directory_url"] != "" {
+		payload["tls"] = tls
+	}
+	return payload
 }
 
 func cloneEnv(env map[string]string) map[string]string {

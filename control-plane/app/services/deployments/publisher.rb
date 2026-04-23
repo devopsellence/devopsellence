@@ -116,11 +116,17 @@ module Deployments
     end
 
     def ingress_ready?
-      environment.environment_ingress&.status == EnvironmentIngress::STATUS_READY
+      ingress = environment.environment_ingress
+      return false unless ingress&.status == EnvironmentIngress::STATUS_READY
+
+      desired_hosts = Array(release.ingress_config&.dig("hosts")).map(&:to_s).map(&:strip).reject(&:blank?).uniq
+      return true if desired_hosts.empty?
+
+      ingress.hosts == desired_hosts
     end
 
     def provision_ingress!
-      EnvironmentIngresses::Reconciler.new(environment: environment).call
+      EnvironmentIngresses::Reconciler.new(environment: environment, release: release).call
       environment.association(:environment_ingress).reset
     end
 

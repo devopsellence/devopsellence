@@ -102,6 +102,13 @@ module Releases
               service: "web",
               args: ["release"]
             }
+          },
+          ingress: {
+            service: "web",
+            hosts: ["app.example.test", "www.example.test"],
+            tls: {
+              mode: "manual"
+            }
           }
         }
       ).to_h
@@ -110,6 +117,34 @@ module Releases
       assert_equal ["/app"], runtime.dig("services", "web", "command")
       assert_equal ["web"], runtime.dig("services", "web", "args")
       assert_equal ["release"], runtime.dig("tasks", "release", "args")
+      assert_equal ["app.example.test", "www.example.test"], runtime.dig("ingress", "hosts")
+      assert_equal "web", runtime.dig("ingress", "service")
+      assert_equal "manual", runtime.dig("ingress", "tls", "mode")
+    end
+
+    test "rejects non-boolean ingress redirect_http" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                kind: "web",
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              service: "web",
+              redirect_http: "yes"
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.redirect_http must be a boolean", error.message
     end
   end
 end

@@ -1427,7 +1427,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
             ]
           )
         },
-        ingress_service: "web"
+        ingress: { service: "web" }
       },
       headers: auth_headers_for(user),
       as: :json
@@ -1455,7 +1455,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
           image_repository: "shop-app",
           image_digest: "sha256:#{'b' * 64}",
           services: { web: web_service_runtime(port: 80) },
-          ingress_service: "web"
+          ingress: { service: "web" }
         },
         headers: auth_headers_for(user),
         as: :json
@@ -1519,7 +1519,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
             volumes: [{ source: "app_storage", target: "/rails/storage" }]
           )
         },
-        ingress_service: "web"
+        ingress: { service: "web" }
       },
       headers: auth_headers_for(user),
       as: :json
@@ -1546,7 +1546,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
         services: {
           web: web_service_runtime(port: 80, env: { "RAILS_ENV" => "production" })
         },
-        ingress_service: "web"
+        ingress: { service: "web" }
       },
       headers: auth_headers_for(user),
       as: :json

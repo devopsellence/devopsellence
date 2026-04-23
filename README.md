@@ -103,7 +103,7 @@ In shared mode, `node create` provisions the server and runs the registration in
 `devopsellence` reads `devopsellence.yml` from the app root:
 
 ```yaml
-schema_version: 5
+schema_version: 6
 app:
   type: rails
 organization: solo
@@ -137,6 +137,16 @@ ingress:
     mode: auto
     email: ops@example.com
   redirect_http: true
+environments:
+  staging:
+    ingress:
+      hosts:
+        - staging.example.com
+  production:
+    services:
+      web:
+        env:
+          RAILS_ENV: production
 ```
 
 ## Need more than solo mode?

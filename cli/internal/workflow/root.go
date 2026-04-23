@@ -371,6 +371,22 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	contextCommand.AddCommand(envCommand)
 	root.AddCommand(contextCommand)
 
+	var configResolveOpts ConfigResolveOptions
+	configCommand := &cobra.Command{
+		Use:   "config",
+		Short: "Inspect resolved workspace config",
+	}
+	configResolveCommand := &cobra.Command{
+		Use:   "resolve",
+		Short: "Print the resolved config for one environment",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return app.ConfigResolve(configResolveOpts)
+		},
+	}
+	configResolveCommand.Flags().StringVar(&configResolveOpts.Environment, "env", "", "Environment name override")
+	configCommand.AddCommand(configResolveCommand)
+	root.AddCommand(configCommand)
+
 	authCommand := &cobra.Command{Use: "auth", Short: "Manage sign-in and API tokens"}
 	authCommand.AddCommand(&cobra.Command{
 		Use:   "login",

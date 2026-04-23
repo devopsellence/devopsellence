@@ -28,10 +28,10 @@ module Cloudflare
         "token-#{token_requests.size}"
       end
 
-      def configure_tunnel(tunnel_id:, hostname:, service:)
+      def configure_tunnel(tunnel_id:, service:, hostname: nil, hostnames: nil)
         @configured_tunnels << {
           tunnel_id: tunnel_id,
-          hostname: hostname,
+          hostnames: Array(hostnames.presence || hostname),
           service: service
         }
       end
@@ -106,6 +106,7 @@ module Cloudflare
       assert_equal [ "tunnel-1" ], client.token_requests
       assert_equal [ "env-#{environment.id}-#{slug}" ], client.created_tunnels
       assert_equal "http://devopsellence-envoy:8000", client.configured_tunnels.first[:service]
+      assert_equal [ "#{slug}.devopsellence.io" ], client.configured_tunnels.first[:hostnames]
       assert_equal "tunnel-1.cfargotunnel.com", client.dns_records.first[:target]
     end
 
@@ -142,7 +143,7 @@ module Cloudflare
       assert_equal [
         {
           tunnel_id: "tunnel-1",
-          hostname: "#{slug}.devopsellence.io",
+          hostnames: [ "#{slug}.devopsellence.io" ],
           service: "http://devopsellence-envoy:8000"
         }
       ], client.configured_tunnels
@@ -195,7 +196,7 @@ module Cloudflare
       assert_equal [
         {
           tunnel_id: bundle.cloudflare_tunnel_id,
-          hostname: bundle.hostname,
+          hostnames: [ bundle.hostname ],
           service: "http://devopsellence-envoy:8000"
         }
       ], client.configured_tunnels

@@ -2,14 +2,15 @@
 
 module EnvironmentIngresses
   class DirectDnsStrategy
-    def initialize(environment:, ingress:, client: Cloudflare::RestClient.new)
+    def initialize(environment:, ingress:, client: Cloudflare::RestClient.new, stale_hosts: [])
       @environment = environment
       @ingress = ingress
       @client = client
+      @stale_hosts = stale_hosts
     end
 
     def call
-      raise "environment ingress hostname is required" if ingress.hostname.blank?
+      raise "environment ingress hosts are required" if ingress.hosts.empty?
 
       addresses = EligibleNodes.new(environment:).call.map(&:public_ip).uniq.sort
 
@@ -35,11 +36,17 @@ module EnvironmentIngresses
 
     private
 
-    attr_reader :environment, :ingress, :client
+    attr_reader :environment, :ingress, :client, :stale_hosts
 
     def cutover_to_direct_dns!(addresses)
-      client.delete_dns_records(hostname: ingress.hostname, type: "CNAME")
-      client.replace_dns_a_records(hostname: ingress.hostname, addresses:)
+      stale_hosts.each do |host|
+        client.delete_dns_records(hostname: host, type: "A")
+        client.delete_dns_records(hostname: host, type: "CNAME")
+      end
+      ingress.hosts.each do |host|
+        client.delete_dns_records(hostname: host, type: "CNAME")
+        client.replace_dns_a_records(hostname: host, addresses:)
+      end
     rescue StandardError
       restore_tunnel_routing!
       raise
@@ -48,11 +55,13 @@ module EnvironmentIngresses
     def restore_tunnel_routing!
       return if ingress.cloudflare_tunnel_id.to_s.strip.empty?
 
-      client.delete_dns_records(hostname: ingress.hostname, type: "A")
-      client.create_dns_cname(
-        hostname: ingress.hostname,
-        target: "#{ingress.cloudflare_tunnel_id}.cfargotunnel.com"
-      )
+      ingress.hosts.each do |host|
+        client.delete_dns_records(hostname: host, type: "A")
+        client.create_dns_cname(
+          hostname: host,
+          target: "#{ingress.cloudflare_tunnel_id}.cfargotunnel.com"
+        )
+      end
     rescue StandardError
       nil
     end

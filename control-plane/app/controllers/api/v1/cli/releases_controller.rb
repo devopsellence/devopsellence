@@ -61,8 +61,10 @@ module Api
             warning: assignment_warning_for(environment, assigned_nodes),
             trial_expires_at: environment.nodes.maximum(:lease_expires_at)&.utc&.iso8601,
             ingress_strategy: environment.ingress_strategy,
-            hostname: environment.environment_ingress&.hostname,
+            hostname: environment.environment_ingress&.primary_hostname,
+            hosts: environment.environment_ingress&.hosts || [],
             public_url: environment.environment_ingress&.public_url,
+            public_urls: environment.environment_ingress&.public_urls || [],
             ingress_status: environment.environment_ingress&.status,
             ingress: serialize_ingress(environment.environment_ingress)
           }, status: :created
@@ -111,7 +113,7 @@ module Api
               revision: params[:revision],
               services: params[:services],
               tasks: params[:tasks],
-              ingress_service: params[:ingress_service],
+              ingress: params[:ingress],
               healthcheck_interval_seconds: params[:healthcheck_interval_seconds],
               healthcheck_timeout_seconds: params[:healthcheck_timeout_seconds]
             }
@@ -122,8 +124,10 @@ module Api
           return nil unless ingress
 
           {
-            hostname: ingress.hostname,
+            hostname: ingress.primary_hostname,
+            hosts: ingress.hosts,
             public_url: ingress.public_url,
+            public_urls: ingress.public_urls,
             status: ingress.status,
             last_error: ingress.last_error
           }

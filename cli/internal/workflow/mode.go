@@ -3,6 +3,7 @@ package workflow
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -65,6 +66,22 @@ func (a *App) savedMode() (Mode, bool, error) {
 	return mode, true, nil
 }
 
+func (a *App) savedEnvironment() (string, bool, error) {
+	if a.WorkspaceState == nil {
+		return "", false, nil
+	}
+	current, err := a.WorkspaceState.Read()
+	if err != nil {
+		return "", false, err
+	}
+	environments, _ := current["environments"].(map[string]any)
+	value := stringFromAny(environments[a.modeWorkspaceKey()])
+	if strings.TrimSpace(value) == "" {
+		return "", false, nil
+	}
+	return strings.TrimSpace(value), true, nil
+}
+
 func (a *App) SetMode(mode Mode) error {
 	if a.WorkspaceState == nil {
 		return nil
@@ -78,6 +95,37 @@ func (a *App) SetMode(mode Mode) error {
 		current["modes"] = modes
 		return current, nil
 	})
+}
+
+func (a *App) SetEnvironment(name string) error {
+	if a.WorkspaceState == nil {
+		return nil
+	}
+	return a.WorkspaceState.Update(func(current map[string]any) (map[string]any, error) {
+		environments, _ := current["environments"].(map[string]any)
+		if environments == nil {
+			environments = map[string]any{}
+		}
+		environments[a.modeWorkspaceKey()] = strings.TrimSpace(name)
+		current["environments"] = environments
+		return current, nil
+	})
+}
+
+func (a *App) effectiveEnvironment(explicit string, cfg *config.Project) string {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit)
+	}
+	if value := strings.TrimSpace(os.Getenv("DEVOPSELLENCE_ENVIRONMENT")); value != "" {
+		return value
+	}
+	if saved, ok, err := a.savedEnvironment(); err == nil && ok {
+		return saved
+	}
+	if cfg != nil && strings.TrimSpace(cfg.DefaultEnvironment) != "" {
+		return strings.TrimSpace(cfg.DefaultEnvironment)
+	}
+	return config.DefaultEnvironment
 }
 
 func (a *App) suggestedMode() Mode {
@@ -192,8 +240,11 @@ func (a *App) ContextShow() error {
 	if cfg != nil {
 		result["organization"] = cfg.Organization
 		result["project"] = cfg.Project
-		result["environment"] = cfg.DefaultEnvironment
+		result["default_environment"] = cfg.DefaultEnvironment
 	}
+	selectedEnvironment := a.effectiveEnvironment("", cfg)
+	result["environment"] = selectedEnvironment
+	result["selected_environment"] = selectedEnvironment
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(result)
 	}
@@ -202,7 +253,8 @@ func (a *App) ContextShow() error {
 		{Label: "Mode", Value: firstNonEmpty(string(mode), "not set")},
 		{Label: "Organization", Value: safeConfigValue(cfg, func(value *config.Project) string { return value.Organization })},
 		{Label: "Project", Value: safeConfigValue(cfg, func(value *config.Project) string { return value.Project })},
-		{Label: "Environment", Value: safeConfigValue(cfg, func(value *config.Project) string { return value.DefaultEnvironment })},
+		{Label: "Default Env", Value: safeConfigValue(cfg, func(value *config.Project) string { return value.DefaultEnvironment })},
+		{Label: "Selected Env", Value: selectedEnvironment},
 	}
 	a.Printer.Println(ui.RenderCard(ui.Card{Title: "Context", Rows: rows}))
 	if !ok {

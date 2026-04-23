@@ -14,15 +14,32 @@ class EnvironmentIngress < ApplicationRecord
   ].freeze
 
   belongs_to :environment
+  has_many :environment_ingress_hosts, -> { order(:position, :id) }, dependent: :destroy
 
   before_validation :assign_gcp_secret_name
+  after_commit :ensure_primary_host_record!, on: [ :create, :update ]
 
   validates :hostname, presence: true, uniqueness: true
   validates :gcp_secret_name, presence: true, uniqueness: true
   validates :status, inclusion: { in: STATUSES }
 
+  def hosts
+    persisted = environment_ingress_hosts.map { |entry| entry.hostname.to_s.strip }.reject(&:blank?)
+    return persisted if persisted.any?
+
+    hostname.to_s.strip.present? ? [ hostname.to_s.strip ] : []
+  end
+
+  def public_urls
+    hosts.map { |host| Devopsellence::IngressConfig.public_url(host) }.compact
+  end
+
+  def primary_hostname
+    hosts.first
+  end
+
   def public_url
-    Devopsellence::IngressConfig.public_url(hostname)
+    Devopsellence::IngressConfig.public_url(primary_hostname)
   end
 
   def tunnel_token_secret_ref
@@ -48,7 +65,36 @@ class EnvironmentIngress < ApplicationRecord
     status == STATUS_DEGRADED
   end
 
+  def hostname_matches?(candidate)
+    hosts.include?(candidate.to_s.strip)
+  end
+
+  def assign_hosts!(values)
+    normalized = normalize_hosts(values)
+    raise ArgumentError, "hosts must include at least one host" if normalized.empty?
+
+    transaction do
+      update!(hostname: normalized.first)
+      environment_ingress_hosts.destroy_all
+      normalized.each_with_index do |entry, index|
+        environment_ingress_hosts.create!(hostname: entry, position: index)
+      end
+    end
+    reload
+  end
+
   private
+    def normalize_hosts(values)
+      Array(values).map { |entry| entry.to_s.strip }.reject(&:blank?).uniq
+    end
+
+    def ensure_primary_host_record!
+      return unless hostname.to_s.strip.present?
+      return if environment_ingress_hosts.exists?(hostname: hostname)
+
+      assign_hosts!([ hostname ])
+    end
+
     def assign_gcp_secret_name
       return if gcp_secret_name.present? || environment.blank?
 

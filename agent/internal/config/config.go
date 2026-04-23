@@ -41,6 +41,8 @@ type Config struct {
 	EnvoyGID                     int
 	EnvoyTLSCertPath             string
 	EnvoyTLSKeyPath              string
+	EnvoyPublicHTTPPublishPort   uint16
+	EnvoyPublicHTTPSPublishPort  uint16
 	IngressCertRenewBefore       time.Duration
 	EnvoyRestartPolicy           string
 	WebPort                      uint16
@@ -85,6 +87,8 @@ func Load(args []string) (*Config, error) {
 	var envoyGID int
 	var envoyTLSCertPath string
 	var envoyTLSKeyPath string
+	var envoyPublicHTTPPort uint
+	var envoyPublicHTTPSPort uint
 	var ingressCertRenewBefore time.Duration
 	var envoyRestartPolicy string
 	var webPort uint
@@ -128,6 +132,8 @@ func Load(args []string) (*Config, error) {
 	fs.IntVar(&envoyGID, "envoy-gid", 101, "numeric gid used by the envoy container process")
 	fs.StringVar(&envoyTLSCertPath, "envoy-tls-cert-path", "", "path to PEM certificate chain for the public HTTPS listener")
 	fs.StringVar(&envoyTLSKeyPath, "envoy-tls-key-path", "", "path to PEM private key for the public HTTPS listener")
+	fs.UintVar(&envoyPublicHTTPPort, "envoy-public-http-port", 80, "host port to publish for public HTTP ingress")
+	fs.UintVar(&envoyPublicHTTPSPort, "envoy-public-https-port", 443, "host port to publish for public HTTPS ingress")
 	fs.DurationVar(&ingressCertRenewBefore, "ingress-cert-renew-before", 30*24*time.Hour, "renew public TLS certificates before expiry by this duration")
 	fs.StringVar(&envoyRestartPolicy, "envoy-restart-policy", "unless-stopped", "envoy restart policy: no, always, unless-stopped, on-failure")
 	fs.UintVar(&webPort, "web-port", 3000, "web service port inside container")
@@ -168,6 +174,8 @@ func Load(args []string) (*Config, error) {
 		EnvoyGID:                     envoyGID,
 		EnvoyTLSCertPath:             strings.TrimSpace(envoyTLSCertPath),
 		EnvoyTLSKeyPath:              strings.TrimSpace(envoyTLSKeyPath),
+		EnvoyPublicHTTPPublishPort:   uint16(envoyPublicHTTPPort),
+		EnvoyPublicHTTPSPublishPort:  uint16(envoyPublicHTTPSPort),
 		IngressCertRenewBefore:       ingressCertRenewBefore,
 		EnvoyRestartPolicy:           envoyRestartPolicy,
 		WebPort:                      uint16(webPort),
@@ -196,6 +204,19 @@ func Load(args []string) (*Config, error) {
 
 	if cfg.ShowVersion {
 		return cfg, nil
+	}
+
+	if err := validateUint16Flag("--envoy-port", envoyPort); err != nil {
+		return nil, err
+	}
+	if err := validateUint16Flag("--web-port", webPort); err != nil {
+		return nil, err
+	}
+	if err := validateUint16Flag("--envoy-public-http-port", envoyPublicHTTPPort); err != nil {
+		return nil, err
+	}
+	if err := validateUint16Flag("--envoy-public-https-port", envoyPublicHTTPSPort); err != nil {
+		return nil, err
 	}
 
 	if cfg.Mode != ModeShared && cfg.Mode != ModeSolo {
@@ -306,6 +327,14 @@ func parseLevel(level string) (slog.Level, error) {
 	default:
 		return slog.LevelInfo, fmt.Errorf("invalid log level: %s", level)
 	}
+}
+
+func validateUint16Flag(name string, value uint) error {
+	const maxUint16Value = uint(^uint16(0))
+	if value > maxUint16Value {
+		return fmt.Errorf("%s must be in range 0-%d, got %d", name, maxUint16Value, value)
+	}
+	return nil
 }
 
 func parseCSV(value string) []string {

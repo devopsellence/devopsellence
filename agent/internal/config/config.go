@@ -155,18 +155,6 @@ func Load(args []string) (*Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	if err := validateUint16Flag("--envoy-port", envoyPort); err != nil {
-		return nil, err
-	}
-	if err := validateUint16Flag("--web-port", webPort); err != nil {
-		return nil, err
-	}
-	if err := validateUint16Flag("--envoy-public-http-port", envoyPublicHTTPPort); err != nil {
-		return nil, err
-	}
-	if err := validateUint16Flag("--envoy-public-https-port", envoyPublicHTTPSPort); err != nil {
-		return nil, err
-	}
 
 	cfg := &Config{
 		Mode:                         mode,
@@ -216,6 +204,19 @@ func Load(args []string) (*Config, error) {
 
 	if cfg.ShowVersion {
 		return cfg, nil
+	}
+
+	if err := validateUint16Flag("--envoy-port", envoyPort); err != nil {
+		return nil, err
+	}
+	if err := validateUint16Flag("--web-port", webPort); err != nil {
+		return nil, err
+	}
+	if err := validateUint16Flag("--envoy-public-http-port", envoyPublicHTTPPort); err != nil {
+		return nil, err
+	}
+	if err := validateUint16Flag("--envoy-public-https-port", envoyPublicHTTPSPort); err != nil {
+		return nil, err
 	}
 
 	if cfg.Mode != ModeShared && cfg.Mode != ModeSolo {
@@ -330,7 +331,7 @@ func parseLevel(level string) (slog.Level, error) {
 
 func validateUint16Flag(name string, value uint) error {
 	if value > 65535 {
-		return fmt.Errorf("%s must be <= 65535", name)
+		return fmt.Errorf("%s must be in range 0-65535, got %d", name, value)
 	}
 	return nil
 }

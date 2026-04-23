@@ -94,7 +94,7 @@ func TestLoadRejectsOutOfRangeEnvoyPublicPorts(t *testing.T) {
 }
 
 func TestLoadVersionSkipsValidation(t *testing.T) {
-	cfg, err := Load([]string{"--version"})
+	cfg, err := Load([]string{"--version", "--envoy-public-http-port=70000"})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

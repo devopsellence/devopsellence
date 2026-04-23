@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
 require "json"
-require "shellwords"
 
 class Release < ApplicationRecord
+  InvalidRuntimeConfig = Class.new(StandardError)
   STATUS_DRAFT = "draft"
   STATUS_PUBLISHED = "published"
   STATUSES = [ STATUS_DRAFT, STATUS_PUBLISHED ].freeze
@@ -104,6 +104,8 @@ class Release < ApplicationRecord
   end
 
   def scheduled_services_for(node:)
+    assert_supported_runtime_payload!
+
     environment = node.environment
     service_names.filter_map do |name|
       service = services_config[name]
@@ -114,6 +116,8 @@ class Release < ApplicationRecord
   end
 
   def release_task_for(node:)
+    assert_supported_runtime_payload!
+
     task = release_task_config
     return nil unless task
 
@@ -303,6 +307,41 @@ class Release < ApplicationRecord
 
   def release_task_array_present?(value)
     string_array?(value) && value.present?
+  end
+
+  def assert_supported_runtime_payload!
+    services_config.each do |name, service|
+      assert_supported_runtime_service!(name, service)
+    end
+
+    return unless tasks_config.key?("release")
+
+    task = tasks_config["release"]
+    raise InvalidRuntimeConfig, "tasks.release must decode to an object" unless task.is_a?(Hash)
+
+    assert_deprecated_runtime_key_absent!(task, deprecated_key: "entrypoint", field: "tasks.release.entrypoint")
+    assert_runtime_string_array!(task["command"], field: "tasks.release.command")
+    assert_runtime_string_array!(task["args"], field: "tasks.release.args")
+  end
+
+  def assert_supported_runtime_service!(name, service)
+    raise InvalidRuntimeConfig, "services.#{name} must decode to an object" unless service.is_a?(Hash)
+
+    assert_deprecated_runtime_key_absent!(service, deprecated_key: "entrypoint", field: "services.#{name}.entrypoint")
+    assert_runtime_string_array!(service["command"], field: "services.#{name}.command")
+    assert_runtime_string_array!(service["args"], field: "services.#{name}.args")
+  end
+
+  def assert_deprecated_runtime_key_absent!(hash, deprecated_key:, field:)
+    return unless hash.key?(deprecated_key)
+
+    raise InvalidRuntimeConfig, "#{field} is no longer supported; use command or args"
+  end
+
+  def assert_runtime_string_array!(value, field:)
+    return if value.nil? || string_array?(value)
+
+    raise InvalidRuntimeConfig, "#{field} must be an array of strings"
   end
 
   def string_array?(value)

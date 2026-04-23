@@ -88,18 +88,20 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 	desiredAuthority := solo.New(cfg.DesiredStateOverridePath, logger.With("authority", "solo"))
 
 	envoyManager := envoy.New(eng, envoy.Config{
-		Image:          cfg.EnvoyImage,
-		ContainerName:  cfg.EnvoyContainer,
-		NetworkName:    cfg.NetworkName,
-		BootstrapPath:  cfg.EnvoyBootstrapPath,
-		SocketUID:      cfg.EnvoyUID,
-		SocketGID:      cfg.EnvoyGID,
-		Port:           cfg.EnvoyPort,
-		TLSCertPath:    cfg.EnvoyTLSCertPath,
-		TLSKeyPath:     cfg.EnvoyTLSKeyPath,
-		ClusterName:    "devopsellence_web",
-		StartupTimeout: cfg.StopTimeout,
-		RestartPolicy:  cfg.EnvoyRestartPolicy,
+		Image:           cfg.EnvoyImage,
+		ContainerName:   cfg.EnvoyContainer,
+		NetworkName:     cfg.NetworkName,
+		BootstrapPath:   cfg.EnvoyBootstrapPath,
+		SocketUID:       cfg.EnvoyUID,
+		SocketGID:       cfg.EnvoyGID,
+		Port:            cfg.EnvoyPort,
+		PublicHTTPPort:  cfg.EnvoyPublicHTTPPort,
+		PublicHTTPSPort: cfg.EnvoyPublicHTTPSPort,
+		TLSCertPath:     cfg.EnvoyTLSCertPath,
+		TLSKeyPath:      cfg.EnvoyTLSKeyPath,
+		ClusterName:     "devopsellence_web",
+		StartupTimeout:  cfg.StopTimeout,
+		RestartPolicy:   cfg.EnvoyRestartPolicy,
 	}, logger)
 
 	cloudflaredManager := cloudflared.New(eng, cloudflared.Config{
@@ -209,18 +211,20 @@ func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		)
 	}
 	envoyManager := envoy.New(eng, envoy.Config{
-		Image:          cfg.EnvoyImage,
-		ContainerName:  cfg.EnvoyContainer,
-		NetworkName:    cfg.NetworkName,
-		BootstrapPath:  cfg.EnvoyBootstrapPath,
-		SocketUID:      cfg.EnvoyUID,
-		SocketGID:      cfg.EnvoyGID,
-		Port:           cfg.EnvoyPort,
-		TLSCertPath:    cfg.EnvoyTLSCertPath,
-		TLSKeyPath:     cfg.EnvoyTLSKeyPath,
-		ClusterName:    "devopsellence_web",
-		StartupTimeout: cfg.StopTimeout,
-		RestartPolicy:  cfg.EnvoyRestartPolicy,
+		Image:           cfg.EnvoyImage,
+		ContainerName:   cfg.EnvoyContainer,
+		NetworkName:     cfg.NetworkName,
+		BootstrapPath:   cfg.EnvoyBootstrapPath,
+		SocketUID:       cfg.EnvoyUID,
+		SocketGID:       cfg.EnvoyGID,
+		Port:            cfg.EnvoyPort,
+		PublicHTTPPort:  cfg.EnvoyPublicHTTPPort,
+		PublicHTTPSPort: cfg.EnvoyPublicHTTPSPort,
+		TLSCertPath:     cfg.EnvoyTLSCertPath,
+		TLSKeyPath:      cfg.EnvoyTLSKeyPath,
+		ClusterName:     "devopsellence_web",
+		StartupTimeout:  cfg.StopTimeout,
+		RestartPolicy:   cfg.EnvoyRestartPolicy,
 	}, logger)
 
 	cloudflaredManager := cloudflared.New(eng, cloudflared.Config{

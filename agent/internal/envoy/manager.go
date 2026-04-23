@@ -61,10 +61,10 @@ type Manager struct {
 
 func New(engine engine.Engine, config Config, logger *slog.Logger) *Manager {
 	if config.PublicHTTPPort == 0 {
-		config.PublicHTTPPort = 8080
+		config.PublicHTTPPort = 80
 	}
 	if config.PublicHTTPSPort == 0 {
-		config.PublicHTTPSPort = 8443
+		config.PublicHTTPSPort = 443
 	}
 	if config.StartupTimeout <= 0 {
 		config.StartupTimeout = 10 * time.Second
@@ -107,7 +107,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 	if err != nil {
 		return err
 	}
-	desiredPorts := portBindingsForIngress(m.config.Port, ingress, publicIngressListener)
+	desiredPorts := portBindingsForIngress(m.config.Port, m.config.PublicHTTPPort, m.config.PublicHTTPSPort, ingress, publicIngressListener)
 
 	// Start the xDS server once (idempotent); binds a Unix socket alongside the bootstrap.
 	socketPath := xdsSocketPath(m.config.BootstrapPath)
@@ -397,7 +397,7 @@ func (m *Manager) restart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	desiredPorts := portBindingsForIngress(m.config.Port, m.lastIngress, publicIngressListener)
+	desiredPorts := portBindingsForIngress(m.config.Port, m.config.PublicHTTPPort, m.config.PublicHTTPSPort, m.lastIngress, publicIngressListener)
 	if err := m.createEnvoy(ctx, m.lastIngress, desiredPorts, publicIngressListener != nil); err != nil {
 		return err
 	}
@@ -508,18 +508,18 @@ func cloneIngressRoutes(ingress *desiredstatepb.Ingress) []*desiredstatepb.Ingre
 	return append([]*desiredstatepb.IngressRoute(nil), ingress.Routes...)
 }
 
-func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress, publicIngress *publicIngressListenerConfig) []engine.PortBinding {
+func portBindingsForIngress(defaultPort, httpHostPort, httpsHostPort uint16, ingress *desiredstatepb.Ingress, publicIngress *publicIngressListenerConfig) []engine.PortBinding {
 	switch normalizedIngressMode(ingress) {
 	case ingressModePublic:
 		ports := []engine.PortBinding{{
 			ContainerPort: 8080,
-			HostPort:      80,
+			HostPort:      httpHostPort,
 			Protocol:      "tcp",
 		}}
 		if publicIngress != nil && publicIngress.TLSEnabled {
 			ports = append(ports, engine.PortBinding{
 				ContainerPort: 8443,
-				HostPort:      443,
+				HostPort:      httpsHostPort,
 				Protocol:      "tcp",
 			})
 		}

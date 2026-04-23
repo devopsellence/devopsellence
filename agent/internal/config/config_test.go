@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,6 +44,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.EnvoyPort != 8000 {
 		t.Fatalf("expected default envoy port 8000, got %d", cfg.EnvoyPort)
 	}
+	if cfg.EnvoyPublicHTTPPort != 80 || cfg.EnvoyPublicHTTPSPort != 443 {
+		t.Fatalf("unexpected default envoy public ports: http=%d https=%d", cfg.EnvoyPublicHTTPPort, cfg.EnvoyPublicHTTPSPort)
+	}
 	if cfg.EnvoyUID != 101 || cfg.EnvoyGID != 101 {
 		t.Fatalf("unexpected envoy uid/gid defaults: %d:%d", cfg.EnvoyUID, cfg.EnvoyGID)
 	}
@@ -75,6 +79,20 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsOutOfRangeEnvoyPublicPorts(t *testing.T) {
+	_, err := Load([]string{
+		"--control-plane-base-url=https://cp.example.com",
+		"--auth-state-path=/tmp/agent-auth-state.json",
+		"--envoy-public-http-port=70000",
+	})
+	if err == nil {
+		t.Fatal("expected error for out-of-range envoy public http port")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "--envoy-public-http-port") {
+		t.Fatalf("expected error to mention flag, got %q", got)
+	}
+}
+
 func TestLoadVersionSkipsValidation(t *testing.T) {
 	cfg, err := Load([]string{"--version"})
 	if err != nil {
@@ -99,6 +117,8 @@ func TestLoadFullConfig(t *testing.T) {
 		"--desired-state-override-path=/var/lib/devopsellence/custom-override.json",
 		"--prefetch-system-images=false",
 		"--envoy-bootstrap-path=/var/lib/devopsellence/envoy/envoy.yaml",
+		"--envoy-public-http-port=18080",
+		"--envoy-public-https-port=18443",
 		"--gcs-api-endpoint=https://fake-gcs.example.test",
 		"--secretmanager-endpoint=https://fake-secretmanager.example.test/v1/",
 		"--cloud-init-instance-data-path=",
@@ -134,6 +154,9 @@ func TestLoadFullConfig(t *testing.T) {
 	}
 	if cfg.EnvoyBootstrapPath != "/var/lib/devopsellence/envoy/envoy.yaml" {
 		t.Fatalf("unexpected envoy bootstrap path: %s", cfg.EnvoyBootstrapPath)
+	}
+	if cfg.EnvoyPublicHTTPPort != 18080 || cfg.EnvoyPublicHTTPSPort != 18443 {
+		t.Fatalf("unexpected envoy public ports: http=%d https=%d", cfg.EnvoyPublicHTTPPort, cfg.EnvoyPublicHTTPSPort)
 	}
 	if cfg.GCSAPIEndpoint != "https://fake-gcs.example.test" {
 		t.Fatalf("unexpected gcs api endpoint: %s", cfg.GCSAPIEndpoint)

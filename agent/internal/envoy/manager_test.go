@@ -426,6 +426,52 @@ func TestEnsureFailsWhenImagePullFails(t *testing.T) {
 	}
 }
 
+func TestEnsurePublishesConfiguredPublicPorts(t *testing.T) {
+	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	bootstrapPath := tempBootstrapPath(t)
+	certPath := filepath.Join(t.TempDir(), "ingress.crt")
+	keyPath := filepath.Join(t.TempDir(), "ingress.key")
+	if err := os.WriteFile(certPath, []byte("cert"), 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	mgr := New(eng, Config{
+		Image:           "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:   "devopsellence-envoy",
+		NetworkName:     "devopsellence",
+		BootstrapPath:   bootstrapPath,
+		Port:            8000,
+		PublicHTTPPort:  18080,
+		PublicHTTPSPort: 18443,
+		TLSCertPath:     certPath,
+		TLSKeyPath:      keyPath,
+		ClusterName:     "devopsellence_web",
+		RestartPolicy:   "unless-stopped",
+		StartupTimeout:  2 * time.Second,
+	}, logger)
+
+	ingress := &desiredstatepb.Ingress{
+		Mode:  "public",
+		Hosts: []string{"abc123.devopsellence.io"},
+	}
+	if err := mgr.Ensure(context.Background(), ingress); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if eng.createdSpec == nil {
+		t.Fatal("expected CreateAndStart to be called")
+	}
+	if len(eng.createdSpec.Ports) != 2 {
+		t.Fatalf("expected host publish on configured ports, got %+v", eng.createdSpec.Ports)
+	}
+	if eng.createdSpec.Ports[0].HostPort != 18080 || eng.createdSpec.Ports[1].HostPort != 18443 {
+		t.Fatalf("expected host ports 18080/18443, got %+v", eng.createdSpec.Ports)
+	}
+}
+
 func TestEnsurePublishesPublicPorts(t *testing.T) {
 	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))

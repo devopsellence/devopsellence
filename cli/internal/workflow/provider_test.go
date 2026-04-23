@@ -12,6 +12,7 @@ import (
 
 func TestProviderTokenStoreReadDelete(t *testing.T) {
 	t.Setenv("HCLOUD_TOKEN", "")
+	t.Setenv("DEVOPSELLENCE_HETZNER_API_TOKEN", "")
 
 	store := state.New(filepath.Join(t.TempDir(), "providers.json"))
 	if err := saveProviderToken(store, providerHetzner, "test-token"); err != nil {
@@ -54,6 +55,7 @@ func TestProviderTokenFallsBackToEnv(t *testing.T) {
 
 func TestEnsureInteractiveProviderLogin(t *testing.T) {
 	t.Setenv("HCLOUD_TOKEN", "")
+	t.Setenv("DEVOPSELLENCE_HETZNER_API_TOKEN", "")
 	store := state.New(filepath.Join(t.TempDir(), "providers.json"))
 	app := &App{
 		Printer:       output.New(io.Discard, io.Discard, false),

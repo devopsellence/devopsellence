@@ -383,8 +383,7 @@ func parseSoloNodeStatusPayload(data []byte) (soloNodeStatus, json.RawMessage, e
 	if err := json.Unmarshal(data, &status); err != nil {
 		return soloNodeStatus{}, nil, err
 	}
-	raw := append(json.RawMessage(nil), data...)
-	return status, raw, nil
+	return status, json.RawMessage(data), nil
 }
 
 func readSoloNodeStatus(ctx context.Context, node config.SoloNode) (soloNodeStatusResult, error) {
@@ -421,13 +420,14 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.So
 
 	lastSummary := ""
 	latestSummary := "rollout pending"
+	nodeNames := sortedSoloNodeNames(nodes)
 	for {
 		pendingCount := 0
 		reconcilingCount := 0
 		settledCount := 0
 		details := []string{}
 
-		for _, name := range sortedSoloNodeNames(nodes) {
+		for _, name := range nodeNames {
 			expectedRevision := strings.TrimSpace(expectedRevisions[name])
 			if expectedRevision == "" {
 				return fmt.Errorf("missing desired state revision for node %s", name)

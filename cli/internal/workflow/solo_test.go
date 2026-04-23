@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/keygen"
 	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/output"
@@ -803,6 +804,34 @@ func TestEnsureGeneratedWorkspaceSSHKeyRejectsPartialKeypair(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing public key") {
 		t.Fatalf("error = %v, want missing public key", err)
+	}
+}
+
+func TestEnsureGeneratedWorkspaceSSHKeyRejectsMismatchedPublicKey(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	workspaceRoot := t.TempDir()
+	first, err := ensureGeneratedWorkspaceSSHKey(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	otherKeyPath := filepath.Join(t.TempDir(), "other_id_ed25519")
+	otherPair, err := keygen.New(otherKeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first.PublicKeyPath, []byte(otherPair.AuthorizedKey()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ensureGeneratedWorkspaceSSHKey(workspaceRoot)
+	if err == nil {
+		t.Fatal("expected mismatched keypair error")
+	}
+	if !strings.Contains(err.Error(), "does not match private key") {
+		t.Fatalf("error = %v, want key mismatch", err)
 	}
 }
 

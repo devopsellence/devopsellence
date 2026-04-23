@@ -71,13 +71,28 @@ func ensureGeneratedWorkspaceSSHKey(workspaceRoot string) (generatedSSHKeyPair, 
 	if err != nil {
 		return generatedSSHKeyPair{}, fmt.Errorf("read generated SSH public key: %w", err)
 	}
+	publicKey, err := validatedAuthorizedKeyForPair(publicKeyPath, privateKeyPath, publicKeyBytes, pair.PublicKey())
+	if err != nil {
+		return generatedSSHKeyPair{}, err
+	}
 	return generatedSSHKeyPair{
 		PrivateKeyPath: privateKeyPath,
 		PublicKeyPath:  publicKeyPath,
-		PublicKey:      strings.TrimSpace(string(publicKeyBytes)),
+		PublicKey:      publicKey,
 		Fingerprint:    ssh.FingerprintSHA256(pair.PublicKey()),
 		Generated:      !privateExists,
 	}, nil
+}
+
+func validatedAuthorizedKeyForPair(publicKeyPath, privateKeyPath string, rawPublicKey []byte, expected ssh.PublicKey) (string, error) {
+	parsedPublicKey, _, _, _, err := ssh.ParseAuthorizedKey(rawPublicKey)
+	if err != nil {
+		return "", fmt.Errorf("parse generated SSH public key %s: %w", publicKeyPath, err)
+	}
+	if parsedPublicKey == nil || expected == nil || !publicKeysMatch(parsedPublicKey, expected) {
+		return "", fmt.Errorf("generated SSH keypair mismatch: public key %s does not match private key %s", publicKeyPath, privateKeyPath)
+	}
+	return strings.TrimSpace(string(rawPublicKey)), nil
 }
 
 func normalizeSoloSSHKeySource(value string) (string, error) {
@@ -100,4 +115,11 @@ func fileExists(path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+func publicKeysMatch(a, b ssh.PublicKey) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return string(a.Marshal()) == string(b.Marshal())
 }

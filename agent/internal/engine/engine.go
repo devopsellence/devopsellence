@@ -88,5 +88,6 @@ type ContainerInfo struct {
 	Health          string
 	HasHealthcheck  bool
 	PublishHostPort bool
+	PublishedPorts  []PortBinding
 	NetworkIP       map[string]string
 }

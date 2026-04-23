@@ -211,7 +211,15 @@ func (r *Reconciler) reconcileService(ctx context.Context, ingress *desiredstate
 		}
 		if r.opts.IngressCert != nil {
 			if err := r.opts.IngressCert.Ensure(ctx, ingress, nodePeers); err != nil {
-				return result, fmt.Errorf("ensure ingress certificate: %w", err)
+				if ingressAutoTLSErrorIsNonFatal(ingress) {
+					logger := r.opts.Logger
+					if logger == nil {
+						logger = slog.Default()
+					}
+					logger.Warn("auto tls provisioning failed; serving http until certificate is ready", "error", err)
+				} else {
+					return result, fmt.Errorf("ensure ingress certificate: %w", err)
+				}
 			}
 		}
 		if err := r.opts.Envoy.Ensure(ctx, ingress); err != nil {
@@ -678,6 +686,21 @@ func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {
 		return ingressModeTunnel
 	}
 	return mode
+}
+
+func ingressAutoTLSErrorIsNonFatal(ingress *desiredstatepb.Ingress) bool {
+	if ingress == nil {
+		return false
+	}
+	if normalizedIngressMode(ingress) != "public" {
+		return false
+	}
+	tls := ingress.GetTls()
+	if tls == nil {
+		return true
+	}
+	mode := strings.TrimSpace(tls.GetMode())
+	return mode == "" || mode == "auto"
 }
 
 func secondsToDuration(seconds int64) time.Duration {

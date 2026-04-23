@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -228,11 +229,41 @@ func (e *Engine) Inspect(ctx context.Context, name string) (engine.ContainerInfo
 		return engine.ContainerInfo{}, err
 	}
 
+	publishedPorts := []engine.PortBinding{}
+	if res.Container.HostConfig != nil {
+		for containerPort, bindings := range res.Container.HostConfig.PortBindings {
+			containerPortSpec := strings.TrimSpace(fmt.Sprint(containerPort))
+			containerPortParts := strings.SplitN(containerPortSpec, "/", 2)
+			containerPortValue, parseContainerErr := strconv.Atoi(containerPortParts[0])
+			if parseContainerErr != nil {
+				continue
+			}
+			proto := string(network.TCP)
+			if len(containerPortParts) == 2 && strings.TrimSpace(containerPortParts[1]) != "" {
+				proto = strings.TrimSpace(containerPortParts[1])
+			}
+			for _, binding := range bindings {
+				hostPortValue := containerPortValue
+				if binding.HostPort != "" {
+					if parsedHostPort, parseHostErr := strconv.Atoi(binding.HostPort); parseHostErr == nil {
+						hostPortValue = parsedHostPort
+					}
+				}
+				publishedPorts = append(publishedPorts, engine.PortBinding{
+					ContainerPort: uint16(containerPortValue),
+					HostPort:      uint16(hostPortValue),
+					Protocol:      proto,
+				})
+			}
+		}
+	}
+
 	info := engine.ContainerInfo{
 		Name:            strings.TrimPrefix(res.Container.Name, "/"),
 		Running:         res.Container.State != nil && res.Container.State.Running,
 		HasHealthcheck:  res.Container.State != nil && res.Container.State.Health != nil,
-		PublishHostPort: res.Container.HostConfig != nil && len(res.Container.HostConfig.PortBindings) > 0,
+		PublishHostPort: len(publishedPorts) > 0,
+		PublishedPorts:  publishedPorts,
 		NetworkIP:       map[string]string{},
 	}
 	if res.Container.State != nil && res.Container.State.Health != nil {

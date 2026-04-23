@@ -107,6 +107,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 	if err != nil {
 		return err
 	}
+	desiredPorts := portBindingsForIngress(m.config.Port, ingress, publicIngressListener)
 
 	// Start the xDS server once (idempotent); binds a Unix socket alongside the bootstrap.
 	socketPath := xdsSocketPath(m.config.BootstrapPath)
@@ -138,7 +139,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 		if !cerrdefs.IsNotFound(err) {
 			return fmt.Errorf("inspect envoy: %w", err)
 		}
-		if err := m.createEnvoy(ctx, ingress); err != nil {
+		if err := m.createEnvoy(ctx, ingress, desiredPorts, publicIngressListener != nil); err != nil {
 			return err
 		}
 		if err := m.waitReady(ctx); err != nil {
@@ -149,9 +150,9 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 		return nil
 	}
 
-	if info.Running && info.PublishHostPort != publishHostPortForIngress(ingress) {
+	if info.Running && !samePublishedPorts(info.PublishedPorts, desiredPorts) {
 		if err := m.engine.Remove(ctx, m.config.ContainerName); err != nil {
-			return fmt.Errorf("remove envoy (publish mode changed): %w", err)
+			return fmt.Errorf("remove envoy (published ports changed): %w", err)
 		}
 		info.Running = false
 	}
@@ -178,7 +179,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 			return fmt.Errorf("remove envoy: %w", err)
 		}
 	}
-	if err := m.createEnvoy(ctx, ingress); err != nil {
+	if err := m.createEnvoy(ctx, ingress, desiredPorts, publicIngressListener != nil); err != nil {
 		return err
 	}
 	if err := m.waitReady(ctx); err != nil {
@@ -284,7 +285,7 @@ func (m *Manager) snapshotEndpoints() map[string]*endpointState {
 	return cloned
 }
 
-func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingress) error {
+func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingress, desiredPorts []engine.PortBinding, publicIngressEnabled bool) error {
 	bootstrapDir := dirOf(m.config.BootstrapPath)
 	mounts := []string{fmt.Sprintf("%s:%s:ro", bootstrapDir, bootstrapDir)}
 	for _, path := range []string{m.config.TLSCertPath, m.config.TLSKeyPath} {
@@ -310,25 +311,16 @@ func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingre
 		Health:  m.config.Healthcheck,
 		Restart: engine.RestartPolicyFromString(m.config.RestartPolicy),
 	}
-	if publicIngressListenerConfigEnabled(ingress) {
+	if publicIngressEnabled {
 		spec.ExtraHosts = []string{"host.docker.internal:host-gateway"}
 	}
-	spec.Ports = portBindingsForIngress(m.config.Port, ingress)
+	spec.Ports = desiredPorts
 
 	if err := m.engine.CreateAndStart(ctx, spec); err != nil {
 		return fmt.Errorf("create envoy: %w", err)
 	}
 
 	return nil
-}
-
-func publicIngressListenerConfigEnabled(ingress *desiredstatepb.Ingress) bool {
-	switch normalizedIngressMode(ingress) {
-	case ingressModePublic:
-		return true
-	default:
-		return false
-	}
 }
 
 func (m *Manager) waitReady(ctx context.Context) error {
@@ -401,7 +393,12 @@ func (m *Manager) restart(ctx context.Context) error {
 	if err := m.engine.Remove(ctx, m.config.ContainerName); err != nil {
 		return fmt.Errorf("remove envoy for restart: %w", err)
 	}
-	if err := m.createEnvoy(ctx, m.lastIngress); err != nil {
+	publicIngressListener, err := m.publicIngressListenerConfig(m.lastIngress)
+	if err != nil {
+		return err
+	}
+	desiredPorts := portBindingsForIngress(m.config.Port, m.lastIngress, publicIngressListener)
+	if err := m.createEnvoy(ctx, m.lastIngress, desiredPorts, publicIngressListener != nil); err != nil {
 		return err
 	}
 	if err := m.waitReady(ctx); err != nil {
@@ -511,11 +508,7 @@ func cloneIngressRoutes(ingress *desiredstatepb.Ingress) []*desiredstatepb.Ingre
 	return append([]*desiredstatepb.IngressRoute(nil), ingress.Routes...)
 }
 
-func publishHostPortForIngress(ingress *desiredstatepb.Ingress) bool {
-	return len(portBindingsForIngress(0, ingress)) > 0
-}
-
-func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress) []engine.PortBinding {
+func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress, publicIngress *publicIngressListenerConfig) []engine.PortBinding {
 	switch normalizedIngressMode(ingress) {
 	case ingressModePublic:
 		ports := []engine.PortBinding{{
@@ -523,7 +516,7 @@ func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress)
 			HostPort:      80,
 			Protocol:      "tcp",
 		}}
-		if ingressTLSMode(ingress) != "off" {
+		if publicIngress != nil && publicIngress.TLSEnabled {
 			ports = append(ports, engine.PortBinding{
 				ContainerPort: 8443,
 				HostPort:      443,
@@ -546,6 +539,37 @@ func portBindingsForIngress(defaultPort uint16, ingress *desiredstatepb.Ingress)
 	default:
 		return nil
 	}
+}
+
+func samePublishedPorts(current, desired []engine.PortBinding) bool {
+	if len(current) != len(desired) {
+		return false
+	}
+	currentCounts := map[string]int{}
+	for _, port := range current {
+		currentCounts[portBindingKey(port)]++
+	}
+	for _, port := range desired {
+		key := portBindingKey(port)
+		if currentCounts[key] == 0 {
+			return false
+		}
+		currentCounts[key]--
+	}
+	for _, count := range currentCounts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func portBindingKey(port engine.PortBinding) string {
+	proto := strings.TrimSpace(port.Protocol)
+	if proto == "" {
+		proto = "tcp"
+	}
+	return fmt.Sprintf("%d:%d/%s", port.HostPort, port.ContainerPort, proto)
 }
 
 func dirOf(path string) string {

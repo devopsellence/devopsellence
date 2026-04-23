@@ -56,6 +56,7 @@ func (f *fakeEngine) CreateAndStart(ctx context.Context, spec engine.ContainerSp
 		Health:          health,
 		HasHealthcheck:  spec.Health != nil,
 		PublishHostPort: len(spec.Ports) > 0,
+		PublishedPorts:  append([]engine.PortBinding(nil), spec.Ports...),
 		NetworkIP:       map[string]string{spec.Network: networkIP},
 	}
 	return nil
@@ -231,7 +232,7 @@ func TestEnsureRecreatesWhenMissingHealthcheck(t *testing.T) {
 	}
 }
 
-func TestEnsureRecreatesWhenPublishModeChanges(t *testing.T) {
+func TestEnsureRecreatesWhenPublishedPortsChange(t *testing.T) {
 	eng := &fakeEngine{
 		inspectInfo: engine.ContainerInfo{
 			Name:            "devopsellence-envoy",
@@ -239,6 +240,11 @@ func TestEnsureRecreatesWhenPublishModeChanges(t *testing.T) {
 			Health:          "healthy",
 			HasHealthcheck:  true,
 			PublishHostPort: true,
+			PublishedPorts: []engine.PortBinding{{
+				ContainerPort: 8080,
+				HostPort:      80,
+				Protocol:      "tcp",
+			}},
 		},
 	}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
@@ -461,6 +467,96 @@ func TestEnsurePublishesPublicPorts(t *testing.T) {
 	}
 	if eng.createdSpec.Ports[0].HostPort != 80 || eng.createdSpec.Ports[1].HostPort != 443 {
 		t.Fatalf("expected host ports 80/443, got %+v", eng.createdSpec.Ports)
+	}
+}
+
+func TestEnsureAutoTLSPublishesOnlyHTTPUntilCertificateExists(t *testing.T) {
+	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	bootstrapPath := tempBootstrapPath(t)
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  bootstrapPath,
+		Port:           8000,
+		TLSCertPath:    filepath.Join(t.TempDir(), "ingress.crt"),
+		TLSKeyPath:     filepath.Join(t.TempDir(), "ingress.key"),
+		ClusterName:    "devopsellence_web",
+		RestartPolicy:  "unless-stopped",
+		StartupTimeout: 2 * time.Second,
+	}, logger)
+
+	ingress := &desiredstatepb.Ingress{
+		Mode:  "public",
+		Hosts: []string{"abc123.devopsellence.io"},
+		Tls:   &desiredstatepb.IngressTLS{Mode: "auto"},
+	}
+	if err := mgr.Ensure(context.Background(), ingress); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if eng.createdSpec == nil {
+		t.Fatal("expected CreateAndStart to be called")
+	}
+	if len(eng.createdSpec.Ports) != 1 || eng.createdSpec.Ports[0].HostPort != 80 {
+		t.Fatalf("expected only host port 80 before cert is ready, got %+v", eng.createdSpec.Ports)
+	}
+}
+
+func TestEnsureRecreatesEnvoyWhenAutoTLSCertificateBecomesReady(t *testing.T) {
+	eng := &fakeEngine{
+		inspectInfo: engine.ContainerInfo{
+			Name:            "devopsellence-envoy",
+			Running:         true,
+			Health:          "healthy",
+			HasHealthcheck:  true,
+			PublishHostPort: true,
+			PublishedPorts: []engine.PortBinding{{
+				ContainerPort: 8080,
+				HostPort:      80,
+				Protocol:      "tcp",
+			}},
+			NetworkIP: map[string]string{"devopsellence": "172.18.0.2"},
+		},
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	bootstrapPath := tempBootstrapPath(t)
+	certDir := t.TempDir()
+	certPath := filepath.Join(certDir, "ingress.crt")
+	keyPath := filepath.Join(certDir, "ingress.key")
+	if err := os.WriteFile(certPath, []byte("cert"), 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  bootstrapPath,
+		Port:           8000,
+		TLSCertPath:    certPath,
+		TLSKeyPath:     keyPath,
+		ClusterName:    "devopsellence_web",
+		RestartPolicy:  "unless-stopped",
+		StartupTimeout: 2 * time.Second,
+	}, logger)
+
+	ingress := &desiredstatepb.Ingress{
+		Mode:  "public",
+		Hosts: []string{"abc123.devopsellence.io"},
+		Tls:   &desiredstatepb.IngressTLS{Mode: "auto"},
+	}
+	if err := mgr.Ensure(context.Background(), ingress); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if len(eng.removed) == 0 {
+		t.Fatal("expected envoy removal to recreate with https publish")
+	}
+	if eng.createdSpec == nil || len(eng.createdSpec.Ports) != 2 {
+		t.Fatalf("expected recreated envoy with ports 80/443, got %+v", eng.createdSpec)
 	}
 }
 

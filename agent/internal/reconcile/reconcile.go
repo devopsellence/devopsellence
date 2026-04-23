@@ -97,12 +97,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		}
 	}
 
+	desired = desiredstate.WithEffectiveIngress(desired)
 	desiredByService := map[string]desiredstate.RuntimeService{}
 	for _, service := range desiredstate.RuntimeServices(desired) {
 		desiredByService[runtimeServiceKey(service.EnvironmentName, service.ServiceName)] = service
 	}
-	effectiveIngress := desiredstate.EffectiveIngress(desired)
-	explicitIngress := desired.GetIngress()
+	ingress := desired.GetIngress()
 
 	existing, err := r.engine.ListManaged(ctx)
 	if err != nil {
@@ -118,7 +118,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 	}
 
 	for serviceKey, c := range desiredByService {
-		serviceResult, err := r.reconcileService(ctx, explicitIngress, effectiveIngress, desired.GetNodePeers(), c, existingByService[serviceKey])
+		serviceResult, err := r.reconcileService(ctx, ingress, desired.GetNodePeers(), c, existingByService[serviceKey])
 		result.Created += serviceResult.Created
 		result.Updated += serviceResult.Updated
 		result.Removed += serviceResult.Removed
@@ -192,7 +192,7 @@ func (r *Reconciler) RunTask(ctx context.Context, revision string, task *desired
 	return result, nil
 }
 
-func (r *Reconciler) reconcileService(ctx context.Context, explicitIngress, effectiveIngress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer, desired desiredstate.RuntimeService, existing []engine.ContainerState) (Result, error) {
+func (r *Reconciler) reconcileService(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer, desired desiredstate.RuntimeService, existing []engine.ContainerState) (Result, error) {
 	result := Result{}
 	isWeb := desired.ServiceKind == desiredstate.ServiceKindWeb
 	name, hash, spec, err := r.specForService(desired)
@@ -208,12 +208,12 @@ func (r *Reconciler) reconcileService(ctx context.Context, explicitIngress, effe
 		if r.opts.Envoy == nil {
 			return result, fmt.Errorf("envoy manager required for web service")
 		}
-		if err := r.opts.Envoy.Ensure(ctx, effectiveIngress); err != nil {
+		if err := r.opts.Envoy.Ensure(ctx, ingress); err != nil {
 			return result, fmt.Errorf("ensure envoy: %w", err)
 		}
 		if r.opts.IngressCert != nil {
-			if err := r.opts.IngressCert.Ensure(ctx, explicitIngress, nodePeers); err != nil {
-				if ingressAutoTLSErrorIsNonFatal(explicitIngress) {
+			if err := r.opts.IngressCert.Ensure(ctx, ingress, nodePeers); err != nil {
+				if ingressAutoTLSErrorIsNonFatal(ingress) {
 					logger := r.opts.Logger
 					if logger == nil {
 						logger = slog.Default()
@@ -224,12 +224,12 @@ func (r *Reconciler) reconcileService(ctx context.Context, explicitIngress, effe
 				}
 			}
 		}
-		if err := r.opts.Envoy.Ensure(ctx, effectiveIngress); err != nil {
+		if err := r.opts.Envoy.Ensure(ctx, ingress); err != nil {
 			return result, fmt.Errorf("ensure envoy: %w", err)
 		}
 		if r.opts.Cloudflared != nil {
-			tunnelIngress := explicitIngress
-			if normalizedIngressMode(explicitIngress) != ingressModeTunnel {
+			tunnelIngress := ingress
+			if normalizedIngressMode(ingress) != ingressModeTunnel {
 				tunnelIngress = nil
 			}
 			if err := r.opts.Cloudflared.Reconcile(ctx, tunnelIngress); err != nil {

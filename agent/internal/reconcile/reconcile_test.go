@@ -299,7 +299,7 @@ func TestReconcileWebUsesDesiredPortWhenPresent(t *testing.T) {
 	}
 }
 
-func TestReconcileSynthesizesIngressForSingleEnvironmentWeb(t *testing.T) {
+func TestReconcileInjectsSynthesizedIngressForSingleEnvironmentWeb(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["httpbin"] = true
 	envoyManager := &fakeEnvoyManager{engine: eng}
@@ -333,7 +333,7 @@ func TestReconcileSynthesizesIngressForSingleEnvironmentWeb(t *testing.T) {
 	}
 }
 
-func TestReconcileSynthesizedIngressSkipsExplicitCertManagement(t *testing.T) {
+func TestReconcileSynthesizedIngressUsesSingleIngressPathForCertManagement(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["httpbin"] = true
 	envoyManager := &fakeEnvoyManager{engine: eng}
@@ -353,8 +353,11 @@ func TestReconcileSynthesizedIngressSkipsExplicitCertManagement(t *testing.T) {
 	if ingressCertManager.calls != 1 {
 		t.Fatalf("expected one cert-manager call, got %d", ingressCertManager.calls)
 	}
-	if ingressCertManager.ingress != nil {
-		t.Fatalf("expected nil explicit ingress for synthesized case, got %+v", ingressCertManager.ingress)
+	if ingressCertManager.ingress == nil {
+		t.Fatal("expected synthesized ingress to be passed to cert manager")
+	}
+	if ingressCertManager.ingress.GetTls().GetMode() != "off" {
+		t.Fatalf("tls mode = %q, want off", ingressCertManager.ingress.GetTls().GetMode())
 	}
 }
 

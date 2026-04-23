@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -94,12 +95,28 @@ func RuntimeTasks(state *desiredstatepb.DesiredState) []RuntimeTask {
 	return tasks
 }
 
-func EffectiveIngress(state *desiredstatepb.DesiredState) *desiredstatepb.Ingress {
+func WithEffectiveIngress(state *desiredstatepb.DesiredState) *desiredstatepb.DesiredState {
 	if state == nil {
 		return nil
 	}
 	if state.Ingress != nil {
-		return cloneIngress(state.Ingress)
+		return state
+	}
+	effective := synthesizedIngress(state)
+	if effective == nil {
+		return state
+	}
+	cloned, ok := proto.Clone(state).(*desiredstatepb.DesiredState)
+	if !ok {
+		return state
+	}
+	cloned.Ingress = effective
+	return cloned
+}
+
+func synthesizedIngress(state *desiredstatepb.DesiredState) *desiredstatepb.Ingress {
+	if state == nil || state.Ingress != nil {
+		return nil
 	}
 	environmentCount := 0
 	for _, env := range state.Environments {
@@ -136,50 +153,6 @@ func EffectiveIngress(state *desiredstatepb.DesiredState) *desiredstatepb.Ingres
 			},
 		}},
 	}
-}
-
-func cloneIngress(ingress *desiredstatepb.Ingress) *desiredstatepb.Ingress {
-	if ingress == nil {
-		return nil
-	}
-	cloned := &desiredstatepb.Ingress{
-		Hosts:                append([]string(nil), ingress.Hosts...),
-		Mode:                 ingress.Mode,
-		TunnelToken:          ingress.TunnelToken,
-		TunnelTokenSecretRef: ingress.TunnelTokenSecretRef,
-		RedirectHttp:         ingress.RedirectHttp,
-	}
-	if ingress.Tls != nil {
-		cloned.Tls = &desiredstatepb.IngressTLS{
-			Mode:           ingress.Tls.Mode,
-			Email:          ingress.Tls.Email,
-			CaDirectoryUrl: ingress.Tls.CaDirectoryUrl,
-		}
-	}
-	if len(ingress.Routes) > 0 {
-		cloned.Routes = make([]*desiredstatepb.IngressRoute, 0, len(ingress.Routes))
-		for _, route := range ingress.Routes {
-			if route == nil {
-				continue
-			}
-			clonedRoute := &desiredstatepb.IngressRoute{}
-			if route.Match != nil {
-				clonedRoute.Match = &desiredstatepb.IngressMatch{
-					Hostname:   route.Match.Hostname,
-					PathPrefix: route.Match.PathPrefix,
-				}
-			}
-			if route.Target != nil {
-				clonedRoute.Target = &desiredstatepb.IngressTarget{
-					Environment: route.Target.Environment,
-					Service:     route.Target.Service,
-					Port:        route.Target.Port,
-				}
-			}
-			cloned.Routes = append(cloned.Routes, clonedRoute)
-		}
-	}
-	return cloned
 }
 
 func normalizedServiceKind(service *desiredstatepb.Service) string {

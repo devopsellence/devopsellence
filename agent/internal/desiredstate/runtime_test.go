@@ -6,7 +6,7 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 )
 
-func TestEffectiveIngressReturnsExplicitIngressUnchanged(t *testing.T) {
+func TestWithEffectiveIngressReturnsOriginalStateWhenExplicitIngressPresent(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Ingress: &desiredstatepb.Ingress{
 			Mode:  "public",
@@ -19,19 +19,13 @@ func TestEffectiveIngressReturnsExplicitIngressUnchanged(t *testing.T) {
 		},
 	}
 
-	effective := EffectiveIngress(state)
-	if effective == nil {
-		t.Fatal("expected effective ingress")
-	}
-	if effective == state.Ingress {
-		t.Fatal("expected cloned ingress, got original pointer")
-	}
-	if effective.GetMode() != "public" || len(effective.GetHosts()) != 1 || effective.GetHosts()[0] != "app.example.com" {
-		t.Fatalf("unexpected ingress: %+v", effective)
+	normalized := WithEffectiveIngress(state)
+	if normalized != state {
+		t.Fatal("expected explicit-ingress state to be returned unchanged")
 	}
 }
 
-func TestEffectiveIngressSynthesizesSingleEnvironmentSingleWeb(t *testing.T) {
+func TestWithEffectiveIngressSynthesizesSingleEnvironmentSingleWeb(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Environments: []*desiredstatepb.Environment{{
 			Name: "production",
@@ -46,7 +40,14 @@ func TestEffectiveIngressSynthesizesSingleEnvironmentSingleWeb(t *testing.T) {
 		}},
 	}
 
-	effective := EffectiveIngress(state)
+	normalized := WithEffectiveIngress(state)
+	if normalized == state {
+		t.Fatal("expected synthesized state clone")
+	}
+	if state.GetIngress() != nil {
+		t.Fatal("expected original state to remain ingress-free")
+	}
+	effective := normalized.GetIngress()
 	if effective == nil {
 		t.Fatal("expected synthesized ingress")
 	}
@@ -71,7 +72,7 @@ func TestEffectiveIngressSynthesizesSingleEnvironmentSingleWeb(t *testing.T) {
 	}
 }
 
-func TestEffectiveIngressSkipsSynthesisForMultipleEnvironments(t *testing.T) {
+func TestWithEffectiveIngressLeavesStateUnchangedForMultipleEnvironments(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Environments: []*desiredstatepb.Environment{
 			{Name: "production", Services: []*desiredstatepb.Service{{Name: "web", Kind: ServiceKindWeb}}},
@@ -79,12 +80,12 @@ func TestEffectiveIngressSkipsSynthesisForMultipleEnvironments(t *testing.T) {
 		},
 	}
 
-	if effective := EffectiveIngress(state); effective != nil {
-		t.Fatalf("expected no synthesized ingress, got %+v", effective)
+	if normalized := WithEffectiveIngress(state); normalized != state {
+		t.Fatal("expected multi-environment state to remain unchanged")
 	}
 }
 
-func TestEffectiveIngressSkipsSynthesisForMultipleWebServices(t *testing.T) {
+func TestWithEffectiveIngressLeavesStateUnchangedForMultipleWebServices(t *testing.T) {
 	state := &desiredstatepb.DesiredState{
 		Environments: []*desiredstatepb.Environment{{
 			Name: "production",
@@ -95,7 +96,7 @@ func TestEffectiveIngressSkipsSynthesisForMultipleWebServices(t *testing.T) {
 		}},
 	}
 
-	if effective := EffectiveIngress(state); effective != nil {
-		t.Fatalf("expected no synthesized ingress, got %+v", effective)
+	if normalized := WithEffectiveIngress(state); normalized != state {
+		t.Fatal("expected multi-web state to remain unchanged")
 	}
 }

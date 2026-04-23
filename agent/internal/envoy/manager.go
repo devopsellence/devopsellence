@@ -25,26 +25,28 @@ const (
 )
 
 type Config struct {
-	Image           string
-	ContainerName   string
-	NetworkName     string
-	BootstrapPath   string
-	SocketUID       int
-	SocketGID       int
-	Port            uint16
-	PublicHTTPPort  uint16
-	PublicHTTPSPort uint16
-	TLSCertPath     string
-	TLSKeyPath      string
-	ClusterName     string
-	ChallengeHost   string
-	ChallengePort   uint16
-	Healthcheck     *engine.Healthcheck
-	StartupTimeout  time.Duration
-	RestartPolicy   string
-	RouteTimeout    time.Duration
-	RouteInterval   time.Duration
-	HTTPClient      *http.Client
+	Image               string
+	ContainerName       string
+	NetworkName         string
+	BootstrapPath       string
+	SocketUID           int
+	SocketGID           int
+	Port                uint16
+	PublicHTTPPort      uint16
+	PublicHTTPSPort     uint16
+	PublicHTTPHostPort  uint16
+	PublicHTTPSHostPort uint16
+	TLSCertPath         string
+	TLSKeyPath          string
+	ClusterName         string
+	ChallengeHost       string
+	ChallengePort       uint16
+	Healthcheck         *engine.Healthcheck
+	StartupTimeout      time.Duration
+	RestartPolicy       string
+	RouteTimeout        time.Duration
+	RouteInterval       time.Duration
+	HTTPClient          *http.Client
 }
 
 type Manager struct {
@@ -61,10 +63,16 @@ type Manager struct {
 
 func New(engine engine.Engine, config Config, logger *slog.Logger) *Manager {
 	if config.PublicHTTPPort == 0 {
-		config.PublicHTTPPort = 80
+		config.PublicHTTPPort = 8080
 	}
 	if config.PublicHTTPSPort == 0 {
-		config.PublicHTTPSPort = 443
+		config.PublicHTTPSPort = 8443
+	}
+	if config.PublicHTTPHostPort == 0 {
+		config.PublicHTTPHostPort = 80
+	}
+	if config.PublicHTTPSHostPort == 0 {
+		config.PublicHTTPSHostPort = 443
 	}
 	if config.StartupTimeout <= 0 {
 		config.StartupTimeout = 10 * time.Second
@@ -107,7 +115,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 	if err != nil {
 		return err
 	}
-	desiredPorts := portBindingsForIngress(m.config.Port, m.config.PublicHTTPPort, m.config.PublicHTTPSPort, ingress, publicIngressListener)
+	desiredPorts := portBindingsForIngress(m.config.Port, m.config.PublicHTTPHostPort, m.config.PublicHTTPSHostPort, ingress, publicIngressListener)
 
 	// Start the xDS server once (idempotent); binds a Unix socket alongside the bootstrap.
 	socketPath := xdsSocketPath(m.config.BootstrapPath)
@@ -397,7 +405,7 @@ func (m *Manager) restart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	desiredPorts := portBindingsForIngress(m.config.Port, m.config.PublicHTTPPort, m.config.PublicHTTPSPort, m.lastIngress, publicIngressListener)
+	desiredPorts := portBindingsForIngress(m.config.Port, m.config.PublicHTTPHostPort, m.config.PublicHTTPSHostPort, m.lastIngress, publicIngressListener)
 	if err := m.createEnvoy(ctx, m.lastIngress, desiredPorts, publicIngressListener != nil); err != nil {
 		return err
 	}

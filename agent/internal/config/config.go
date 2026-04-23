@@ -330,8 +330,9 @@ func parseLevel(level string) (slog.Level, error) {
 }
 
 func validateUint16Flag(name string, value uint) error {
-	if value > 65535 {
-		return fmt.Errorf("%s must be in range 0-65535, got %d", name, value)
+	const maxUint16Value = uint(^uint16(0))
+	if value > maxUint16Value {
+		return fmt.Errorf("%s must be in range 0-%d, got %d", name, maxUint16Value, value)
 	}
 	return nil
 }

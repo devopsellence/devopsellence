@@ -440,18 +440,18 @@ func TestEnsurePublishesConfiguredPublicPorts(t *testing.T) {
 	}
 
 	mgr := New(eng, Config{
-		Image:           "docker.io/envoyproxy/envoy:v1.37.0",
-		ContainerName:   "devopsellence-envoy",
-		NetworkName:     "devopsellence",
-		BootstrapPath:   bootstrapPath,
-		Port:            8000,
-		PublicHTTPPort:  18080,
-		PublicHTTPSPort: 18443,
-		TLSCertPath:     certPath,
-		TLSKeyPath:      keyPath,
-		ClusterName:     "devopsellence_web",
-		RestartPolicy:   "unless-stopped",
-		StartupTimeout:  2 * time.Second,
+		Image:               "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:       "devopsellence-envoy",
+		NetworkName:         "devopsellence",
+		BootstrapPath:       bootstrapPath,
+		Port:                8000,
+		PublicHTTPHostPort:  18080,
+		PublicHTTPSHostPort: 18443,
+		TLSCertPath:         certPath,
+		TLSKeyPath:          keyPath,
+		ClusterName:         "devopsellence_web",
+		RestartPolicy:       "unless-stopped",
+		StartupTimeout:      2 * time.Second,
 	}, logger)
 
 	ingress := &desiredstatepb.Ingress{
@@ -466,6 +466,9 @@ func TestEnsurePublishesConfiguredPublicPorts(t *testing.T) {
 	}
 	if len(eng.createdSpec.Ports) != 2 {
 		t.Fatalf("expected host publish on configured ports, got %+v", eng.createdSpec.Ports)
+	}
+	if eng.createdSpec.Ports[0].ContainerPort != 8080 || eng.createdSpec.Ports[1].ContainerPort != 8443 {
+		t.Fatalf("expected container ports 8080/8443, got %+v", eng.createdSpec.Ports)
 	}
 	if eng.createdSpec.Ports[0].HostPort != 18080 || eng.createdSpec.Ports[1].HostPort != 18443 {
 		t.Fatalf("expected host ports 18080/18443, got %+v", eng.createdSpec.Ports)

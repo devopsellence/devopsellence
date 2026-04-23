@@ -332,6 +332,61 @@ func TestReconcileEnsuresIngressCertificateForPublicIngress(t *testing.T) {
 	}
 }
 
+func TestReconcileContinuesServingHTTPWhenAutoTLSProvisioningFails(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["httpbin"] = true
+	envoyManager := &fakeEnvoyManager{engine: eng}
+	ingressCertManager := &fakeIngressCertManager{ensureErr: fmt.Errorf("acme unavailable")}
+	rec := New(eng, Options{
+		Network:     "devopsellence",
+		StopTimeout: 2 * time.Second,
+		WebPort:     3000,
+		Envoy:       envoyManager,
+		IngressCert: ingressCertManager,
+		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
+	})
+
+	state := desiredState(webService(80, "/up"))
+	state.Ingress = publicIngress()
+
+	result, err := rec.Reconcile(context.Background(), state)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Created != 1 {
+		t.Fatalf("expected web service creation to continue, got %+v", result)
+	}
+	if len(eng.created) != 1 || eng.created[0].Labels[engine.LabelService] != "web" {
+		t.Fatalf("expected created web container, got %+v", eng.created)
+	}
+}
+
+func TestReconcileFailsWhenManualTLSProvisioningFails(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["httpbin"] = true
+	envoyManager := &fakeEnvoyManager{engine: eng}
+	ingressCertManager := &fakeIngressCertManager{ensureErr: fmt.Errorf("missing certificate")}
+	rec := New(eng, Options{
+		Network:     "devopsellence",
+		StopTimeout: 2 * time.Second,
+		WebPort:     3000,
+		Envoy:       envoyManager,
+		IngressCert: ingressCertManager,
+		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
+	})
+
+	state := desiredState(webService(80, "/up"))
+	state.Ingress = publicIngress()
+	state.Ingress.Tls = &desiredstatepb.IngressTLS{Mode: "manual"}
+
+	if _, err := rec.Reconcile(context.Background(), state); err == nil {
+		t.Fatal("expected reconcile error")
+	}
+	if len(eng.created) != 0 {
+		t.Fatalf("expected no web container create on manual tls failure, got %+v", eng.created)
+	}
+}
+
 func TestRunTaskTruncatesLogOutput(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["busybox"] = true

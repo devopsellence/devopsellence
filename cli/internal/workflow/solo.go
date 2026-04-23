@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -387,7 +388,7 @@ func parseSoloNodeStatusPayload(data []byte) (soloNodeStatus, json.RawMessage, e
 }
 
 func readSoloNodeStatus(ctx context.Context, node config.SoloNode) (soloNodeStatusResult, error) {
-	statusPath := filepath.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "status.json")
+	statusPath := path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "status.json")
 	out, err := solo.RunSSH(ctx, node, remoteReadOptionalFileCommand(statusPath, soloStatusMissingSentinel), nil)
 	if err != nil {
 		return soloNodeStatusResult{}, err

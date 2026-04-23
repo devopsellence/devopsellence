@@ -73,6 +73,7 @@ cd control-plane && mise run test -- test/path/file_test.rb
 
 - Explicit user product direction overrides reviewer suggestions.
 - If user says no legacy / no backward compat / clean slate, do not add backfills, shims, or compat code just to satisfy review comments; leave the thread open and note the rationale.
+- Right after each PR is opened or updated with pushed fixes, request a fresh Copilot review.
 
 ## Architecture
 

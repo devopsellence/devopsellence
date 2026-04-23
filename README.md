@@ -46,6 +46,8 @@ devopsellence provider login hetzner
 devopsellence setup
 ```
 
+For provider-created solo nodes, `devopsellence setup` now defaults to generating a workspace-scoped SSH keypair under `$XDG_STATE_HOME/devopsellence/solo/keys/` (default: `~/.local/state/devopsellence/solo/keys/`) and reuses it for later node creation from the same workspace.
+
 Or create a Hetzner-backed node from the provider:
 
 ```bash
@@ -77,7 +79,7 @@ printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --st
 devopsellence secret list
 ```
 
-Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest desired environment snapshots live in `$XDG_STATE_HOME/devopsellence/solo/state.json` (default: `~/.local/state/devopsellence/solo/state.json` when `XDG_STATE_HOME` is unset).
+Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest desired environment snapshots live in `$XDG_STATE_HOME/devopsellence/solo/state.json` (default: `~/.local/state/devopsellence/solo/state.json` when `XDG_STATE_HOME` is unset). Generated solo SSH keys stay local under `$XDG_STATE_HOME/devopsellence/solo/keys/`.
 
 ## Shared mode
 

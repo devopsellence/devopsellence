@@ -939,6 +939,13 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	return nil
 }
 
+func (a *App) runSoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) error {
+	if a.soloNodeAttachFn != nil {
+		return a.soloNodeAttachFn(ctx, opts)
+	}
+	return a.SoloNodeAttach(ctx, opts)
+}
+
 func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) error {
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
@@ -1123,6 +1130,13 @@ func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) err
 	return nil
 }
 
+func (a *App) runSoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
+	if a.soloRuntimeDoctorFn != nil {
+		return a.soloRuntimeDoctorFn(ctx, opts)
+	}
+	return a.SoloRuntimeDoctor(ctx, opts)
+}
+
 func (a *App) SoloDoctor(ctx context.Context) error {
 	checks := []map[string]any{}
 	addCheck := func(name string, fn func() (string, error)) {
@@ -1279,6 +1293,13 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	}
 	a.Printer.Println("Created solo node " + opts.Name + " at " + created.Node.Host)
 	return nil
+}
+
+func (a *App) runSoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
+	if a.soloNodeCreateFn != nil {
+		return a.soloNodeCreateFn(ctx, opts)
+	}
+	return a.SoloNodeCreate(ctx, opts)
 }
 
 func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions) error {
@@ -1447,11 +1468,35 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 		if err != nil {
 			return err
 		}
-		sshPublicKey, err := a.promptLine("SSH public key path", defaultSoloSSHPublicKeyPath())
+		sshKeySource, err := a.promptLine("SSH key source (generate/existing)", "generate")
 		if err != nil {
 			return err
 		}
-		if err := a.SoloNodeCreate(ctx, SoloNodeCreateOptions{
+		sshKeySource, err = normalizeSoloSSHKeySource(sshKeySource)
+		if err != nil {
+			return err
+		}
+		sshPublicKey := ""
+		if sshKeySource == "generate" {
+			generatedKey, err := ensureGeneratedWorkspaceSSHKey(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			if !a.Printer.JSON {
+				action := "Reusing"
+				if generatedKey.Generated {
+					action = "Generated"
+				}
+				a.Printer.Println(fmt.Sprintf("%s workspace SSH key %s (%s)", action, generatedKey.PrivateKeyPath, generatedKey.Fingerprint))
+			}
+			sshPublicKey = generatedKey.PublicKeyPath
+		} else {
+			sshPublicKey, err = a.promptLine("SSH public key path", defaultSoloSSHPublicKeyPath())
+			if err != nil {
+				return err
+			}
+		}
+		if err := a.runSoloNodeCreate(ctx, SoloNodeCreateOptions{
 			Name:         name,
 			Provider:     "hetzner",
 			Region:       region,
@@ -1461,10 +1506,10 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 		}); err != nil {
 			return err
 		}
-		if err := a.SoloNodeAttach(ctx, SoloNodeAttachOptions{Node: name}); err != nil {
+		if err := a.runSoloNodeAttach(ctx, SoloNodeAttachOptions{Node: name}); err != nil {
 			return err
 		}
-		return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
+		return a.runSoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
 	}
 	host, err := a.promptLine("Host", "")
 	if err != nil {

@@ -692,6 +692,197 @@ func TestDefaultSoloSSHPublicKeyCandidates(t *testing.T) {
 	}
 }
 
+func TestGeneratedWorkspaceSSHKeyPathUsesCanonicalWorkspaceKey(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	gotA, err := generatedWorkspaceSSHKeyPath(realRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotB, err := generatedWorkspaceSSHKeyPath(filepath.Join(linkRoot, "."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotA != gotB {
+		t.Fatalf("generatedWorkspaceSSHKeyPath() = %q, want %q", gotB, gotA)
+	}
+	wantPrefix := filepath.Join(stateDir, "devopsellence", "solo", "keys") + string(os.PathSeparator)
+	if !strings.HasPrefix(gotA, wantPrefix) {
+		t.Fatalf("generatedWorkspaceSSHKeyPath() = %q, want prefix %q", gotA, wantPrefix)
+	}
+}
+
+func TestEnsureGeneratedWorkspaceSSHKeyGeneratesAndReusesKeyPair(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	workspaceRoot := t.TempDir()
+	first, err := ensureGeneratedWorkspaceSSHKey(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Generated {
+		t.Fatal("first.Generated = false, want true")
+	}
+	if first.PublicKeyPath != first.PrivateKeyPath+".pub" {
+		t.Fatalf("public key path = %q, want %q", first.PublicKeyPath, first.PrivateKeyPath+".pub")
+	}
+	if strings.TrimSpace(first.PublicKey) == "" {
+		t.Fatal("public key empty")
+	}
+	if strings.TrimSpace(first.Fingerprint) == "" {
+		t.Fatal("fingerprint empty")
+	}
+
+	privateInfo, err := os.Stat(first.PrivateKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privateInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("private key perm = %#o, want 0600", privateInfo.Mode().Perm())
+	}
+	publicInfo, err := os.Stat(first.PublicKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publicInfo.Mode().Perm() != 0o644 {
+		t.Fatalf("public key perm = %#o, want 0644", publicInfo.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(filepath.Dir(first.PrivateKeyPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("key dir perm = %#o, want 0700", dirInfo.Mode().Perm())
+	}
+
+	second, err := ensureGeneratedWorkspaceSSHKey(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Generated {
+		t.Fatal("second.Generated = true, want false")
+	}
+	if second.PrivateKeyPath != first.PrivateKeyPath {
+		t.Fatalf("private key path = %q, want %q", second.PrivateKeyPath, first.PrivateKeyPath)
+	}
+	if second.PublicKey != first.PublicKey {
+		t.Fatalf("public key = %q, want %q", second.PublicKey, first.PublicKey)
+	}
+	if second.Fingerprint != first.Fingerprint {
+		t.Fatalf("fingerprint = %q, want %q", second.Fingerprint, first.Fingerprint)
+	}
+}
+
+func TestEnsureGeneratedWorkspaceSSHKeyRejectsPartialKeypair(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	workspaceRoot := t.TempDir()
+	privateKeyPath, err := generatedWorkspaceSSHKeyPath(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(privateKeyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privateKeyPath, []byte("not-a-real-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ensureGeneratedWorkspaceSSHKey(workspaceRoot)
+	if err == nil {
+		t.Fatal("expected partial keypair error")
+	}
+	if !strings.Contains(err.Error(), "missing public key") {
+		t.Fatalf("error = %v, want missing public key", err)
+	}
+}
+
+func TestSoloSetupHetznerDefaultsToGeneratedWorkspaceKey(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var created SoloNodeCreateOptions
+	app := &App{
+		In:          strings.NewReader("hetzner\nprod-1\nweb\nash\ncpx11\n\n"),
+		Printer:     output.New(&stdout, io.Discard, false),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+		soloNodeCreateFn: func(_ context.Context, opts SoloNodeCreateOptions) error {
+			created = opts
+			return nil
+		},
+		soloNodeAttachFn:    func(context.Context, SoloNodeAttachOptions) error { return nil },
+		soloRuntimeDoctorFn: func(context.Context, SoloDoctorOptions) error { return nil },
+	}
+	app.Printer.Interactive = true
+
+	if err := app.SoloSetup(context.Background(), SoloSetupOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if created.SSHPublicKey == "" {
+		t.Fatal("generated SSH public key path empty")
+	}
+	if !strings.HasSuffix(created.SSHPublicKey, ".pub") {
+		t.Fatalf("SSH public key path = %q, want .pub suffix", created.SSHPublicKey)
+	}
+	if _, err := os.Stat(created.SSHPublicKey); err != nil {
+		t.Fatalf("expected generated public key: %v", err)
+	}
+	if _, err := os.Stat(strings.TrimSuffix(created.SSHPublicKey, ".pub")); err != nil {
+		t.Fatalf("expected generated private key: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "workspace SSH key") {
+		t.Fatalf("output = %q, want workspace SSH key message", stdout.String())
+	}
+}
+
+func TestSoloSetupHetznerExistingUsesPromptedPublicKeyPath(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	customPublicKey := filepath.Join(t.TempDir(), "custom.pub")
+	if err := os.WriteFile(customPublicKey, []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBexample\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var created SoloNodeCreateOptions
+	app := &App{
+		In:          strings.NewReader("hetzner\nprod-1\nweb\nash\ncpx11\nexisting\n" + customPublicKey + "\n"),
+		Printer:     output.New(io.Discard, io.Discard, false),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+		soloNodeCreateFn: func(_ context.Context, opts SoloNodeCreateOptions) error {
+			created = opts
+			return nil
+		},
+		soloNodeAttachFn:    func(context.Context, SoloNodeAttachOptions) error { return nil },
+		soloRuntimeDoctorFn: func(context.Context, SoloDoctorOptions) error { return nil },
+	}
+	app.Printer.Interactive = true
+
+	if err := app.SoloSetup(context.Background(), SoloSetupOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if created.SSHPublicKey != customPublicKey {
+		t.Fatalf("SSH public key path = %q, want %q", created.SSHPublicKey, customPublicKey)
+	}
+}
+
 func TestWaitForSoloSSHWithProbeReturnsLastError(t *testing.T) {
 	node := config.SoloNode{User: "root", Host: "203.0.113.10"}
 	wantErr := errors.New("ssh: connect to host 203.0.113.10 port 22: Connection timed out")

@@ -318,10 +318,10 @@
         <div class="tl"><span class="tp">$</span> devopsellence mode use solo</div>
         <div class="tl"><span class="tp">$</span> devopsellence setup</div>
         <div class="tl tl-muted"># Existing node: prompts for host, user, labels, and SSH private key path.</div>
-        <div class="tl tl-muted"># Hetzner: prompts for region, size, labels, and SSH public key path.</div>
+        <div class="tl tl-muted"># Hetzner: prompts for region, size, labels, and defaults to a workspace-scoped generated SSH key.</div>
       </div>
     </div>
-    <p>The wizard creates <code>devopsellence.yml</code> when needed, records the node and attachment in local solo state, installs Docker when supported, installs <code>devopsellence-agent</code>, starts the <code>devopsellence-agent</code> systemd service, and runs <code>doctor</code>.</p>
+    <p>The wizard creates <code>devopsellence.yml</code> when needed, records the node and attachment in local solo state, installs Docker when supported, installs <code>devopsellence-agent</code>, starts the <code>devopsellence-agent</code> systemd service, and runs <code>doctor</code>. For provider-created solo nodes it can generate and reuse a workspace-scoped SSH keypair under local state instead of requiring a pre-existing SSH public key path.</p>
 
     <h3>Create a Hetzner node</h3>
     <p>Provider tokens stay outside the config file. Save a Hetzner token locally, or set <code>DEVOPSELLENCE_HETZNER_API_TOKEN</code> or <code>HCLOUD_TOKEN</code>:</p>
@@ -344,7 +344,7 @@
     <p>Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in local solo state at <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). The provider API token and SSH private key value are not written to app config.</p>
 
     <h3>Solo config</h3>
-    <p><code>devopsellence.yml</code> stays workload-only in solo mode. Solo nodes, workspace/environment attachments, and the latest desired environment snapshots live in <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). SSH private key material stays in your SSH agent, local filesystem, or CI secrets.</p>
+    <p><code>devopsellence.yml</code> stays workload-only in solo mode. Solo nodes, workspace/environment attachments, and the latest desired environment snapshots live in <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). Generated solo SSH keys stay local under <code>$XDG_STATE_HOME/devopsellence/solo/keys/</code>; SSH private key material is still never written into app config.</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>

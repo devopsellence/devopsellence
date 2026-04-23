@@ -15,7 +15,7 @@ module EnvironmentIngresses
       if environment.direct_dns_ingress?
         DirectDnsStrategy.new(environment:, ingress:, client:, stale_hosts:).call
       else
-        Cloudflare::EnvironmentIngressProvisioner.new(environment:, client:, release:).call
+        Cloudflare::EnvironmentIngressProvisioner.new(environment:, client:, release:, stale_hosts:).call
       end
     end
 

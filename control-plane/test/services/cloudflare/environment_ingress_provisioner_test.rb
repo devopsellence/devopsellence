@@ -159,6 +159,44 @@ module Cloudflare
       ], client.dns_records
     end
 
+    test "removes stale hosts supplied by the reconciler" do
+      organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+      ensure_test_organization_runtime!(organization)
+      project = organization.projects.create!(name: "Project A")
+      environment = project.environments.create!(
+        name: "production",
+        gcp_project_id: organization.gcp_project_id,
+        gcp_project_number: organization.gcp_project_number,
+        workload_identity_pool: organization.workload_identity_pool,
+        workload_identity_provider: organization.workload_identity_provider,
+        service_account_email: "env@#{organization.gcp_project_id}.iam.gserviceaccount.com"
+      )
+      current_host = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
+      stale_host = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
+      environment.create_environment_ingress!(
+        hostname: current_host,
+        cloudflare_tunnel_id: "tunnel-1",
+        gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
+        status: EnvironmentIngress::STATUS_READY,
+        provisioned_at: Time.current
+      )
+      client = FakeClient.new
+
+      EnvironmentIngressProvisioner.new(
+        environment: environment,
+        client: client,
+        secret_manager: FakeSecretManager.new,
+        stale_hosts: [ stale_host ]
+      ).call
+
+      assert_equal [
+        { hostname: stale_host, type: "A" },
+        { hostname: stale_host, type: "CNAME" },
+        { hostname: current_host, type: "A" },
+        { hostname: current_host, type: "CNAME" }
+      ], client.deleted_dns_records
+    end
+
     test "restores tunnel routing from environment bundle data" do
       organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
       ensure_test_organization_runtime!(organization)

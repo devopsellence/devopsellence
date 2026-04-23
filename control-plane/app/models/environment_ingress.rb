@@ -17,6 +17,7 @@ class EnvironmentIngress < ApplicationRecord
   has_many :environment_ingress_hosts, -> { order(:position, :id) }, dependent: :destroy
 
   before_validation :assign_gcp_secret_name
+  before_validation :normalize_hostname!
   after_commit :ensure_primary_host_record!, on: [ :create, :update ]
 
   validates :hostname, presence: true, uniqueness: true
@@ -24,10 +25,11 @@ class EnvironmentIngress < ApplicationRecord
   validates :status, inclusion: { in: STATUSES }
 
   def hosts
-    persisted = environment_ingress_hosts.map { |entry| entry.hostname.to_s.strip }.reject(&:blank?)
+    persisted = environment_ingress_hosts.map { |entry| normalize_host(entry.hostname) }.reject(&:blank?)
     return persisted if persisted.any?
 
-    hostname.to_s.strip.present? ? [ hostname.to_s.strip ] : []
+    normalized_hostname = normalize_host(hostname)
+    normalized_hostname.present? ? [ normalized_hostname ] : []
   end
 
   def public_urls
@@ -66,7 +68,7 @@ class EnvironmentIngress < ApplicationRecord
   end
 
   def hostname_matches?(candidate)
-    hosts.include?(candidate.to_s.strip)
+    hosts.include?(normalize_host(candidate))
   end
 
   def assign_hosts!(values)
@@ -85,14 +87,23 @@ class EnvironmentIngress < ApplicationRecord
 
   private
     def normalize_hosts(values)
-      Array(values).map { |entry| entry.to_s.strip }.reject(&:blank?).uniq
+      Array(values).map { |entry| normalize_host(entry) }.reject(&:blank?).uniq
+    end
+
+    def normalize_host(value)
+      value.to_s.strip.downcase
     end
 
     def ensure_primary_host_record!
-      return unless hostname.to_s.strip.present?
-      return if environment_ingress_hosts.exists?(hostname: hostname)
+      normalized_hostname = normalize_host(hostname)
+      return if normalized_hostname.blank?
+      return if environment_ingress_hosts.exists?(hostname: normalized_hostname)
 
-      assign_hosts!([ hostname ])
+      assign_hosts!([ normalized_hostname ])
+    end
+
+    def normalize_hostname!
+      self.hostname = normalize_host(hostname)
     end
 
     def assign_gcp_secret_name

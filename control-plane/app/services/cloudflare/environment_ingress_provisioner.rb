@@ -5,13 +5,14 @@ require "securerandom"
 module Cloudflare
   class EnvironmentIngressProvisioner
     def initialize(environment:, client: RestClient.new, secret_manager: Gcp::EnvironmentSecretManager.new,
-      hostname_generator: nil, origin_service: Devopsellence::IngressConfig.envoy_origin, release: nil)
+      hostname_generator: nil, origin_service: Devopsellence::IngressConfig.envoy_origin, release: nil, stale_hosts: [])
       @environment = environment
       @client = client
       @secret_manager = secret_manager
       @hostname_generator = hostname_generator || -> { SecureRandom.alphanumeric(EnvironmentIngress::HOSTNAME_LENGTH).downcase }
       @origin_service = origin_service
       @release = release || environment.current_release
+      @stale_hosts = stale_hosts
     end
 
     def call
@@ -40,7 +41,7 @@ module Cloudflare
       end
 
       if ingress.primary_hostname.present? && ingress.cloudflare_tunnel_id.present?
-        ensure_managed_tunnel_routing!(ingress, stale_hosts: previous_hosts - ingress.hosts)
+        ensure_managed_tunnel_routing!(ingress, stale_hosts: removed_hosts(previous_hosts, ingress))
         mark_ingress_ready!(ingress)
         return ingress
       end
@@ -49,7 +50,7 @@ module Cloudflare
       tunnel_token = client.tunnel_token(tunnel_id: tunnel.fetch("id"))
 
       ingress.cloudflare_tunnel_id = tunnel.fetch("id")
-      ensure_managed_tunnel_routing!(ingress, stale_hosts: previous_hosts - ingress.hosts)
+      ensure_managed_tunnel_routing!(ingress, stale_hosts: removed_hosts(previous_hosts, ingress))
       mark_ingress_ready!(ingress, provisioned_at: Time.current)
       secret_manager.upsert_ingress_token!(environment_ingress: ingress, value: tunnel_token)
       ingress
@@ -65,7 +66,7 @@ module Cloudflare
 
     private
 
-    attr_reader :environment, :client, :secret_manager, :hostname_generator, :origin_service, :release
+    attr_reader :environment, :client, :secret_manager, :hostname_generator, :origin_service, :release, :stale_hosts
 
     def next_hostname!
       20.times do
@@ -121,6 +122,10 @@ module Cloudflare
       return [ environment.environment_bundle.hostname ] if environment.environment_bundle&.hostname.present?
 
       [ next_hostname! ]
+    end
+
+    def removed_hosts(previous_hosts, ingress)
+      ((previous_hosts - ingress.hosts) | stale_hosts).uniq
     end
   end
 end

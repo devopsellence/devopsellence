@@ -1241,7 +1241,7 @@ func installFakeSoloCommands(t *testing.T, statusResponses []fakeSSHResponse) st
 	writeExecutable(t, filepath.Join(binDir, "docker"), "#!/usr/bin/env bash\nset -euo pipefail\nif [ \"$1\" = \"build\" ]; then exit 0; fi\necho \"unexpected docker command: $*\" >&2\nexit 1\n")
 	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
 set -euo pipefail
-command="${@: -1}"
+command="${!#}"
 
 if [[ "$command" == *"desired-state set-override"* ]]; then
   cat >"$DEVOPSELLENCE_FAKE_SSH_REVISION_FILE"

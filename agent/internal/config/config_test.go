@@ -44,8 +44,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.EnvoyPort != 8000 {
 		t.Fatalf("expected default envoy port 8000, got %d", cfg.EnvoyPort)
 	}
-	if cfg.EnvoyPublicHTTPPort != 80 || cfg.EnvoyPublicHTTPSPort != 443 {
-		t.Fatalf("unexpected envoy public publish ports: http=%d https=%d", cfg.EnvoyPublicHTTPPort, cfg.EnvoyPublicHTTPSPort)
+	if cfg.EnvoyPublicHTTPPublishPort != 80 || cfg.EnvoyPublicHTTPSPublishPort != 443 {
+		t.Fatalf("unexpected envoy public publish ports: http=%d https=%d", cfg.EnvoyPublicHTTPPublishPort, cfg.EnvoyPublicHTTPSPublishPort)
 	}
 	if cfg.EnvoyUID != 101 || cfg.EnvoyGID != 101 {
 		t.Fatalf("unexpected envoy uid/gid defaults: %d:%d", cfg.EnvoyUID, cfg.EnvoyGID)
@@ -155,8 +155,8 @@ func TestLoadFullConfig(t *testing.T) {
 	if cfg.EnvoyBootstrapPath != "/var/lib/devopsellence/envoy/envoy.yaml" {
 		t.Fatalf("unexpected envoy bootstrap path: %s", cfg.EnvoyBootstrapPath)
 	}
-	if cfg.EnvoyPublicHTTPPort != 18080 || cfg.EnvoyPublicHTTPSPort != 18443 {
-		t.Fatalf("unexpected envoy public publish ports: http=%d https=%d", cfg.EnvoyPublicHTTPPort, cfg.EnvoyPublicHTTPSPort)
+	if cfg.EnvoyPublicHTTPPublishPort != 18080 || cfg.EnvoyPublicHTTPSPublishPort != 18443 {
+		t.Fatalf("unexpected envoy public publish ports: http=%d https=%d", cfg.EnvoyPublicHTTPPublishPort, cfg.EnvoyPublicHTTPSPublishPort)
 	}
 	if cfg.GCSAPIEndpoint != "https://fake-gcs.example.test" {
 		t.Fatalf("unexpected gcs api endpoint: %s", cfg.GCSAPIEndpoint)

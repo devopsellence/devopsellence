@@ -41,8 +41,8 @@ type Config struct {
 	EnvoyGID                     int
 	EnvoyTLSCertPath             string
 	EnvoyTLSKeyPath              string
-	EnvoyPublicHTTPPort          uint16
-	EnvoyPublicHTTPSPort         uint16
+	EnvoyPublicHTTPPublishPort   uint16
+	EnvoyPublicHTTPSPublishPort  uint16
 	IngressCertRenewBefore       time.Duration
 	EnvoyRestartPolicy           string
 	WebPort                      uint16
@@ -174,8 +174,8 @@ func Load(args []string) (*Config, error) {
 		EnvoyGID:                     envoyGID,
 		EnvoyTLSCertPath:             strings.TrimSpace(envoyTLSCertPath),
 		EnvoyTLSKeyPath:              strings.TrimSpace(envoyTLSKeyPath),
-		EnvoyPublicHTTPPort:          uint16(envoyPublicHTTPPort),
-		EnvoyPublicHTTPSPort:         uint16(envoyPublicHTTPSPort),
+		EnvoyPublicHTTPPublishPort:   uint16(envoyPublicHTTPPort),
+		EnvoyPublicHTTPSPublishPort:  uint16(envoyPublicHTTPSPort),
 		IngressCertRenewBefore:       ingressCertRenewBefore,
 		EnvoyRestartPolicy:           envoyRestartPolicy,
 		WebPort:                      uint16(webPort),

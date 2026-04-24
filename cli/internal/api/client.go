@@ -48,9 +48,10 @@ type Project struct {
 }
 
 type Environment struct {
-	ID              int    `json:"id"`
-	Name            string `json:"name"`
-	IngressStrategy string `json:"ingress_strategy,omitempty"`
+	ID              int      `json:"id"`
+	Name            string   `json:"name"`
+	IngressStrategy string   `json:"ingress_strategy,omitempty"`
+	IngressHosts    []string `json:"ingress_hosts,omitempty"`
 }
 
 type DeployTargetResponse struct {

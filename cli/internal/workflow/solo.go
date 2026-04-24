@@ -1909,6 +1909,7 @@ func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig
 			cfg.Services[serviceName] = service
 		}
 	}
+	cfg = applyBootstrapIngress(cfg, nil)
 	return &cfg
 }
 
@@ -2042,6 +2043,22 @@ func normalizeIngressHosts(values []string) []string {
 		}
 	}
 	sort.Strings(normalized)
+	return normalized
+}
+
+func normalizeIngressHostsKeepOrder(values []string) []string {
+	seen := map[string]bool{}
+	normalized := []string{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" || seen[part] {
+				continue
+			}
+			seen[part] = true
+			normalized = append(normalized, part)
+		}
+	}
 	return normalized
 }
 

@@ -208,6 +208,41 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_equal "managed", json_body.dig("environment", "runtime_kind")
   end
 
+  test "deploy target includes canonical ingress hosts for existing environment" do
+    user = User.create!(email: "owner-#{SecureRandom.hex(4)}@example.com", confirmed_at: Time.current)
+    organization = Organization.create!(name: "acme")
+    ensure_test_organization_runtime!(organization)
+    OrganizationMembership.create!(organization: organization, user: user, role: OrganizationMembership::ROLE_OWNER)
+    project = organization.projects.create!(name: "ShopApp")
+    environment = project.environments.create!(
+      name: "production",
+      gcp_project_id: organization.gcp_project_id,
+      gcp_project_number: organization.gcp_project_number,
+      workload_identity_pool: organization.workload_identity_pool,
+      workload_identity_provider: organization.workload_identity_provider,
+      runtime_kind: Environment::RUNTIME_MANAGED
+    )
+    ingress = environment.create_environment_ingress!(
+      hostname: "prod-abc.devopsellence.io",
+      gcp_secret_name: "env-#{SecureRandom.hex(4)}-ingress-cloudflare-tunnel-token",
+      status: EnvironmentIngress::STATUS_READY,
+      provisioned_at: Time.current
+    )
+    ingress.assign_hosts!([ "prod-abc.devopsellence.io", "www.prod-abc.devopsellence.io" ])
+
+    post "/api/v1/cli/deploy_target",
+      params: {
+        organization: "acme",
+        project: "ShopApp",
+        environment: "production"
+      },
+      headers: auth_headers_for(user),
+      as: :json
+
+    assert_response :success
+    assert_equal [ "prod-abc.devopsellence.io", "www.prod-abc.devopsellence.io" ], json_body.dig("environment", "ingress_hosts")
+  end
+
   test "deploy target resolves existing organization by preferred id when organization is omitted" do
     user = User.create!(email: "owner-#{SecureRandom.hex(4)}@example.com", confirmed_at: Time.current)
     alpha = Organization.create!(name: "alpha")

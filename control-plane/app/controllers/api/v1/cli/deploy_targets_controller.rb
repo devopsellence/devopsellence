@@ -183,8 +183,19 @@ module Api
             name: environment.name,
             project_id: environment.project_id,
             identity_version: environment.identity_version,
-            runtime_kind: environment.runtime_kind
+            runtime_kind: environment.runtime_kind,
+            ingress_hosts: environment_ingress_hosts(environment)
           }
+        end
+
+        def environment_ingress_hosts(environment)
+          ingress_hosts = environment.environment_ingress&.hosts
+          return ingress_hosts if ingress_hosts.present?
+
+          bundle_hostname = environment.environment_bundle&.hostname.to_s.strip
+          return [ bundle_hostname ] if bundle_hostname.present?
+
+          []
         end
 
         def integer_string?(value)

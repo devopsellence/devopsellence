@@ -3360,6 +3360,9 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 	if existing == nil && discovered.InferredWebPort > 0 {
 		projectConfig = setPrimaryWebServicePort(projectConfig, discovered.InferredWebPort)
 	}
+	if existing == nil {
+		projectConfig = applySharedBootstrapIngress(projectConfig, target.Environment.IngressHosts)
+	}
 	if existing != nil {
 		projectConfig.Build = existing.Build
 		projectConfig.Services = existing.Services
@@ -3715,6 +3718,46 @@ func setPrimaryWebServicePort(cfg config.ProjectConfig, port int) config.Project
 		}
 	}
 	cfg.Services[name] = service
+	return cfg
+}
+
+func applyBootstrapIngress(cfg config.ProjectConfig, hosts []string) config.ProjectConfig {
+	serviceName, ok := cfg.PrimaryWebServiceName()
+	if !ok {
+		return cfg
+	}
+	resolvedHosts := normalizeIngressHosts(hosts)
+	if len(resolvedHosts) == 0 {
+		resolvedHosts = []string{"*"}
+	}
+	cfg.Ingress = &config.IngressConfig{
+		Hosts:   resolvedHosts,
+		Service: serviceName,
+		TLS: config.IngressTLSConfig{
+			Mode: "off",
+		},
+		RedirectHTTP: configBoolPtr(false),
+	}
+	return cfg
+}
+
+func applySharedBootstrapIngress(cfg config.ProjectConfig, hosts []string) config.ProjectConfig {
+	serviceName, ok := cfg.PrimaryWebServiceName()
+	if !ok {
+		return cfg
+	}
+	resolvedHosts := normalizeIngressHostsKeepOrder(hosts)
+	if len(resolvedHosts) == 0 {
+		return cfg
+	}
+	cfg.Ingress = &config.IngressConfig{
+		Hosts:   resolvedHosts,
+		Service: serviceName,
+		TLS: config.IngressTLSConfig{
+			Mode: "off",
+		},
+		RedirectHTTP: configBoolPtr(false),
+	}
 	return cfg
 }
 

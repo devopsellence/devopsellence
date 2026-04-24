@@ -89,7 +89,7 @@ class MinimalHTTPServer
     request = Request.new(path: uri.path, query: query)
     response = @handler.call(request)
     write_response(socket, status: response.status, headers: response.headers, body: response.body)
-  rescue URI::InvalidURIError
+  rescue URI::InvalidURIError, ArgumentError
     write_response(socket, status: 400, body: "invalid request path\n")
   rescue IOError, Errno::EBADF
     nil

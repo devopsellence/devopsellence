@@ -71,7 +71,7 @@ class MinimalHTTPServer
   private
 
   Request = Struct.new(:path, :query, keyword_init: true)
-  Response = Struct.new(:status, :headers, :body, keyword_init: true)
+  Response = Struct.new(:status, :headers, :body, :body_path, keyword_init: true)
 
   def handle_client(socket)
     request_line = socket.gets
@@ -88,7 +88,7 @@ class MinimalHTTPServer
     query = URI.decode_www_form(uri.query.to_s).to_h
     request = Request.new(path: uri.path, query: query)
     response = @handler.call(request)
-    write_response(socket, status: response.status, headers: response.headers, body: response.body)
+    write_response(socket, status: response.status, headers: response.headers, body: response.body, body_path: response.body_path)
   rescue URI::InvalidURIError, ArgumentError
     write_response(socket, status: 400, body: "invalid request path\n")
   rescue IOError, Errno::EBADF
@@ -97,7 +97,7 @@ class MinimalHTTPServer
     socket.close rescue nil
   end
 
-  def write_response(socket, status:, body:, headers: {})
+  def write_response(socket, status:, body:, body_path: nil, headers: {})
     reason = {
       200 => "OK",
       400 => "Bad Request",
@@ -107,16 +107,25 @@ class MinimalHTTPServer
     }.fetch(status, "OK")
 
     payload = body.to_s.b
+    content_length = body_path ? File.size(body_path).to_s : payload.bytesize.to_s
+
     socket.write "HTTP/1.1 #{status} #{reason}\r\n"
     merged_headers = {
-      "Content-Length" => payload.bytesize.to_s,
+      "Content-Length" => content_length,
       "Connection" => "close"
     }.merge(headers)
     merged_headers.each do |key, value|
       socket.write "#{key}: #{value}\r\n"
     end
     socket.write "\r\n"
-    socket.write payload
+
+    if body_path
+      File.open(body_path, "rb") do |file|
+        IO.copy_stream(file, socket)
+      end
+    else
+      socket.write payload
+    end
   end
 end
 
@@ -903,7 +912,7 @@ PY
       os = validate_artifact_component!("os", req.query.fetch("os"), RELEASE_TARGET_PATTERN)
       arch = validate_artifact_component!("arch", req.query.fetch("arch"), RELEASE_TARGET_PATTERN)
       artifact = release_artifact_path(@agent_root, version, "#{os}-#{arch}")
-      response(status: 200, body: File.binread(artifact), content_type: "application/octet-stream")
+      file_response(status: 200, path: artifact, content_type: "application/octet-stream")
     when "/agent/checksums"
       checksums = release_artifact_path(@agent_root, version, RELEASE_CHECKSUM_NAME)
       response(status: 200, body: prefixed_checksums(checksums, AGENT_RELEASE_PREFIX), content_type: "text/plain; charset=utf-8")
@@ -948,6 +957,12 @@ PY
     headers = {}
     headers["Content-Type"] = content_type if content_type
     MinimalHTTPServer::Response.new(status: status, headers: headers, body: body)
+  end
+
+  def file_response(status:, path:, content_type: nil)
+    headers = {}
+    headers["Content-Type"] = content_type if content_type
+    MinimalHTTPServer::Response.new(status: status, headers: headers, body_path: path.to_s)
   end
 
   def prefixed_checksums(path, prefix)

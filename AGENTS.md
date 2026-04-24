@@ -12,7 +12,7 @@ Always write "devopsellence" in all lowercase.
 | `test/e2e/` | Ruby + shell | Root-owned integration harness across agent, CLI, control plane, GCP mock. |
 | `test/support/gcp-mock/` | Go | Local emulator for GCP APIs used by hermetic e2e tests. |
 
-Each component has its own toolchain, tests, and CI. No shared build system.
+Each component still owns its tests and CI, while repo-level `mise` now declares the shared Go and Ruby toolchains used across the monorepo. There is still no shared build system.
 
 ## Commands
 

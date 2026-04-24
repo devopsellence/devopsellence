@@ -35,7 +35,7 @@ jobs:
         env:
           DEVOPSELLENCE_CLI_ROOT: ${{ github.workspace }}/cli
           DEVOPSELLENCE_AGENT_ROOT: ${{ github.workspace }}/agent
-        run: ruby test/e2e/solo_e2e.rb
+        run: mise run e2e-solo
 
       - name: Upload e2e logs
         if: failure()

@@ -14,12 +14,17 @@ module NodeDesiredState
       hosts = configured_hosts(release)
       hosts = [ingress.hostname] if hosts.empty?
 
+      tls = configured_tls(release)
+      redirect_http = configured_redirect_http(release)
+
       if environment.tunnel_ingress?
         return nil unless ingress.status == EnvironmentIngress::STATUS_READY
 
         {
           hosts: hosts,
           mode: Environment::INGRESS_STRATEGY_TUNNEL,
+          tls: tls,
+          redirectHttp: redirect_http,
           tunnelTokenSecretRef: ingress.tunnel_token_secret_ref,
           routes: routes_for(environment:, ingress:, release:)
         }
@@ -29,10 +34,8 @@ module NodeDesiredState
         {
           hosts: hosts,
           mode: "public",
-          tls: {
-            mode: "auto"
-          },
-          redirectHttp: true,
+          tls: tls,
+          redirectHttp: redirect_http,
           routes: routes_for(environment:, ingress:, release:)
         }
       end
@@ -62,6 +65,22 @@ module NodeDesiredState
         value = host.to_s.strip
         value.presence
       end.uniq
+    end
+
+    def self.configured_tls(release)
+      tls = release.ingress_config["tls"]
+      tls = tls.is_a?(Hash) ? tls : {}
+      {
+        mode: tls["mode"].to_s.strip.presence || "auto",
+        email: tls["email"].to_s.strip.presence,
+        caDirectoryUrl: tls["ca_directory_url"].to_s.strip.presence
+      }.compact
+    end
+
+    def self.configured_redirect_http(release)
+      return release.ingress_config["redirect_http"] if release.ingress_config.key?("redirect_http")
+
+      true
     end
   end
 end

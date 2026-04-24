@@ -94,6 +94,22 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_predicate release, :valid?
   end
 
+  test "rejects non-object ingress payloads" do
+    release = build_release(
+      runtime_json: JSON.generate(
+        {
+          "services" => {
+            "web" => web_service_runtime
+          },
+          "ingress" => "web"
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress must be an object"
+  end
+
   test "blank kind still infers required labels from service shape" do
     release = build_release(
       runtime_json: release_runtime_json(

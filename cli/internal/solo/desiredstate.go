@@ -311,7 +311,7 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 			},
 		})
 	}
-	redirectHTTP := false
+	redirectHTTP := true
 	if ingress.RedirectHTTP != nil {
 		redirectHTTP = *ingress.RedirectHTTP
 	}

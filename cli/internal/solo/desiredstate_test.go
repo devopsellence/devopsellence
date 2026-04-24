@@ -263,6 +263,32 @@ func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredStateForNodeDefaultsIngressRedirectHTTPToTrue(t *testing.T) {
+	cfg := baseProject()
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
+
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWebRole}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ds desiredStateJSON
+	if err := json.Unmarshal(data, &ds); err != nil {
+		t.Fatal(err)
+	}
+	if ds.Ingress == nil {
+		t.Fatal("expected ingress")
+	}
+	if !ds.Ingress.RedirectHTTP {
+		t.Fatalf("redirect_http = %v, want true", ds.Ingress.RedirectHTTP)
+	}
+}
+
 func TestBuildDesiredState_MissingSecretErrors(t *testing.T) {
 	cfg := baseProject()
 	_, err := BuildDesiredState(cfg, "myapp:abc1234", "abc1234", map[string]string{})

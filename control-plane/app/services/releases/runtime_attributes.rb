@@ -130,7 +130,7 @@ module Releases
         target = parse_hash(rule["target"] || rule[:target], field: :"ingress.rules[#{index}].target")
         {
           "match" => {
-            "host" => required_service_string(match["host"] || match[:host], field: :"ingress.rules[#{index}].match.host"),
+            "host" => IngressHostnames.normalize(required_service_string(match["host"] || match[:host], field: :"ingress.rules[#{index}].match.host")),
             "path_prefix" => optional_service_string(match["path_prefix"] || match[:path_prefix]) || "/"
           }.compact,
           "target" => {

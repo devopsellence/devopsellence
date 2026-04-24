@@ -248,6 +248,8 @@ module Releases
 
       runtime = JSON.parse(attrs.fetch(:runtime_json))
       assert_equal ["app.example.test", "www.example.test"], runtime.dig("ingress", "hosts")
+      assert_equal "app.example.test", runtime.dig("ingress", "rules", 0, "match", "host")
+      assert_equal "www.example.test", runtime.dig("ingress", "rules", 1, "match", "host")
     end
 
     test "preserves explicit ingress rules payload" do

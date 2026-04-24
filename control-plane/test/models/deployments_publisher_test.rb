@@ -77,12 +77,29 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      runtime_json: release_runtime_json(services: {
-        "web" => web_service_runtime(
-          env: { "RAILS_ENV" => "production" },
-          secret_refs: [ { "name" => "DATABASE_URL", "secret" => "projects/acme/secrets/db/versions/latest" } ]
-        )
-      }),
+      runtime_json: release_runtime_json(
+        services: {
+          "web" => web_service_runtime(
+            env: { "RAILS_ENV" => "production" },
+            secret_refs: [ { "name" => "DATABASE_URL", "secret" => "projects/acme/secrets/db/versions/latest" } ]
+          )
+        },
+        ingress: {
+          "hosts" => ["app.devopsellence.test"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.devopsellence.test", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ],
+          "tls" => {
+            "mode" => "manual",
+            "email" => "ops@example.com",
+            "ca_directory_url" => "https://ca.example.test/directory"
+          },
+          "redirect_http" => false
+        }
+      ),
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -126,6 +143,8 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal 3000, service.dig("ports", 0, "port")
     assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, service.fetch("secretRefs"))
     assert_equal release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
+    assert_equal({ "mode" => "manual", "email" => "ops@example.com", "caDirectoryUrl" => "https://ca.example.test/directory" }, desired_state.dig("ingress", "tls"))
+    assert_equal false, desired_state.dig("ingress", "redirectHttp")
     assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnelTokenSecretRef")
     assert_equal "Production", desired_state.dig("ingress", "routes", 0, "target", "environment")
     assert_equal "/up", service.dig("healthcheck", "path")
@@ -864,9 +883,25 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      runtime_json: release_runtime_json(services: {
-        "web" => web_service_runtime(port: 80)
-      }),
+      runtime_json: release_runtime_json(
+        services: {
+          "web" => web_service_runtime(port: 80)
+        },
+        ingress: {
+          "hosts" => ["app.devopsellence.test"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.devopsellence.test", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ],
+          "tls" => {
+            "mode" => "manual",
+            "email" => "ops@example.com"
+          },
+          "redirect_http" => false
+        }
+      ),
       revision: "rel-1"
     )
     node_a, = issue_test_node!(organization: organization, name: "node-a", labels: ["web"], public_ip: "198.51.100.10")
@@ -888,6 +923,8 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     state_a = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_a.reload.desired_state_object_path)
     state_b = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_b.reload.desired_state_object_path)
     assert_equal release.ingress_config.fetch("hosts"), state_a.dig("ingress", "hosts")
+    assert_equal({ "mode" => "manual", "email" => "ops@example.com" }, state_a.dig("ingress", "tls"))
+    assert_equal false, state_a.dig("ingress", "redirectHttp")
 
     assert_equal [ "node-b", "worker-a" ], state_a.fetch("nodePeers").map { |peer| peer.fetch("name") }
     node_b_peer = state_a.fetch("nodePeers").find { |peer| peer.fetch("name") == "node-b" }

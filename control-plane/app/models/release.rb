@@ -279,6 +279,15 @@ class Release < ApplicationRecord
   end
 
   def validate_ingress_config
+    payload = runtime_payload
+    raw_ingress = if payload.is_a?(Hash)
+      payload.key?("ingress") ? payload["ingress"] : payload[:ingress]
+    end
+    unless raw_ingress.nil? || raw_ingress.is_a?(Hash)
+      errors.add(:runtime_json, "ingress must be an object")
+      return
+    end
+
     ingress = ingress_config
     return if ingress.blank?
 
@@ -288,7 +297,7 @@ class Release < ApplicationRecord
       return
     end
 
-    normalized_hosts = hosts.map { |host| host.to_s.strip }.reject(&:blank?)
+    normalized_hosts = hosts.map { |host| IngressHostnames.normalize(host) }.reject(&:blank?)
     if normalized_hosts.length != hosts.length
       errors.add(:runtime_json, "ingress.hosts entries must be present")
     end
@@ -307,7 +316,7 @@ class Release < ApplicationRecord
       rule = stringify_hash(raw_rule)
       match = stringify_hash(rule["match"])
       target = stringify_hash(rule["target"])
-      host = match["host"].to_s.strip
+      host = IngressHostnames.normalize(match["host"])
       path_prefix = match["path_prefix"].to_s.strip.presence || "/"
       service_name = target["service"].to_s.strip
       port_name = target["port"].to_s.strip

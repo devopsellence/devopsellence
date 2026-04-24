@@ -178,6 +178,16 @@ func TestValidateIngressAllowsPublicMode(t *testing.T) {
 	}
 }
 
+func TestValidateIngressTreatsBlankModeWithoutTunnelSecretAsPublic(t *testing.T) {
+	state := desiredState(webService())
+	state.Ingress = &desiredstatepb.Ingress{
+		Hosts: []string{"abc123.devopsellence.io"},
+	}
+	if err := Validate(state); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateIngressRejectsUnsupportedMode(t *testing.T) {
 	state := desiredState(webService())
 	state.Ingress = &desiredstatepb.Ingress{

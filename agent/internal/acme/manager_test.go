@@ -60,11 +60,18 @@ func TestNodePeerPublicWebAddresses(t *testing.T) {
 func TestPeerChallengeURL(t *testing.T) {
 	got := peerChallengeURL("203.0.113.10", "/.well-known/acme-challenge/token-a")
 	if got != "http://203.0.113.10/.well-known/acme-challenge/token-a" {
-		t.Fatalf("url = %q", got)
+		t.Fatalf("url = %q, want http://203.0.113.10/.well-known/acme-challenge/token-a", got)
 	}
 
 	got = peerChallengeURL("2001:db8::1", "/.well-known/acme-challenge/token-a")
 	if got != "http://[2001:db8::1]/.well-known/acme-challenge/token-a" {
 		t.Fatalf("ipv6 url = %q", got)
+	}
+}
+
+func TestNeedsAutoTLSTreatsBlankModeWithoutTunnelTokenAsPublic(t *testing.T) {
+	ingress := &desiredstatepb.Ingress{Hosts: []string{"app.example.com"}}
+	if !needsAutoTLS(ingress) {
+		t.Fatal("expected blank mode ingress without tunnel token to need auto TLS")
 	}
 }

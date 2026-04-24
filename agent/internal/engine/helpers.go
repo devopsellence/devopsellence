@@ -49,7 +49,7 @@ func WaitReady(ctx context.Context, eng Engine, containerName, component string,
 }
 
 // EnsureImage pulls image if it is not already present locally.
-// Intended for system containers (envoy, cloudflared) that need no registry auth.
+// Intended for system containers that need no registry auth.
 func EnsureImage(ctx context.Context, eng Engine, image string) error {
 	exists, err := eng.ImageExists(ctx, image)
 	if err != nil {

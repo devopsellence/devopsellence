@@ -72,7 +72,7 @@ cd control-plane && mise run test -- test/path/file_test.rb
 ## Review Handling
 
 - Explicit user product direction overrides reviewer suggestions.
-- If user says no legacy / no backward compat / clean slate, do not add backfills, shims, or compat code just to satisfy review comments; leave the thread open and note the rationale.
+- If user says no legacy / no backward compat / clean slate, do not add backfills, shims, compat code, or rejection guards just to preserve or explicitly refute removed behavior; remove the deleted surface cleanly and simplify the codepath instead.
 - Right after each PR is opened or updated with pushed fixes, request a fresh Copilot review with `gh pr edit <pr-number> --add-reviewer copilot-pull-request-reviewer`.
 
 ## Architecture

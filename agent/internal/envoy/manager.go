@@ -612,10 +612,13 @@ func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {
 	}
 
 	mode := strings.TrimSpace(ingress.Mode)
-	if mode == "" {
+	if mode != "" {
+		return mode
+	}
+	if strings.TrimSpace(ingress.TunnelToken) != "" || strings.TrimSpace(ingress.TunnelTokenSecretRef) != "" {
 		return ingressModeTunnel
 	}
-	return mode
+	return ingressModePublic
 }
 
 func ingressTLSMode(ingress *desiredstatepb.Ingress) string {

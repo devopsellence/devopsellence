@@ -70,7 +70,9 @@ module EnvironmentBundles
       zone = hostname_zone_name
       20.times do
         candidate = "#{SecureRandom.alphanumeric(EnvironmentIngress::HOSTNAME_LENGTH).downcase}.#{zone}"
-        return candidate unless EnvironmentIngress.exists?(hostname: candidate) || EnvironmentBundle.exists?(hostname: candidate)
+        return candidate unless EnvironmentIngressHost.exists?(hostname: candidate) ||
+          EnvironmentIngress.exists?(hostname: candidate) ||
+          EnvironmentBundle.exists?(hostname: candidate)
       end
       raise "failed to allocate a unique bundle ingress hostname"
     end

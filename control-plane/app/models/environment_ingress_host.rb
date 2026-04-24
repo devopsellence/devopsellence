@@ -10,6 +10,6 @@ class EnvironmentIngressHost < ApplicationRecord
 
   private
     def normalize_hostname!
-      self.hostname = hostname.to_s.strip.downcase
+      self.hostname = IngressHostnames.normalize(hostname)
     end
 end

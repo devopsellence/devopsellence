@@ -197,6 +197,55 @@ module Cloudflare
       ], client.deleted_dns_records
     end
 
+    test "normalizes stored mixed-case release hosts before updating routing" do
+      organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+      ensure_test_organization_runtime!(organization)
+      project = organization.projects.create!(name: "Project A")
+      environment = project.environments.create!(
+        name: "production",
+        gcp_project_id: organization.gcp_project_id,
+        gcp_project_number: organization.gcp_project_number,
+        workload_identity_pool: organization.workload_identity_pool,
+        workload_identity_provider: organization.workload_identity_provider,
+        service_account_email: "env@#{organization.gcp_project_id}.iam.gserviceaccount.com"
+      )
+      release = project.releases.create!(
+        git_sha: "a" * 40,
+        revision: "rel-1",
+        image_repository: "shop-app",
+        image_digest: "sha256:#{"b" * 64}",
+        runtime_json: JSON.generate(
+          {
+            "services" => { "web" => web_service_runtime },
+            "tasks" => {},
+            "ingress" => {
+              "service" => "web",
+              "hosts" => ["App.Example.Test", "WWW.Example.Test"]
+            }
+          }
+        )
+      )
+      environment.update!(current_release: release)
+      environment.create_environment_ingress!(
+        hostname: "app.example.test",
+        cloudflare_tunnel_id: "tunnel-1",
+        gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
+        status: EnvironmentIngress::STATUS_READY,
+        provisioned_at: Time.current
+      )
+      client = FakeClient.new
+
+      ingress = EnvironmentIngressProvisioner.new(
+        environment: environment,
+        client: client,
+        secret_manager: FakeSecretManager.new,
+        release: release
+      ).call
+
+      assert_equal ["app.example.test", "www.example.test"], ingress.hosts
+      assert_equal ["app.example.test", "www.example.test"], client.configured_tunnels.first[:hostnames]
+    end
+
     test "restores tunnel routing from environment bundle data" do
       organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
       ensure_test_organization_runtime!(organization)

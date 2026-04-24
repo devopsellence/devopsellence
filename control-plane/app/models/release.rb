@@ -289,7 +289,7 @@ class Release < ApplicationRecord
     unless hosts.nil? || string_array?(hosts)
       errors.add(:runtime_json, "ingress.hosts must be an array of strings")
     end
-    if string_array?(hosts) && hosts.uniq.length != hosts.length
+    if string_array?(hosts) && IngressHostnames.normalize_all(hosts).length != hosts.length
       errors.add(:runtime_json, "ingress.hosts must be unique")
     end
 

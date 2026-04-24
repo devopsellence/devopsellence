@@ -170,5 +170,52 @@ module Releases
       runtime = JSON.parse(attrs.fetch(:runtime_json))
       assert_equal false, runtime.dig("ingress", "redirect_http")
     end
+
+    test "normalizes ingress hosts and rejects case-insensitive duplicates" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                kind: "web",
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              service: "web",
+              hosts: ["App.Example.Test", "app.example.test"]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.hosts must be unique", error.message
+
+      attrs = RuntimeAttributes.new(
+        params: {
+          git_sha: "a" * 40,
+          image_repository: "api",
+          image_digest: "sha256:#{"b" * 64}",
+          services: {
+            web: {
+              kind: "web",
+              ports: [{ name: "http", port: 3000 }],
+              healthcheck: { path: "/up", port: 3000 }
+            }
+          },
+          ingress: {
+            service: "web",
+            hosts: ["App.Example.Test", "WWW.Example.Test"]
+          }
+        }
+      ).to_h
+
+      runtime = JSON.parse(attrs.fetch(:runtime_json))
+      assert_equal ["app.example.test", "www.example.test"], runtime.dig("ingress", "hosts")
+    end
   end
 end

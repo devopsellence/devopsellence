@@ -133,8 +133,14 @@ module Releases
         end
 
       tls = ingress["tls"] || ingress[:tls]
+      hosts = optional_service_array(ingress["hosts"] || ingress[:hosts], field: :"ingress.hosts")
+      normalized_hosts = IngressHostnames.normalize_all(hosts)
+      if hosts.present? && normalized_hosts.length != hosts.length
+        raise InvalidPayload, "ingress.hosts must be unique"
+      end
+
       parsed = {
-        "hosts" => optional_service_array(ingress["hosts"] || ingress[:hosts], field: :"ingress.hosts"),
+        "hosts" => normalized_hosts.presence,
         "service" => optional_service_string(ingress["service"] || ingress[:service]),
         "redirect_http" => optional_boolean(redirect_http, field: :"ingress.redirect_http")
       }.compact

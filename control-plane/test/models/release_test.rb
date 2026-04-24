@@ -67,6 +67,20 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_equal({ "service" => "web" }, release.ingress_config)
   end
 
+  test "ingress hosts must be unique case-insensitively" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "service" => "web",
+          "hosts" => ["App.Example.Test", "app.example.test"]
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.hosts must be unique"
+  end
+
   test "blank kind does not contribute required labels and reports one kind error" do
     release = build_release(
       runtime_json: release_runtime_json(

@@ -91,7 +91,7 @@ class EnvironmentIngress < ApplicationRecord
     end
 
     def normalize_host(value)
-      value.to_s.strip.downcase
+      IngressHostnames.normalize(value)
     end
 
     def ensure_primary_host_record!

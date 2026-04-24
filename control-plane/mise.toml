@@ -1,3 +1,6 @@
+[tools]
+ruby = "4.0.3"
+
 [tasks.postgres-up]
 description = "Start PostgreSQL container"
 run = '''

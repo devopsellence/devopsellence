@@ -8,7 +8,7 @@
 # For a containerized dev environment, see Dev Containers: https://guides.rubyonrails.org/getting_started_with_devcontainer.html
 
 # Make sure RUBY_VERSION matches the Ruby version in .ruby-version
-ARG RUBY_VERSION=4.0.0
+ARG RUBY_VERSION=4.0.3
 ARG DEVOPSELLENCE_DEFAULT_GCP_PROJECT_ID=example-devopsellence
 ARG DEVOPSELLENCE_DEFAULT_GCP_PROJECT_NUMBER=123456789012
 ARG DEVOPSELLENCE_DEFAULT_WORKLOAD_IDENTITY_POOL=projects/123456789012/locations/global/workloadIdentityPools/devopsellence-nodes

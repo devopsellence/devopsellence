@@ -1,3 +1,7 @@
+[tools]
+go = "1.26.2"
+ruby = "4.0.3"
+
 [tasks."test:agent"]
 description = "Run agent tests"
 dir = "agent"

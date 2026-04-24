@@ -1,5 +1,5 @@
-ARG GO_VERSION=1.25.8
-ARG RUBY_VERSION=4.0.0
+ARG GO_VERSION=1.26.2
+ARG RUBY_VERSION=4.0.3
 
 FROM docker.io/library/golang:${GO_VERSION}-bookworm AS go
 

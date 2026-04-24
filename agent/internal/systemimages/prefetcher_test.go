@@ -42,7 +42,7 @@ func (f *fakeImageEngine) PullImage(ctx context.Context, image string, auth *eng
 func TestPrefetcherPrefetchesEachImageOnce(t *testing.T) {
 	engine := &fakeImageEngine{existing: map[string]bool{}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	prefetcher := NewPrefetcher(engine, []string{"envoy", "envoy", " cloudflared "}, logger)
+	prefetcher := NewPrefetcher(engine, []string{"envoy", "envoy", " redis "}, logger)
 
 	if err := prefetcher.Prefetch(context.Background()); err != nil {
 		t.Fatalf("prefetch: %v", err)
@@ -61,7 +61,7 @@ func TestPrefetcherContinuesAfterPullFailure(t *testing.T) {
 		pullErrors: map[string]error{"envoy": errors.New("pull failed")},
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	prefetcher := NewPrefetcher(engine, []string{"envoy", "cloudflared"}, logger)
+	prefetcher := NewPrefetcher(engine, []string{"envoy", "redis"}, logger)
 
 	if err := prefetcher.Prefetch(context.Background()); err != nil {
 		t.Fatalf("prefetch: %v", err)
@@ -69,7 +69,7 @@ func TestPrefetcherContinuesAfterPullFailure(t *testing.T) {
 
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
-	if len(engine.pulled) != 1 || engine.pulled[0] != "cloudflared" {
+	if len(engine.pulled) != 1 || engine.pulled[0] != "redis" {
 		t.Fatalf("expected prefetch to continue after failure, got %v", engine.pulled)
 	}
 }

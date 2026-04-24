@@ -46,7 +46,6 @@ type Config struct {
 	IngressCertRenewBefore       time.Duration
 	EnvoyRestartPolicy           string
 	WebPort                      uint16
-	CloudflareTunnelToken        string
 	ControlPlaneBaseURL          string
 	BootstrapToken               string
 	NodeName                     string
@@ -92,7 +91,6 @@ func Load(args []string) (*Config, error) {
 	var ingressCertRenewBefore time.Duration
 	var envoyRestartPolicy string
 	var webPort uint
-	var cloudflareTunnelTokenFile string
 	var controlPlaneBaseURL string
 	var bootstrapToken string
 	var nodeName string
@@ -137,7 +135,6 @@ func Load(args []string) (*Config, error) {
 	fs.DurationVar(&ingressCertRenewBefore, "ingress-cert-renew-before", 30*24*time.Hour, "renew public TLS certificates before expiry by this duration")
 	fs.StringVar(&envoyRestartPolicy, "envoy-restart-policy", "unless-stopped", "envoy restart policy: no, always, unless-stopped, on-failure")
 	fs.UintVar(&webPort, "web-port", 3000, "web service port inside container")
-	fs.StringVar(&cloudflareTunnelTokenFile, "cloudflare-tunnel-token-file", "", "path to file containing cloudflared tunnel token")
 	fs.StringVar(&controlPlaneBaseURL, "control-plane-base-url", envOrDefault("DEVOPSELLENCE_BASE_URL", ""), "control plane base url")
 	fs.StringVar(&bootstrapToken, "bootstrap-token", envOrDefault("DEVOPSELLENCE_BOOTSTRAP_TOKEN", ""), "one-time bootstrap token")
 	fs.StringVar(&nodeName, "node-name", defaultNodeName, "node name sent during bootstrap")
@@ -281,37 +278,7 @@ func Load(args []string) (*Config, error) {
 		return nil, errors.New("--google-scopes requires at least one scope")
 	}
 
-	if cloudflareTunnelTokenFile != "" {
-		token, err := readSecretFile(cloudflareTunnelTokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("load cloudflare tunnel token file: %w", err)
-		}
-		cfg.CloudflareTunnelToken = token
-	}
-
 	return cfg, nil
-}
-
-func readSecretFile(path string) (string, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("not a regular file: %s", path)
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("insecure permissions on %s: require owner-only (0600/0400)", path)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	value := strings.TrimSpace(string(data))
-	if value == "" {
-		return "", fmt.Errorf("file is empty: %s", path)
-	}
-	return value, nil
 }
 
 func parseLevel(level string) (slog.Level, error) {

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -33,10 +32,6 @@ type EnvoyManager interface {
 	WaitForRoute(ctx context.Context, path string) error
 }
 
-type CloudflaredManager interface {
-	Reconcile(ctx context.Context, ingress *desiredstatepb.Ingress) error
-}
-
 type ImagePullAuthProvider interface {
 	AuthForImage(ctx context.Context, image string) (*engine.RegistryAuth, error)
 }
@@ -55,7 +50,6 @@ type Options struct {
 	DrainDelay    time.Duration
 	WebPort       uint16
 	Envoy         EnvoyManager
-	Cloudflared   CloudflaredManager
 	ImagePullAuth ImagePullAuthProvider
 	IngressCert   IngressCertManager
 	HTTPProber    HTTPProber
@@ -79,10 +73,6 @@ type TaskResult struct {
 }
 
 func New(eng engine.Engine, opts Options) *Reconciler {
-	// Normalise typed-nil interfaces so callers can use == nil checks safely.
-	if isNilInterface(opts.Cloudflared) {
-		opts.Cloudflared = nil
-	}
 	if opts.HTTPProber == nil {
 		opts.HTTPProber = newDefaultHTTPProber()
 	}
@@ -125,12 +115,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 			return result, err
 		}
 	}
-	if !hasWebRuntimeService(desiredByService) && r.opts.Cloudflared != nil {
-		if err := r.opts.Cloudflared.Reconcile(ctx, nil); err != nil {
-			return result, fmt.Errorf("reconcile cloudflared: %w", err)
-		}
-	}
-
 	for _, c := range existing {
 		if _, ok := desiredByService[containerServiceKey(c)]; ok {
 			continue
@@ -224,15 +208,6 @@ func (r *Reconciler) reconcileService(ctx context.Context, ingress *desiredstate
 		}
 		if err := r.opts.Envoy.Ensure(ctx, ingress); err != nil {
 			return result, fmt.Errorf("ensure envoy: %w", err)
-		}
-		if r.opts.Cloudflared != nil {
-			tunnelIngress := ingress
-			if normalizedIngressMode(ingress) != ingressModeTunnel {
-				tunnelIngress = nil
-			}
-			if err := r.opts.Cloudflared.Reconcile(ctx, tunnelIngress); err != nil {
-				return result, fmt.Errorf("reconcile cloudflared: %w", err)
-			}
 		}
 	}
 
@@ -442,15 +417,6 @@ func runtimeServiceKey(environmentName, serviceName string) string {
 
 func containerServiceKey(c engine.ContainerState) string {
 	return runtimeServiceKey(c.Environment, c.Service)
-}
-
-func hasWebRuntimeService(services map[string]desiredstate.RuntimeService) bool {
-	for _, service := range services {
-		if service.ServiceKind == desiredstate.ServiceKindWeb {
-			return true
-		}
-	}
-	return false
 }
 
 // tearDownFailedContainer stops a container that failed to become healthy,
@@ -756,19 +722,6 @@ func (p defaultHTTPProber) Get(ctx context.Context, target string, timeout time.
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode, nil
-}
-
-func isNilInterface(v any) bool {
-	if v == nil {
-		return true
-	}
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return rv.IsNil()
-	default:
-		return false
-	}
 }
 
 const maxTaskLogSnippetLen = 512

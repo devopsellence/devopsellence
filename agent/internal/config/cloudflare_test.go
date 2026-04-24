@@ -1,8 +1,8 @@
 package config
 
 import (
-	"os"
-	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -11,33 +11,19 @@ var requiredFlags = []string{
 	"--auth-state-path=/tmp/agent-auth-state.json",
 }
 
-func TestLoadCloudflareTokenFile(t *testing.T) {
-	dir := t.TempDir()
-	tokenFile := filepath.Join(dir, "token")
-	if err := os.WriteFile(tokenFile, []byte("tok-from-file\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-
-	args := append(requiredFlags, "--cloudflare-tunnel-token-file="+tokenFile)
-	cfg, err := Load(args)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if cfg.CloudflareTunnelToken != "tok-from-file" {
-		t.Fatalf("expected token from file, got %q", cfg.CloudflareTunnelToken)
+func TestConfigDoesNotExposeCloudflareTunnelToken(t *testing.T) {
+	if _, ok := reflect.TypeOf(Config{}).FieldByName("CloudflareTunnelToken"); ok {
+		t.Fatal("expected cloudflare tunnel token to be removed from agent config")
 	}
 }
 
-func TestLoadCloudflareTokenFileRejectsInsecurePerms(t *testing.T) {
-	dir := t.TempDir()
-	tokenFile := filepath.Join(dir, "token")
-	if err := os.WriteFile(tokenFile, []byte("tok"), 0o644); err != nil {
-		t.Fatalf("write token file: %v", err)
+func TestLoadRejectsRemovedCloudflareTunnelTokenFileFlag(t *testing.T) {
+	_, err := Load(append(requiredFlags, "--cloudflare-tunnel-token-file=/tmp/token"))
+	if err == nil {
+		t.Fatal("expected removed cloudflare tunnel token flag to be rejected")
 	}
-
-	args := append(requiredFlags, "--cloudflare-tunnel-token-file="+tokenFile)
-	if _, err := Load(args); err == nil {
-		t.Fatal("expected error for insecure permissions")
+	if !strings.Contains(err.Error(), "cloudflare-tunnel-token-file") {
+		t.Fatalf("expected error to mention removed flag, got %q", err)
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/auth"
 	"github.com/devopsellence/devopsellence/agent/internal/authority/remote"
 	"github.com/devopsellence/devopsellence/agent/internal/authority/solo"
-	"github.com/devopsellence/devopsellence/agent/internal/cloudflared"
 	"github.com/devopsellence/devopsellence/agent/internal/config"
 	cpregistry "github.com/devopsellence/devopsellence/agent/internal/controlplane"
 	"github.com/devopsellence/devopsellence/agent/internal/diagnose"
@@ -104,11 +103,6 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 		RestartPolicy:       cfg.EnvoyRestartPolicy,
 	}, logger)
 
-	cloudflaredManager := cloudflared.New(eng, cloudflared.Config{
-		NetworkName:    cfg.NetworkName,
-		TunnelToken:    cfg.CloudflareTunnelToken,
-		StartupTimeout: cfg.StopTimeout,
-	}, logger)
 	ingressCertManager := acme.New(acme.Config{
 		CertPath:    cfg.EnvoyTLSCertPath,
 		KeyPath:     cfg.EnvoyTLSKeyPath,
@@ -124,7 +118,6 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 		DrainDelay:  cfg.DrainDelay,
 		WebPort:     cfg.WebPort,
 		Envoy:       envoyManager,
-		Cloudflared: cloudflaredManager,
 		IngressCert: ingressCertManager,
 		Logger:      logger,
 	})
@@ -206,7 +199,7 @@ func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 	if cfg.PrefetchSystemImages {
 		systemImagePrefetcher = systemimages.NewPrefetcher(
 			eng,
-			[]string{cfg.EnvoyImage, cloudflared.DefaultImageRef()},
+			[]string{cfg.EnvoyImage},
 			logger.With("component", "system-image-prefetch"),
 		)
 	}
@@ -227,11 +220,6 @@ func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		RestartPolicy:       cfg.EnvoyRestartPolicy,
 	}, logger)
 
-	cloudflaredManager := cloudflared.New(eng, cloudflared.Config{
-		NetworkName:    cfg.NetworkName,
-		TunnelToken:    cfg.CloudflareTunnelToken,
-		StartupTimeout: cfg.StopTimeout,
-	}, logger)
 	ingressCertManager := acme.New(acme.Config{
 		CertPath:    cfg.EnvoyTLSCertPath,
 		KeyPath:     cfg.EnvoyTLSKeyPath,
@@ -250,7 +238,6 @@ func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		DrainDelay:    cfg.DrainDelay,
 		WebPort:       cfg.WebPort,
 		Envoy:         envoyManager,
-		Cloudflared:   cloudflaredManager,
 		ImagePullAuth: imagePullAuth,
 		IngressCert:   ingressCertManager,
 		Logger:        logger,

@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -158,15 +159,6 @@ func (f *fakeEnvoyManager) WaitForRoute(_ context.Context, path string) error {
 	f.waitCalls++
 	f.waitPath = path
 	return f.waitErr
-}
-
-type fakeCloudflaredManager struct {
-	ingresses []*desiredstatepb.Ingress
-}
-
-func (f *fakeCloudflaredManager) Reconcile(_ context.Context, ingress *desiredstatepb.Ingress) error {
-	f.ingresses = append(f.ingresses, ingress)
-	return nil
 }
 
 type fakeImagePullAuth struct {
@@ -532,18 +524,22 @@ func TestReconcilePullsMissingImageWhenRemotePullAuthConfigured(t *testing.T) {
 	}
 }
 
-func TestReconcileWebPassesIngressToCloudflared(t *testing.T) {
+func TestOptionsDoesNotExposeCloudflaredManager(t *testing.T) {
+	if _, ok := reflect.TypeOf(Options{}).FieldByName("Cloudflared"); ok {
+		t.Fatal("expected built-in cloudflared management to be removed from reconciler options")
+	}
+}
+
+func TestReconcileWebWithTunnelIngressStillConfiguresEnvoy(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["httpbin"] = true
 
 	envoyManager := &fakeEnvoyManager{}
-	cloudflared := &fakeCloudflaredManager{}
 	rec := New(eng, Options{
 		Network:     "devopsellence",
 		StopTimeout: 2 * time.Second,
 		WebPort:     80,
 		Envoy:       envoyManager,
-		Cloudflared: cloudflared,
 		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
 	})
 	state := desiredState(webService(80, "/up"))
@@ -552,39 +548,8 @@ func TestReconcileWebPassesIngressToCloudflared(t *testing.T) {
 	if _, err := rec.Reconcile(context.Background(), state); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if len(cloudflared.ingresses) != 1 {
-		t.Fatalf("expected cloudflared reconcile, got %d", len(cloudflared.ingresses))
-	}
-	if got := strings.Join(cloudflared.ingresses[0].Hosts, ","); got != "abc123.devopsellence.io" {
-		t.Fatalf("unexpected ingress hosts: %s", got)
-	}
 	if envoyManager.ingress == nil || strings.Join(envoyManager.ingress.Hosts, ",") != "abc123.devopsellence.io" {
 		t.Fatalf("unexpected envoy ingress: %+v", envoyManager.ingress)
-	}
-}
-
-func TestReconcileBlankModeWithoutTunnelTokenClearsCloudflared(t *testing.T) {
-	eng := newFakeEngine()
-	eng.images["httpbin"] = true
-
-	envoyManager := &fakeEnvoyManager{}
-	cloudflared := &fakeCloudflaredManager{}
-	rec := New(eng, Options{
-		Network:     "devopsellence",
-		StopTimeout: 2 * time.Second,
-		WebPort:     80,
-		Envoy:       envoyManager,
-		Cloudflared: cloudflared,
-		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
-	})
-	state := desiredState(webService(80, "/up"))
-	state.Ingress = blankModeIngress()
-
-	if _, err := rec.Reconcile(context.Background(), state); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if len(cloudflared.ingresses) != 1 || cloudflared.ingresses[0] != nil {
-		t.Fatalf("expected nil cloudflared ingress, got %+v", cloudflared.ingresses)
 	}
 }
 
@@ -611,25 +576,6 @@ func TestReconcileBlankModeContinuesServingHTTPWhenAutoTLSProvisioningFails(t *t
 	}
 	if result.Created != 1 {
 		t.Fatalf("expected web service creation to continue, got %+v", result)
-	}
-}
-
-func TestReconcileWithoutWebClearsCloudflared(t *testing.T) {
-	eng := newFakeEngine()
-	eng.images["busybox"] = true
-
-	cloudflared := &fakeCloudflaredManager{}
-	rec := New(eng, Options{
-		Network:     "devopsellence",
-		StopTimeout: 2 * time.Second,
-		WebPort:     80,
-		Cloudflared: cloudflared,
-	})
-	if _, err := rec.Reconcile(context.Background(), desiredState(workerService("worker", nil))); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if len(cloudflared.ingresses) != 1 || cloudflared.ingresses[0] != nil {
-		t.Fatalf("expected nil ingress reconcile, got %+v", cloudflared.ingresses)
 	}
 }
 

@@ -198,7 +198,7 @@ The product layering is deliberate:
 
 When you outgrow solo, `devopsellence mode use shared` switches to control-plane workflows. Same config, same agent, same deploy verbs.
 
-The design rationale lives in [`docs/vision.md`](docs/vision.md).
+The design rationale lives in [`docs/vision.md`](docs/vision.md). The explicit ingress-rules + generic-services schema change is documented in [`docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md`](docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md).
 
 ## Monorepo layout
 

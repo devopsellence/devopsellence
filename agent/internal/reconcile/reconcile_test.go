@@ -563,6 +563,57 @@ func TestReconcileWebPassesIngressToCloudflared(t *testing.T) {
 	}
 }
 
+func TestReconcileBlankModeWithoutTunnelTokenClearsCloudflared(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["httpbin"] = true
+
+	envoyManager := &fakeEnvoyManager{}
+	cloudflared := &fakeCloudflaredManager{}
+	rec := New(eng, Options{
+		Network:     "devopsellence",
+		StopTimeout: 2 * time.Second,
+		WebPort:     80,
+		Envoy:       envoyManager,
+		Cloudflared: cloudflared,
+		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
+	})
+	state := desiredState(webService(80, "/up"))
+	state.Ingress = blankModeIngress()
+
+	if _, err := rec.Reconcile(context.Background(), state); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(cloudflared.ingresses) != 1 || cloudflared.ingresses[0] != nil {
+		t.Fatalf("expected nil cloudflared ingress, got %+v", cloudflared.ingresses)
+	}
+}
+
+func TestReconcileBlankModeContinuesServingHTTPWhenAutoTLSProvisioningFails(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["httpbin"] = true
+	envoyManager := &fakeEnvoyManager{engine: eng}
+	ingressCertManager := &fakeIngressCertManager{ensureErr: fmt.Errorf("acme unavailable")}
+	rec := New(eng, Options{
+		Network:     "devopsellence",
+		StopTimeout: 2 * time.Second,
+		WebPort:     3000,
+		Envoy:       envoyManager,
+		IngressCert: ingressCertManager,
+		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
+	})
+
+	state := desiredState(webService(80, "/up"))
+	state.Ingress = blankModeIngress()
+
+	result, err := rec.Reconcile(context.Background(), state)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Created != 1 {
+		t.Fatalf("expected web service creation to continue, got %+v", result)
+	}
+}
+
 func TestReconcileWithoutWebClearsCloudflared(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
@@ -740,6 +791,13 @@ func tunnelIngress() *desiredstatepb.Ingress {
 func publicIngress() *desiredstatepb.Ingress {
 	return &desiredstatepb.Ingress{
 		Mode:   "public",
+		Hosts:  []string{"abc123.devopsellence.io"},
+		Routes: []*desiredstatepb.IngressRoute{ingressRoute("abc123.devopsellence.io")},
+	}
+}
+
+func blankModeIngress() *desiredstatepb.Ingress {
+	return &desiredstatepb.Ingress{
 		Hosts:  []string{"abc123.devopsellence.io"},
 		Routes: []*desiredstatepb.IngressRoute{ingressRoute("abc123.devopsellence.io")},
 	}

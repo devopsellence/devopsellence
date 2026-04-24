@@ -333,16 +333,21 @@ func needsAutoTLS(ingress *desiredstatepb.Ingress) bool {
 	if ingress == nil {
 		return false
 	}
-	switch strings.TrimSpace(ingress.Mode) {
-	case "public":
-	default:
+	mode := strings.TrimSpace(ingress.Mode)
+	if mode == "" {
+		if strings.TrimSpace(ingress.TunnelToken) != "" || strings.TrimSpace(ingress.TunnelTokenSecretRef) != "" {
+			return false
+		}
+		mode = "public"
+	}
+	if mode != "public" {
 		return false
 	}
 	tls := ingress.GetTls()
 	if tls == nil {
 		return true
 	}
-	mode := strings.TrimSpace(tls.Mode)
+	mode = strings.TrimSpace(tls.Mode)
 	return mode == "" || mode == "auto"
 }
 

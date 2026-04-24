@@ -341,10 +341,15 @@ func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {
 	}
 
 	switch strings.TrimSpace(ingress.Mode) {
-	case "", ingressModeTunnel:
+	case "":
+		if strings.TrimSpace(ingress.TunnelToken) != "" || strings.TrimSpace(ingress.TunnelTokenSecretRef) != "" {
+			return ingressModeTunnel
+		}
+		return ingressModePublic
+	case ingressModeTunnel:
 		return ingressModeTunnel
 	case ingressModePublic:
-		return strings.TrimSpace(ingress.Mode)
+		return ingressModePublic
 	default:
 		return strings.TrimSpace(ingress.Mode)
 	}

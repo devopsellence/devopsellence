@@ -149,6 +149,35 @@ environments:
           RAILS_ENV: production
 ```
 
+### Example: run cloudflared as an accessory service
+
+`kind: accessory` is already supported for non-web sidecars/helpers. That means Cloudflare Tunnel can live in normal app config instead of as special agent-managed behavior:
+
+```yaml
+services:
+  web:
+    kind: web
+    ports:
+      - name: http
+        port: 3000
+
+  cloudflared:
+    kind: accessory
+    image: docker.io/cloudflare/cloudflared:latest
+    command: ["cloudflared"]
+    args: ["tunnel", "run"]
+    secret_refs:
+      - name: TUNNEL_TOKEN
+        secret: CLOUDFLARE_TUNNEL_TOKEN
+```
+
+Then store the token as a project secret and deploy normally:
+
+```bash
+devopsellence secrets set CLOUDFLARE_TUNNEL_TOKEN
+devopsellence deploy
+```
+
 ## Need more than solo mode?
 
 When you want browser auth, team workflows, hosted deploy APIs, managed nodes, or a control plane, switch the workspace to `shared` and choose one of these paths:

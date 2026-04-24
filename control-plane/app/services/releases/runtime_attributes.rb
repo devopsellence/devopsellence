@@ -24,7 +24,7 @@ module Releases
       runtime = {
         "services" => parse_services(params[:services]),
         "tasks" => parse_tasks(params[:tasks]),
-        "ingress_service" => optional_string(:ingress_service)
+        "ingress" => parse_ingress(params[:ingress])
       }.compact
 
       attrs.merge(runtime_json: JSON.generate(runtime))
@@ -121,6 +121,40 @@ module Releases
       }.compact
     end
 
+    def parse_ingress(value)
+      ingress = parse_hash(value, field: :ingress)
+      return nil if ingress.blank?
+
+      redirect_http =
+        if ingress.key?("redirect_http")
+          ingress["redirect_http"]
+        elsif ingress.key?(:redirect_http)
+          ingress[:redirect_http]
+        end
+
+      tls = ingress["tls"] || ingress[:tls]
+      hosts = optional_service_array(ingress["hosts"] || ingress[:hosts], field: :"ingress.hosts")
+      normalized_hosts = IngressHostnames.normalize_all(hosts)
+      if hosts.present? && normalized_hosts.length != hosts.length
+        raise InvalidPayload, "ingress.hosts must be unique"
+      end
+
+      parsed = {
+        "hosts" => normalized_hosts.presence,
+        "service" => optional_service_string(ingress["service"] || ingress[:service]),
+        "redirect_http" => optional_boolean(redirect_http, field: :"ingress.redirect_http")
+      }.compact
+      if tls.present?
+        tls = parse_hash(tls, field: :"ingress.tls")
+        parsed["tls"] = {
+          "mode" => optional_service_string(tls["mode"] || tls[:mode]),
+          "email" => optional_service_string(tls["email"] || tls[:email]),
+          "ca_directory_url" => optional_service_string(tls["ca_directory_url"] || tls[:ca_directory_url])
+        }.compact
+      end
+      parsed
+    end
+
     def parse_ports(value, field:)
       parse_array(value, field:).map.with_index do |entry, index|
         port = parse_hash(entry, field: :"#{field}[#{index}]")
@@ -215,6 +249,13 @@ module Releases
       raise InvalidPayload, "#{field} is required" if integer.nil?
 
       integer
+    end
+
+    def optional_boolean(value, field:)
+      return nil if value.nil? || value == ""
+      return value if value == true || value == false
+
+      raise InvalidPayload, "#{field} must be a boolean"
     end
   end
 end

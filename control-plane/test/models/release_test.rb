@@ -10,27 +10,27 @@ class ReleaseTest < ActiveSupport::TestCase
           "admin" => web_service_runtime,
           "public" => web_service_runtime
         },
-        ingress_service: nil
+        ingress: nil
       )
     )
 
     assert_not release.valid?
-    assert_includes release.errors[:runtime_json], "ingress_service is required when multiple web services are defined"
+    assert_includes release.errors[:runtime_json], "ingress.service is required when multiple web services are defined"
   end
 
-  test "uses canonical web service as inferred ingress service when present" do
+  test "requires explicit ingress service even when a canonical web service exists" do
     release = build_release(
       runtime_json: release_runtime_json(
         services: {
           "admin" => web_service_runtime,
           "web" => web_service_runtime
         },
-        ingress_service: nil
+        ingress: nil
       )
     )
 
-    assert_predicate release, :valid?
-    assert_equal "web", release.ingress_service_name
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.service is required when multiple web services are defined"
   end
 
   test "release task command and args must be arrays" do
@@ -49,6 +49,35 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_not release.valid?
     assert_includes release.errors[:runtime_json], "tasks.release.command must be an array of strings"
     assert_includes release.errors[:runtime_json], "tasks.release.args must be an array of strings"
+  end
+
+  test "ingress hosts must be unique case-insensitively" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "service" => "web",
+          "hosts" => ["App.Example.Test", "app.example.test"]
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.hosts must be unique"
+  end
+
+  test "ingress must decode to an object when present" do
+    release = build_release(
+      runtime_json: JSON.generate(
+        {
+          "services" => { "web" => web_service_runtime },
+          "tasks" => {},
+          "ingress" => "web"
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress must decode to an object"
   end
 
   test "blank kind does not contribute required labels and reports one kind error" do

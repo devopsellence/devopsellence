@@ -166,9 +166,11 @@ type DeploymentProgressNode struct {
 }
 
 type DeploymentProgressIngress struct {
-	Hostname  string `json:"hostname"`
-	PublicURL string `json:"public_url"`
-	Status    string `json:"status"`
+	Hostname   string   `json:"hostname"`
+	Hosts      []string `json:"hosts,omitempty"`
+	PublicURL  string   `json:"public_url"`
+	PublicURLs []string `json:"public_urls,omitempty"`
+	Status     string   `json:"status"`
 }
 
 type DeploymentProgress struct {
@@ -202,7 +204,7 @@ type ReleaseCreateRequest struct {
 	ImageDigest     string         `json:"image_digest"`
 	Services        map[string]any `json:"services"`
 	Tasks           map[string]any `json:"tasks,omitempty"`
-	IngressService  string         `json:"ingress_service,omitempty"`
+	Ingress         map[string]any `json:"ingress,omitempty"`
 }
 
 func New(baseURL string) *Client {

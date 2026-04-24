@@ -40,13 +40,13 @@ module Cloudflare
       result.fetch("token")
     end
 
-    def configure_tunnel(tunnel_id:, hostname:, service:)
+    def configure_tunnel(tunnel_id:, service:, hostname: nil, hostnames: nil)
+      routes = Array(hostnames.presence || hostname).map do |entry|
+        { hostname: entry, service: service }
+      end
       request(:put, "/accounts/#{account_id}/cfd_tunnel/#{tunnel_id}/configurations", payload: {
         config: {
-          ingress: [
-            { hostname: hostname, service: service },
-            { service: "http_status:404" }
-          ]
+          ingress: routes + [ { service: "http_status:404" } ]
         }
       })
     end

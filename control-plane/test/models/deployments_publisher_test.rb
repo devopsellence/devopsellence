@@ -134,6 +134,108 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal 3, service.dig("healthcheck", "retries")
   end
 
+  test "publishes desired state ingress routes for every configured host" do
+    organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+    ensure_test_organization_runtime!(organization)
+    project = organization.projects.create!(name: "Project A")
+    environment = project.environments.create!(
+      name: "Production",
+      gcp_project_id: "gcp-proj-a",
+      gcp_project_number: "123456789",
+      service_account_email: "svc-a@gcp-proj-a.iam.gserviceaccount.com",
+      workload_identity_pool: "pool-a",
+      workload_identity_provider: "provider-a",
+      runtime_kind: Environment::RUNTIME_CUSTOMER_NODES
+    )
+    release = project.releases.create!(
+      git_sha: "abcd1234",
+      image_digest: "sha256:abc",
+      image_repository: "api",
+      runtime_json: release_runtime_json(ingress: {
+        "service" => "web",
+        "hosts" => [ "app.example.test", "www.example.test" ],
+        "tls" => { "mode" => "manual" },
+        "redirect_http" => false
+      }),
+      revision: "rel-1"
+    )
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
+    node.update!(environment: environment)
+    store = FakeObjectStore.new
+    ingress = environment.create_environment_ingress!(
+      hostname: "app.example.test",
+      cloudflare_tunnel_id: "tunnel-1",
+      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
+      status: EnvironmentIngress::STATUS_READY,
+      provisioned_at: Time.current
+    )
+    ingress.assign_hosts!([ "app.example.test", "www.example.test" ])
+
+    Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
+      Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
+    )
+    EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
+    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
+
+    Deployments::Publisher.new(environment: environment, release: release, store: store).call
+
+    desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
+    assert_equal [ "app.example.test", "www.example.test" ], desired_state.dig("ingress", "hosts")
+    assert_equal [ "app.example.test", "www.example.test" ], desired_state.dig("ingress", "routes").map { |route| route.dig("match", "hostname") }
+    assert_equal false, desired_state.dig("ingress", "redirectHttp")
+    assert_equal "manual", desired_state.dig("ingress", "tls", "mode")
+  end
+
+  test "skips ingress reprovision when stored ingress hosts only differ by case" do
+    organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+    ensure_test_organization_runtime!(organization)
+    project = organization.projects.create!(name: "Project A")
+    environment = project.environments.create!(
+      name: "Production",
+      gcp_project_id: "gcp-proj-a",
+      gcp_project_number: "123456789",
+      service_account_email: "svc-a@gcp-proj-a.iam.gserviceaccount.com",
+      workload_identity_pool: "pool-a",
+      workload_identity_provider: "provider-a",
+      runtime_kind: Environment::RUNTIME_CUSTOMER_NODES
+    )
+    release = project.releases.create!(
+      git_sha: "abcd1234",
+      image_digest: "sha256:abc",
+      image_repository: "api",
+      runtime_json: JSON.generate(
+        {
+          "services" => { "web" => web_service_runtime },
+          "tasks" => {},
+          "ingress" => {
+            "service" => "web",
+            "hosts" => ["App.Example.Test", "WWW.Example.Test"]
+          }
+        }
+      ),
+      revision: "rel-1"
+    )
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
+    node.update!(environment: environment)
+    store = FakeObjectStore.new
+    ingress = environment.create_environment_ingress!(
+      hostname: "app.example.test",
+      cloudflare_tunnel_id: "tunnel-1",
+      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
+      status: EnvironmentIngress::STATUS_READY,
+      provisioned_at: Time.current
+    )
+    ingress.assign_hosts!(["app.example.test", "www.example.test"])
+
+    Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
+      Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
+    )
+    EnvironmentIngresses::Reconciler.any_instance.expects(:call).never
+    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
+
+    Deployments::Publisher.new(environment: environment, release: release, store: store).call
+  end
+
   test "publishes immutable desired state object plus pointer and direct desired state path" do
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     ensure_test_organization_runtime!(organization)

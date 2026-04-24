@@ -84,8 +84,10 @@ module Api
           return nil unless ingress
 
           {
-            hostname: ingress.hostname,
+            hostname: ingress.primary_hostname,
+            hosts: ingress.hosts,
             public_url: ingress.public_url,
+            public_urls: ingress.public_urls,
             status: ingress.status,
             last_error: ingress.last_error
           }

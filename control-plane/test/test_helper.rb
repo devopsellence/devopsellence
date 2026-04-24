@@ -198,13 +198,14 @@ module ActiveSupport
       }.compact
     end
 
-    def release_runtime_json(services: nil, tasks: {}, ingress_service: "web")
+    def release_runtime_json(services: nil, tasks: {}, ingress: :__default__)
       services ||= { "web" => web_service_runtime }
+      ingress = { "service" => "web" } if ingress == :__default__
       ::JSON.generate(
         {
           "services" => services,
           "tasks" => tasks,
-          "ingress_service" => ingress_service
+          "ingress" => ingress
         }.compact
       )
     end

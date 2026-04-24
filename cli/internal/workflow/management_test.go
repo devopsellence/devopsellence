@@ -184,6 +184,9 @@ func TestContextShowJSONIncludesWorkspaceContext(t *testing.T) {
 		"modes": map[string]any{
 			root: "shared",
 		},
+		"environments": map[string]any{
+			root: "production",
+		},
 	}); err != nil {
 		t.Fatalf("write workspace state: %v", err)
 	}
@@ -204,7 +207,10 @@ func TestContextShowJSONIncludesWorkspaceContext(t *testing.T) {
 	if payload["mode"] != "shared" {
 		t.Fatalf("mode = %v, want shared", payload["mode"])
 	}
-	if stringValueAny(payload["organization"]) != "default" || stringValueAny(payload["project"]) != "ShopApp" || stringValueAny(payload["environment"]) != "staging" {
+	if stringValueAny(payload["organization"]) != "default" || stringValueAny(payload["project"]) != "ShopApp" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if stringValueAny(payload["default_environment"]) != "staging" || stringValueAny(payload["selected_environment"]) != "production" || stringValueAny(payload["environment"]) != "production" {
 		t.Fatalf("payload = %#v", payload)
 	}
 }
@@ -279,7 +285,7 @@ func TestProjectUseUpdatesConfig(t *testing.T) {
 	}
 }
 
-func TestEnvironmentUseUpdatesConfig(t *testing.T) {
+func TestEnvironmentUseUpdatesWorkspaceStateNotConfig(t *testing.T) {
 	t.Parallel()
 
 	root := makeRailsRoot(t, "ShopApp")
@@ -312,8 +318,16 @@ func TestEnvironmentUseUpdatesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	if loaded.DefaultEnvironment != "production" {
-		t.Fatalf("default_environment = %q, want production", loaded.DefaultEnvironment)
+	if loaded.DefaultEnvironment != "staging" {
+		t.Fatalf("default_environment = %q, want staging", loaded.DefaultEnvironment)
+	}
+	state, err := app.WorkspaceState.Read()
+	if err != nil {
+		t.Fatalf("Read() workspace state error = %v", err)
+	}
+	environments, _ := state["environments"].(map[string]any)
+	if stringValueAny(environments[root]) != "production" {
+		t.Fatalf("workspace environments = %#v", environments)
 	}
 }
 
@@ -357,6 +371,121 @@ func TestEnvironmentOpenUsesWorkspaceContext(t *testing.T) {
 	}
 	if opened != "https://shop.example.test" {
 		t.Fatalf("opened = %q, want https://shop.example.test", opened)
+	}
+}
+
+func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
+	t.Parallel()
+
+	root := makeRailsRoot(t, "ShopApp")
+	project := config.DefaultProjectConfig("default", "ShopApp", "production")
+	project.Ingress = &config.IngressConfig{
+		Hosts:   []string{"app.example.test"},
+		Service: "web",
+	}
+	project.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {
+			Ingress: &config.IngressConfigOverlay{
+				Hosts: []string{"staging.example.test"},
+			},
+			Services: map[string]config.ServiceConfigOverlay{
+				"web": {
+					Env: map[string]string{"RAILS_ENV": "staging"},
+				},
+			},
+		},
+	}
+	if _, err := config.Write(root, project); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		return nil, nil
+	}))
+
+	var stdout bytes.Buffer
+	app.Printer.Out = &stdout
+	app.Printer.JSON = true
+	app.Printer.Interactive = false
+
+	if err := app.ConfigResolve(ConfigResolveOptions{Environment: "staging"}); err != nil {
+		t.Fatalf("ConfigResolve() error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal config resolve output: %v", err)
+	}
+	if stringValueAny(payload["selected_environment"]) != "staging" {
+		t.Fatalf("selected_environment = %#v", payload["selected_environment"])
+	}
+	configPayload, _ := payload["config"].(map[string]any)
+	if stringValueAny(configPayload["default_environment"]) != "staging" {
+		t.Fatalf("config = %#v", configPayload)
+	}
+	ingress, _ := configPayload["ingress"].(map[string]any)
+	hosts, _ := ingress["hosts"].([]any)
+	if len(hosts) != 1 || stringValueAny(hosts[0]) != "staging.example.test" {
+		t.Fatalf("ingress hosts = %#v", ingress["hosts"])
+	}
+}
+
+func TestStatusUsesSavedWorkspaceEnvironment(t *testing.T) {
+	t.Parallel()
+
+	root := makeRailsRoot(t, "ShopApp")
+	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
+			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
+			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
+			return jsonResponse(t, map[string]any{"environments": []map[string]any{
+				{"id": 44, "name": "staging"},
+				{"id": 45, "name": "production"},
+			}}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/45/status":
+			return jsonResponse(t, map[string]any{
+				"organization":   map[string]any{"id": 7, "name": "default"},
+				"project":        map[string]any{"id": 11, "name": "ShopApp"},
+				"environment":    map[string]any{"id": 45, "name": "production"},
+				"assigned_nodes": 0,
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	}))
+	if err := app.WorkspaceState.Write(map[string]any{
+		"environments": map[string]any{
+			root: "production",
+		},
+	}); err != nil {
+		t.Fatalf("write workspace state: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	app.Printer.Out = &stdout
+	app.Printer.JSON = true
+	app.Printer.Interactive = false
+
+	if err := app.Status(context.Background(), StatusOptions{}); err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal status output: %v", err)
+	}
+	environment, _ := payload["environment"].(map[string]any)
+	if stringValueAny(environment["name"]) != "production" {
+		t.Fatalf("environment = %#v", environment)
 	}
 }
 

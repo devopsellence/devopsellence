@@ -64,6 +64,11 @@ class Release < ApplicationRecord
     task.is_a?(Hash) ? task : nil
   end
 
+  def ingress_config
+    ingress = runtime_payload["ingress"]
+    ingress.is_a?(Hash) ? ingress : nil
+  end
+
   def has_release_task?
     release_task_config.present?
   end
@@ -93,14 +98,7 @@ class Release < ApplicationRecord
   end
 
   def ingress_service_name
-    configured = runtime_payload["ingress_service"].to_s.strip
-    return configured if configured.present?
-
-    names = web_service_names
-    return "web" if names.include?("web")
-    return names.first if names.one?
-
-    nil
+    ingress_config&.dig("service").to_s.strip.presence
   end
 
   def scheduled_services_for(node:)
@@ -169,7 +167,7 @@ class Release < ApplicationRecord
     end
 
     validate_release_task
-    validate_ingress_service
+    validate_ingress_config
   end
 
   def validate_service_config(name, service)
@@ -273,21 +271,58 @@ class Release < ApplicationRecord
     end
   end
 
-  def validate_ingress_service
-    name = ingress_service_name
-    if name.blank? && web_service_names.length > 1
-      errors.add(:runtime_json, "ingress_service is required when multiple web services are defined")
+  def validate_ingress_config
+    if runtime_payload.key?("ingress") && !runtime_payload["ingress"].is_a?(Hash)
+      errors.add(:runtime_json, "ingress must decode to an object")
       return
     end
-    return if name.blank?
+
+    ingress = ingress_config
+    if ingress.nil?
+      if web_service_names.length > 1
+        errors.add(:runtime_json, "ingress.service is required when multiple web services are defined")
+      end
+      return
+    end
+
+    hosts = ingress["hosts"]
+    unless hosts.nil? || string_array?(hosts)
+      errors.add(:runtime_json, "ingress.hosts must be an array of strings")
+    end
+    if string_array?(hosts) && IngressHostnames.normalize_all(hosts).length != hosts.length
+      errors.add(:runtime_json, "ingress.hosts must be unique")
+    end
+
+    name = ingress["service"].to_s.strip
+    if name.blank?
+      errors.add(:runtime_json, "ingress.service is required")
+      return
+    end
 
     service = services_config[name]
     if service.blank?
-      errors.add(:runtime_json, "ingress_service must reference an existing service")
+      errors.add(:runtime_json, "ingress.service must reference an existing service")
       return
     end
     if service_kind(service) != "web"
-      errors.add(:runtime_json, "ingress_service must reference a web service")
+      errors.add(:runtime_json, "ingress.service must reference a web service")
+    end
+
+    tls = ingress["tls"]
+    unless tls.nil? || tls.is_a?(Hash)
+      errors.add(:runtime_json, "ingress.tls must be an object")
+      return
+    end
+    if tls.is_a?(Hash)
+      mode = tls["mode"].to_s.strip
+      if mode.present? && ![ "auto", "off", "manual" ].include?(mode)
+        errors.add(:runtime_json, "ingress.tls.mode must be auto, off, or manual")
+      end
+    end
+
+    redirect_http = ingress["redirect_http"]
+    unless redirect_http.nil? || redirect_http == true || redirect_http == false
+      errors.add(:runtime_json, "ingress.redirect_http must be a boolean")
     end
   end
 
@@ -314,14 +349,21 @@ class Release < ApplicationRecord
       assert_supported_runtime_service!(name, service)
     end
 
-    return unless tasks_config.key?("release")
+    if tasks_config.key?("release")
+      task = tasks_config["release"]
+      raise InvalidRuntimeConfig, "tasks.release must decode to an object" unless task.is_a?(Hash)
 
-    task = tasks_config["release"]
-    raise InvalidRuntimeConfig, "tasks.release must decode to an object" unless task.is_a?(Hash)
+      assert_deprecated_runtime_key_absent!(task, deprecated_key: "entrypoint", field: "tasks.release.entrypoint")
+      assert_runtime_string_array!(task["command"], field: "tasks.release.command")
+      assert_runtime_string_array!(task["args"], field: "tasks.release.args")
+    end
 
-    assert_deprecated_runtime_key_absent!(task, deprecated_key: "entrypoint", field: "tasks.release.entrypoint")
-    assert_runtime_string_array!(task["command"], field: "tasks.release.command")
-    assert_runtime_string_array!(task["args"], field: "tasks.release.args")
+    return unless runtime_payload.key?("ingress")
+
+    ingress = runtime_payload["ingress"]
+    raise InvalidRuntimeConfig, "ingress must decode to an object" unless ingress.is_a?(Hash)
+
+    assert_runtime_string_array!(ingress["hosts"], field: "ingress.hosts")
   end
 
   def assert_supported_runtime_service!(name, service)

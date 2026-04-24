@@ -298,7 +298,7 @@ class AbuseControlsTest < ActionDispatch::IntegrationTest
       services: {
         web: web_service_runtime(port: 80)
       },
-      ingress_service: "web"
+      ingress: { service: "web" }
     }
   end
 

@@ -16,7 +16,7 @@ module Api
 
           ingress = current_environment.environment_ingress
           return render_error("invalid_request", "environment ingress is not provisioned", status: :unprocessable_entity) unless ingress
-          return render_error("invalid_request", "hostname mismatch", status: :unprocessable_entity) unless ingress.hostname == hostname
+          return render_error("invalid_request", "hostname mismatch", status: :unprocessable_entity) unless ingress.hostname_matches?(hostname)
 
           result = nil
           ingress.with_lock do

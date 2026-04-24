@@ -312,9 +312,16 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 			Email:          strings.TrimSpace(ingress.TLS.Email),
 			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
 		},
-		RedirectHTTP: ingress.RedirectHTTP,
+		RedirectHTTP: ingressRedirectHTTPValue(ingress),
 		Routes:       routes,
 	}
+}
+
+func ingressRedirectHTTPValue(ingress *config.IngressConfig) bool {
+	if ingress == nil || ingress.RedirectHTTP == nil {
+		return true
+	}
+	return *ingress.RedirectHTTP
 }
 
 func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmentNames map[string]string) (*ingressJSON, error) {

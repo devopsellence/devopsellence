@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_18_123100) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_23_000100) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -123,6 +123,17 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_123100) do
     t.index ["environment_id"], name: "index_environment_ingresses_on_environment_id", unique: true
     t.index ["gcp_secret_name"], name: "index_environment_ingresses_on_gcp_secret_name", unique: true
     t.index ["hostname"], name: "index_environment_ingresses_on_hostname", unique: true
+  end
+
+  create_table "environment_ingress_hosts", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.integer "environment_ingress_id", null: false
+    t.string "hostname", null: false
+    t.integer "position", default: 0, null: false
+    t.datetime "updated_at", null: false
+    t.index ["environment_ingress_id", "position"], name: "index_env_ingress_hosts_on_ingress_and_position", unique: true
+    t.index ["environment_ingress_id"], name: "index_environment_ingress_hosts_on_environment_ingress_id"
+    t.index ["hostname"], name: "index_environment_ingress_hosts_on_hostname", unique: true
   end
 
   create_table "environment_secrets", force: :cascade do |t|
@@ -485,6 +496,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_123100) do
   add_foreign_key "environment_bundles", "environments", column: "claimed_by_environment_id"
   add_foreign_key "environment_bundles", "organization_bundles"
   add_foreign_key "environment_bundles", "runtime_projects"
+  add_foreign_key "environment_ingress_hosts", "environment_ingresses"
   add_foreign_key "environment_ingresses", "environments"
   add_foreign_key "environment_secrets", "environments"
   add_foreign_key "environments", "environment_bundles"

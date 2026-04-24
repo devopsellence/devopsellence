@@ -37,9 +37,97 @@ require "socket"
 require "time"
 require "timeout"
 require "tmpdir"
-require "webrick"
+require "uri"
 require "yaml"
 require_relative "binary_artifacts"
+
+class MinimalHTTPServer
+  def initialize(bind_address:, port:, handler:)
+    @bind_address = bind_address
+    @port = port
+    @handler = handler
+    @server = TCPServer.new(@bind_address, @port)
+    @running = true
+  end
+
+  def start
+    while @running
+      begin
+        client = @server.accept
+      rescue IOError, Errno::EBADF
+        break
+      end
+      Thread.new(client) { |socket| handle_client(socket) }
+    end
+  end
+
+  def shutdown
+    @running = false
+    @server.close
+  rescue IOError, Errno::EBADF
+    nil
+  end
+
+  private
+
+  Request = Struct.new(:path, :query, keyword_init: true)
+  Response = Struct.new(:status, :headers, :body, :body_path, keyword_init: true)
+
+  def handle_client(socket)
+    request_line = socket.gets
+    return if request_line.nil?
+
+    method, target, _http_version = request_line.split(" ", 3)
+    return write_response(socket, status: 405, body: "method not allowed\n") unless method == "GET"
+
+    while (line = socket.gets)
+      break if line == "\r\n"
+    end
+
+    uri = URI.parse(target)
+    query = URI.decode_www_form(uri.query.to_s).to_h
+    request = Request.new(path: uri.path, query: query)
+    response = @handler.call(request)
+    write_response(socket, status: response.status, headers: response.headers, body: response.body, body_path: response.body_path)
+  rescue URI::InvalidURIError, ArgumentError
+    write_response(socket, status: 400, body: "invalid request path\n")
+  rescue IOError, Errno::EBADF
+    nil
+  ensure
+    socket.close rescue nil
+  end
+
+  def write_response(socket, status:, body:, body_path: nil, headers: {})
+    reason = {
+      200 => "OK",
+      400 => "Bad Request",
+      404 => "Not Found",
+      405 => "Method Not Allowed",
+      500 => "Internal Server Error"
+    }.fetch(status, "OK")
+
+    payload = body.to_s.b
+    content_length = body_path ? File.size(body_path).to_s : payload.bytesize.to_s
+
+    socket.write "HTTP/1.1 #{status} #{reason}\r\n"
+    merged_headers = {
+      "Content-Length" => content_length,
+      "Connection" => "close"
+    }.merge(headers)
+    merged_headers.each do |key, value|
+      socket.write "#{key}: #{value}\r\n"
+    end
+    socket.write "\r\n"
+
+    if body_path
+      File.open(body_path, "rb") do |file|
+        IO.copy_stream(file, socket)
+      end
+    else
+      socket.write payload
+    end
+  end
+end
 
 class SoloE2E
   include E2EBinaryArtifacts
@@ -805,21 +893,17 @@ PY
   end
 
   def start_artifact_server!
-    @artifact_server = WEBrick::HTTPServer.new(
-      BindAddress: "0.0.0.0",
-      Port: @artifact_server_port,
-      AccessLog: [],
-      Logger: WEBrick::Log.new(File::NULL)
+    @artifact_server = MinimalHTTPServer.new(
+      bind_address: "0.0.0.0",
+      port: @artifact_server_port,
+      handler: method(:route_artifact_request)
     )
-    @artifact_server.mount_proc("/") do |req, res|
-      route_artifact_request(req, res)
-    end
     @artifact_server_thread = Thread.new { @artifact_server.start }
     wait_until!(timeout: 10) { tcp_port_open?("127.0.0.1", @artifact_server_port) }
     puts "[ok] Artifact server listening at #{artifact_base_url}"
   end
 
-  def route_artifact_request(req, res)
+  def route_artifact_request(req)
     version = req.query["version"].to_s.strip
     version = @release_version if version.empty?
 
@@ -828,26 +912,21 @@ PY
       os = validate_artifact_component!("os", req.query.fetch("os"), RELEASE_TARGET_PATTERN)
       arch = validate_artifact_component!("arch", req.query.fetch("arch"), RELEASE_TARGET_PATTERN)
       artifact = release_artifact_path(@agent_root, version, "#{os}-#{arch}")
-      serve_artifact!(res, artifact, "application/octet-stream")
+      file_response(status: 200, path: artifact, content_type: "application/octet-stream")
     when "/agent/checksums"
       checksums = release_artifact_path(@agent_root, version, RELEASE_CHECKSUM_NAME)
-      serve_prefixed_checksums!(res, checksums, AGENT_RELEASE_PREFIX)
+      response(status: 200, body: prefixed_checksums(checksums, AGENT_RELEASE_PREFIX), content_type: "text/plain; charset=utf-8")
     else
-      res.status = 404
-      res.body = "not found\n"
+      response(status: 404, body: "not found\n")
     end
   rescue KeyError => e
-    res.status = 400
-    res.body = "missing query param: #{e.message}\n"
+    response(status: 400, body: "missing query param: #{e.message}\n")
   rescue ArgumentError => e
-    res.status = 400
-    res.body = "#{e.message}\n"
+    response(status: 400, body: "#{e.message}\n")
   rescue ArtifactNotFoundError => e
-    res.status = 404
-    res.body = "#{e.message}\n"
+    response(status: 404, body: "#{e.message}\n")
   rescue StandardError => e
-    res.status = 500
-    res.body = "#{e.class}: #{e.message}\n"
+    response(status: 500, body: "#{e.class}: #{e.message}\n")
   end
 
   def release_artifact_path(root, version, name)
@@ -874,23 +953,25 @@ PY
     value
   end
 
-  def serve_artifact!(res, path, content_type)
-    res.status = 200
-    res["Content-Type"] = content_type
-    res.body = File.binread(path)
+  def response(status:, body:, content_type: nil)
+    headers = {}
+    headers["Content-Type"] = content_type if content_type
+    MinimalHTTPServer::Response.new(status: status, headers: headers, body: body)
   end
 
-  def serve_prefixed_checksums!(res, path, prefix)
-    body = File.read(path).lines.map do |line|
+  def file_response(status:, path:, content_type: nil)
+    headers = {}
+    headers["Content-Type"] = content_type if content_type
+    MinimalHTTPServer::Response.new(status: status, headers: headers, body_path: path.to_s)
+  end
+
+  def prefixed_checksums(path, prefix)
+    File.read(path).lines.map do |line|
       checksum, filename = line.strip.split(/\s+/, 2)
       next line if checksum.to_s.empty? || filename.to_s.empty?
 
       "#{checksum}  #{prefix}-#{filename}\n"
     end.join
-
-    res.status = 200
-    res["Content-Type"] = "text/plain; charset=utf-8"
-    res.body = body
   end
 
   def docker_label_args

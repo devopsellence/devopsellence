@@ -48,6 +48,39 @@ func TestDockerBuildArgsRejectsMultiplePlatforms(t *testing.T) {
 	}
 }
 
+func TestSoloDefaultProjectConfigBootstrapsExplicitCatchAllIngress(t *testing.T) {
+	t.Parallel()
+
+	cfg := soloDefaultProjectConfig(discovery.Result{
+		ProjectName:     "shop-app",
+		AppType:         config.AppTypeRails,
+		InferredWebPort: 3001,
+	})
+
+	if cfg.Ingress == nil {
+		t.Fatal("expected bootstrapped ingress")
+	}
+	if got, want := cfg.Ingress.Service, config.DefaultWebServiceName; got != want {
+		t.Fatalf("ingress.service = %q, want %q", got, want)
+	}
+	if got, want := cfg.Ingress.Hosts, []string{"*"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ingress.hosts = %#v, want %#v", got, want)
+	}
+	if got, want := cfg.Ingress.TLS.Mode, "off"; got != want {
+		t.Fatalf("ingress.tls.mode = %q, want %q", got, want)
+	}
+	if cfg.Ingress.RedirectHTTP == nil {
+		t.Fatal("expected explicit ingress.redirect_http=false")
+	}
+	if *cfg.Ingress.RedirectHTTP {
+		t.Fatal("ingress.redirect_http = true, want false")
+	}
+	web := cfg.Services[config.DefaultWebServiceName]
+	if got, want := web.HTTPPort(0), 3001; got != want {
+		t.Fatalf("web http port = %d, want %d", got, want)
+	}
+}
+
 func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{

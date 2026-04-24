@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -165,6 +166,103 @@ func TestInitWritesGenericConfigAtRepoRoot(t *testing.T) {
 	web := webService(t, loaded)
 	if web.Healthcheck == nil || web.Healthcheck.Path != "/" {
 		t.Fatalf("generic healthcheck path = %#v, want /", web.Healthcheck)
+	}
+}
+
+func TestInitBootstrapsSharedIngressFromCanonicalDomain(t *testing.T) {
+	t.Parallel()
+
+	root := makeRailsRoot(t, "ShopApp")
+	app := newTestAppWithDeployTarget(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/deploy_target":
+			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
+				"organization":         map[string]any{"id": 7, "name": "default"},
+				"organization_created": false,
+				"project":              map[string]any{"id": 11, "name": "ShopApp", "organization_id": 7},
+				"project_created":      false,
+				"environment": map[string]any{
+					"id":            44,
+					"name":          "production",
+					"project_id":    11,
+					"runtime_kind":  "managed",
+					"ingress_hosts": []string{"www.prod-abc.devopsellence.io", "prod-abc.devopsellence.io"},
+				},
+				"environment_created": true,
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	}))
+
+	if err := app.Init(context.Background(), InitOptions{NonInteractive: true}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	loaded, err := config.LoadFromRoot(root)
+	if err != nil {
+		t.Fatalf("LoadFromRoot() error = %v", err)
+	}
+	if loaded == nil || loaded.Ingress == nil {
+		t.Fatalf("expected bootstrapped ingress, got %#v", loaded)
+	}
+	if got, want := loaded.Ingress.Service, config.DefaultWebServiceName; got != want {
+		t.Fatalf("ingress.service = %q, want %q", got, want)
+	}
+	if got, want := loaded.Ingress.Hosts, []string{"www.prod-abc.devopsellence.io", "prod-abc.devopsellence.io"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ingress.hosts = %#v, want %#v", got, want)
+	}
+	if got, want := loaded.Ingress.TLS.Mode, "off"; got != want {
+		t.Fatalf("ingress.tls.mode = %q, want %q", got, want)
+	}
+	if loaded.Ingress.RedirectHTTP == nil {
+		t.Fatal("expected explicit ingress.redirect_http=false")
+	}
+	if *loaded.Ingress.RedirectHTTP {
+		t.Fatal("ingress.redirect_http = true, want false")
+	}
+}
+
+func TestInitLeavesSharedIngressUnsetUntilCanonicalDomainExists(t *testing.T) {
+	t.Parallel()
+
+	root := makeRailsRoot(t, "ShopApp")
+	app := newTestAppWithDeployTarget(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/deploy_target":
+			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
+				"organization":         map[string]any{"id": 7, "name": "default"},
+				"organization_created": false,
+				"project":              map[string]any{"id": 11, "name": "ShopApp", "organization_id": 7},
+				"project_created":      false,
+				"environment": map[string]any{
+					"id":           44,
+					"name":         "production",
+					"project_id":   11,
+					"runtime_kind": "managed",
+				},
+				"environment_created": true,
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	}))
+
+	if err := app.Init(context.Background(), InitOptions{NonInteractive: true}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	loaded, err := config.LoadFromRoot(root)
+	if err != nil {
+		t.Fatalf("LoadFromRoot() error = %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("expected config to load")
+	}
+	if loaded.Ingress != nil {
+		t.Fatalf("expected shared ingress to stay unset without canonical host, got %#v", loaded.Ingress)
 	}
 }
 

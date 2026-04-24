@@ -147,6 +147,13 @@ environments:
     ingress:
       hosts:
         - staging.example.com
+      rules:
+        - match:
+            host: staging.example.com
+            path_prefix: /
+          target:
+            service: web
+            port: http
   production:
     services:
       web:
@@ -154,20 +161,18 @@ environments:
           RAILS_ENV: production
 ```
 
-### Example: run cloudflared as an accessory service
+### Example: run cloudflared as a normal service
 
-`kind: accessory` is already supported for non-web sidecars/helpers. That means Cloudflare Tunnel can live in normal app config instead of as special agent-managed behavior:
+Cloudflare Tunnel can live in normal app config instead of as special agent-managed behavior:
 
 ```yaml
 services:
   web:
-    kind: web
     ports:
       - name: http
         port: 3000
 
   cloudflared:
-    kind: accessory
     image: docker.io/cloudflare/cloudflared:latest
     command: ["cloudflared"]
     args: ["tunnel", "run"]

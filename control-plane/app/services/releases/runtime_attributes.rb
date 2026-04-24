@@ -123,7 +123,7 @@ module Releases
       ingress = parse_hash(value, field: :ingress)
       return nil if ingress.blank?
 
-      hosts = optional_service_array(ingress["hosts"] || ingress[:hosts], field: :"ingress.hosts")
+      hosts = parse_ingress_hosts(ingress["hosts"] || ingress[:hosts])
       rules = parse_array(ingress["rules"] || ingress[:rules], field: :"ingress.rules").map.with_index do |entry, index|
         rule = parse_hash(entry, field: :"ingress.rules[#{index}]")
         match = parse_hash(rule["match"] || rule[:match], field: :"ingress.rules[#{index}].match")
@@ -131,7 +131,7 @@ module Releases
         {
           "match" => {
             "host" => required_service_string(match["host"] || match[:host], field: :"ingress.rules[#{index}].match.host"),
-            "path_prefix" => optional_service_string(match["path_prefix"] || match[:path_prefix])
+            "path_prefix" => optional_service_string(match["path_prefix"] || match[:path_prefix]) || "/"
           }.compact,
           "target" => {
             "service" => required_service_string(target["service"] || target[:service], field: :"ingress.rules[#{index}].target.service"),
@@ -156,8 +156,18 @@ module Releases
       end
 
       redirect_http = ingress.key?("redirect_http") ? ingress["redirect_http"] : ingress[:redirect_http]
-      normalized["redirect_http"] = redirect_http unless redirect_http.nil?
+      normalized["redirect_http"] = parse_boolean!(redirect_http, field: :"ingress.redirect_http") unless redirect_http.nil?
       normalized.presence
+    end
+
+    def parse_ingress_hosts(value)
+      raw_hosts = optional_service_array(value, field: :"ingress.hosts")
+      return nil if raw_hosts.blank?
+
+      normalized_hosts = raw_hosts.map { |entry| IngressHostnames.normalize(entry) }.reject(&:blank?)
+      raise InvalidPayload, "ingress.hosts must be unique" if normalized_hosts.uniq.length != normalized_hosts.length
+
+      normalized_hosts
     end
 
     def parse_ports(value, field:)
@@ -254,6 +264,12 @@ module Releases
       raise InvalidPayload, "#{field} is required" if integer.nil?
 
       integer
+    end
+
+    def parse_boolean!(value, field:)
+      return value if value == true || value == false
+
+      raise InvalidPayload, "#{field} must be a boolean"
     end
   end
 end

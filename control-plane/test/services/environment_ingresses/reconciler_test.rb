@@ -25,8 +25,13 @@ module EnvironmentIngresses
         image_repository: "shop-app",
         image_digest: "sha256:#{"b" * 64}",
         runtime_json: release_runtime_json(ingress: {
-          "service" => "web",
-          "hosts" => [ desired_host ]
+          "hosts" => [ desired_host ],
+          "rules" => [
+            {
+              "match" => { "host" => desired_host, "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ]
         })
       )
       environment.update!(current_release: release)

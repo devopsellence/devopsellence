@@ -103,8 +103,17 @@ module Releases
             }
           },
           ingress: {
-            service: "web",
             hosts: ["app.example.test", "www.example.test"],
+            rules: [
+              {
+                match: { host: "app.example.test", path_prefix: "/" },
+                target: { service: "web", port: "http" }
+              },
+              {
+                match: { host: "www.example.test", path_prefix: "/" },
+                target: { service: "web", port: "http" }
+              }
+            ],
             tls: {
               mode: "manual"
             }
@@ -117,7 +126,7 @@ module Releases
       assert_equal ["web"], runtime.dig("services", "web", "args")
       assert_equal ["release"], runtime.dig("tasks", "release", "args")
       assert_equal ["app.example.test", "www.example.test"], runtime.dig("ingress", "hosts")
-      assert_equal "web", runtime.dig("ingress", "service")
+      assert_equal "web", runtime.dig("ingress", "rules", 0, "target", "service")
       assert_equal "manual", runtime.dig("ingress", "tls", "mode")
     end
 
@@ -136,7 +145,12 @@ module Releases
               }
             },
             ingress: {
-              service: "web",
+              rules: [
+                {
+                  match: { host: "app.example.test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ],
               redirect_http: "yes"
             }
           }
@@ -158,12 +172,17 @@ module Releases
               ports: [{ name: "http", port: 3000 }],
               healthcheck: { path: "/up", port: 3000 }
             }
-          },
-          ingress: {
-            service: "web",
-            redirect_http: false
+            },
+            ingress: {
+              rules: [
+                {
+                  match: { host: "app.example.test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ],
+              redirect_http: false
+            }
           }
-        }
       ).to_h
 
       runtime = JSON.parse(attrs.fetch(:runtime_json))
@@ -185,8 +204,13 @@ module Releases
               }
             },
             ingress: {
-              service: "web",
-              hosts: ["App.Example.Test", "app.example.test"]
+              hosts: ["App.Example.Test", "app.example.test"],
+              rules: [
+                {
+                  match: { host: "app.example.test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
             }
           }
         ).to_h
@@ -205,12 +229,21 @@ module Releases
               ports: [{ name: "http", port: 3000 }],
               healthcheck: { path: "/up", port: 3000 }
             }
-          },
-          ingress: {
-            service: "web",
-            hosts: ["App.Example.Test", "WWW.Example.Test"]
+            },
+            ingress: {
+              hosts: ["App.Example.Test", "WWW.Example.Test"],
+              rules: [
+                {
+                  match: { host: "App.Example.Test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                },
+                {
+                  match: { host: "WWW.Example.Test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
           }
-        }
       ).to_h
 
       runtime = JSON.parse(attrs.fetch(:runtime_json))

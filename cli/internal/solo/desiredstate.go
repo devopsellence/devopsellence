@@ -311,6 +311,10 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 			},
 		})
 	}
+	redirectHTTP := false
+	if ingress.RedirectHTTP != nil {
+		redirectHTTP = *ingress.RedirectHTTP
+	}
 	return &ingressJSON{
 		Hosts: append([]string(nil), ingress.Hosts...),
 		Mode:  "public",
@@ -319,7 +323,7 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 			Email:          strings.TrimSpace(ingress.TLS.Email),
 			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
 		},
-		RedirectHTTP: ingress.RedirectHTTP,
+		RedirectHTTP: redirectHTTP,
 		Routes:       routes,
 	}
 }
@@ -339,12 +343,12 @@ func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmen
 				TLS:          snapshot.Ingress.TLS,
 				RedirectHTTP: snapshot.Ingress.RedirectHTTP,
 			}
-		} else if merged.TLS != snapshot.Ingress.TLS || merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP || merged.Mode != snapshot.Ingress.Mode {
+		} else if merged.TLS != snapshot.Ingress.TLS || merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP || normalizedIngressMode(merged.Mode) != normalizedIngressMode(snapshot.Ingress.Mode) {
 			differingSettings := []string{}
 			if merged.TLS != snapshot.Ingress.TLS {
 				differingSettings = append(differingSettings, "TLS")
 			}
-			if merged.Mode != snapshot.Ingress.Mode {
+			if normalizedIngressMode(merged.Mode) != normalizedIngressMode(snapshot.Ingress.Mode) {
 				differingSettings = append(differingSettings, "mode")
 			}
 			if merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP {
@@ -394,6 +398,14 @@ func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmen
 		return left.Target.Port < right.Target.Port
 	})
 	return merged, nil
+}
+
+func normalizedIngressMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "public"
+	}
+	return mode
 }
 
 func snapshotShouldScheduleIngress(labels []string, snapshot DeploySnapshot) bool {

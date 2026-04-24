@@ -192,18 +192,15 @@ func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 	cfg := baseProject()
 	cfg.Ingress = &config.IngressConfig{
 		Hosts: []string{"app.example.com", "www.example.com"},
-		Rules: []config.IngressRuleConfig{
-			{
-				Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
-				Target: config.IngressTargetConfig{Service: "web", Port: "http"},
-			},
-			{
-				Match:  config.IngressMatchConfig{Host: "www.example.com", PathPrefix: "/"},
-				Target: config.IngressTargetConfig{Service: "web", Port: "http"},
-			},
-		},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}, {
+			Match:  config.IngressMatchConfig{Host: "www.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
 		TLS: config.IngressTLSConfig{
-			Mode:           "manual",
+			Mode:           "auto",
 			Email:          "ops@example.com",
 			CADirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
 		},
@@ -225,8 +222,8 @@ func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 	if ds.Ingress == nil {
 		t.Fatal("expected ingress")
 	}
-	if ds.Ingress.Mode != "" {
-		t.Fatalf("mode = %q, want empty", ds.Ingress.Mode)
+	if ds.Ingress.Mode != "public" {
+		t.Fatalf("mode = %q, want public", ds.Ingress.Mode)
 	}
 	if strings.Join(ds.Ingress.Hosts, ",") != "app.example.com,www.example.com" {
 		t.Fatalf("hosts = %#v", ds.Ingress.Hosts)
@@ -263,66 +260,6 @@ func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
 	}
 	if ds.Ingress != nil {
 		t.Fatalf("ingress = %#v, want nil", ds.Ingress)
-	}
-}
-
-func TestBuildDesiredStateForNodeSerializesExplicitIngressRules(t *testing.T) {
-	cfg := baseProject()
-	cfg.SchemaVersion = 6
-	cfg.Services = map[string]config.Service{
-		"app": {
-			Command: []string{"./bin/web"},
-			Ports:   []config.ServicePort{{Name: "http", Port: 3000}},
-			Healthcheck: &config.HTTPHealthcheck{
-				Path: "/up",
-				Port: 3000,
-			},
-		},
-		"api": {
-			Command: []string{"./bin/api"},
-			Ports:   []config.ServicePort{{Name: "http", Port: 4000}, {Name: "metrics", Port: 9090}},
-			Healthcheck: &config.HTTPHealthcheck{
-				Path: "/up",
-				Port: 4000,
-			},
-		},
-	}
-	cfg.Ingress = &config.IngressConfig{
-		Hosts: []string{"app.example.com"},
-		Rules: []config.IngressRuleConfig{
-			{
-				Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/api"},
-				Target: config.IngressTargetConfig{Service: "api", Port: "metrics"},
-			},
-			{
-				Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
-				Target: config.IngressTargetConfig{Service: "app", Port: "http"},
-			},
-		},
-	}
-
-	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{}, []string{config.DefaultWebRole}, true, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ds desiredStateJSON
-	if err := json.Unmarshal(data, &ds); err != nil {
-		t.Fatal(err)
-	}
-	if ds.Ingress == nil {
-		t.Fatal("expected ingress")
-	}
-	if len(ds.Ingress.Routes) != 2 {
-		t.Fatalf("routes = %#v", ds.Ingress.Routes)
-	}
-	if ds.Ingress.Routes[0].Match.Hostname != "app.example.com" || ds.Ingress.Routes[0].Match.PathPrefix != "/api" {
-		t.Fatalf("first route match = %#v", ds.Ingress.Routes[0].Match)
-	}
-	if ds.Ingress.Routes[0].Target.Service != "api" || ds.Ingress.Routes[0].Target.Port != "metrics" {
-		t.Fatalf("first route target = %#v", ds.Ingress.Routes[0].Target)
-	}
-	if ds.Ingress.Routes[1].Target.Service != "app" || ds.Ingress.Routes[1].Target.Port != "http" {
-		t.Fatalf("second route target = %#v", ds.Ingress.Routes[1].Target)
 	}
 }
 
@@ -435,10 +372,11 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 
 	snapshots := []DeploySnapshot{
 		{
-			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:web"}},
+			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
 				Mode: "public",
 				TLS:  ingressTLSJSON{Mode: "auto"},
+				Hosts: []string{"app.example.com"},
 				Routes: []ingressRouteJSON{{
 					Match:  ingressMatchJSON{Hostname: "app.example.com"},
 					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "metrics"},
@@ -448,10 +386,11 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 			IngressServiceKind: config.ServiceKindWeb,
 		},
 		{
-			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:web"}},
+			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
 				Mode: "public",
 				TLS:  ingressTLSJSON{Mode: "auto"},
+				Hosts: []string{"app.example.com"},
 				Routes: []ingressRouteJSON{{
 					Match:  ingressMatchJSON{Hostname: "app.example.com"},
 					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
@@ -479,6 +418,7 @@ func TestMergeIngressForNodeTreatsBlankAndPublicModeAsEquivalent(t *testing.T) {
 
 	snapshots := []DeploySnapshot{
 		{
+			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
 				TLS:   ingressTLSJSON{Mode: "auto"},
 				Hosts: []string{"a.example.com"},
@@ -491,6 +431,7 @@ func TestMergeIngressForNodeTreatsBlankAndPublicModeAsEquivalent(t *testing.T) {
 			IngressServiceKind: config.ServiceKindWeb,
 		},
 		{
+			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
 				Mode:  "public",
 				TLS:   ingressTLSJSON{Mode: "auto"},

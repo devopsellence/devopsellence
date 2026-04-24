@@ -60,8 +60,20 @@ func TestSoloDefaultProjectConfigBootstrapsExplicitCatchAllIngress(t *testing.T)
 	if cfg.Ingress == nil {
 		t.Fatal("expected bootstrapped ingress")
 	}
-	if got, want := cfg.Ingress.Service, config.DefaultWebServiceName; got != want {
-		t.Fatalf("ingress.service = %q, want %q", got, want)
+	if len(cfg.Ingress.Rules) != 1 {
+		t.Fatalf("ingress.rules = %#v, want single root rule", cfg.Ingress.Rules)
+	}
+	if got, want := cfg.Ingress.Rules[0].Target.Service, config.DefaultWebServiceName; got != want {
+		t.Fatalf("ingress.rules[0].target.service = %q, want %q", got, want)
+	}
+	if got, want := cfg.Ingress.Rules[0].Target.Port, "http"; got != want {
+		t.Fatalf("ingress.rules[0].target.port = %q, want %q", got, want)
+	}
+	if got, want := cfg.Ingress.Rules[0].Match.Host, "*"; got != want {
+		t.Fatalf("ingress.rules[0].match.host = %q, want %q", got, want)
+	}
+	if got, want := cfg.Ingress.Rules[0].Match.PathPrefix, "/"; got != want {
+		t.Fatalf("ingress.rules[0].match.path_prefix = %q, want %q", got, want)
 	}
 	if got, want := cfg.Ingress.Hosts, []string{"*"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ingress.hosts = %#v, want %#v", got, want)

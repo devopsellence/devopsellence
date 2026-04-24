@@ -53,6 +53,8 @@ module EnvironmentIngresses
     end
 
     def desired_hosts_for(ingress)
+      return [ environment.environment_bundle.hostname ] if environment.environment_bundle&.hostname.present?
+
       configured = IngressHostnames.normalize_all(release&.ingress_config&.dig("hosts"))
       return configured if configured.any?
       return ingress.hosts if ingress.hosts.any?

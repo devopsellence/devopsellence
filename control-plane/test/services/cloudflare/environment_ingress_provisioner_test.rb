@@ -219,8 +219,17 @@ module Cloudflare
             "services" => { "web" => web_service_runtime },
             "tasks" => {},
             "ingress" => {
-              "service" => "web",
-              "hosts" => ["App.Example.Test", "WWW.Example.Test"]
+              "hosts" => ["App.Example.Test", "WWW.Example.Test"],
+              "rules" => [
+                {
+                  "match" => { "host" => "App.Example.Test", "path_prefix" => "/" },
+                  "target" => { "service" => "web", "port" => "http" }
+                },
+                {
+                  "match" => { "host" => "WWW.Example.Test", "path_prefix" => "/" },
+                  "target" => { "service" => "web", "port" => "http" }
+                }
+              ]
             }
           }
         )

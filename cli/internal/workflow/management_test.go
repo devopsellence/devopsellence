@@ -207,8 +207,20 @@ func TestInitBootstrapsSharedIngressFromCanonicalDomain(t *testing.T) {
 	if loaded == nil || loaded.Ingress == nil {
 		t.Fatalf("expected bootstrapped ingress, got %#v", loaded)
 	}
-	if got, want := loaded.Ingress.Service, config.DefaultWebServiceName; got != want {
-		t.Fatalf("ingress.service = %q, want %q", got, want)
+	if len(loaded.Ingress.Rules) != 2 {
+		t.Fatalf("ingress.rules = %#v, want two host rules", loaded.Ingress.Rules)
+	}
+	if got, want := loaded.Ingress.Rules[0].Target.Service, config.DefaultWebServiceName; got != want {
+		t.Fatalf("ingress.rules[0].target.service = %q, want %q", got, want)
+	}
+	if got, want := loaded.Ingress.Rules[0].Target.Port, "http"; got != want {
+		t.Fatalf("ingress.rules[0].target.port = %q, want %q", got, want)
+	}
+	if got, want := loaded.Ingress.Rules[0].Match.Host, "www.prod-abc.devopsellence.io"; got != want {
+		t.Fatalf("ingress.rules[0].match.host = %q, want %q", got, want)
+	}
+	if got, want := loaded.Ingress.Rules[1].Match.Host, "prod-abc.devopsellence.io"; got != want {
+		t.Fatalf("ingress.rules[1].match.host = %q, want %q", got, want)
 	}
 	if got, want := loaded.Ingress.Hosts, []string{"www.prod-abc.devopsellence.io", "prod-abc.devopsellence.io"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ingress.hosts = %#v, want %#v", got, want)
@@ -478,13 +490,20 @@ func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 	root := makeRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
 	project.Ingress = &config.IngressConfig{
-		Hosts:   []string{"app.example.test"},
-		Service: "web",
+		Hosts: []string{"app.example.test"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.test", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
 	}
 	project.Environments = map[string]config.EnvironmentOverlay{
 		"staging": {
 			Ingress: &config.IngressConfigOverlay{
 				Hosts: []string{"staging.example.test"},
+				Rules: []config.IngressRuleConfig{{
+					Match:  config.IngressMatchConfig{Host: "staging.example.test", PathPrefix: "/"},
+					Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+				}},
 			},
 			Services: map[string]config.ServiceConfigOverlay{
 				"web": {

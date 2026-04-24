@@ -125,6 +125,10 @@ module Deployments
       ingress = environment.environment_ingress
       return false unless ingress&.status == EnvironmentIngress::STATUS_READY
 
+      if environment.environment_bundle&.hostname.present?
+        return true
+      end
+
       desired_hosts = IngressHostnames.normalize_all(release.ingress_config&.dig("hosts"))
       return true if desired_hosts.empty?
 

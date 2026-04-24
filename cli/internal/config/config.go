@@ -99,7 +99,7 @@ type IngressConfig struct {
 	Hosts        []string             `yaml:"hosts,omitempty" json:"hosts,omitempty"`
 	Rules        []IngressRuleConfig  `yaml:"rules,omitempty" json:"rules,omitempty"`
 	TLS          IngressTLSConfig     `yaml:"tls,omitempty" json:"tls,omitempty"`
-	RedirectHTTP bool                 `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
+	RedirectHTTP *bool                `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
 }
 
 type IngressRuleConfig struct {
@@ -117,6 +117,52 @@ type IngressTargetConfig struct {
 	Port    string `yaml:"port" json:"port"`
 }
 
+type HTTPHealthcheckOverlay struct {
+	Path *string `yaml:"path,omitempty" json:"path,omitempty"`
+	Port *int    `yaml:"port,omitempty" json:"port,omitempty"`
+}
+
+type ServiceConfigOverlay struct {
+	Image       *string                 `yaml:"image,omitempty" json:"image,omitempty"`
+	Command     []string                `yaml:"command,omitempty" json:"command,omitempty"`
+	Args        []string                `yaml:"args,omitempty" json:"args,omitempty"`
+	Env         map[string]string       `yaml:"env,omitempty" json:"env,omitempty"`
+	SecretRefs  []SecretRef             `yaml:"secret_refs,omitempty" json:"secret_refs,omitempty"`
+	Ports       []ServicePort           `yaml:"ports,omitempty" json:"ports,omitempty"`
+	Healthcheck *HTTPHealthcheckOverlay `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
+	Volumes     []Volume                `yaml:"volumes,omitempty" json:"volumes,omitempty"`
+}
+
+type TaskConfigOverlay struct {
+	Service *string           `yaml:"service,omitempty" json:"service,omitempty"`
+	Command []string          `yaml:"command,omitempty" json:"command,omitempty"`
+	Args    []string          `yaml:"args,omitempty" json:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+}
+
+type TasksConfigOverlay struct {
+	Release *TaskConfigOverlay `yaml:"release,omitempty" json:"release,omitempty"`
+}
+
+type IngressTLSConfigOverlay struct {
+	Mode           *string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Email          *string `yaml:"email,omitempty" json:"email,omitempty"`
+	CADirectoryURL *string `yaml:"ca_directory_url,omitempty" json:"ca_directory_url,omitempty"`
+}
+
+type IngressConfigOverlay struct {
+	Hosts        []string                 `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	Rules        []IngressRuleConfig      `yaml:"rules,omitempty" json:"rules,omitempty"`
+	TLS          *IngressTLSConfigOverlay `yaml:"tls,omitempty" json:"tls,omitempty"`
+	RedirectHTTP *bool                    `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
+}
+
+type EnvironmentOverlay struct {
+	Ingress  *IngressConfigOverlay           `yaml:"ingress,omitempty" json:"ingress,omitempty"`
+	Services map[string]ServiceConfigOverlay `yaml:"services,omitempty" json:"services,omitempty"`
+	Tasks    *TasksConfigOverlay             `yaml:"tasks,omitempty" json:"tasks,omitempty"`
+}
+
 type SoloNode struct {
 	Host             string   `yaml:"host" json:"host"`
 	User             string   `yaml:"user" json:"user"`
@@ -132,15 +178,16 @@ type SoloNode struct {
 }
 
 type ProjectConfig struct {
-	SchemaVersion      int                      `yaml:"schema_version" json:"schema_version"`
-	App                AppConfig                `yaml:"app,omitempty" json:"app,omitempty"`
-	Organization       string                   `yaml:"organization" json:"organization"`
-	Project            string                   `yaml:"project" json:"project"`
-	DefaultEnvironment string                   `yaml:"default_environment" json:"default_environment"`
-	Build              BuildConfig              `yaml:"build" json:"build"`
-	Services           map[string]ServiceConfig `yaml:"services" json:"services"`
-	Tasks              TasksConfig              `yaml:"tasks,omitempty" json:"tasks,omitempty"`
-	Ingress            *IngressConfig           `yaml:"ingress,omitempty" json:"ingress,omitempty"`
+	SchemaVersion      int                           `yaml:"schema_version" json:"schema_version"`
+	App                AppConfig                     `yaml:"app,omitempty" json:"app,omitempty"`
+	Organization       string                        `yaml:"organization" json:"organization"`
+	Project            string                        `yaml:"project" json:"project"`
+	DefaultEnvironment string                        `yaml:"default_environment" json:"default_environment"`
+	Build              BuildConfig                   `yaml:"build" json:"build"`
+	Services           map[string]ServiceConfig      `yaml:"services" json:"services"`
+	Tasks              TasksConfig                   `yaml:"tasks,omitempty" json:"tasks,omitempty"`
+	Ingress            *IngressConfig                `yaml:"ingress,omitempty" json:"ingress,omitempty"`
+	Environments       map[string]EnvironmentOverlay `yaml:"environments,omitempty" json:"environments,omitempty"`
 }
 
 type Project = ProjectConfig
@@ -277,6 +324,7 @@ func DefaultProjectConfigForType(organization, project, environment, appType str
 		},
 		Services: map[string]ServiceConfig{
 			DefaultWebServiceName: {
+				Kind:       ServiceKindWeb,
 				Env:        map[string]string{},
 				SecretRefs: []SecretRef{},
 				Volumes:    []Volume{},
@@ -314,6 +362,17 @@ func Validate(cfg *ProjectConfig) error {
 	if strings.TrimSpace(cfg.DefaultEnvironment) == "" {
 		return errors.New("default_environment is required")
 	}
+	if err := validateEnvironmentOverlays(cfg); err != nil {
+		return err
+	}
+	resolved, err := ResolveEnvironmentConfig(*cfg, cfg.DefaultEnvironment)
+	if err != nil {
+		return err
+	}
+	return validateResolvedProjectConfig(&resolved)
+}
+
+func validateResolvedProjectConfig(cfg *ProjectConfig) error {
 	if strings.TrimSpace(cfg.Build.Context) == "" {
 		return errors.New("build.context is required")
 	}
@@ -392,6 +451,9 @@ func applyDefaults(cfg *ProjectConfig) {
 	if cfg.Services == nil {
 		cfg.Services = map[string]ServiceConfig{}
 	}
+	if cfg.Environments == nil {
+		cfg.Environments = map[string]EnvironmentOverlay{}
+	}
 	for name, service := range cfg.Services {
 		if service.Env == nil {
 			service.Env = map[string]string{}
@@ -405,7 +467,7 @@ func applyDefaults(cfg *ProjectConfig) {
 		service.Ports = normalizeServicePorts(service.Ports)
 		if service.Healthcheck != nil {
 			service.Healthcheck.Path = strings.TrimSpace(service.Healthcheck.Path)
-			if service.Healthcheck.Path == "" {
+			if strings.TrimSpace(service.Healthcheck.Path) == "" {
 				if cfg.App.Type == AppTypeGeneric {
 					service.Healthcheck.Path = "/"
 				} else {
@@ -420,6 +482,9 @@ func applyDefaults(cfg *ProjectConfig) {
 		cfg.Services[name] = service
 	}
 	if cfg.Tasks.Release != nil {
+		cfg.Tasks.Release.Service = strings.TrimSpace(cfg.Tasks.Release.Service)
+		cfg.Tasks.Release.Command = normalizeStringListKeepOrder(cfg.Tasks.Release.Command)
+		cfg.Tasks.Release.Args = normalizeStringListKeepOrder(cfg.Tasks.Release.Args)
 		cfg.Tasks.Release.Env = mergeStringMaps(cfg.Tasks.Release.Env)
 	}
 	if cfg.Ingress != nil {
@@ -440,10 +505,47 @@ func applyDefaults(cfg *ProjectConfig) {
 		}
 		cfg.Ingress.TLS.Email = strings.TrimSpace(cfg.Ingress.TLS.Email)
 		cfg.Ingress.TLS.CADirectoryURL = strings.TrimSpace(cfg.Ingress.TLS.CADirectoryURL)
-		if cfg.Ingress.TLS.Mode == "auto" {
-			cfg.Ingress.RedirectHTTP = true
+		if cfg.Ingress.TLS.Mode == "auto" && cfg.Ingress.RedirectHTTP == nil {
+			cfg.Ingress.RedirectHTTP = boolPtr(true)
 		}
 	}
+}
+
+func ResolveEnvironmentConfig(base ProjectConfig, selectedEnv string) (ProjectConfig, error) {
+	resolved := cloneProjectConfig(base)
+	envName := strings.TrimSpace(selectedEnv)
+	if envName == "" {
+		envName = strings.TrimSpace(base.DefaultEnvironment)
+	}
+	if envName == "" {
+		envName = DefaultEnvironment
+	}
+	resolved.DefaultEnvironment = envName
+
+	overlay, ok := base.Environments[envName]
+	if !ok {
+		applyDefaults(&resolved)
+		return resolved, nil
+	}
+
+	if overlay.Ingress != nil {
+		resolved.Ingress = mergeIngressConfig(resolved.Ingress, overlay.Ingress)
+	}
+	if len(overlay.Services) > 0 {
+		if resolved.Services == nil {
+			resolved.Services = map[string]ServiceConfig{}
+		}
+		for name, entry := range overlay.Services {
+			baseService := resolved.Services[name]
+			resolved.Services[name] = mergeServiceConfig(baseService, entry)
+		}
+	}
+	if overlay.Tasks != nil {
+		resolved.Tasks = mergeTasksConfig(resolved.Tasks, overlay.Tasks)
+	}
+
+	applyDefaults(&resolved)
+	return resolved, nil
 }
 
 func normalizeNodeLabels(labels []string) []string {
@@ -473,6 +575,17 @@ func normalizeStringList(values []string) []string {
 		}
 		seen[value] = true
 		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
+func normalizeStringListKeepOrder(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized = append(normalized, strings.TrimSpace(value))
 	}
 	return normalized
 }
@@ -531,70 +644,31 @@ func validateService(name string, service ServiceConfig) error {
 	}
 	seenPorts := map[string]bool{}
 	for _, port := range service.Ports {
-		portName := strings.TrimSpace(port.Name)
-		if portName == "" {
+		if strings.TrimSpace(port.Name) == "" {
 			return fmt.Errorf("services.%s.ports[].name is required", name)
 		}
 		if port.Port <= 0 {
 			return fmt.Errorf("services.%s.ports[%s].port must be a positive integer", name, port.Name)
 		}
-		if seenPorts[portName] {
-			return fmt.Errorf("services.%s.ports contains duplicate port %q", name, portName)
+		if seenPorts[port.Name] {
+			return fmt.Errorf("services.%s.ports contains duplicate port %q", name, port.Name)
 		}
-		seenPorts[portName] = true
+		seenPorts[port.Name] = true
 	}
-	if service.Healthcheck != nil {
+	serviceKind := inferredServiceKind(name, service)
+	if serviceKind == ServiceKindWeb {
+		if service.HTTPPort(0) <= 0 {
+			return fmt.Errorf("services.%s must expose an http port", name)
+		}
+		if service.Healthcheck == nil {
+			return fmt.Errorf("services.%s.healthcheck is required", name)
+		}
 		if strings.TrimSpace(service.Healthcheck.Path) == "" {
 			return fmt.Errorf("services.%s.healthcheck.path is required", name)
 		}
 		if service.Healthcheck.Port <= 0 {
 			return fmt.Errorf("services.%s.healthcheck.port must be a positive integer", name)
 		}
-	}
-	return nil
-}
-
-func validateIngressRules(cfg *ProjectConfig) error {
-	knownHosts := map[string]struct{}{}
-	for _, host := range cfg.Ingress.Hosts {
-		knownHosts[host] = struct{}{}
-	}
-	seen := map[string]struct{}{}
-	for i, rule := range cfg.Ingress.Rules {
-		host := strings.TrimSpace(rule.Match.Host)
-		if host == "" {
-			return fmt.Errorf("ingress.rules[%d].match.host is required", i)
-		}
-		if _, ok := knownHosts[host]; !ok {
-			return fmt.Errorf("ingress.rules[%d].match.host %q missing from ingress.hosts", i, host)
-		}
-		pathPrefix := strings.TrimSpace(rule.Match.PathPrefix)
-		if pathPrefix == "" {
-			pathPrefix = "/"
-		}
-		if !strings.HasPrefix(pathPrefix, "/") {
-			return fmt.Errorf("ingress.rules[%d].match.path_prefix must start with /", i)
-		}
-		serviceName := strings.TrimSpace(rule.Target.Service)
-		if serviceName == "" {
-			return fmt.Errorf("ingress.rules[%d].target.service is required", i)
-		}
-		service, ok := cfg.Services[serviceName]
-		if !ok {
-			return fmt.Errorf("ingress.rules[%d].target.service %q not found in services", i, serviceName)
-		}
-		portName := strings.TrimSpace(rule.Target.Port)
-		if portName == "" {
-			return fmt.Errorf("ingress.rules[%d].target.port is required", i)
-		}
-		if !service.HasPortNamed(portName) {
-			return fmt.Errorf("ingress.rules[%d].target.port %q not found on service %q", i, portName, serviceName)
-		}
-		key := host + "\x00" + pathPrefix
-		if _, ok := seen[key]; ok {
-			return fmt.Errorf("ingress.rules[%d]: duplicate route for %s%s", i, host, pathPrefix)
-		}
-		seen[key] = struct{}{}
 	}
 	return nil
 }
@@ -632,6 +706,54 @@ func validateTasks(cfg *ProjectConfig) error {
 	return nil
 }
 
+func validateIngressRules(cfg *ProjectConfig) error {
+	if cfg == nil || cfg.Ingress == nil {
+		return nil
+	}
+	hostSet := map[string]bool{}
+	for _, host := range cfg.Ingress.Hosts {
+		hostSet[strings.TrimSpace(host)] = true
+	}
+	seenRoutes := map[string]bool{}
+	for i, rule := range cfg.Ingress.Rules {
+		host := strings.TrimSpace(rule.Match.Host)
+		pathPrefix := strings.TrimSpace(rule.Match.PathPrefix)
+		if pathPrefix == "" {
+			pathPrefix = "/"
+		}
+		serviceName := strings.TrimSpace(rule.Target.Service)
+		portName := strings.TrimSpace(rule.Target.Port)
+		if host == "" {
+			return fmt.Errorf("ingress.rules[%d].match.host is required", i)
+		}
+		if !hostSet[host] {
+			return fmt.Errorf("ingress.rules[%d].match.host must exist in ingress.hosts", i)
+		}
+		if !strings.HasPrefix(pathPrefix, "/") {
+			return fmt.Errorf("ingress.rules[%d].match.path_prefix must start with /", i)
+		}
+		if serviceName == "" {
+			return fmt.Errorf("ingress.rules[%d].target.service is required", i)
+		}
+		service, ok := cfg.Services[serviceName]
+		if !ok {
+			return fmt.Errorf("ingress.rules[%d].target.service %q not found in services", i, serviceName)
+		}
+		if portName == "" {
+			return fmt.Errorf("ingress.rules[%d].target.port is required", i)
+		}
+		if !service.HasPortNamed(portName) {
+			return fmt.Errorf("ingress.rules[%d].target.port %q not found on service %q", i, portName, serviceName)
+		}
+		key := host + "\n" + pathPrefix
+		if seenRoutes[key] {
+			return fmt.Errorf("ingress.rules contains duplicate route for host %q and path_prefix %q", host, pathPrefix)
+		}
+		seenRoutes[key] = true
+	}
+	return nil
+}
+
 func (cfg ProjectConfig) ServiceNames() []string {
 	names := make([]string, 0, len(cfg.Services))
 	for name := range cfg.Services {
@@ -652,23 +774,6 @@ func (cfg ProjectConfig) ServicesByKind(kind string) []string {
 }
 
 func (cfg ProjectConfig) PrimaryWebServiceName() (string, bool) {
-	targeted := map[string]struct{}{}
-	if cfg.Ingress != nil {
-		for _, rule := range cfg.Ingress.Rules {
-			serviceName := strings.TrimSpace(rule.Target.Service)
-			if serviceName != "" {
-				targeted[serviceName] = struct{}{}
-			}
-		}
-	}
-	if len(targeted) == 1 {
-		for serviceName := range targeted {
-			return serviceName, true
-		}
-	}
-	if _, ok := targeted[DefaultWebServiceName]; ok {
-		return DefaultWebServiceName, true
-	}
 	services := cfg.ServicesByKind(ServiceKindWeb)
 	if len(services) == 0 {
 		return "", false
@@ -696,6 +801,7 @@ func (service ServiceConfig) HTTPPort(fallback int) int {
 }
 
 func (service ServiceConfig) HasPortNamed(name string) bool {
+	name = strings.TrimSpace(name)
 	for _, port := range service.Ports {
 		if strings.TrimSpace(port.Name) == name && port.Port > 0 {
 			return true
@@ -719,4 +825,221 @@ func mergeStringMaps(parts ...map[string]string) map[string]string {
 		}
 	}
 	return merged
+}
+
+func validateEnvironmentOverlays(cfg *ProjectConfig) error {
+	for envName, overlay := range cfg.Environments {
+		name := strings.TrimSpace(envName)
+		if name == "" {
+			return errors.New("environments keys must be present")
+		}
+		if err := validateEnvironmentOverlay(name, overlay, cfg); err != nil {
+			return err
+		}
+		resolved, err := ResolveEnvironmentConfig(*cfg, name)
+		if err != nil {
+			return err
+		}
+		if err := validateResolvedProjectConfig(&resolved); err != nil {
+			return fmt.Errorf("environments.%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateEnvironmentOverlay(envName string, overlay EnvironmentOverlay, cfg *ProjectConfig) error {
+	if overlay.Ingress != nil {
+		if overlay.Ingress.TLS != nil {
+			for field, value := range map[string]*string{
+				"mode":             overlay.Ingress.TLS.Mode,
+				"email":            overlay.Ingress.TLS.Email,
+				"ca_directory_url": overlay.Ingress.TLS.CADirectoryURL,
+			} {
+				if value != nil && strings.TrimSpace(*value) == "" {
+					return fmt.Errorf("environments.%s.ingress.tls.%s must be present", envName, field)
+				}
+			}
+		}
+	}
+	for serviceName, service := range overlay.Services {
+		if _, ok := cfg.Services[serviceName]; !ok {
+			return fmt.Errorf("environments.%s.services.%s not found in services", envName, serviceName)
+		}
+		for field, value := range map[string]*string{
+			"image": service.Image,
+		} {
+			if value != nil && strings.TrimSpace(*value) == "" {
+				return fmt.Errorf("environments.%s.services.%s.%s must be present", envName, serviceName, field)
+			}
+		}
+		if service.Healthcheck != nil && service.Healthcheck.Port != nil && *service.Healthcheck.Port <= 0 {
+			return fmt.Errorf("environments.%s.services.%s.healthcheck.port must be a positive integer", envName, serviceName)
+		}
+	}
+	if overlay.Tasks != nil && overlay.Tasks.Release != nil {
+		release := overlay.Tasks.Release
+		if release.Service != nil && strings.TrimSpace(*release.Service) == "" {
+			return fmt.Errorf("environments.%s.tasks.release.service must be present", envName)
+		}
+	}
+	return nil
+}
+
+func cloneProjectConfig(cfg ProjectConfig) ProjectConfig {
+	cloned := cfg
+	cloned.Build.Platforms = append([]string(nil), cfg.Build.Platforms...)
+	cloned.Services = map[string]ServiceConfig{}
+	for name, service := range cfg.Services {
+		cloned.Services[name] = cloneServiceConfig(service)
+	}
+	if cfg.Tasks.Release != nil {
+		release := *cfg.Tasks.Release
+		release.Command = append([]string(nil), cfg.Tasks.Release.Command...)
+		release.Args = append([]string(nil), cfg.Tasks.Release.Args...)
+		release.Env = cloneStringMap(cfg.Tasks.Release.Env)
+		cloned.Tasks.Release = &release
+	}
+	if cfg.Ingress != nil {
+		ingress := *cfg.Ingress
+		ingress.Hosts = append([]string(nil), cfg.Ingress.Hosts...)
+		ingress.Rules = append([]IngressRuleConfig(nil), cfg.Ingress.Rules...)
+		if cfg.Ingress.RedirectHTTP != nil {
+			ingress.RedirectHTTP = boolPtr(*cfg.Ingress.RedirectHTTP)
+		}
+		cloned.Ingress = &ingress
+	}
+	cloned.Environments = cfg.Environments
+	return cloned
+}
+
+func cloneServiceConfig(service ServiceConfig) ServiceConfig {
+	cloned := service
+	cloned.Command = append([]string(nil), service.Command...)
+	cloned.Args = append([]string(nil), service.Args...)
+	cloned.Env = cloneStringMap(service.Env)
+	cloned.SecretRefs = append([]SecretRef(nil), service.SecretRefs...)
+	cloned.Ports = append([]ServicePort(nil), service.Ports...)
+	cloned.Volumes = append([]Volume(nil), service.Volumes...)
+	if service.Healthcheck != nil {
+		healthcheck := *service.Healthcheck
+		cloned.Healthcheck = &healthcheck
+	}
+	return cloned
+}
+
+func mergeServiceConfig(base ServiceConfig, overlay ServiceConfigOverlay) ServiceConfig {
+	merged := cloneServiceConfig(base)
+	if overlay.Image != nil {
+		merged.Image = strings.TrimSpace(*overlay.Image)
+	}
+	if overlay.Command != nil {
+		merged.Command = append([]string(nil), overlay.Command...)
+	}
+	if overlay.Args != nil {
+		merged.Args = append([]string(nil), overlay.Args...)
+	}
+	if overlay.Env != nil {
+		merged.Env = mergeStringMaps(merged.Env, overlay.Env)
+	}
+	if overlay.SecretRefs != nil {
+		merged.SecretRefs = append([]SecretRef(nil), overlay.SecretRefs...)
+	}
+	if overlay.Ports != nil {
+		merged.Ports = append([]ServicePort(nil), overlay.Ports...)
+	}
+	if overlay.Volumes != nil {
+		merged.Volumes = append([]Volume(nil), overlay.Volumes...)
+	}
+	if overlay.Healthcheck != nil {
+		if merged.Healthcheck == nil {
+			merged.Healthcheck = &HTTPHealthcheck{}
+		}
+		if overlay.Healthcheck.Path != nil {
+			merged.Healthcheck.Path = strings.TrimSpace(*overlay.Healthcheck.Path)
+		}
+		if overlay.Healthcheck.Port != nil {
+			merged.Healthcheck.Port = *overlay.Healthcheck.Port
+		}
+	}
+	return merged
+}
+
+func mergeTasksConfig(base TasksConfig, overlay *TasksConfigOverlay) TasksConfig {
+	merged := base
+	if overlay == nil || overlay.Release == nil {
+		return merged
+	}
+	if merged.Release == nil {
+		merged.Release = &TaskConfig{}
+	}
+	if overlay.Release.Service != nil {
+		merged.Release.Service = strings.TrimSpace(*overlay.Release.Service)
+	}
+	if overlay.Release.Command != nil {
+		merged.Release.Command = append([]string(nil), overlay.Release.Command...)
+	}
+	if overlay.Release.Args != nil {
+		merged.Release.Args = append([]string(nil), overlay.Release.Args...)
+	}
+	if overlay.Release.Env != nil {
+		merged.Release.Env = mergeStringMaps(merged.Release.Env, overlay.Release.Env)
+	}
+	return merged
+}
+
+func mergeIngressConfig(base *IngressConfig, overlay *IngressConfigOverlay) *IngressConfig {
+	if overlay == nil {
+		if base == nil {
+			return nil
+		}
+		cloned := *base
+		cloned.Hosts = append([]string(nil), base.Hosts...)
+		cloned.Rules = append([]IngressRuleConfig(nil), base.Rules...)
+		return &cloned
+	}
+	merged := &IngressConfig{}
+	if base != nil {
+		*merged = *base
+		merged.Hosts = append([]string(nil), base.Hosts...)
+		merged.Rules = append([]IngressRuleConfig(nil), base.Rules...)
+		if base.RedirectHTTP != nil {
+			merged.RedirectHTTP = boolPtr(*base.RedirectHTTP)
+		}
+	}
+	if overlay.Hosts != nil {
+		merged.Hosts = append([]string(nil), overlay.Hosts...)
+	}
+	if overlay.Rules != nil {
+		merged.Rules = append([]IngressRuleConfig(nil), overlay.Rules...)
+	}
+	if overlay.TLS != nil {
+		if overlay.TLS.Mode != nil {
+			merged.TLS.Mode = strings.TrimSpace(*overlay.TLS.Mode)
+		}
+		if overlay.TLS.Email != nil {
+			merged.TLS.Email = strings.TrimSpace(*overlay.TLS.Email)
+		}
+		if overlay.TLS.CADirectoryURL != nil {
+			merged.TLS.CADirectoryURL = strings.TrimSpace(*overlay.TLS.CADirectoryURL)
+		}
+	}
+	if overlay.RedirectHTTP != nil {
+		merged.RedirectHTTP = boolPtr(*overlay.RedirectHTTP)
+	}
+	return merged
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := map[string]string{}
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }

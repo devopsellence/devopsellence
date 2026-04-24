@@ -66,12 +66,7 @@ class Release < ApplicationRecord
 
   def ingress_config
     ingress = runtime_payload["ingress"]
-    return ingress if ingress.is_a?(Hash)
-
-    legacy_service = runtime_payload["ingress_service"].to_s.strip
-    return nil if legacy_service.blank?
-
-    { "service" => legacy_service }
+    ingress.is_a?(Hash) ? ingress : nil
   end
 
   def has_release_task?
@@ -277,6 +272,11 @@ class Release < ApplicationRecord
   end
 
   def validate_ingress_config
+    if runtime_payload.key?("ingress") && !runtime_payload["ingress"].is_a?(Hash)
+      errors.add(:runtime_json, "ingress must decode to an object")
+      return
+    end
+
     ingress = ingress_config
     if ingress.nil?
       if web_service_names.length > 1

@@ -92,7 +92,6 @@ func TestLoadAppliesDefaultBuildPlatforms(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -130,7 +129,6 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -164,7 +162,6 @@ func TestLoadRejectsStringCommandSyntax(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    command: ./bin/server",
 		"    ports:",
 		"      - name: http",
@@ -201,6 +198,18 @@ func TestValidateAcceptsWorkerWithoutExtraPlacementFields(t *testing.T) {
 	}
 }
 
+func TestInferredServiceKindTreatsNonHTTPPortOnlyServiceAsWorker(t *testing.T) {
+	t.Parallel()
+
+	service := ServiceConfig{
+		Ports: []ServicePort{{Name: "metrics", Port: 9090}},
+	}
+
+	if got := inferredServiceKind("api", service); got != ServiceKindWorker {
+		t.Fatalf("inferredServiceKind() = %q, want %q", got, ServiceKindWorker)
+	}
+}
+
 func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 	t.Parallel()
 
@@ -216,7 +225,6 @@ func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -253,7 +261,6 @@ func TestLoadRejectsLegacySoloConfigBlock(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -354,199 +361,69 @@ func TestReadmeExampleConfigParses(t *testing.T) {
 	}
 }
 
-func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
+func TestValidateAcceptsGenericServicesAndExplicitIngressRules(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
+	project.SchemaVersion = 6
+	project.Services = map[string]Service{
+		"app": {
+			Command: []string{"./bin/web"},
+			Ports:   []ServicePort{{Name: "http", Port: 3000}},
+			Healthcheck: &HTTPHealthcheck{
+				Path: "/up",
+				Port: 3000,
+			},
+		},
+		"api": {
+			Command: []string{"./bin/api"},
+			Ports:   []ServicePort{{Name: "http", Port: 4000}},
+		},
+		"worker": {
+			Command: []string{"./bin/worker"},
+		},
+	}
 	project.Ingress = &IngressConfig{
-		Hosts:   []string{"app.example.test"},
-		Service: "web",
-		TLS:     IngressTLSConfig{Mode: "auto", Email: "ops@example.test"},
-	}
-	project.Services["web"] = Service{
-		Kind:       ServiceKindWeb,
-		Command:    []string{"bundle", "exec", "puma"},
-		Args:       []string{"-C", "config/puma.rb"},
-		Env:        map[string]string{"RAILS_ENV": "production", "BASE_ONLY": "1"},
-		SecretRefs: []SecretRef{{Name: "BASE_KEY", Secret: "gsm://base"}},
-		Ports:      []ServicePort{{Name: "http", Port: 3000}},
-		Healthcheck: &HTTPHealthcheck{
-			Path: "/up",
-			Port: 3000,
-		},
-		Volumes: []Volume{{Source: "storage", Target: "/rails/storage"}},
-	}
-	project.Tasks.Release = &TaskConfig{
-		Service: "web",
-		Command: []string{"bundle", "exec", "rails", "db:migrate"},
-		Env:     map[string]string{"RELEASE_ONLY": "base"},
-	}
-	redirectHTTP := false
-	stagingService := "web"
-	stagingPath := "/healthz"
-	stagingPort := 8080
-	project.Environments = map[string]EnvironmentOverlay{
-		"staging": {
-			Ingress: &IngressConfigOverlay{
-				Hosts:   []string{"staging.example.test", "alt-staging.example.test"},
-				Service: &stagingService,
-				TLS: &IngressTLSConfigOverlay{
-					Email: stringPtr("staging@example.test"),
-				},
-				RedirectHTTP: &redirectHTTP,
+		Hosts: []string{"app.example.com"},
+		Rules: []IngressRuleConfig{
+			{
+				Match:  IngressMatchConfig{Host: "app.example.com", PathPrefix: "/api"},
+				Target: IngressTargetConfig{Service: "api", Port: "http"},
 			},
-			Services: map[string]ServiceConfigOverlay{
-				"web": {
-					Command:     []string{"./bin/staging-web"},
-					Env:         map[string]string{"RAILS_ENV": "staging", "STAGING_ONLY": "1"},
-					SecretRefs:  []SecretRef{{Name: "STAGING_KEY", Secret: "gsm://staging"}},
-					Ports:       []ServicePort{{Name: "http", Port: 8080}},
-					Volumes:     []Volume{{Source: "staging-storage", Target: "/rails/storage"}},
-					Healthcheck: &HTTPHealthcheckOverlay{Path: &stagingPath, Port: &stagingPort},
-				},
-			},
-			Tasks: &TasksConfigOverlay{
-				Release: &TaskConfigOverlay{
-					Env:     map[string]string{"RELEASE_ONLY": "staging", "MIGRATION_MODE": "online"},
-					Command: []string{"bundle", "exec", "rails", "db:prepare"},
-				},
+			{
+				Match:  IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+				Target: IngressTargetConfig{Service: "app", Port: "http"},
 			},
 		},
 	}
 
-	resolved, err := ResolveEnvironmentConfig(project, "staging")
-	if err != nil {
-		t.Fatalf("ResolveEnvironmentConfig() error = %v", err)
-	}
-	if resolved.DefaultEnvironment != "staging" {
-		t.Fatalf("default_environment = %q, want staging", resolved.DefaultEnvironment)
-	}
-	if got := strings.Join(resolved.Ingress.Hosts, ","); got != "staging.example.test,alt-staging.example.test" {
-		t.Fatalf("ingress.hosts = %q", got)
-	}
-	if resolved.Ingress.TLS.Mode != "auto" || resolved.Ingress.TLS.Email != "staging@example.test" {
-		t.Fatalf("ingress tls = %#v", resolved.Ingress.TLS)
-	}
-	if resolved.Ingress.RedirectHTTP == nil || *resolved.Ingress.RedirectHTTP {
-		t.Fatalf("ingress.redirect_http = %#v, want false", resolved.Ingress.RedirectHTTP)
-	}
-	web := resolved.Services["web"]
-	if got := strings.Join(web.Command, " "); got != "./bin/staging-web" {
-		t.Fatalf("command = %q", got)
-	}
-	if web.Args[0] != "-C" {
-		t.Fatalf("args = %#v", web.Args)
-	}
-	if web.Env["RAILS_ENV"] != "staging" || web.Env["BASE_ONLY"] != "1" || web.Env["STAGING_ONLY"] != "1" {
-		t.Fatalf("env = %#v", web.Env)
-	}
-	if len(web.SecretRefs) != 1 || web.SecretRefs[0].Name != "STAGING_KEY" {
-		t.Fatalf("secret_refs = %#v", web.SecretRefs)
-	}
-	if web.Healthcheck == nil || web.Healthcheck.Path != "/healthz" || web.Healthcheck.Port != 8080 {
-		t.Fatalf("healthcheck = %#v", web.Healthcheck)
-	}
-	if resolved.Tasks.Release == nil {
-		t.Fatal("release task missing")
-	}
-	if got := strings.Join(resolved.Tasks.Release.Command, " "); got != "bundle exec rails db:prepare" {
-		t.Fatalf("release command = %q", got)
-	}
-	if resolved.Tasks.Release.Env["RELEASE_ONLY"] != "staging" || resolved.Tasks.Release.Env["MIGRATION_MODE"] != "online" {
-		t.Fatalf("release env = %#v", resolved.Tasks.Release.Env)
+	if err := Validate(&project); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
-func TestResolveEnvironmentConfigReturnsBaseForMissingOverlay(t *testing.T) {
+func TestValidateRejectsIngressRuleTargetingMissingNamedPort(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	resolved, err := ResolveEnvironmentConfig(project, "staging")
-	if err != nil {
-		t.Fatalf("ResolveEnvironmentConfig() error = %v", err)
+	project.SchemaVersion = 6
+	project.Services = map[string]Service{
+		"app": {
+			Command: []string{"./bin/web"},
+			Ports:   []ServicePort{{Name: "http", Port: 3000}},
+			Healthcheck: &HTTPHealthcheck{Path: "/up", Port: 3000},
+		},
 	}
-	if resolved.DefaultEnvironment != "staging" {
-		t.Fatalf("default_environment = %q, want staging", resolved.DefaultEnvironment)
-	}
-	if _, ok := resolved.Services["web"]; !ok {
-		t.Fatalf("resolved services = %#v", resolved.Services)
-	}
-}
-
-func TestLoadRejectsOverlayServiceNotInBase(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	path := filepath.Join(root, FilePath)
-	content := strings.Join([]string{
-		"schema_version: 6",
-		"organization: acme",
-		"project: ShopApp",
-		"default_environment: production",
-		"build:",
-		"  context: .",
-		"  dockerfile: Dockerfile",
-		"services:",
-		"  web:",
-		"    kind: web",
-		"    ports:",
-		"      - name: http",
-		"        port: 3000",
-		"    healthcheck:",
-		"      path: /up",
-		"environments:",
-		"  staging:",
-		"    services:",
-		"      jobs:",
-		"        command:",
-		"          - ./bin/jobs",
-	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+	project.Ingress = &IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []IngressRuleConfig{{
+			Match:  IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: IngressTargetConfig{Service: "app", Port: "metrics"},
+		}},
 	}
 
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "environments.staging.services.jobs not found in services") {
-		t.Fatalf("expected missing service error, got %v", err)
+	err := Validate(&project)
+	if err == nil || !strings.Contains(err.Error(), "ingress.rules[0].target.port") {
+		t.Fatalf("expected ingress rule target port validation error, got %v", err)
 	}
-}
-
-func TestLoadRejectsUnknownOverlayKeys(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	path := filepath.Join(root, FilePath)
-	content := strings.Join([]string{
-		"schema_version: 6",
-		"organization: acme",
-		"project: ShopApp",
-		"default_environment: production",
-		"build:",
-		"  context: .",
-		"  dockerfile: Dockerfile",
-		"services:",
-		"  web:",
-		"    kind: web",
-		"    ports:",
-		"      - name: http",
-		"        port: 3000",
-		"    healthcheck:",
-		"      path: /up",
-		"environments:",
-		"  staging:",
-		"    build:",
-		"      context: .",
-	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "field build not found") {
-		t.Fatalf("expected unknown overlay key error, got %v", err)
-	}
-}
-
-func stringPtr(value string) *string {
-	return &value
 }

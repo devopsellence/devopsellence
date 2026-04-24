@@ -198,9 +198,17 @@ module ActiveSupport
       }.compact
     end
 
-    def release_runtime_json(services: nil, tasks: {}, ingress: :__default__)
+    def release_runtime_json(services: nil, tasks: {}, ingress: nil)
       services ||= { "web" => web_service_runtime }
-      ingress = { "service" => "web" } if ingress == :__default__
+      ingress ||= {
+        "hosts" => ["app.devopsellence.test"],
+        "rules" => [
+          {
+            "match" => { "host" => "app.devopsellence.test", "path_prefix" => "/" },
+            "target" => { "service" => "web", "port" => "http" }
+          }
+        ]
+      }
       ::JSON.generate(
         {
           "services" => services,

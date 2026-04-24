@@ -1427,6 +1427,13 @@ func TestDeployUsesResolveDeployTargetWhenAvailable(t *testing.T) {
 
 	root := makeGitGenericRoot(t)
 	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+	}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1501,6 +1508,12 @@ func TestDeployUsesResolveDeployTargetWhenAvailable(t *testing.T) {
 	}
 	if releaseCaptured.ImageRepository != "docker.io/mccutchen/go-httpbin" {
 		t.Fatalf("image repository = %q, want docker.io/mccutchen/go-httpbin", releaseCaptured.ImageRepository)
+	}
+	if got := stringValueAny(releaseCaptured.Ingress["hosts"].([]any)[0]); got != "app.example.com" {
+		t.Fatalf("ingress host = %q, want app.example.com", got)
+	}
+	if got := stringValueAny(releaseCaptured.Ingress["rules"].([]any)[0].(map[string]any)["target"].(map[string]any)["service"]); got != config.DefaultWebServiceName {
+		t.Fatalf("ingress target service = %q, want %q", got, config.DefaultWebServiceName)
 	}
 }
 

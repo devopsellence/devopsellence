@@ -208,9 +208,11 @@ func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 	}
 	if cfg.Ingress != nil {
 		snapshot.Ingress = buildIngress(cfg.Ingress, environmentName)
-		snapshot.IngressService = cfg.Ingress.Service
-		if service, ok := cfg.Services[cfg.Ingress.Service]; ok {
-			snapshot.IngressServiceKind = service.Kind
+		if serviceName, ok := cfg.PrimaryWebServiceName(); ok {
+			snapshot.IngressService = serviceName
+			if service, ok := cfg.Services[serviceName]; ok {
+				snapshot.IngressServiceKind = service.Kind
+			}
 		}
 	}
 	return snapshot, nil

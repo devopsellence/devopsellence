@@ -19,23 +19,22 @@ module Releases
       assert_equal "services must be valid JSON", error.message
     end
 
-    test "raises invalid payload when service kind is blank" do
-      error = assert_raises(RuntimeAttributes::InvalidPayload) do
-        RuntimeAttributes.new(
-          params: {
-            git_sha: "a" * 40,
-            image_repository: "api",
-            image_digest: "sha256:#{"b" * 64}",
-            services: {
-              web: {
-                kind: "   "
-              }
+    test "allows blank service kind and preserves generic service shape" do
+      attrs = RuntimeAttributes.new(
+        params: {
+          git_sha: "a" * 40,
+          image_repository: "api",
+          image_digest: "sha256:#{"b" * 64}",
+          services: {
+            web: {
+              kind: "   "
             }
           }
-        ).to_h
-      end
+        }
+      ).to_h
 
-      assert_equal "services.web.kind must be present", error.message
+      runtime = JSON.parse(attrs.fetch(:runtime_json))
+      assert_equal({}, runtime.dig("services", "web").slice("kind"))
     end
 
     test "rejects deprecated entrypoint fields" do
@@ -216,6 +215,44 @@ module Releases
 
       runtime = JSON.parse(attrs.fetch(:runtime_json))
       assert_equal ["app.example.test", "www.example.test"], runtime.dig("ingress", "hosts")
+    end
+
+    test "preserves explicit ingress rules payload" do
+      attrs = RuntimeAttributes.new(
+        params: {
+          git_sha: "a" * 40,
+          image_repository: "api",
+          image_digest: "sha256:#{"b" * 64}",
+          services: {
+            app: {
+              ports: [{ name: "http", port: 3000 }],
+              healthcheck: { path: "/up", port: 3000 }
+            },
+            api: {
+              ports: [{ name: "metrics", port: 9090 }]
+            }
+          },
+          ingress: {
+            hosts: ["app.example.com"],
+            rules: [
+              {
+                match: { host: "app.example.com", path_prefix: "/api" },
+                target: { service: "api", port: "metrics" }
+              },
+              {
+                match: { host: "app.example.com", path_prefix: "/" },
+                target: { service: "app", port: "http" }
+              }
+            ]
+          }
+        }
+      ).to_h
+
+      runtime = JSON.parse(attrs.fetch(:runtime_json))
+      assert_equal ["app.example.com"], runtime.dig("ingress", "hosts")
+      assert_equal "api", runtime.dig("ingress", "rules", 0, "target", "service")
+      assert_equal "metrics", runtime.dig("ingress", "rules", 0, "target", "port")
+      assert_equal "/", runtime.dig("ingress", "rules", 1, "match", "path_prefix")
     end
   end
 end

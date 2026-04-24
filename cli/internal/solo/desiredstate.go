@@ -146,9 +146,11 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
-		if !shouldScheduleService(labels, service.Kind) {
+		serviceKind := effectiveServiceKind(serviceName, service)
+		if !shouldScheduleService(labels, serviceKind) {
 			continue
 		}
+		service.Kind = serviceKind
 		rendered, err := buildService(serviceName, service, imageTag, secrets)
 		if err != nil {
 			return nil, fmt.Errorf("build service %s: %w", serviceName, err)
@@ -284,43 +286,42 @@ func normalizeEnvironmentNameToken(value string) string {
 }
 
 func buildIngress(ingress *config.IngressConfig, environmentName string) *ingressJSON {
-	if ingress == nil || len(ingress.Hosts) == 0 {
+	if ingress == nil || len(ingress.Hosts) == 0 || len(ingress.Rules) == 0 {
 		return nil
 	}
 	mode := strings.TrimSpace(ingress.TLS.Mode)
 	if mode == "" {
 		mode = "auto"
 	}
-	routes := make([]ingressRouteJSON, 0, len(ingress.Hosts))
-	for _, host := range ingress.Hosts {
+	routes := make([]ingressRouteJSON, 0, len(ingress.Rules))
+	for _, rule := range ingress.Rules {
+		pathPrefix := strings.TrimSpace(rule.Match.PathPrefix)
+		if pathPrefix == "" {
+			pathPrefix = "/"
+		}
 		routes = append(routes, ingressRouteJSON{
 			Match: ingressMatchJSON{
-				Hostname: host,
+				Hostname:   strings.TrimSpace(rule.Match.Host),
+				PathPrefix: pathPrefix,
 			},
 			Target: ingressTargetJSON{
 				Environment: environmentName,
-				Service:     ingress.Service,
-				Port:        "http",
+				Service:     strings.TrimSpace(rule.Target.Service),
+				Port:        strings.TrimSpace(rule.Target.Port),
 			},
 		})
 	}
 	return &ingressJSON{
 		Hosts: append([]string(nil), ingress.Hosts...),
+		Mode:  "public",
 		TLS: ingressTLSJSON{
 			Mode:           mode,
 			Email:          strings.TrimSpace(ingress.TLS.Email),
 			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
 		},
-		RedirectHTTP: ingressRedirectHTTPValue(ingress),
+		RedirectHTTP: ingress.RedirectHTTP,
 		Routes:       routes,
 	}
-}
-
-func ingressRedirectHTTPValue(ingress *config.IngressConfig) bool {
-	if ingress == nil || ingress.RedirectHTTP == nil {
-		return true
-	}
-	return *ingress.RedirectHTTP
 }
 
 func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmentNames map[string]string) (*ingressJSON, error) {
@@ -329,21 +330,21 @@ func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmen
 	routeSet := map[string]bool{}
 
 	for _, snapshot := range snapshots {
-		if snapshot.Ingress == nil || !shouldScheduleService(labels, snapshot.IngressServiceKind) {
+		if snapshot.Ingress == nil || !snapshotShouldScheduleIngress(labels, snapshot) {
 			continue
 		}
 		if merged == nil {
 			merged = &ingressJSON{
-				Mode:         normalizedMergedIngressMode(snapshot.Ingress.Mode),
+				Mode:         snapshot.Ingress.Mode,
 				TLS:          snapshot.Ingress.TLS,
 				RedirectHTTP: snapshot.Ingress.RedirectHTTP,
 			}
-		} else if merged.TLS != snapshot.Ingress.TLS || merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP || merged.Mode != normalizedMergedIngressMode(snapshot.Ingress.Mode) {
+		} else if merged.TLS != snapshot.Ingress.TLS || merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP || merged.Mode != snapshot.Ingress.Mode {
 			differingSettings := []string{}
 			if merged.TLS != snapshot.Ingress.TLS {
 				differingSettings = append(differingSettings, "TLS")
 			}
-			if merged.Mode != normalizedMergedIngressMode(snapshot.Ingress.Mode) {
+			if merged.Mode != snapshot.Ingress.Mode {
 				differingSettings = append(differingSettings, "mode")
 			}
 			if merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP {
@@ -395,11 +396,58 @@ func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmen
 	return merged, nil
 }
 
-func normalizedMergedIngressMode(mode string) string {
-	if strings.TrimSpace(mode) == "public" {
-		return ""
+func snapshotShouldScheduleIngress(labels []string, snapshot DeploySnapshot) bool {
+	serviceKinds := map[string]string{}
+	for _, service := range snapshot.Services {
+		serviceKinds[strings.TrimSpace(service.Name)] = strings.TrimSpace(service.Kind)
 	}
-	return strings.TrimSpace(mode)
+	serviceNames := ingressTargetServiceNamesFromRoutes(snapshot.Ingress)
+	if len(serviceNames) == 0 {
+		return false
+	}
+	for _, serviceName := range serviceNames {
+		kind, ok := serviceKinds[serviceName]
+		if !ok || !shouldScheduleService(labels, kind) {
+			return false
+		}
+	}
+	return true
+}
+
+func ingressTargetServiceNames(ingress *config.IngressConfig) []string {
+	serviceSet := map[string]bool{}
+	serviceNames := []string{}
+	if ingress == nil {
+		return serviceNames
+	}
+	for _, rule := range ingress.Rules {
+		serviceName := strings.TrimSpace(rule.Target.Service)
+		if serviceName == "" || serviceSet[serviceName] {
+			continue
+		}
+		serviceSet[serviceName] = true
+		serviceNames = append(serviceNames, serviceName)
+	}
+	sort.Strings(serviceNames)
+	return serviceNames
+}
+
+func ingressTargetServiceNamesFromRoutes(ingress *ingressJSON) []string {
+	serviceSet := map[string]bool{}
+	serviceNames := []string{}
+	if ingress == nil {
+		return serviceNames
+	}
+	for _, route := range ingress.Routes {
+		serviceName := strings.TrimSpace(route.Target.Service)
+		if serviceName == "" || serviceSet[serviceName] {
+			continue
+		}
+		serviceSet[serviceName] = true
+		serviceNames = append(serviceNames, serviceName)
+	}
+	sort.Strings(serviceNames)
+	return serviceNames
 }
 
 func syntheticRevision(ds desiredStateJSON) (string, error) {
@@ -460,11 +508,20 @@ func shouldScheduleIngress(labels []string, cfg *config.ProjectConfig) bool {
 	if cfg == nil || cfg.Ingress == nil {
 		return false
 	}
-	service, ok := cfg.Services[cfg.Ingress.Service]
-	if !ok {
+	serviceNames := ingressTargetServiceNames(cfg.Ingress)
+	if len(serviceNames) == 0 {
 		return false
 	}
-	return shouldScheduleService(labels, service.Kind)
+	for _, serviceName := range serviceNames {
+		service, ok := cfg.Services[serviceName]
+		if !ok {
+			return false
+		}
+		if !shouldScheduleService(labels, effectiveServiceKind(serviceName, service)) {
+			return false
+		}
+	}
+	return true
 }
 
 func shouldScheduleReleaseTask(labels []string, cfg *config.ProjectConfig) bool {
@@ -487,6 +544,17 @@ func hasLabel(labels []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func effectiveServiceKind(name string, svc config.ServiceConfig) string {
+	kind := strings.TrimSpace(svc.Kind)
+	if kind != "" {
+		return kind
+	}
+	if svc.HasPortNamed("http") || svc.Healthcheck != nil || strings.TrimSpace(name) == config.DefaultWebServiceName {
+		return config.ServiceKindWeb
+	}
+	return config.ServiceKindWorker
 }
 
 func buildService(serviceName string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (serviceJSON, error) {

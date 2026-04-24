@@ -116,7 +116,6 @@ build:
     - linux/amd64
 services:
   web:
-    kind: web
     ports:
       - name: http
         port: 3000
@@ -130,9 +129,15 @@ tasks:
       - bin/rails
       - db:migrate
 ingress:
-  service: web
   hosts:
     - app.example.com
+  rules:
+    - match:
+        host: app.example.com
+        path_prefix: /
+      target:
+        service: web
+        port: http
   tls:
     mode: auto
     email: ops@example.com

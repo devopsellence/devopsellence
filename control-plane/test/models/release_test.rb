@@ -3,34 +3,44 @@
 require "test_helper"
 
 class ReleaseTest < ActiveSupport::TestCase
-  test "requires explicit ingress service when multiple web services cannot infer a primary" do
+  test "accepts releases without ingress config" do
     release = build_release(
-      runtime_json: release_runtime_json(
-        services: {
-          "admin" => web_service_runtime,
-          "public" => web_service_runtime
-        },
-        ingress: nil
+      runtime_json: JSON.generate(
+        {
+          "services" => {
+            "admin" => web_service_runtime,
+            "public" => web_service_runtime
+          }
+        }
       )
     )
 
-    assert_not release.valid?
-    assert_includes release.errors[:runtime_json], "ingress.service is required when multiple web services are defined"
+    assert_predicate release, :valid?
+    assert_equal [], release.ingress_target_service_names
   end
 
-  test "requires explicit ingress service even when a canonical web service exists" do
+  test "uses configured ingress target services" do
     release = build_release(
       runtime_json: release_runtime_json(
         services: {
           "admin" => web_service_runtime,
           "web" => web_service_runtime
         },
-        ingress: nil
+        ingress: {
+          "hosts" => ["app.example.com"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ]
+        }
       )
     )
 
-    assert_not release.valid?
-    assert_includes release.errors[:runtime_json], "ingress.service is required when multiple web services are defined"
+    assert_predicate release, :valid?
+    assert_equal ["web"], release.ingress_target_service_names
+    assert_equal "web", release.ingress_service_name
   end
 
   test "release task command and args must be arrays" do
@@ -51,36 +61,40 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_includes release.errors[:runtime_json], "tasks.release.args must be an array of strings"
   end
 
-  test "ingress hosts must be unique case-insensitively" do
-    release = build_release(
-      runtime_json: release_runtime_json(
-        ingress: {
-          "service" => "web",
-          "hosts" => ["App.Example.Test", "app.example.test"]
-        }
-      )
-    )
-
-    assert_not release.valid?
-    assert_includes release.errors[:runtime_json], "ingress.hosts must be unique"
-  end
-
-  test "ingress must decode to an object when present" do
+  test "accepts explicit ingress rules targeting generic services and custom ports" do
     release = build_release(
       runtime_json: JSON.generate(
         {
-          "services" => { "web" => web_service_runtime },
-          "tasks" => {},
-          "ingress" => "web"
+          "services" => {
+            "app" => {
+              "ports" => [{ "name" => "http", "port" => 3000 }],
+              "healthcheck" => { "path" => "/up", "port" => 3000 }
+            },
+            "api" => {
+              "ports" => [{ "name" => "metrics", "port" => 9090 }]
+            }
+          },
+          "ingress" => {
+            "hosts" => ["app.example.com"],
+            "rules" => [
+              {
+                "match" => { "host" => "app.example.com", "path_prefix" => "/api" },
+                "target" => { "service" => "api", "port" => "metrics" }
+              },
+              {
+                "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+                "target" => { "service" => "app", "port" => "http" }
+              }
+            ]
+          }
         }
       )
     )
 
-    assert_not release.valid?
-    assert_includes release.errors[:runtime_json], "ingress must decode to an object"
+    assert_predicate release, :valid?
   end
 
-  test "blank kind does not contribute required labels and reports one kind error" do
+  test "blank kind still infers required labels from service shape" do
     release = build_release(
       runtime_json: release_runtime_json(
         services: {
@@ -89,10 +103,8 @@ class ReleaseTest < ActiveSupport::TestCase
       )
     )
 
-    assert_equal [], release.required_labels
-    assert_not release.valid?
-    kind_errors = release.errors[:runtime_json].grep(/\Aservices\.web\.kind /)
-    assert_equal [ "services.web.kind must be present" ], kind_errors
+    assert_equal ["web"], release.required_labels
+    assert_predicate release, :valid?
   end
 
   test "scheduled_services_for fails fast for stored legacy string command" do

@@ -362,11 +362,30 @@ func soloNodeCanRunIngress(node config.SoloNode, cfg *config.ProjectConfig) bool
 	if cfg == nil || cfg.Ingress == nil {
 		return false
 	}
-	service, ok := cfg.Services[cfg.Ingress.Service]
-	if !ok {
-		return false
+	serviceNames := map[string]bool{}
+	for _, rule := range cfg.Ingress.Rules {
+		serviceName := strings.TrimSpace(rule.Target.Service)
+		if serviceName == "" || serviceNames[serviceName] {
+			continue
+		}
+		serviceNames[serviceName] = true
+		service, ok := cfg.Services[serviceName]
+		if !ok {
+			return false
+		}
+		kind := strings.TrimSpace(service.Kind)
+		if kind == "" {
+			if service.HasPortNamed("http") || service.Healthcheck != nil || serviceName == config.DefaultWebServiceName {
+				kind = config.ServiceKindWeb
+			} else {
+				kind = config.ServiceKindWorker
+			}
+		}
+		if !soloNodeCanRunKind(node, kind) {
+			return false
+		}
 	}
-	return soloNodeCanRunKind(node, service.Kind)
+	return len(serviceNames) > 0
 }
 
 func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
@@ -1702,8 +1721,8 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		return fmt.Errorf("ingress set requires at least one --host")
 	}
 	serviceName := strings.TrimSpace(opts.Service)
-	if serviceName == "" && cfg.Ingress != nil {
-		serviceName = strings.TrimSpace(cfg.Ingress.Service)
+	if serviceName == "" && cfg.Ingress != nil && len(cfg.Ingress.Rules) > 0 {
+		serviceName = strings.TrimSpace(cfg.Ingress.Rules[0].Target.Service)
 	}
 	if serviceName == "" {
 		var ok bool
@@ -1711,6 +1730,13 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		if !ok {
 			return fmt.Errorf("ingress set requires --service when the primary web service cannot be inferred")
 		}
+	}
+	rules := make([]config.IngressRuleConfig, 0, len(hosts))
+	for _, host := range hosts {
+		rules = append(rules, config.IngressRuleConfig{
+			Match:  config.IngressMatchConfig{Host: host, PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: serviceName, Port: "http"},
+		})
 	}
 	tlsMode := strings.TrimSpace(opts.TLSMode)
 	if tlsMode == "" {
@@ -1726,8 +1752,8 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		redirectHTTP = opts.RedirectHTTP
 	}
 	cfg.Ingress = &config.IngressConfig{
-		Hosts:   hosts,
-		Service: serviceName,
+		Hosts: hosts,
+		Rules: rules,
 		TLS: config.IngressTLSConfig{
 			Mode:           tlsMode,
 			Email:          strings.TrimSpace(opts.TLSEmail),

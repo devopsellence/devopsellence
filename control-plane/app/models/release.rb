@@ -51,22 +51,21 @@ class Release < ApplicationRecord
     stringify_hash(runtime_payload["tasks"])
   end
 
+  def ingress_config
+    stringify_hash(runtime_payload["ingress"])
+  end
+
   def service_names
     services_config.keys.sort
   end
 
   def web_service_names
-    service_names.select { |name| service_kind(services_config[name]) == "web" }
+    service_names.select { |name| inferred_service_kind(name, services_config[name]) == "web" }
   end
 
   def release_task_config
     task = tasks_config["release"]
     task.is_a?(Hash) ? task : nil
-  end
-
-  def ingress_config
-    ingress = runtime_payload["ingress"]
-    ingress.is_a?(Hash) ? ingress : nil
   end
 
   def has_release_task?
@@ -78,7 +77,9 @@ class Release < ApplicationRecord
   end
 
   def required_labels
-    services_config.values.filter_map { |service| service_label(service).presence }.uniq.sort
+    service_names.filter_map do |name|
+      service_label(name, services_config[name]).presence
+    end.uniq.sort
   end
 
   def requires_label?(label)
@@ -89,7 +90,7 @@ class Release < ApplicationRecord
     service = services_config[name.to_s]
     return nil if service.blank?
 
-    service_label(service)
+    service_label(name.to_s, service)
   end
 
   def service_scheduled_on?(service_name, node)
@@ -97,8 +98,26 @@ class Release < ApplicationRecord
     label.present? && node.labeled?(label)
   end
 
+  def ingress_target_service_names
+    rules = Array(ingress_config["rules"]).filter_map do |rule|
+      target = rule.is_a?(Hash) ? stringify_hash(rule["target"]) : {}
+      target["service"].to_s.strip.presence
+    end
+    rules.uniq.sort
+  end
+
+  def ingress_scheduled_on?(node)
+    service_names = ingress_target_service_names
+    service_names.any? && service_names.all? { |service_name| service_scheduled_on?(service_name, node) }
+  end
+
   def ingress_service_name
-    ingress_config&.dig("service").to_s.strip.presence
+    names = ingress_target_service_names
+    return nil if names.empty?
+    return "web" if names.include?("web")
+    return names.first if names.one?
+
+    nil
   end
 
   def scheduled_services_for(node:)
@@ -107,7 +126,7 @@ class Release < ApplicationRecord
     environment = node.environment
     service_names.filter_map do |name|
       service = services_config[name]
-      next unless node.labeled?(service_label(service))
+      next unless node.labeled?(service_label(name, service))
 
       service_payload(name, service, organization: node.organization, environment: environment)
     end
@@ -122,7 +141,7 @@ class Release < ApplicationRecord
     service_name = task["service"].to_s.strip
     service = services_config[service_name]
     return nil if service.blank?
-    return nil unless node.labeled?(service_label(service))
+    return nil unless node.labeled?(service_label(service_name, service))
 
     task_payload(
       "release",
@@ -162,10 +181,6 @@ class Release < ApplicationRecord
       validate_service_config(name, service)
     end
 
-    if web_service_names.empty?
-      errors.add(:runtime_json, "must include at least one web service")
-    end
-
     validate_release_task
     validate_ingress_config
   end
@@ -177,12 +192,7 @@ class Release < ApplicationRecord
     end
 
     kind = service_kind(service)
-    if kind.blank?
-      errors.add(:runtime_json, "services.#{name}.kind must be present")
-      return
-    end
-
-    unless SERVICE_KINDS.include?(kind)
+    if kind.present? && !SERVICE_KINDS.include?(kind)
       errors.add(:runtime_json, "services.#{name}.kind must be one of #{SERVICE_KINDS.join(', ')}")
     end
 
@@ -216,9 +226,6 @@ class Release < ApplicationRecord
     end
 
     ports = service_ports(service)
-    if kind == "web" && http_port(service).to_i <= 0
-      errors.add(:runtime_json, "services.#{name} must expose an http port")
-    end
     if ports.map { |port| port["name"] }.uniq.length != ports.length
       errors.add(:runtime_json, "services.#{name}.ports must have unique names")
     end
@@ -230,7 +237,8 @@ class Release < ApplicationRecord
     end
 
     healthcheck = service["healthcheck"]
-    if kind == "web"
+    next_kind = inferred_service_kind(name, service)
+    if next_kind == "web"
       unless healthcheck.is_a?(Hash)
         errors.add(:runtime_json, "services.#{name}.healthcheck must be an object")
         return
@@ -241,6 +249,8 @@ class Release < ApplicationRecord
       unless healthcheck["port"].is_a?(Integer) && healthcheck["port"].positive?
         errors.add(:runtime_json, "services.#{name}.healthcheck.port must be a positive integer")
       end
+    elsif healthcheck.present? && !healthcheck.is_a?(Hash)
+      errors.add(:runtime_json, "services.#{name}.healthcheck must be an object")
     end
   end
 
@@ -266,63 +276,66 @@ class Release < ApplicationRecord
     unless task["env"].nil? || task["env"].is_a?(Hash)
       errors.add(:runtime_json, "tasks.release.env must be an object")
     end
-    if service_kind(service).blank?
-      errors.add(:runtime_json, "tasks.release.service must reference a service with kind")
-    end
   end
 
   def validate_ingress_config
-    if runtime_payload.key?("ingress") && !runtime_payload["ingress"].is_a?(Hash)
-      errors.add(:runtime_json, "ingress must decode to an object")
-      return
-    end
-
     ingress = ingress_config
-    if ingress.nil?
-      if web_service_names.length > 1
-        errors.add(:runtime_json, "ingress.service is required when multiple web services are defined")
-      end
+    return if ingress.blank?
+
+    hosts = Array(ingress["hosts"])
+    if hosts.blank?
+      errors.add(:runtime_json, "ingress.hosts must include at least one host")
       return
     end
 
-    hosts = ingress["hosts"]
-    unless hosts.nil? || string_array?(hosts)
-      errors.add(:runtime_json, "ingress.hosts must be an array of strings")
+    normalized_hosts = hosts.map { |host| host.to_s.strip }.reject(&:blank?)
+    if normalized_hosts.length != hosts.length
+      errors.add(:runtime_json, "ingress.hosts entries must be present")
     end
-    if string_array?(hosts) && IngressHostnames.normalize_all(hosts).length != hosts.length
+    if normalized_hosts.uniq.length != normalized_hosts.length
       errors.add(:runtime_json, "ingress.hosts must be unique")
     end
 
-    name = ingress["service"].to_s.strip
-    if name.blank?
-      errors.add(:runtime_json, "ingress.service is required")
+    rules = Array(ingress["rules"])
+    if rules.blank?
+      errors.add(:runtime_json, "ingress.rules must include at least one rule")
       return
     end
 
-    service = services_config[name]
-    if service.blank?
-      errors.add(:runtime_json, "ingress.service must reference an existing service")
-      return
-    end
-    if service_kind(service) != "web"
-      errors.add(:runtime_json, "ingress.service must reference a web service")
-    end
+    seen = {}
+    rules.each_with_index do |raw_rule, index|
+      rule = stringify_hash(raw_rule)
+      match = stringify_hash(rule["match"])
+      target = stringify_hash(rule["target"])
+      host = match["host"].to_s.strip
+      path_prefix = match["path_prefix"].to_s.strip.presence || "/"
+      service_name = target["service"].to_s.strip
+      port_name = target["port"].to_s.strip
 
-    tls = ingress["tls"]
-    unless tls.nil? || tls.is_a?(Hash)
-      errors.add(:runtime_json, "ingress.tls must be an object")
-      return
-    end
-    if tls.is_a?(Hash)
-      mode = tls["mode"].to_s.strip
-      if mode.present? && ![ "auto", "off", "manual" ].include?(mode)
-        errors.add(:runtime_json, "ingress.tls.mode must be auto, off, or manual")
+      if host.blank?
+        errors.add(:runtime_json, "ingress.rules[#{index}].match.host is required")
+      elsif !normalized_hosts.include?(host)
+        errors.add(:runtime_json, "ingress.rules[#{index}].match.host must exist in ingress.hosts")
       end
-    end
+      unless path_prefix.start_with?("/")
+        errors.add(:runtime_json, "ingress.rules[#{index}].match.path_prefix must start with /")
+      end
+      if service_name.blank?
+        errors.add(:runtime_json, "ingress.rules[#{index}].target.service is required")
+      elsif services_config[service_name].blank?
+        errors.add(:runtime_json, "ingress.rules[#{index}].target.service must reference an existing service")
+      end
+      if port_name.blank?
+        errors.add(:runtime_json, "ingress.rules[#{index}].target.port is required")
+      elsif services_config[service_name].present? && !service_port_names(services_config[service_name]).include?(port_name)
+        errors.add(:runtime_json, "ingress.rules[#{index}].target.port must reference an existing named port")
+      end
 
-    redirect_http = ingress["redirect_http"]
-    unless redirect_http.nil? || redirect_http == true || redirect_http == false
-      errors.add(:runtime_json, "ingress.redirect_http must be a boolean")
+      key = [host, path_prefix]
+      if seen[key]
+        errors.add(:runtime_json, "ingress.rules[#{index}] duplicates an existing host/path route")
+      end
+      seen[key] = true
     end
   end
 
@@ -349,21 +362,14 @@ class Release < ApplicationRecord
       assert_supported_runtime_service!(name, service)
     end
 
-    if tasks_config.key?("release")
-      task = tasks_config["release"]
-      raise InvalidRuntimeConfig, "tasks.release must decode to an object" unless task.is_a?(Hash)
+    return unless tasks_config.key?("release")
 
-      assert_deprecated_runtime_key_absent!(task, deprecated_key: "entrypoint", field: "tasks.release.entrypoint")
-      assert_runtime_string_array!(task["command"], field: "tasks.release.command")
-      assert_runtime_string_array!(task["args"], field: "tasks.release.args")
-    end
+    task = tasks_config["release"]
+    raise InvalidRuntimeConfig, "tasks.release must decode to an object" unless task.is_a?(Hash)
 
-    return unless runtime_payload.key?("ingress")
-
-    ingress = runtime_payload["ingress"]
-    raise InvalidRuntimeConfig, "ingress must decode to an object" unless ingress.is_a?(Hash)
-
-    assert_runtime_string_array!(ingress["hosts"], field: "ingress.hosts")
+    assert_deprecated_runtime_key_absent!(task, deprecated_key: "entrypoint", field: "tasks.release.entrypoint")
+    assert_runtime_string_array!(task["command"], field: "tasks.release.command")
+    assert_runtime_string_array!(task["args"], field: "tasks.release.args")
   end
 
   def assert_supported_runtime_service!(name, service)
@@ -394,7 +400,7 @@ class Release < ApplicationRecord
     image = service["image"].to_s.strip.presence || image_reference_for(organization)
     payload = {
       name: name,
-      kind: service_kind(service),
+      kind: inferred_service_kind(name, service),
       image: image,
       entrypoint: string_array(service["command"]),
       command: string_array(service["args"]),
@@ -475,8 +481,22 @@ class Release < ApplicationRecord
     service["kind"].to_s.strip
   end
 
-  def service_label(service)
-    service_kind(service)
+  def inferred_service_kind(name, service)
+    explicit = service_kind(service)
+    return explicit if explicit.present?
+    return "web" if name.to_s.strip == "web"
+    return "web" if http_port(service).to_i.positive?
+    return "web" if service["healthcheck"].is_a?(Hash)
+
+    "worker"
+  end
+
+  def service_label(name, service)
+    inferred_service_kind(name, service)
+  end
+
+  def service_port_names(service)
+    service_ports(service).map { |port| port["name"] }
   end
 
   def string_array(value)

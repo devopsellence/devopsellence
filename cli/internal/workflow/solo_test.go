@@ -150,6 +150,32 @@ func TestSoloNodeCanRunUnlabeledNode(t *testing.T) {
 	}
 }
 
+func TestSoloNodeCanRunIngressRequiresAllIngressTargetServices(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Services: map[string]config.ServiceConfig{
+			"web": {
+				Kind:  config.ServiceKindWeb,
+				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
+			},
+			"api": {
+				Kind:  config.ServiceKindWorker,
+				Ports: []config.ServicePort{{Name: "metrics", Port: 9090}},
+			},
+		},
+		Ingress: &config.IngressConfig{Rules: []config.IngressRuleConfig{
+			{Target: config.IngressTargetConfig{Service: "web", Port: "http"}},
+			{Target: config.IngressTargetConfig{Service: "api", Port: "metrics"}},
+		}},
+	}
+
+	if soloNodeCanRunIngress(config.SoloNode{Labels: []string{config.DefaultWebRole}}, cfg) {
+		t.Fatal("web-only node should not run ingress for mixed web/worker targets")
+	}
+	if !soloNodeCanRunIngress(config.SoloNode{Labels: []string{config.DefaultWebRole, config.DefaultWorkerRole}}, cfg) {
+		t.Fatal("web+worker node should run ingress when it hosts all targets")
+	}
+}
+
 func TestParseSoloLabels(t *testing.T) {
 	got, err := parseSoloLabels("web,worker web")
 	if err != nil {
@@ -1235,8 +1261,11 @@ func TestIngressSetInfersPrimaryWebService(t *testing.T) {
 	if written.Ingress == nil {
 		t.Fatal("ingress = nil, want populated ingress config")
 	}
-	if written.Ingress.Service != config.DefaultWebServiceName {
-		t.Fatalf("ingress.service = %q, want %q", written.Ingress.Service, config.DefaultWebServiceName)
+	if len(written.Ingress.Rules) != 1 {
+		t.Fatalf("ingress.rules = %#v, want one rule", written.Ingress.Rules)
+	}
+	if written.Ingress.Rules[0].Target.Service != config.DefaultWebServiceName {
+		t.Fatalf("ingress.rules[0].target.service = %q, want %q", written.Ingress.Rules[0].Target.Service, config.DefaultWebServiceName)
 	}
 }
 
@@ -1380,10 +1409,13 @@ func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
 	cfg.Services["frontend"] = cfg.Services[config.DefaultWebServiceName]
 	delete(cfg.Services, config.DefaultWebServiceName)
 	cfg.Ingress = &config.IngressConfig{
-		Service: "frontend",
-		Hosts:   []string{"old.devopsellence.io"},
-		TLS:     config.IngressTLSConfig{Mode: "manual"},
+		Hosts: []string{"old.devopsellence.io"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "old.devopsellence.io", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "frontend", Port: "http"},
+		}},
 	}
+
 	if _, err := config.Write(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -1407,8 +1439,11 @@ func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
 	if written.Ingress == nil {
 		t.Fatal("ingress = nil, want populated ingress config")
 	}
-	if written.Ingress.Service != "frontend" {
-		t.Fatalf("ingress.service = %q, want frontend", written.Ingress.Service)
+	if len(written.Ingress.Rules) != 1 {
+		t.Fatalf("ingress.rules = %#v, want one rule", written.Ingress.Rules)
+	}
+	if written.Ingress.Rules[0].Target.Service != "frontend" {
+		t.Fatalf("ingress.rules[0].target.service = %q, want frontend", written.Ingress.Rules[0].Target.Service)
 	}
 }
 

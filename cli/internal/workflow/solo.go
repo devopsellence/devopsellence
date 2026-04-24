@@ -1554,7 +1554,7 @@ func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if !a.Printer.Interactive {
 		return fmt.Errorf("solo setup requires an interactive terminal; use `devopsellence node create`, or add a node to %s and run `devopsellence node attach`", solo.DefaultStatePath())
 	}
-	mode, err := a.promptLine("Node source (existing/hetzner)", "existing")
+	mode, err := a.promptLine("Node source (existing/hetzner)", "hetzner")
 	if err != nil {
 		return err
 	}

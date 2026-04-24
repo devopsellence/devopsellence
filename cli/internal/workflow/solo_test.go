@@ -1078,7 +1078,7 @@ func TestEnsureGeneratedWorkspaceSSHKeyRejectsMismatchedPublicKey(t *testing.T) 
 	}
 }
 
-func TestSoloSetupHetznerDefaultsToGeneratedWorkspaceKey(t *testing.T) {
+func TestSoloSetupDefaultsToHetznerAndGeneratedWorkspaceKey(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)
 
@@ -1089,7 +1089,7 @@ func TestSoloSetupHetznerDefaultsToGeneratedWorkspaceKey(t *testing.T) {
 	var stdout bytes.Buffer
 	var created SoloNodeCreateOptions
 	app := &App{
-		In:          strings.NewReader("hetzner\nprod-1\nweb\nash\ncpx11\n\n"),
+		In:          strings.NewReader("\nprod-1\nweb\nash\ncpx11\n\n"),
 		Printer:     output.New(&stdout, io.Discard, false),
 		ConfigStore: config.NewStore(),
 		Cwd:         workspaceRoot,
@@ -1104,6 +1104,9 @@ func TestSoloSetupHetznerDefaultsToGeneratedWorkspaceKey(t *testing.T) {
 
 	if err := app.SoloSetup(context.Background(), SoloSetupOptions{}); err != nil {
 		t.Fatal(err)
+	}
+	if created.Provider != "hetzner" {
+		t.Fatalf("provider = %q, want hetzner", created.Provider)
 	}
 	if created.SSHPublicKey == "" {
 		t.Fatal("generated SSH public key path empty")

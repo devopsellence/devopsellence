@@ -295,6 +295,10 @@ class Release < ApplicationRecord
       errors.add(:runtime_json, "ingress.hosts must be an array")
       hosts_valid = false
     end
+    if hosts.is_a?(Array) && !string_array?(hosts)
+      errors.add(:runtime_json, "ingress.hosts must be an array of strings")
+      hosts_valid = false
+    end
 
     rules = ingress["rules"]
     rules_valid = true
@@ -336,7 +340,7 @@ class Release < ApplicationRecord
     end
 
     redirect_http = ingress["redirect_http"]
-    unless redirect_http.nil? || redirect_http == true || redirect_http == false
+    if ingress.key?("redirect_http") && redirect_http != true && redirect_http != false
       errors.add(:runtime_json, "ingress.redirect_http must be a boolean")
     end
 
@@ -429,6 +433,9 @@ class Release < ApplicationRecord
 
     assert_unsupported_runtime_key_absent!(ingress, deprecated_key: "service", field: "ingress.service")
     assert_runtime_string_array!(ingress["hosts"], field: "ingress.hosts")
+    if ingress.key?("redirect_http") && ingress["redirect_http"] != true && ingress["redirect_http"] != false
+      raise InvalidRuntimeConfig, "ingress.redirect_http must be a boolean"
+    end
     rules = ingress["rules"]
     raise InvalidRuntimeConfig, "ingress.rules must be an array of objects" unless rules.is_a?(Array) && rules.all? { |rule| rule.is_a?(Hash) }
   end

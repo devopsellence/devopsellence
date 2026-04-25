@@ -80,7 +80,12 @@ module NodeDesiredState
     end
 
     def self.configured_redirect_http(release)
-      return release.ingress_config["redirect_http"] if release.ingress_config.key?("redirect_http")
+      if release.ingress_config.key?("redirect_http")
+        value = release.ingress_config["redirect_http"]
+        raise Release::InvalidRuntimeConfig, "ingress.redirect_http must be a boolean" unless value == true || value == false
+
+        return value
+      end
 
       true
     end

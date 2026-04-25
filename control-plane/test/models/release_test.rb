@@ -128,6 +128,45 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_includes release.errors[:runtime_json], "ingress.rules must be an array"
   end
 
+  test "rejects ingress hosts containing non-string entries" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "hosts" => ["app.example.com", 123],
+          "rules" => [
+            {
+              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ]
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.hosts must be an array of strings"
+  end
+
+  test "rejects null ingress redirect_http when explicitly present" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "hosts" => ["app.example.com"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ],
+          "redirect_http" => nil
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.redirect_http must be a boolean"
+  end
+
   test "rejects invalid ingress tls and redirect settings" do
     release = build_release(
       runtime_json: release_runtime_json(
@@ -253,6 +292,29 @@ class ReleaseTest < ActiveSupport::TestCase
     end
 
     assert_equal "ingress.rules must be an array of objects", error.message
+  end
+
+  test "scheduled_services_for fails fast for stored null ingress redirect_http" do
+    release = persisted_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "hosts" => ["app.example.com"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ],
+          "redirect_http" => nil
+        }
+      )
+    )
+
+    error = assert_raises(Release::InvalidRuntimeConfig) do
+      release.scheduled_services_for(node: build_node_for(release:))
+    end
+
+    assert_equal "ingress.redirect_http must be a boolean", error.message
   end
 
   test "release_task_for fails fast for stored deprecated entrypoint" do

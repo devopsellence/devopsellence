@@ -196,9 +196,11 @@ module ActiveSupport
       }.compact
     end
 
-    def release_runtime_json(services: nil, tasks: {}, ingress: nil)
+    DEFAULT_RELEASE_RUNTIME_INGRESS = Object.new.freeze
+
+    def release_runtime_json(services: nil, tasks: {}, ingress: DEFAULT_RELEASE_RUNTIME_INGRESS)
       services ||= { "web" => web_service_runtime }
-      ingress ||= {
+      ingress = {
         "hosts" => ["app.devopsellence.test"],
         "rules" => [
           {
@@ -206,7 +208,7 @@ module ActiveSupport
             "target" => { "service" => "web", "port" => "http" }
           }
         ]
-      }
+      } if ingress.equal?(DEFAULT_RELEASE_RUNTIME_INGRESS)
       ::JSON.generate(
         {
           "services" => services,

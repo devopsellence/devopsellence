@@ -128,6 +128,36 @@ module Releases
       assert_equal "manual", runtime.dig("ingress", "tls", "mode")
     end
 
+    test "rejects legacy ingress service" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"],
+              service: "web",
+              rules: [
+                {
+                  match: { host: "app.example.com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.service is no longer supported", error.message
+    end
+
     test "rejects non-boolean ingress redirect_http" do
       error = assert_raises(RuntimeAttributes::InvalidPayload) do
         RuntimeAttributes.new(
@@ -150,6 +180,36 @@ module Releases
                 }
               ],
               redirect_http: "yes"
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.redirect_http must be a boolean", error.message
+    end
+
+    test "rejects null ingress redirect_http" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.test"],
+              rules: [
+                {
+                  match: { host: "app.example.test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ],
+              redirect_http: nil
             }
           }
         ).to_h

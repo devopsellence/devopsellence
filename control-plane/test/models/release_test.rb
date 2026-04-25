@@ -5,13 +5,12 @@ require "test_helper"
 class ReleaseTest < ActiveSupport::TestCase
   test "accepts releases without ingress config" do
     release = build_release(
-      runtime_json: JSON.generate(
-        {
-          "services" => {
-            "admin" => web_service_runtime,
-            "public" => web_service_runtime
-          }
-        }
+      runtime_json: release_runtime_json(
+        services: {
+          "admin" => web_service_runtime,
+          "public" => web_service_runtime
+        },
+        ingress: nil
       )
     )
 
@@ -252,69 +251,6 @@ class ReleaseTest < ActiveSupport::TestCase
     end
 
     assert_equal "services.web.kind is no longer supported", error.message
-  end
-
-  test "scheduled_services_for fails fast for stored legacy ingress service" do
-    release = persisted_release(
-      runtime_json: release_runtime_json(
-        ingress: {
-          "hosts" => ["app.example.com"],
-          "service" => "web"
-        }
-      )
-    )
-
-    error = assert_raises(Release::InvalidRuntimeConfig) do
-      release.scheduled_services_for(node: build_node_for(release:))
-    end
-
-    assert_equal "ingress.service is no longer supported", error.message
-  end
-
-  test "scheduled_services_for fails fast for stored invalid ingress rules" do
-    release = persisted_release(
-      runtime_json: JSON.generate(
-        {
-          "services" => { "web" => web_service_runtime },
-          "ingress" => {
-            "hosts" => ["app.example.com"],
-            "rules" => {
-              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
-              "target" => { "service" => "web", "port" => "http" }
-            }
-          }
-        }
-      )
-    )
-
-    error = assert_raises(Release::InvalidRuntimeConfig) do
-      release.scheduled_services_for(node: build_node_for(release:))
-    end
-
-    assert_equal "ingress.rules must be an array of objects", error.message
-  end
-
-  test "scheduled_services_for fails fast for stored null ingress redirect_http" do
-    release = persisted_release(
-      runtime_json: release_runtime_json(
-        ingress: {
-          "hosts" => ["app.example.com"],
-          "rules" => [
-            {
-              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
-              "target" => { "service" => "web", "port" => "http" }
-            }
-          ],
-          "redirect_http" => nil
-        }
-      )
-    )
-
-    error = assert_raises(Release::InvalidRuntimeConfig) do
-      release.scheduled_services_for(node: build_node_for(release:))
-    end
-
-    assert_equal "ingress.redirect_http must be a boolean", error.message
   end
 
   test "release_task_for fails fast for stored deprecated entrypoint" do

@@ -118,6 +118,8 @@ module Releases
       ingress = parse_hash(value, field: :ingress)
       return nil if ingress.blank?
 
+      reject_unsupported_key!(ingress, key: :service, field: :"ingress.service")
+
       hosts = parse_ingress_hosts(ingress["hosts"] || ingress[:hosts])
       raise InvalidPayload, "ingress.hosts must include at least one host" if hosts.blank?
       host_set = hosts.index_with(true)
@@ -158,8 +160,10 @@ module Releases
         }.compact
       end
 
-      redirect_http = ingress.key?("redirect_http") ? ingress["redirect_http"] : ingress[:redirect_http]
-      normalized["redirect_http"] = parse_boolean!(redirect_http, field: :"ingress.redirect_http") unless redirect_http.nil?
+      if ingress.key?("redirect_http") || ingress.key?(:redirect_http)
+        redirect_http = ingress.key?("redirect_http") ? ingress["redirect_http"] : ingress[:redirect_http]
+        normalized["redirect_http"] = parse_boolean!(redirect_http, field: :"ingress.redirect_http")
+      end
       normalized.presence
     end
 
@@ -245,6 +249,12 @@ module Releases
       return unless hash.key?(deprecated_key) || hash.key?(deprecated_key.to_s)
 
       raise InvalidPayload, "#{field} is no longer supported; use command or args"
+    end
+
+    def reject_unsupported_key!(hash, key:, field:)
+      return unless hash.key?(key) || hash.key?(key.to_s)
+
+      raise InvalidPayload, "#{field} is no longer supported"
     end
 
     def reject_unsupported_kind!(hash, field:)

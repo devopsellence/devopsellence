@@ -404,8 +404,6 @@ class Release < ApplicationRecord
       assert_supported_runtime_service!(name, service)
     end
 
-    assert_supported_runtime_ingress!
-
     return unless tasks_config.key?("release")
 
     task = tasks_config["release"]
@@ -423,21 +421,6 @@ class Release < ApplicationRecord
     assert_deprecated_runtime_key_absent!(service, deprecated_key: "entrypoint", field: "services.#{name}.entrypoint")
     assert_runtime_string_array!(service["command"], field: "services.#{name}.command")
     assert_runtime_string_array!(service["args"], field: "services.#{name}.args")
-  end
-
-  def assert_supported_runtime_ingress!
-    return unless runtime_payload.key?("ingress")
-
-    ingress = runtime_payload["ingress"]
-    raise InvalidRuntimeConfig, "ingress must decode to an object" unless ingress.is_a?(Hash)
-
-    assert_unsupported_runtime_key_absent!(ingress, deprecated_key: "service", field: "ingress.service")
-    assert_runtime_string_array!(ingress["hosts"], field: "ingress.hosts")
-    if ingress.key?("redirect_http") && ingress["redirect_http"] != true && ingress["redirect_http"] != false
-      raise InvalidRuntimeConfig, "ingress.redirect_http must be a boolean"
-    end
-    rules = ingress["rules"]
-    raise InvalidRuntimeConfig, "ingress.rules must be an array of objects" unless rules.is_a?(Array) && rules.all? { |rule| rule.is_a?(Hash) }
   end
 
   def assert_deprecated_runtime_key_absent!(hash, deprecated_key:, field:)

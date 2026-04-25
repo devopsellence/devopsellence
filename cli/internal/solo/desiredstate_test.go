@@ -71,6 +71,38 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredStateWithScopedSecretsUsesServiceScope(t *testing.T) {
+	cfg := baseProject()
+	cfg.Services["worker"] = config.Service{
+		Command:    []string{"bundle", "exec", "sidekiq"},
+		SecretRefs: []config.SecretRef{{Name: "DATABASE_URL", Secret: "local"}},
+	}
+	secrets := ScopedSecrets{
+		"web":    {"DATABASE_URL": "postgres://web"},
+		"worker": {"DATABASE_URL": "postgres://worker"},
+	}
+
+	data, err := BuildDesiredStateWithScopedSecrets(cfg, "myapp:abc1234", "abc1234", secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var ds desiredStateJSON
+	if err := json.Unmarshal(data, &ds); err != nil {
+		t.Fatal(err)
+	}
+	envByService := map[string]map[string]string{}
+	for _, service := range ds.Environments[0].Services {
+		envByService[service.Name] = service.Env
+	}
+	if got := envByService["web"]["DATABASE_URL"]; got != "postgres://web" {
+		t.Fatalf("web DATABASE_URL = %q", got)
+	}
+	if got := envByService["worker"]["DATABASE_URL"]; got != "postgres://worker" {
+		t.Fatalf("worker DATABASE_URL = %q", got)
+	}
+}
+
 func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
@@ -395,8 +427,8 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 		{
 			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
-				Mode: "public",
-				TLS:  ingressTLSJSON{Mode: "auto"},
+				Mode:  "public",
+				TLS:   ingressTLSJSON{Mode: "auto"},
 				Hosts: []string{"app.example.com"},
 				Routes: []ingressRouteJSON{{
 					Match:  ingressMatchJSON{Hostname: "app.example.com"},
@@ -409,8 +441,8 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 		{
 			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
-				Mode: "public",
-				TLS:  ingressTLSJSON{Mode: "auto"},
+				Mode:  "public",
+				TLS:   ingressTLSJSON{Mode: "auto"},
 				Hosts: []string{"app.example.com"},
 				Routes: []ingressRouteJSON{{
 					Match:  ingressMatchJSON{Hostname: "app.example.com"},

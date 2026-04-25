@@ -73,7 +73,7 @@ Prefer stdin over literal secret values in prompts or shell history:
 
 ```bash
 printf '%s' "$VALUE" | devopsellence secret set NAME --service web --stdin
-devopsellence secret list
+devopsellence secret list --env production
 devopsellence secret delete NAME --service web
 ```
 

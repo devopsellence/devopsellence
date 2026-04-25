@@ -652,6 +652,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var secretSoloDeleteOpts SoloSecretsDeleteOptions
 	var secretValue string
 	var secretValueStdin bool
+	var secretEnvironment string
+	var secretServiceName string
 	secretCommand := &cobra.Command{
 		Use:   "secret",
 		Short: "Manage secrets for the selected workspace mode",
@@ -662,9 +664,13 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			secretSoloSetOpts.Key = strings.TrimSpace(args[0])
+			secretSoloSetOpts.Environment = secretEnvironment
+			secretSoloSetOpts.ServiceName = secretServiceName
 			secretSoloSetOpts.Value = secretValue
 			secretSoloSetOpts.ValueStdin = secretValueStdin
 			secretSharedSetOpts.Name = strings.TrimSpace(args[0])
+			secretSharedSetOpts.Environment = secretEnvironment
+			secretSharedSetOpts.ServiceName = secretServiceName
 			secretSharedSetOpts.Value = secretValue
 			secretSharedSetOpts.ValueStdin = secretValueStdin
 			return runByMode(func(ctx context.Context) error {
@@ -677,8 +683,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Organization, "org", "", "Organization name override (shared mode)")
 	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Project, "project", "", "Project name override (shared mode)")
-	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Environment, "env", "", "Environment name override (shared mode)")
-	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.ServiceName, "service", "", "Service name (required in shared mode)")
+	secretSetCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
+	secretSetCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name")
 	secretSetCommand.Flags().StringVar(&secretValue, "value", "", "Secret value")
 	secretSetCommand.Flags().BoolVar(&secretValueStdin, "stdin", false, "Read secret value from stdin")
 	secretSetCommand.Example = strings.Join([]string{
@@ -688,22 +694,32 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	secretListCommand := &cobra.Command{
 		Use:   "list",
 		Short: "List secrets",
-		RunE: runByMode(func(ctx context.Context) error {
-			return app.SoloSecretsList(ctx, secretSoloListOpts)
-		}, func(ctx context.Context) error {
-			return app.SecretList(ctx, secretSharedListOpts)
-		}),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			secretSoloListOpts.Environment = secretEnvironment
+			secretSoloListOpts.ServiceName = secretServiceName
+			secretSharedListOpts.Environment = secretEnvironment
+			return runByMode(func(ctx context.Context) error {
+				return app.SoloSecretsList(ctx, secretSoloListOpts)
+			}, func(ctx context.Context) error {
+				return app.SecretList(ctx, secretSharedListOpts)
+			})(cmd, args)
+		},
 	}
 	secretListCommand.Flags().StringVar(&secretSharedListOpts.Organization, "org", "", "Organization name override (shared mode)")
 	secretListCommand.Flags().StringVar(&secretSharedListOpts.Project, "project", "", "Project name override (shared mode)")
-	secretListCommand.Flags().StringVar(&secretSharedListOpts.Environment, "env", "", "Environment name override (shared mode)")
+	secretListCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
+	secretListCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name filter (solo mode)")
 	secretDeleteCommand := &cobra.Command{
 		Use:   "delete <name>",
 		Short: "Delete a secret",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			secretSoloDeleteOpts.Key = strings.TrimSpace(args[0])
+			secretSoloDeleteOpts.Environment = secretEnvironment
+			secretSoloDeleteOpts.ServiceName = secretServiceName
 			secretSharedDeleteOpts.Name = strings.TrimSpace(args[0])
+			secretSharedDeleteOpts.Environment = secretEnvironment
+			secretSharedDeleteOpts.ServiceName = secretServiceName
 			return runByMode(func(ctx context.Context) error {
 				return app.SoloSecretsDelete(ctx, secretSoloDeleteOpts)
 			}, func(ctx context.Context) error {
@@ -713,8 +729,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Organization, "org", "", "Organization name override (shared mode)")
 	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Project, "project", "", "Project name override (shared mode)")
-	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Environment, "env", "", "Environment name override (shared mode)")
-	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.ServiceName, "service", "", "Service name (shared mode)")
+	secretDeleteCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
+	secretDeleteCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name")
 	secretCommand.AddCommand(secretSetCommand, secretListCommand, secretDeleteCommand)
 	root.AddCommand(secretCommand)
 

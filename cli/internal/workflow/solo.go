@@ -36,15 +36,22 @@ type SoloStatusOptions struct {
 }
 
 type SoloSecretsSetOptions struct {
-	Key        string
-	Value      string
-	ValueStdin bool
+	Key         string
+	ServiceName string
+	Environment string
+	Value       string
+	ValueStdin  bool
 }
 
-type SoloSecretsListOptions struct{}
+type SoloSecretsListOptions struct {
+	ServiceName string
+	Environment string
+}
 
 type SoloSecretsDeleteOptions struct {
-	Key string
+	Key         string
+	ServiceName string
+	Environment string
 }
 
 type SoloNodeListOptions struct{}
@@ -276,7 +283,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return fmt.Errorf("docker build: %w", err)
 	}
 
-	secrets, err := solo.LoadSecrets(workspaceRoot)
+	secrets, err := current.ScopedSecretValues(workspaceRoot, environmentName)
 	if err != nil {
 		return fmt.Errorf("load secrets: %w", err)
 	}
@@ -286,7 +293,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		a.Printer.Println("Rails: " + notice)
 	}
 
-	snapshot, err := solo.BuildDeploySnapshot(cfg, workspaceRoot, a.ConfigStore.PathFor(workspaceRoot), imageTag, shortSHA, secrets)
+	snapshot, err := solo.BuildDeploySnapshotWithScopedSecrets(cfg, workspaceRoot, a.ConfigStore.PathFor(workspaceRoot), imageTag, shortSHA, secrets)
 	if err != nil {
 		return err
 	}
@@ -660,7 +667,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	return revisions, nil
 }
 
-func (a *App) resolveStoredDeploySnapshot(snapshot solo.DeploySnapshot) (solo.DeploySnapshot, error) {
+func (a *App) resolveStoredDeploySnapshot(current solo.State, snapshot solo.DeploySnapshot) (solo.DeploySnapshot, error) {
 	cfg, err := a.ConfigStore.Read(snapshot.WorkspaceRoot)
 	if err != nil {
 		return solo.DeploySnapshot{}, err
@@ -668,7 +675,7 @@ func (a *App) resolveStoredDeploySnapshot(snapshot solo.DeploySnapshot) (solo.De
 	if cfg == nil {
 		return solo.DeploySnapshot{}, fmt.Errorf("missing devopsellence.yml for %s", snapshot.WorkspaceRoot)
 	}
-	secrets, err := solo.LoadSecrets(snapshot.WorkspaceRoot)
+	secrets, err := current.ScopedSecretValues(snapshot.WorkspaceRoot, snapshot.Environment)
 	if err != nil {
 		return solo.DeploySnapshot{}, fmt.Errorf("load secrets for %s: %w", snapshot.WorkspaceRoot, err)
 	}
@@ -679,7 +686,7 @@ func (a *App) resolveStoredDeploySnapshot(snapshot solo.DeploySnapshot) (solo.De
 	if configPath == "" {
 		configPath = a.ConfigStore.PathFor(snapshot.WorkspaceRoot)
 	}
-	return solo.BuildDeploySnapshot(cfg, snapshot.WorkspaceRoot, configPath, snapshot.Image, snapshot.Revision, secrets)
+	return solo.BuildDeploySnapshotWithScopedSecrets(cfg, snapshot.WorkspaceRoot, configPath, snapshot.Image, snapshot.Revision, secrets)
 }
 
 func (a *App) preparedSoloNodeDesiredStateInputs(current solo.State, nodeName string, node config.SoloNode, resolvedSnapshotCache map[string]solo.DeploySnapshot) (struct {
@@ -703,7 +710,7 @@ func (a *App) preparedSoloNodeDesiredStateInputs(current solo.State, nodeName st
 		key := strings.TrimSpace(snapshot.WorkspaceKey) + "\n" + strings.TrimSpace(snapshot.Environment)
 		resolvedSnapshot, ok := resolvedSnapshotCache[key]
 		if !ok {
-			resolvedSnapshot, err = a.resolveStoredDeploySnapshot(snapshot)
+			resolvedSnapshot, err = a.resolveStoredDeploySnapshot(current, snapshot)
 			if err != nil {
 				return struct {
 					snapshots    []solo.DeploySnapshot
@@ -935,38 +942,55 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if strings.TrimSpace(opts.Value) == "" {
 		return ExitError{Code: 2, Err: errors.New("secret value is required")}
 	}
-	_, workspaceRoot, err := a.loadSoloProjectConfig()
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
-	if err := solo.SaveSecret(workspaceRoot, opts.Key, opts.Value); err != nil {
+	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	if strings.TrimSpace(opts.ServiceName) == "" {
+		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	record, err := current.SetSecret(workspaceRoot, environmentName, opts.ServiceName, opts.Key, opts.Value)
+	if err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"key": opts.Key, "action": "saved"})
+		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "action": "saved"})
 	}
-	a.Printer.Println(fmt.Sprintf("Secret %q saved", opts.Key))
+	a.Printer.Println(fmt.Sprintf("Secret %q saved for %s in %s", record.Name, record.ServiceName, record.Environment))
 	return nil
 }
 
-func (a *App) SoloSecretsList(_ context.Context, _ SoloSecretsListOptions) error {
-	_, workspaceRoot, err := a.loadSoloProjectConfig()
+func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) error {
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
-	keys, err := solo.ListSecrets(workspaceRoot)
+	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	secrets, err := current.ListSecrets(workspaceRoot, environmentName, opts.ServiceName)
 	if err != nil {
 		return err
 	}
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"keys": keys})
+		return a.Printer.PrintJSON(map[string]any{"environment": environmentName, "secrets": secrets})
 	}
-	if len(keys) == 0 {
+	if len(secrets) == 0 {
 		a.Printer.Println("No secrets configured")
 		return nil
 	}
-	for _, k := range keys {
-		a.Printer.Println(k)
+	for _, secret := range secrets {
+		a.Printer.Println(secret.ServiceName + " " + secret.Name)
 	}
 	return nil
 }
@@ -1112,17 +1136,29 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 }
 
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
-	_, workspaceRoot, err := a.loadSoloProjectConfig()
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
-	if err := solo.DeleteSecret(workspaceRoot, opts.Key); err != nil {
+	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	if strings.TrimSpace(opts.ServiceName) == "" {
+		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	record, err := current.DeleteSecret(workspaceRoot, environmentName, opts.ServiceName, opts.Key)
+	if err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"key": opts.Key, "action": "deleted"})
+		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "action": "deleted"})
 	}
-	a.Printer.Println(fmt.Sprintf("Secret %q deleted", opts.Key))
+	a.Printer.Println(fmt.Sprintf("Secret %q deleted for %s in %s", record.Name, record.ServiceName, record.Environment))
 	return nil
 }
 
@@ -2136,34 +2172,53 @@ func parseSoloLabels(value string) ([]string, error) {
 	return labels, nil
 }
 
-func applySoloRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, secrets map[string]string) (string, error) {
+func applySoloRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, secrets solo.ScopedSecrets) (string, error) {
 	if cfg == nil || cfg.App.Type != config.AppTypeRails {
 		return "", nil
 	}
 	if secrets == nil {
-		secrets = map[string]string{}
+		secrets = solo.ScopedSecrets{}
 	}
 
-	source := ".env"
-	if strings.TrimSpace(secrets[railsMasterKeySecretName]) == "" {
+	serviceNames := cfg.ServiceNames()
+	missingServices := []string{}
+	for _, serviceName := range serviceNames {
+		if strings.TrimSpace(secrets.Value(serviceName, railsMasterKeySecretName)) == "" {
+			missingServices = append(missingServices, serviceName)
+		}
+	}
+
+	source := "managed secret store"
+	if len(missingServices) > 0 {
 		keyPath := filepath.Join(workspaceRoot, railsMasterKeyRelativePath)
 		data, err := os.ReadFile(keyPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return "", nil
+				if len(missingServices) == len(serviceNames) {
+					return "", nil
+				}
+				missingServices = nil
+			} else {
+				return "", fmt.Errorf("read Rails master key: %w", err)
 			}
-			return "", fmt.Errorf("read Rails master key: %w", err)
 		}
-		value := strings.TrimSpace(string(data))
-		if value == "" {
-			return "", fmt.Errorf("Rails app detected, but %s is empty", keyPath)
+		if len(missingServices) > 0 {
+			value := strings.TrimSpace(string(data))
+			if value == "" {
+				return "", fmt.Errorf("Rails app detected, but %s is empty", keyPath)
+			}
+			for _, serviceName := range missingServices {
+				secrets.Set(serviceName, railsMasterKeySecretName, value)
+			}
+			source = railsMasterKeyRelativePath
 		}
-		secrets[railsMasterKeySecretName] = value
-		source = railsMasterKeyRelativePath
 	}
 
 	services := []string{}
-	for _, serviceName := range cfg.ServiceNames() {
+	for _, serviceName := range serviceNames {
+		if strings.TrimSpace(secrets.Value(serviceName, railsMasterKeySecretName)) == "" {
+			continue
+		}
 		service := cfg.Services[serviceName]
 		if addServiceSecretRef(&service, railsMasterKeySecretName) {
 			cfg.Services[serviceName] = service

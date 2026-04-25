@@ -115,19 +115,31 @@ type nodePeerJSON struct {
 // git revision, and pre-resolved secrets. Secrets are merged into env vars;
 // no secret_refs appear in the output.
 func BuildDesiredState(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string) ([]byte, error) {
-	return BuildDesiredStateForLabels(cfg, imageTag, revision, secrets, nil, cfg.ReleaseTask() != nil)
+	return buildDesiredStateForNode(cfg, imageTag, revision, func(string) map[string]string { return secrets }, nil, false, cfg.ReleaseTask() != nil)
+}
+
+func BuildDesiredStateWithScopedSecrets(cfg *config.ProjectConfig, imageTag, revision string, secrets ScopedSecrets) ([]byte, error) {
+	return BuildDesiredStateForNodeWithScopedSecrets(cfg, imageTag, revision, secrets, nil, false, cfg.ReleaseTask() != nil)
 }
 
 // BuildDesiredStateForLabels produces desired-state JSON for one solo node.
 // A nil labels slice runs all configured services. A non-nil labels slice
 // schedules only matching services.
 func BuildDesiredStateForLabels(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, includeReleaseTask bool) ([]byte, error) {
-	return BuildDesiredStateForNode(cfg, imageTag, revision, secrets, labels, false, includeReleaseTask)
+	return buildDesiredStateForNode(cfg, imageTag, revision, func(string) map[string]string { return secrets }, labels, false, includeReleaseTask)
 }
 
 // BuildDesiredStateForNode produces desired-state JSON for one node, including
 // public ingress only when the node has the web label.
 func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secrets map[string]string, labels []string, ingressNode bool, includeReleaseTask bool, nodePeers ...[]NodePeer) ([]byte, error) {
+	return buildDesiredStateForNode(cfg, imageTag, revision, func(string) map[string]string { return secrets }, labels, ingressNode, includeReleaseTask, nodePeers...)
+}
+
+func BuildDesiredStateForNodeWithScopedSecrets(cfg *config.ProjectConfig, imageTag, revision string, secrets ScopedSecrets, labels []string, ingressNode bool, includeReleaseTask bool, nodePeers ...[]NodePeer) ([]byte, error) {
+	return buildDesiredStateForNode(cfg, imageTag, revision, secrets.ValuesForService, labels, ingressNode, includeReleaseTask, nodePeers...)
+}
+
+func buildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secretsForService func(string) map[string]string, labels []string, ingressNode bool, includeReleaseTask bool, nodePeers ...[]NodePeer) ([]byte, error) {
 	ds := desiredStateJSON{
 		SchemaVersion: 2,
 		Revision:      revision,
@@ -150,7 +162,7 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 		if !shouldScheduleService(labels, serviceKind) {
 			continue
 		}
-		rendered, err := buildService(serviceName, service, imageTag, secrets)
+		rendered, err := buildService(serviceName, service, imageTag, secretsForService(serviceName))
 		if err != nil {
 			return nil, fmt.Errorf("build service %s: %w", serviceName, err)
 		}
@@ -162,7 +174,7 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	}
 
 	if includeReleaseTask && cfg.ReleaseTask() != nil && shouldScheduleReleaseTask(labels, cfg) {
-		releaseTask, err := buildReleaseTask(cfg, imageTag, secrets)
+		releaseTask, err := buildReleaseTask(cfg, imageTag, secretsForService(cfg.ReleaseTask().Service))
 		if err != nil {
 			return nil, fmt.Errorf("build release task: %w", err)
 		}

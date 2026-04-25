@@ -937,13 +937,16 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 			},
 		},
 	}
-	secrets := map[string]string{}
+	secrets := solo.ScopedSecrets{}
 	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secrets[railsMasterKeySecretName] != "from-master-key" {
-		t.Fatalf("RAILS_MASTER_KEY = %q", secrets[railsMasterKeySecretName])
+	if got := secrets.Value(config.DefaultWebServiceName, railsMasterKeySecretName); got != "from-master-key" {
+		t.Fatalf("web RAILS_MASTER_KEY = %q", got)
+	}
+	if got := secrets.Value("worker", railsMasterKeySecretName); got != "from-master-key" {
+		t.Fatalf("worker RAILS_MASTER_KEY = %q", got)
 	}
 	if !strings.Contains(notice, "config/master.key") {
 		t.Fatalf("notice = %q, want config/master.key", notice)
@@ -956,7 +959,7 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 	}
 }
 
-func TestApplySoloRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
+func TestApplySoloRailsMasterKeyLetsManagedSecretOverrideMasterKey(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
@@ -975,16 +978,18 @@ func TestApplySoloRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
 			},
 		},
 	}
-	secrets := map[string]string{railsMasterKeySecretName: "from-env"}
+	secrets := solo.ScopedSecrets{
+		config.DefaultWebServiceName: {railsMasterKeySecretName: "from-store"},
+	}
 	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secrets[railsMasterKeySecretName] != "from-env" {
-		t.Fatalf("RAILS_MASTER_KEY = %q, want from-env", secrets[railsMasterKeySecretName])
+	if got := secrets.Value(config.DefaultWebServiceName, railsMasterKeySecretName); got != "from-store" {
+		t.Fatalf("RAILS_MASTER_KEY = %q, want from-store", got)
 	}
-	if !strings.Contains(notice, ".env") {
-		t.Fatalf("notice = %q, want .env", notice)
+	if !strings.Contains(notice, "managed secret store") {
+		t.Fatalf("notice = %q, want managed secret store", notice)
 	}
 }
 

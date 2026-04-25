@@ -1,182 +1,149 @@
 package solo
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
-const envFile = ".env"
+type ScopedSecrets map[string]map[string]string
 
-func envPath(workspaceRoot string) string {
-	return filepath.Join(workspaceRoot, envFile)
+func (s ScopedSecrets) ValuesForService(serviceName string) map[string]string {
+	values := s[strings.TrimSpace(serviceName)]
+	if values == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(values))
+	for name, value := range values {
+		out[name] = value
+	}
+	return out
 }
 
-// LoadSecrets reads KEY=VALUE pairs from .env in the workspace root.
-// Returns an empty map if the file does not exist.
-// Supports blank lines, # comments, optional quoting, and export prefix.
-func LoadSecrets(workspaceRoot string) (map[string]string, error) {
-	path := envPath(workspaceRoot)
-	f, err := os.Open(path)
+func (s ScopedSecrets) Value(serviceName, name string) string {
+	values := s[strings.TrimSpace(serviceName)]
+	if values == nil {
+		return ""
+	}
+	return values[strings.TrimSpace(name)]
+}
+
+func (s ScopedSecrets) Set(serviceName, name, value string) {
+	serviceName = strings.TrimSpace(serviceName)
+	name = strings.TrimSpace(name)
+	if serviceName == "" || name == "" {
+		return
+	}
+	if s[serviceName] == nil {
+		s[serviceName] = map[string]string{}
+	}
+	s[serviceName][name] = value
+}
+
+func (s *State) SetSecret(workspaceRoot, environment, serviceName, name, value string) (SecretRecord, error) {
+	s.ensureDefaults()
+	key, record, err := buildSecretRecord(workspaceRoot, environment, serviceName, name, value)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]string{}, nil
-		}
-		return nil, fmt.Errorf("read %s: %w", envFile, err)
+		return SecretRecord{}, err
 	}
-	defer f.Close()
-
-	secrets := map[string]string{}
-	scanner := bufio.NewScanner(f)
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// Strip optional "export " prefix.
-		line = strings.TrimPrefix(line, "export ")
-
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			return nil, fmt.Errorf("%s:%d: expected KEY=VALUE", envFile, lineNum)
-		}
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		value = unquote(value)
-		secrets[key] = value
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read %s: %w", envFile, err)
-	}
-	return secrets, nil
+	record.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.Secrets[key] = record
+	return record, nil
 }
 
-// SaveSecret sets a key in .env, preserving comments and ordering.
-// Creates the file if it doesn't exist.
-func SaveSecret(workspaceRoot, key, value string) error {
-	path := envPath(workspaceRoot)
-	lines, err := readLines(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", envFile, err)
-	}
-
-	found := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		lineKey, _, ok := strings.Cut(strings.TrimPrefix(trimmed, "export "), "=")
-		if ok && strings.TrimSpace(lineKey) == key {
-			lines[i] = key + "=" + quoteIfNeeded(value)
-			found = true
-			break
-		}
-	}
-	if !found {
-		lines = append(lines, key+"="+quoteIfNeeded(value))
-	}
-
-	return writeLines(path, lines)
-}
-
-// DeleteSecret removes a key from .env.
-func DeleteSecret(workspaceRoot, key string) error {
-	path := envPath(workspaceRoot)
-	lines, err := readLines(path)
+func (s *State) DeleteSecret(workspaceRoot, environment, serviceName, name string) (SecretRecord, error) {
+	s.ensureDefaults()
+	key, record, err := buildSecretRecord(workspaceRoot, environment, serviceName, name, "")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("secret %q not found", key)
-		}
-		return fmt.Errorf("read %s: %w", envFile, err)
+		return SecretRecord{}, err
 	}
-
-	found := false
-	out := lines[:0]
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-			lineKey, _, ok := strings.Cut(strings.TrimPrefix(trimmed, "export "), "=")
-			if ok && strings.TrimSpace(lineKey) == key {
-				found = true
-				continue
-			}
-		}
-		out = append(out, line)
+	existing, ok := s.Secrets[key]
+	if !ok {
+		return SecretRecord{}, fmt.Errorf("secret %q for service %q in %s not found", record.Name, record.ServiceName, record.Environment)
 	}
-	if !found {
-		return fmt.Errorf("secret %q not found", key)
-	}
-
-	return writeLines(path, out)
+	delete(s.Secrets, key)
+	return existing, nil
 }
 
-// ListSecrets returns sorted key names from .env.
-func ListSecrets(workspaceRoot string) ([]string, error) {
-	secrets, err := LoadSecrets(workspaceRoot)
+func (s *State) ListSecrets(workspaceRoot, environment, serviceName string) ([]SecretRecord, error) {
+	s.ensureDefaults()
+	workspaceKey, err := CanonicalWorkspaceKey(workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
-	keys := make([]string, 0, len(secrets))
-	for k := range secrets {
-		keys = append(keys, k)
+	environment = defaultEnvironmentName(environment)
+	serviceName = strings.TrimSpace(serviceName)
+	records := []SecretRecord{}
+	for _, record := range s.Secrets {
+		if record.WorkspaceKey != workspaceKey || record.Environment != environment {
+			continue
+		}
+		if serviceName != "" && record.ServiceName != serviceName {
+			continue
+		}
+		record.Value = ""
+		records = append(records, record)
 	}
-	sort.Strings(keys)
-	return keys, nil
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].ServiceName != records[j].ServiceName {
+			return records[i].ServiceName < records[j].ServiceName
+		}
+		return records[i].Name < records[j].Name
+	})
+	return records, nil
 }
 
-func readLines(path string) ([]string, error) {
-	data, err := os.ReadFile(path)
+func (s *State) ScopedSecretValues(workspaceRoot, environment string) (ScopedSecrets, error) {
+	s.ensureDefaults()
+	workspaceKey, err := CanonicalWorkspaceKey(workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
-	s := string(data)
-	if s == "" {
-		return nil, nil
-	}
-	// Preserve original line endings; split without stripping trailing newline.
-	lines := strings.Split(s, "\n")
-	// Remove trailing empty element from final newline.
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return lines, nil
-}
-
-func writeLines(path string, lines []string) error {
-	content := strings.Join(lines, "\n") + "\n"
-	return os.WriteFile(path, []byte(content), 0o600)
-}
-
-// unquote strips matching single or double quotes from a value and
-// unescapes backslash sequences inside double-quoted strings.
-func unquote(s string) string {
-	if len(s) >= 2 {
-		if s[0] == '\'' && s[len(s)-1] == '\'' {
-			return s[1 : len(s)-1]
+	environment = defaultEnvironmentName(environment)
+	values := ScopedSecrets{}
+	for _, record := range s.Secrets {
+		if record.WorkspaceKey != workspaceKey || record.Environment != environment {
+			continue
 		}
-		if s[0] == '"' && s[len(s)-1] == '"' {
-			inner := s[1 : len(s)-1]
-			inner = strings.ReplaceAll(inner, `\"`, `"`)
-			inner = strings.ReplaceAll(inner, `\\`, `\`)
-			return inner
-		}
+		values.Set(record.ServiceName, record.Name, record.Value)
 	}
-	return s
+	return values, nil
 }
 
-// quoteIfNeeded wraps the value in double quotes if it contains spaces,
-// #, quotes, or backslashes.
-func quoteIfNeeded(s string) string {
-	if strings.ContainsAny(s, " \t#\"'\\") {
-		s = strings.ReplaceAll(s, `\`, `\\`)
-		s = strings.ReplaceAll(s, `"`, `\"`)
-		return `"` + s + `"`
+func buildSecretRecord(workspaceRoot, environment, serviceName, name, value string) (string, SecretRecord, error) {
+	workspaceKey, err := CanonicalWorkspaceKey(workspaceRoot)
+	if err != nil {
+		return "", SecretRecord{}, err
 	}
-	return s
+	environment = defaultEnvironmentName(environment)
+	serviceName = strings.TrimSpace(serviceName)
+	name = strings.TrimSpace(name)
+	if serviceName == "" {
+		return "", SecretRecord{}, fmt.Errorf("service name is required")
+	}
+	if name == "" {
+		return "", SecretRecord{}, fmt.Errorf("secret name is required")
+	}
+	record := SecretRecord{
+		WorkspaceRoot: strings.TrimSpace(workspaceRoot),
+		WorkspaceKey:  workspaceKey,
+		Environment:   environment,
+		ServiceName:   serviceName,
+		Name:          name,
+		Value:         value,
+	}
+	if record.WorkspaceRoot == "" {
+		record.WorkspaceRoot = workspaceKey
+	}
+	return secretKey(workspaceKey, environment, serviceName, name), record, nil
+}
+
+func secretKey(workspaceKey, environment, serviceName, name string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(workspaceKey),
+		defaultEnvironmentName(environment),
+		strings.TrimSpace(serviceName),
+		strings.TrimSpace(name),
+	}, "\n")
 }

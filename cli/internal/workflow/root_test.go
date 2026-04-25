@@ -3,8 +3,12 @@ package workflow
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/devopsellence/cli/internal/solo"
 )
 
 func TestRootVersionCommand(t *testing.T) {
@@ -109,6 +113,53 @@ func TestRootSecretSetRejectsExplicitEmptyValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "secret value is required") {
 		t.Fatalf("error = %v, want secret value is required", err)
+	}
+}
+
+func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
+	if err := os.WriteFile(filepath.Join(cwd, "devopsellence.yml"), []byte(strings.Join([]string{
+		"schema_version: 6",
+		"organization: solo",
+		"project: demo",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+		"      port: 3000",
+	}, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "DATABASE_URL", "--env", "staging", "--service", "web", "--value", "postgres://staging"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	current, err := solo.NewStateStore(solo.DefaultStatePath()).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := current.ScopedSecretValues(cwd, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := values.Value("web", "DATABASE_URL"); got != "postgres://staging" {
+		t.Fatalf("web DATABASE_URL = %q", got)
+	}
+	if got := values.Value("worker", "DATABASE_URL"); got != "" {
+		t.Fatalf("worker DATABASE_URL = %q", got)
 	}
 }
 

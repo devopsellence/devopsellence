@@ -25,6 +25,7 @@ type State struct {
 	Nodes         map[string]config.SoloNode  `json:"nodes,omitempty"`
 	Attachments   map[string]AttachmentRecord `json:"attachments,omitempty"`
 	Snapshots     map[string]DeploySnapshot   `json:"snapshots,omitempty"`
+	Secrets       map[string]SecretRecord     `json:"secrets,omitempty"`
 }
 
 type AttachmentRecord struct {
@@ -55,6 +56,16 @@ type DeploySnapshot struct {
 	IngressService     string           `json:"ingress_service,omitempty"`
 	IngressServiceKind string           `json:"ingress_service_kind,omitempty"`
 	Metadata           SnapshotMetadata `json:"metadata,omitempty"`
+}
+
+type SecretRecord struct {
+	WorkspaceRoot string `json:"workspace_root"`
+	WorkspaceKey  string `json:"workspace_key"`
+	Environment   string `json:"environment"`
+	ServiceName   string `json:"service_name"`
+	Name          string `json:"name"`
+	Value         string `json:"value"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
 }
 
 func DefaultStatePath() string {
@@ -163,6 +174,14 @@ func EnvironmentStateKey(workspaceRoot, environment string) (string, error) {
 }
 
 func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secrets map[string]string) (DeploySnapshot, error) {
+	return buildDeploySnapshot(cfg, workspaceRoot, configPath, imageTag, revision, func(string) map[string]string { return secrets })
+}
+
+func BuildDeploySnapshotWithScopedSecrets(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secrets ScopedSecrets) (DeploySnapshot, error) {
+	return buildDeploySnapshot(cfg, workspaceRoot, configPath, imageTag, revision, secrets.ValuesForService)
+}
+
+func buildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secretsForService func(string) map[string]string) (DeploySnapshot, error) {
 	if cfg == nil {
 		return DeploySnapshot{}, fmt.Errorf("config is required")
 	}
@@ -189,14 +208,14 @@ func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 	}
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
-		rendered, err := buildService(serviceName, service, imageTag, secrets)
+		rendered, err := buildService(serviceName, service, imageTag, secretsForService(serviceName))
 		if err != nil {
 			return DeploySnapshot{}, fmt.Errorf("build service %s: %w", serviceName, err)
 		}
 		snapshot.Services = append(snapshot.Services, rendered)
 	}
 	if cfg.ReleaseTask() != nil {
-		releaseTask, err := buildReleaseTask(cfg, imageTag, secrets)
+		releaseTask, err := buildReleaseTask(cfg, imageTag, secretsForService(cfg.ReleaseTask().Service))
 		if err != nil {
 			return DeploySnapshot{}, fmt.Errorf("build release task: %w", err)
 		}
@@ -279,6 +298,7 @@ func newState() State {
 		Nodes:         map[string]config.SoloNode{},
 		Attachments:   map[string]AttachmentRecord{},
 		Snapshots:     map[string]DeploySnapshot{},
+		Secrets:       map[string]SecretRecord{},
 	}
 }
 
@@ -294,6 +314,9 @@ func (s *State) ensureDefaults() {
 	}
 	if s.Snapshots == nil {
 		s.Snapshots = map[string]DeploySnapshot{}
+	}
+	if s.Secrets == nil {
+		s.Secrets = map[string]SecretRecord{}
 	}
 }
 
@@ -350,6 +373,21 @@ func normalizeState(current State) (State, error) {
 	}
 	current.Snapshots = normalizedSnapshots
 
+	secretKeys := make([]string, 0, len(current.Secrets))
+	for key := range current.Secrets {
+		secretKeys = append(secretKeys, key)
+	}
+	sort.Strings(secretKeys)
+	normalizedSecrets := make(map[string]SecretRecord, len(current.Secrets))
+	for _, key := range secretKeys {
+		normalizedKey, secret, err := normalizeSecretRecord(key, current.Secrets[key])
+		if err != nil {
+			return State{}, fmt.Errorf("normalize secret %q: %w", key, err)
+		}
+		normalizedSecrets[normalizedKey] = secret
+	}
+	current.Secrets = normalizedSecrets
+
 	return current, nil
 }
 
@@ -377,6 +415,27 @@ func normalizeSnapshotRecord(key string, snapshot DeploySnapshot) (string, Deplo
 	snapshot.WorkspaceKey = workspaceKey
 	snapshot.Environment = defaultEnvironmentName(firstNonEmpty(snapshot.Environment, keyEnvironment))
 	return snapshot.WorkspaceKey + "\n" + snapshot.Environment, snapshot, nil
+}
+
+func normalizeSecretRecord(key string, secret SecretRecord) (string, SecretRecord, error) {
+	workspaceRoot, workspaceKey, err := normalizeWorkspaceIdentity(key, secret.WorkspaceRoot, secret.WorkspaceKey)
+	if err != nil {
+		return "", SecretRecord{}, err
+	}
+	keyWorkspace, keyEnvironment, keyService, keyName := splitSecretStateKey(key)
+	_ = keyWorkspace
+	secret.WorkspaceRoot = workspaceRoot
+	secret.WorkspaceKey = workspaceKey
+	secret.Environment = defaultEnvironmentName(firstNonEmpty(secret.Environment, keyEnvironment))
+	secret.ServiceName = strings.TrimSpace(firstNonEmpty(secret.ServiceName, keyService))
+	secret.Name = strings.TrimSpace(firstNonEmpty(secret.Name, keyName))
+	if secret.ServiceName == "" {
+		return "", SecretRecord{}, errors.New("service name is required")
+	}
+	if secret.Name == "" {
+		return "", SecretRecord{}, errors.New("secret name is required")
+	}
+	return secretKey(secret.WorkspaceKey, secret.Environment, secret.ServiceName, secret.Name), secret, nil
 }
 
 func normalizeWorkspaceIdentity(key, workspaceRoot, workspaceKey string) (string, string, error) {
@@ -407,6 +466,15 @@ func splitEnvironmentStateKey(key string) (string, string) {
 		environment = strings.TrimSpace(parts[1])
 	}
 	return workspace, environment
+}
+
+func splitSecretStateKey(key string) (string, string, string, string) {
+	parts := strings.SplitN(key, "\n", 4)
+	values := [4]string{}
+	for i := range parts {
+		values[i] = strings.TrimSpace(parts[i])
+	}
+	return values[0], values[1], values[2], values[3]
 }
 
 func firstNonEmpty(values ...string) string {

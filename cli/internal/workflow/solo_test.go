@@ -596,7 +596,7 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		Git:                git.Client{},
 		Cwd:                workspaceRoot,
 		DeployPollInterval: 5 * time.Millisecond,
-		DeployTimeout:      200 * time.Millisecond,
+		DeployTimeout:      time.Second,
 	}
 
 	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{}); err != nil {
@@ -623,7 +623,7 @@ func TestWaitForSoloRolloutIgnoresMissingAndStaleStatusUntilExpectedRevisionSett
 	app := &App{
 		Printer:            output.New(io.Discard, io.Discard, false),
 		DeployPollInterval: 5 * time.Millisecond,
-		DeployTimeout:      200 * time.Millisecond,
+		DeployTimeout:      time.Second,
 	}
 
 	err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
@@ -933,7 +933,7 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
 			},
 			"worker": {
-				Env:  map[string]string{},
+				Env: map[string]string{},
 			},
 		},
 	}

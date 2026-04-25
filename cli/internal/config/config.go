@@ -55,6 +55,8 @@ type ServicePort struct {
 }
 
 type ServiceConfig struct {
+	// Kind is inferred after load/defaulting for internal scheduling and placement logic.
+	// It is not part of the repo config schema and is never serialized back to YAML/JSON.
 	Kind        string            `yaml:"-" json:"-"`
 	Image       string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Command     []string          `yaml:"command,omitempty" json:"command,omitempty"`

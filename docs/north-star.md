@@ -75,11 +75,11 @@ Persistence should sit behind explicit state adapters.
 
 Differences in tenancy, locking, jobs, and coordination should live in adapters, not in separate deploy semantics.
 
-### 4. broker adapters
+### 4. infrastructure adapters
 
-Infrastructure integration should sit behind broker adapters that understand primitives, not product semantics.
+Infrastructure integration should sit behind adapters that understand provider primitives, not product semantics.
 
-Broker responsibilities include:
+Infrastructure adapter responsibilities include:
 
 - container registries;
 - desired-state storage;
@@ -89,7 +89,7 @@ Broker responsibilities include:
 - DNS, certificates, and cloud-owned ingress helpers;
 - lifecycle cleanup and diagnostics.
 
-Broker adapters should be cloud-specific when that produces a better result. The goal is not a weak lowest-common-denominator abstraction. The goal is a clean seam between deploy semantics and infrastructure execution.
+Infrastructure adapters should be cloud-specific when that produces a better result. The goal is not a weak lowest-common-denominator abstraction. The goal is a clean seam between deploy semantics and infrastructure execution.
 
 ### 5. product surfaces
 
@@ -107,10 +107,10 @@ The intended shape is:
 
 ```text
 solo:
-  cli -> deployment core -> state adapter + broker adapter -> agent
+  cli -> deployment core -> state adapter + infrastructure adapter -> agent
 
 shared:
-  control plane -> core api/rpc -> deployment core -> state adapter + broker adapter -> agent
+  control plane -> core api/rpc -> deployment core -> state adapter + infrastructure adapter -> agent
 ```
 
 The agent should stay mode-agnostic. It should know how to fetch desired state, resolve secrets, pull images, reconcile containers and Envoy, and publish status through concrete adapters. It should not branch on solo or shared as product concepts.

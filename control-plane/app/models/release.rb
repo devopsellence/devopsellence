@@ -289,6 +289,10 @@ class Release < ApplicationRecord
     ingress = ingress_config
     return if ingress.blank?
 
+    if ingress.key?("service")
+      errors.add(:runtime_json, "ingress.service is no longer supported")
+    end
+
     hosts = ingress["hosts"]
     hosts_valid = true
     unless hosts.is_a?(Array)

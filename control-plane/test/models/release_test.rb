@@ -208,6 +208,26 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_includes release.errors[:runtime_json], "ingress.tls.mode must be one of auto, off, or manual"
   end
 
+  test "rejects unsupported ingress service field" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "hosts" => ["app.example.com"],
+          "service" => "web",
+          "rules" => [
+            {
+              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ]
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.service is no longer supported"
+  end
+
   test "rejects explicit service kind fields" do
     release = build_release(
       runtime_json: release_runtime_json(

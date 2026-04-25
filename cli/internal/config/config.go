@@ -485,9 +485,9 @@ func applyDefaults(cfg *ProjectConfig) {
 		cfg.Tasks.Release.Env = mergeStringMaps(cfg.Tasks.Release.Env)
 	}
 	if cfg.Ingress != nil {
-		cfg.Ingress.Hosts = normalizeStringList(cfg.Ingress.Hosts)
+		cfg.Ingress.Hosts = normalizeIngressHostList(cfg.Ingress.Hosts)
 		for i, rule := range cfg.Ingress.Rules {
-			rule.Match.Host = strings.TrimSpace(rule.Match.Host)
+			rule.Match.Host = normalizedIngressHost(rule.Match.Host)
 			rule.Match.PathPrefix = strings.TrimSpace(rule.Match.PathPrefix)
 			if rule.Match.PathPrefix == "" {
 				rule.Match.PathPrefix = "/"
@@ -567,6 +567,20 @@ func normalizeStringList(values []string) []string {
 	normalized := make([]string, 0, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
+func normalizeIngressHostList(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = normalizedIngressHost(value)
 		if value == "" || seen[value] {
 			continue
 		}

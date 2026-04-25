@@ -2645,13 +2645,28 @@ func (a *App) currentEnvironmentSecrets(ctx context.Context, callAuth authCall, 
 func railsRuntimeServices(cfg config.ProjectConfig) []string {
 	services := []string{}
 	for _, name := range cfg.ServiceNames() {
-		service := cfg.Services[name]
-		if strings.TrimSpace(service.Image) != "" {
+		if looksLikeCloudflaredService(name, cfg.Services[name]) {
 			continue
 		}
 		services = append(services, name)
 	}
 	return services
+}
+
+func looksLikeCloudflaredService(name string, service config.ServiceConfig) bool {
+	if strings.EqualFold(strings.TrimSpace(name), "cloudflared") {
+		return true
+	}
+	image := strings.ToLower(strings.TrimSpace(service.Image))
+	if strings.Contains(image, "cloudflare/cloudflared") {
+		return true
+	}
+	for _, value := range append(append([]string{}, service.Command...), service.Args...) {
+		if strings.EqualFold(strings.TrimSpace(value), "cloudflared") {
+			return true
+		}
+	}
+	return false
 }
 
 func runtimeServices(cfg config.ProjectConfig) []string {

@@ -280,6 +280,53 @@ func TestValidateRejectsBlankBuildPlatform(t *testing.T) {
 	}
 }
 
+func TestLoadNormalizesIngressHostsAndRuleHosts(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, FilePath)
+	content := strings.Join([]string{
+		"schema_version: 6",
+		"organization: acme",
+		"project: ShopApp",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+		"ingress:",
+		"  hosts:",
+		"    - App.Example.com",
+		"  rules:",
+		"    - match:",
+		"        host: APP.EXAMPLE.COM",
+		"        path_prefix: /",
+		"      target:",
+		"        service: web",
+		"        port: http",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := strings.Join(cfg.Ingress.Hosts, ","); got != "app.example.com" {
+		t.Fatalf("ingress.hosts = %q, want normalized host", got)
+	}
+	if got := cfg.Ingress.Rules[0].Match.Host; got != "app.example.com" {
+		t.Fatalf("rule match host = %q, want normalized host", got)
+	}
+}
+
 func TestValidateIngressRulesTreatHostsCaseInsensitively(t *testing.T) {
 	t.Parallel()
 

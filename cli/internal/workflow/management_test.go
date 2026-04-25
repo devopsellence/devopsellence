@@ -2342,6 +2342,9 @@ func TestDeployRailsDoesNotSyncMasterKeyToHelperServices(t *testing.T) {
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
 	project.Services["worker"] = config.ServiceConfig{}
+	web := project.Services["web"]
+	web.Image = "ghcr.io/acme/shop:latest"
+	project.Services["web"] = web
 	project.Services["cloudflared"] = config.ServiceConfig{
 		Image:   "docker.io/cloudflare/cloudflared:latest",
 		Command: []string{"cloudflared"},

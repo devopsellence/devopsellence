@@ -96,10 +96,10 @@ type IngressTLSConfig struct {
 }
 
 type IngressConfig struct {
-	Hosts        []string             `yaml:"hosts,omitempty" json:"hosts,omitempty"`
-	Rules        []IngressRuleConfig  `yaml:"rules,omitempty" json:"rules,omitempty"`
-	TLS          IngressTLSConfig     `yaml:"tls,omitempty" json:"tls,omitempty"`
-	RedirectHTTP *bool                `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
+	Hosts        []string            `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	Rules        []IngressRuleConfig `yaml:"rules,omitempty" json:"rules,omitempty"`
+	TLS          IngressTLSConfig    `yaml:"tls,omitempty" json:"tls,omitempty"`
+	RedirectHTTP *bool               `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
 }
 
 type IngressRuleConfig struct {
@@ -712,11 +712,11 @@ func validateIngressRules(cfg *ProjectConfig) error {
 	}
 	hostSet := map[string]bool{}
 	for _, host := range cfg.Ingress.Hosts {
-		hostSet[strings.TrimSpace(host)] = true
+		hostSet[normalizedIngressHost(host)] = true
 	}
 	seenRoutes := map[string]bool{}
 	for i, rule := range cfg.Ingress.Rules {
-		host := strings.TrimSpace(rule.Match.Host)
+		host := normalizedIngressHost(rule.Match.Host)
 		pathPrefix := strings.TrimSpace(rule.Match.PathPrefix)
 		if pathPrefix == "" {
 			pathPrefix = "/"
@@ -815,6 +815,10 @@ func inferredServiceKind(name string, service ServiceConfig) string {
 		return ServiceKindWeb
 	}
 	return ServiceKindWorker
+}
+
+func normalizedIngressHost(host string) string {
+	return strings.ToLower(strings.TrimSpace(host))
 }
 
 func mergeStringMaps(parts ...map[string]string) map[string]string {

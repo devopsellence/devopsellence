@@ -212,7 +212,7 @@ func TestValidateIngressRouteTarget(t *testing.T) {
 	}
 }
 
-func TestValidateIngressRouteTargetRequiresWebService(t *testing.T) {
+func TestValidateIngressRouteTargetAllowsNonWebService(t *testing.T) {
 	state := desiredState(&desiredstatepb.Service{
 		Name:  "worker",
 		Kind:  "worker",
@@ -247,7 +247,7 @@ func TestValidateIngressRouteTargetAllowsGenericServiceAndNamedPort(t *testing.T
 	}
 }
 
-func TestValidateIngressRouteTargetRequiresHTTPPort(t *testing.T) {
+func TestValidateIngressRouteTargetAllowsNonHTTPNamedPort(t *testing.T) {
 	service := webService()
 	service.Ports = append(service.Ports, &desiredstatepb.ServicePort{Name: "metrics", Port: 9090})
 	state := desiredState(service)
@@ -258,6 +258,18 @@ func TestValidateIngressRouteTargetRequiresHTTPPort(t *testing.T) {
 	}
 	if err := Validate(state); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateIngressRouteTargetRequiresNamedPort(t *testing.T) {
+	state := desiredState(webService())
+	state.Ingress = &desiredstatepb.Ingress{
+		Mode:   "public",
+		Hosts:  []string{"app.example.com"},
+		Routes: []*desiredstatepb.IngressRoute{route("app.example.com", "production", "web", "")},
+	}
+	if err := Validate(state); err == nil {
+		t.Fatal("expected error")
 	}
 }
 

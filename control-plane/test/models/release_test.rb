@@ -110,6 +110,48 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_includes release.errors[:runtime_json], "ingress must be an object"
   end
 
+  test "rejects invalid ingress tls and redirect settings" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "hosts" => ["app.example.com"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ],
+          "tls" => "manual",
+          "redirect_http" => "yes"
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.tls must be an object"
+    assert_includes release.errors[:runtime_json], "ingress.redirect_http must be a boolean"
+  end
+
+  test "rejects unsupported ingress tls mode" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "hosts" => ["app.example.com"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ],
+          "tls" => { "mode" => "bogus" }
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.tls.mode must be one of auto, off, or manual"
+  end
+
   test "blank kind still infers required labels from service shape" do
     release = build_release(
       runtime_json: release_runtime_json(

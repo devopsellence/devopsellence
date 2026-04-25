@@ -124,6 +124,7 @@ module Releases
       return nil if ingress.blank?
 
       hosts = parse_ingress_hosts(ingress["hosts"] || ingress[:hosts])
+      raise InvalidPayload, "ingress.hosts must include at least one host" if hosts.blank?
       rules = parse_array(ingress["rules"] || ingress[:rules], field: :"ingress.rules").map.with_index do |entry, index|
         rule = parse_hash(entry, field: :"ingress.rules[#{index}]")
         match = parse_hash(rule["match"] || rule[:match], field: :"ingress.rules[#{index}].match")
@@ -139,6 +140,7 @@ module Releases
           }
         }
       end
+      raise InvalidPayload, "ingress.rules must include at least one rule" if rules.blank?
 
       normalized = {
         "hosts" => hosts,

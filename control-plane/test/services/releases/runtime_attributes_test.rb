@@ -145,6 +145,7 @@ module Releases
               }
             },
             ingress: {
+              hosts: ["app.example.test"],
               rules: [
                 {
                   match: { host: "app.example.test", path_prefix: "/" },
@@ -174,6 +175,7 @@ module Releases
             }
             },
             ingress: {
+              hosts: ["app.example.test"],
               rules: [
                 {
                   match: { host: "app.example.test", path_prefix: "/" },
@@ -288,6 +290,57 @@ module Releases
       assert_equal "api", runtime.dig("ingress", "rules", 0, "target", "service")
       assert_equal "metrics", runtime.dig("ingress", "rules", 0, "target", "port")
       assert_equal "/", runtime.dig("ingress", "rules", 1, "match", "path_prefix")
+    end
+
+    test "rejects ingress without hosts" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              rules: [
+                {
+                  match: { host: "app.example.com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.hosts must include at least one host", error.message
+    end
+
+    test "rejects ingress without rules" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.rules must include at least one rule", error.message
     end
   end
 end

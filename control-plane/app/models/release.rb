@@ -311,6 +311,22 @@ class Release < ApplicationRecord
       return
     end
 
+    tls = ingress["tls"]
+    unless tls.nil? || tls.is_a?(Hash)
+      errors.add(:runtime_json, "ingress.tls must be an object")
+    end
+    if tls.is_a?(Hash)
+      mode = tls["mode"].to_s.strip
+      unless mode.blank? || ["auto", "off", "manual"].include?(mode)
+        errors.add(:runtime_json, "ingress.tls.mode must be one of auto, off, or manual")
+      end
+    end
+
+    redirect_http = ingress["redirect_http"]
+    unless redirect_http.nil? || redirect_http == true || redirect_http == false
+      errors.add(:runtime_json, "ingress.redirect_http must be a boolean")
+    end
+
     seen = {}
     rules.each_with_index do |raw_rule, index|
       rule = stringify_hash(raw_rule)

@@ -282,6 +282,44 @@ func TestValidateRejectsBlankBuildPlatform(t *testing.T) {
 	}
 }
 
+func TestValidateIngressRulesTreatHostsCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	project := DefaultProjectConfig("acme", "ShopApp", "production")
+	project.Ingress = &IngressConfig{
+		Hosts: []string{"App.Example.com"},
+		Rules: []IngressRuleConfig{{
+			Match:  IngressMatchConfig{Host: "app.example.COM", PathPrefix: "/"},
+			Target: IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
+
+	if err := Validate(&project); err != nil {
+		t.Fatalf("expected ingress host matching to be case-insensitive, got %v", err)
+	}
+}
+
+func TestValidateIngressRulesRejectsCaseInsensitiveDuplicateRoutes(t *testing.T) {
+	t.Parallel()
+
+	project := DefaultProjectConfig("acme", "ShopApp", "production")
+	project.Ingress = &IngressConfig{
+		Hosts: []string{"App.Example.com"},
+		Rules: []IngressRuleConfig{{
+			Match:  IngressMatchConfig{Host: "App.Example.com", PathPrefix: "/"},
+			Target: IngressTargetConfig{Service: "web", Port: "http"},
+		}, {
+			Match:  IngressMatchConfig{Host: "app.example.COM", PathPrefix: "/"},
+			Target: IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
+
+	err := Validate(&project)
+	if err == nil || !strings.Contains(err.Error(), "duplicate route") {
+		t.Fatalf("expected duplicate route error, got %v", err)
+	}
+}
+
 func TestWriteGenericConfigUsesRepoRootPath(t *testing.T) {
 	t.Parallel()
 

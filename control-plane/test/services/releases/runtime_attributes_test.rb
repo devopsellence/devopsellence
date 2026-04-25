@@ -403,6 +403,39 @@ module Releases
       assert_equal "ingress.rules[0].match.path_prefix must start with /", error.message
     end
 
+    test "rejects duplicate ingress rules after normalizing host and path prefix" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"],
+              rules: [
+                {
+                  match: { host: "app.example.com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                },
+                {
+                  match: { host: "App.Example.Com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.rules must be unique by host and path_prefix", error.message
+    end
+
     test "rejects ingress rules whose hosts are not declared in ingress.hosts" do
       error = assert_raises(RuntimeAttributes::InvalidPayload) do
         RuntimeAttributes.new(

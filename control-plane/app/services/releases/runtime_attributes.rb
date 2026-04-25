@@ -123,6 +123,7 @@ module Releases
       hosts = parse_ingress_hosts(ingress["hosts"] || ingress[:hosts])
       raise InvalidPayload, "ingress.hosts must include at least one host" if hosts.blank?
       host_set = hosts.index_with(true)
+      route_set = {}
       rules = parse_array(ingress["rules"] || ingress[:rules], field: :"ingress.rules").map.with_index do |entry, index|
         rule = parse_hash(entry, field: :"ingress.rules[#{index}]")
         match = parse_hash(rule["match"] || rule[:match], field: :"ingress.rules[#{index}].match")
@@ -131,6 +132,9 @@ module Releases
         path_prefix = optional_service_string(match["path_prefix"] || match[:path_prefix]) || "/"
         raise InvalidPayload, "ingress.rules[#{index}].match.host must exist in ingress.hosts" unless host_set[host]
         raise InvalidPayload, "ingress.rules[#{index}].match.path_prefix must start with /" unless path_prefix.start_with?("/")
+        route_key = [host, path_prefix]
+        raise InvalidPayload, "ingress.rules must be unique by host and path_prefix" if route_set[route_key]
+        route_set[route_key] = true
 
         {
           "match" => {

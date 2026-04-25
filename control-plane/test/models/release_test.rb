@@ -152,17 +152,17 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_includes release.errors[:runtime_json], "ingress.tls.mode must be one of auto, off, or manual"
   end
 
-  test "blank kind still infers required labels from service shape" do
+  test "rejects explicit service kind fields" do
     release = build_release(
       runtime_json: release_runtime_json(
         services: {
-          "web" => web_service_runtime.merge("kind" => "")
+          "web" => web_service_runtime.merge("kind" => "web")
         }
       )
     )
 
-    assert_equal ["web"], release.required_labels
-    assert_predicate release, :valid?
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "services.web.kind is no longer supported"
   end
 
   test "scheduled_services_for fails fast for stored legacy string command" do
@@ -179,6 +179,22 @@ class ReleaseTest < ActiveSupport::TestCase
     end
 
     assert_equal "services.web.command must be an array of strings", error.message
+  end
+
+  test "scheduled_services_for fails fast for stored legacy service kind" do
+    release = persisted_release(
+      runtime_json: release_runtime_json(
+        services: {
+          "web" => web_service_runtime.merge("kind" => "web")
+        }
+      )
+    )
+
+    error = assert_raises(Release::InvalidRuntimeConfig) do
+      release.scheduled_services_for(node: build_node_for(release:))
+    end
+
+    assert_equal "services.web.kind is no longer supported", error.message
   end
 
   test "release_task_for fails fast for stored deprecated entrypoint" do

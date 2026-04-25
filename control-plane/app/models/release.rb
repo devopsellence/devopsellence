@@ -7,7 +7,6 @@ class Release < ApplicationRecord
   STATUS_DRAFT = "draft"
   STATUS_PUBLISHED = "published"
   STATUSES = [ STATUS_DRAFT, STATUS_PUBLISHED ].freeze
-  SERVICE_KINDS = [ "web", "worker", "accessory" ].freeze
 
   belongs_to :project
 
@@ -191,9 +190,8 @@ class Release < ApplicationRecord
       return
     end
 
-    kind = service_kind(service)
-    if kind.present? && !SERVICE_KINDS.include?(kind)
-      errors.add(:runtime_json, "services.#{name}.kind must be one of #{SERVICE_KINDS.join(', ')}")
+    if service.key?("kind")
+      errors.add(:runtime_json, "services.#{name}.kind is no longer supported")
     end
 
     validate_string_array(service, name:, field: "command")
@@ -400,6 +398,7 @@ class Release < ApplicationRecord
   def assert_supported_runtime_service!(name, service)
     raise InvalidRuntimeConfig, "services.#{name} must decode to an object" unless service.is_a?(Hash)
 
+    assert_unsupported_runtime_key_absent!(service, deprecated_key: "kind", field: "services.#{name}.kind")
     assert_deprecated_runtime_key_absent!(service, deprecated_key: "entrypoint", field: "services.#{name}.entrypoint")
     assert_runtime_string_array!(service["command"], field: "services.#{name}.command")
     assert_runtime_string_array!(service["args"], field: "services.#{name}.args")
@@ -409,6 +408,12 @@ class Release < ApplicationRecord
     return unless hash.key?(deprecated_key)
 
     raise InvalidRuntimeConfig, "#{field} is no longer supported; use command or args"
+  end
+
+  def assert_unsupported_runtime_key_absent!(hash, deprecated_key:, field:)
+    return unless hash.key?(deprecated_key)
+
+    raise InvalidRuntimeConfig, "#{field} is no longer supported"
   end
 
   def assert_runtime_string_array!(value, field:)
@@ -502,13 +507,7 @@ class Release < ApplicationRecord
     end
   end
 
-  def service_kind(service)
-    service["kind"].to_s.strip
-  end
-
   def inferred_service_kind(name, service)
-    explicit = service_kind(service)
-    return explicit if explicit.present?
     return "web" if name.to_s.strip == "web"
     return "web" if http_port(service).to_i.positive?
     return "web" if service["healthcheck"].is_a?(Hash)

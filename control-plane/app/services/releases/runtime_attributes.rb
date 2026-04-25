@@ -5,7 +5,6 @@ require "json"
 module Releases
   class RuntimeAttributes
     InvalidPayload = Class.new(StandardError)
-    SERVICE_KINDS = [ "web", "worker", "accessory" ].freeze
 
     def initialize(params:)
       @params = params
@@ -79,14 +78,10 @@ module Releases
 
     def parse_service(value, field:)
       service = parse_hash(value, field:)
+      reject_unsupported_kind!(service, field: :"#{field}.kind")
       reject_deprecated_key!(service, deprecated_key: :entrypoint, field: :"#{field}.entrypoint")
-      kind = optional_service_string(service["kind"] || service[:kind])
-      if kind.present? && !SERVICE_KINDS.include?(kind)
-        raise InvalidPayload, "#{field}.kind must be one of #{SERVICE_KINDS.join(', ')}"
-      end
 
       normalized = {
-        "kind" => kind,
         "image" => optional_service_string(service["image"] || service[:image]),
         "command" => optional_service_array(service["command"] || service[:command], field: :"#{field}.command"),
         "args" => optional_service_array(service["args"] || service[:args], field: :"#{field}.args"),
@@ -244,6 +239,12 @@ module Releases
       return unless hash.key?(deprecated_key) || hash.key?(deprecated_key.to_s)
 
       raise InvalidPayload, "#{field} is no longer supported; use command or args"
+    end
+
+    def reject_unsupported_kind!(hash, field:)
+      return unless hash.key?(:kind) || hash.key?("kind")
+
+      raise InvalidPayload, "#{field} is no longer supported"
     end
 
     def required_service_string(value, field:)

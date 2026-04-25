@@ -174,7 +174,6 @@ module ActiveSupport
 
     def web_service_runtime(port: 3000, healthcheck_path: "/up", healthcheck_port: nil, command: nil, args: nil, env: {}, secret_refs: [], volumes: [], image: nil)
       {
-        "kind" => "web",
         "image" => image,
         "command" => command,
         "args" => args,
@@ -188,7 +187,6 @@ module ActiveSupport
 
     def worker_service_runtime(command: nil, args: nil, env: {}, secret_refs: [], volumes: [], image: nil)
       {
-        "kind" => "worker",
         "image" => image,
         "command" => command,
         "args" => args,

@@ -19,22 +19,23 @@ module Releases
       assert_equal "services must be valid JSON", error.message
     end
 
-    test "allows blank service kind and preserves generic service shape" do
-      attrs = RuntimeAttributes.new(
-        params: {
-          git_sha: "a" * 40,
-          image_repository: "api",
-          image_digest: "sha256:#{"b" * 64}",
-          services: {
-            web: {
-              kind: "   "
+    test "rejects explicit service kind fields" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                kind: "web"
+              }
             }
           }
-        }
-      ).to_h
+        ).to_h
+      end
 
-      runtime = JSON.parse(attrs.fetch(:runtime_json))
-      assert_equal({}, runtime.dig("services", "web").slice("kind"))
+      assert_equal "services.web.kind is no longer supported", error.message
     end
 
     test "rejects deprecated entrypoint fields" do
@@ -46,7 +47,6 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "web",
                 entrypoint: ["/app"],
                 ports: [{ name: "http", port: 3000 }],
                 healthcheck: { path: "/up", port: 3000 }
@@ -68,7 +68,6 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "web",
                 command: ["/app", 123],
                 ports: [{ name: "http", port: 3000 }],
                 healthcheck: { path: "/up", port: 3000 }
@@ -89,7 +88,6 @@ module Releases
           image_digest: "sha256:#{"b" * 64}",
           services: {
             web: {
-              kind: "web",
               command: ["/app"],
               args: ["web"],
               ports: [{ name: "http", port: 3000 }],
@@ -139,7 +137,6 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "web",
                 ports: [{ name: "http", port: 3000 }],
                 healthcheck: { path: "/up", port: 3000 }
               }
@@ -169,7 +166,6 @@ module Releases
           image_digest: "sha256:#{"b" * 64}",
           services: {
             web: {
-              kind: "web",
               ports: [{ name: "http", port: 3000 }],
               healthcheck: { path: "/up", port: 3000 }
             }
@@ -200,7 +196,6 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "web",
                 ports: [{ name: "http", port: 3000 }],
                 healthcheck: { path: "/up", port: 3000 }
               }
@@ -227,7 +222,6 @@ module Releases
           image_digest: "sha256:#{"b" * 64}",
           services: {
             web: {
-              kind: "web",
               ports: [{ name: "http", port: 3000 }],
               healthcheck: { path: "/up", port: 3000 }
             }

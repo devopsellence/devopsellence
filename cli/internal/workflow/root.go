@@ -16,9 +16,8 @@ import (
 
 func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command {
 	var (
-		jsonMode     bool
-		verboseMode  bool
-		modeOverride string
+		jsonMode    bool
+		verboseMode bool
 	)
 
 	app := NewApp(in, out, err, jsonMode, cwd)
@@ -32,7 +31,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runByMode := func(solo, shared func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(modeOverride, app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
 				if modeErr != nil {
 					return modeErr
 				}
@@ -51,12 +50,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runSoloOnly := func(name string, run func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(modeOverride, app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
 				if modeErr != nil {
 					return modeErr
 				}
 				if mode != ModeSolo {
-					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in solo mode; run `devopsellence mode use solo` or pass `--mode solo`", name)}
+					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in solo mode; run `devopsellence mode use solo`", name)}
 				}
 				return run(ctx)
 			})
@@ -66,12 +65,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runSharedOnly := func(name string, run func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(modeOverride, app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
 				if modeErr != nil {
 					return modeErr
 				}
 				if mode != ModeShared {
-					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in shared mode; run `devopsellence mode use shared` or pass `--mode shared`", name)}
+					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in shared mode; run `devopsellence mode use shared`", name)}
 				}
 				return run(ctx)
 			})
@@ -86,8 +85,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			"  solo   - SSH-driven workflows with local source of truth",
 			"  shared - control-plane-backed workflows for team use",
 			"",
-			"Pick a workspace mode once with `devopsellence mode use solo|shared`,",
-			"or override a single command with `--mode solo|shared`.",
+			"Pick a workspace mode once with `devopsellence mode use solo|shared`.",
 		}, "\n"),
 		Example: strings.Join([]string{
 			"  devopsellence mode use solo",
@@ -106,7 +104,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	root.PersistentFlags().BoolVar(&jsonMode, "json", false, "Emit machine-readable JSON output")
 	root.PersistentFlags().BoolVar(&verboseMode, "verbose", false, "Emit detailed progress logs")
-	root.PersistentFlags().StringVar(&modeOverride, "mode", "", "Override workspace mode for this command (solo or shared)")
 	root.SetVersionTemplate("{{.Version}}\n")
 
 	root.AddCommand(&cobra.Command{
@@ -512,6 +509,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(aliasCommand)
 
 	var setupSharedOpts InitOptions
+	var setupMode string
 	setupCommand := &cobra.Command{
 		Use:   "setup",
 		Short: "Prepare the current workspace for its selected mode",
@@ -520,12 +518,24 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			"  solo   - initialize config if needed, register or create a node, attach it, and install the agent",
 			"  shared - sign in, create/select org/project/env, and write workspace config",
 		}, "\n"),
-		RunE: runByMode(func(ctx context.Context) error {
-			return app.SoloSetup(ctx, SoloSetupOptions{})
-		}, func(ctx context.Context) error {
-			return app.Init(ctx, setupSharedOpts)
-		}),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runWithTimeout(cmd, func(ctx context.Context) error {
+				mode, modeErr := app.ResolveSetupMode(setupMode, app.Printer.Interactive)
+				if modeErr != nil {
+					return modeErr
+				}
+				switch mode {
+				case ModeSolo:
+					return app.SoloSetup(ctx, SoloSetupOptions{})
+				case ModeShared:
+					return app.Init(ctx, setupSharedOpts)
+				default:
+					return ExitError{Code: 2, Err: fmt.Errorf("unsupported mode %q", mode)}
+				}
+			})
+		},
 	}
+	setupCommand.Flags().StringVar(&setupMode, "mode", "", "Set and use workspace mode for setup (solo or shared)")
 	setupCommand.Flags().StringVar(&setupSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
 	setupCommand.Flags().StringVar(&setupSharedOpts.ProjectName, "project", "", "Project name override (shared mode)")
 	setupCommand.Flags().StringVar(&setupSharedOpts.Environment, "env", "", "Environment name override (shared mode)")

@@ -49,14 +49,59 @@ func TestRootVersionCommandJSON(t *testing.T) {
 	}
 }
 
-func TestRootSecretSetRejectsExplicitEmptyValue(t *testing.T) {
+func TestRootModeFlagIsNotGlobal(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
 	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stdout)
-	cmd.SetArgs([]string{"--mode", "shared", "secret", "set", "SECRET_KEY_BASE", "--service", "web", "--value", ""})
+	cmd.SetArgs([]string{"--mode", "solo", "version"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unknown flag")
+	}
+	if !strings.Contains(err.Error(), "unknown flag: --mode") {
+		t.Fatalf("error = %v, want unknown flag: --mode", err)
+	}
+}
+
+func TestSetupModeFlagPersistsWorkspaceMode(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"setup", "--mode", "solo"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want solo setup to require interactive terminal")
+	}
+	if !strings.Contains(err.Error(), "solo setup requires an interactive terminal") {
+		t.Fatalf("error = %v, want solo setup path", err)
+	}
+
+	app := NewApp(bytes.NewBuffer(nil), &stdout, &stdout, false, cwd)
+	mode, ok, modeErr := app.savedMode()
+	if modeErr != nil {
+		t.Fatalf("savedMode error = %v", modeErr)
+	}
+	if !ok || mode != ModeSolo {
+		t.Fatalf("saved mode = %q, %v; want solo, true", mode, ok)
+	}
+}
+
+func TestRootSecretSetRejectsExplicitEmptyValue(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestWorkspaceWithMode(t, ModeShared)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "SECRET_KEY_BASE", "--service", "web", "--value", ""})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -132,13 +177,12 @@ func TestNodeRegisterHelpSignalsTrialPolicy(t *testing.T) {
 }
 
 func TestNodeCreateRunsInSharedMode(t *testing.T) {
-	t.Parallel()
-
 	var stdout bytes.Buffer
-	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cwd := rootTestWorkspaceWithMode(t, ModeShared)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stdout)
-	cmd.SetArgs([]string{"--mode", "shared", "node", "create", "prod-1", "--deploy"})
+	cmd.SetArgs([]string{"node", "create", "prod-1", "--deploy"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -150,6 +194,21 @@ func TestNodeCreateRunsInSharedMode(t *testing.T) {
 	if strings.Contains(err.Error(), "not available in shared mode") {
 		t.Fatalf("Execute() still used old shared-mode guard: %v", err)
 	}
+}
+
+func rootTestWorkspaceWithMode(t *testing.T, mode Mode) string {
+	t.Helper()
+	cwd := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"mode", "use", string(mode)})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("mode use error = %v", err)
+	}
+	return cwd
 }
 
 func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {

@@ -174,7 +174,6 @@ module ActiveSupport
 
     def web_service_runtime(port: 3000, healthcheck_path: "/up", healthcheck_port: nil, command: nil, args: nil, env: {}, secret_refs: [], volumes: [], image: nil)
       {
-        "kind" => "web",
         "image" => image,
         "command" => command,
         "args" => args,
@@ -188,7 +187,6 @@ module ActiveSupport
 
     def worker_service_runtime(command: nil, args: nil, env: {}, secret_refs: [], volumes: [], image: nil)
       {
-        "kind" => "worker",
         "image" => image,
         "command" => command,
         "args" => args,
@@ -198,9 +196,19 @@ module ActiveSupport
       }.compact
     end
 
-    def release_runtime_json(services: nil, tasks: {}, ingress: :__default__)
+    DEFAULT_RELEASE_RUNTIME_INGRESS = Object.new.freeze
+
+    def release_runtime_json(services: nil, tasks: {}, ingress: DEFAULT_RELEASE_RUNTIME_INGRESS)
       services ||= { "web" => web_service_runtime }
-      ingress = { "service" => "web" } if ingress == :__default__
+      ingress = {
+        "hosts" => ["app.devopsellence.test"],
+        "rules" => [
+          {
+            "match" => { "host" => "app.devopsellence.test", "path_prefix" => "/" },
+            "target" => { "service" => "web", "port" => "http" }
+          }
+        ]
+      } if ingress.equal?(DEFAULT_RELEASE_RUNTIME_INGRESS)
       ::JSON.generate(
         {
           "services" => services,

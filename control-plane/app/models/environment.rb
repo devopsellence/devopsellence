@@ -73,14 +73,15 @@ class Environment < ApplicationRecord
   end
 
   def assigned_ingress_nodes_missing_direct_dns_capability
-    service_name = current_release&.ingress_service_name
-    return [] if service_name.blank?
+    service_names = current_release&.ingress_target_service_names.to_a
+    return [] if service_names.empty?
 
     nodes.select do |node|
-      current_release.service_scheduled_on?(service_name, node) &&
+      current_release.ingress_scheduled_on?(node) &&
         !node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
     end
   end
+
 
   def active_runtime_project
     runtime_project || project&.organization&.runtime_project || RuntimeProject.default!

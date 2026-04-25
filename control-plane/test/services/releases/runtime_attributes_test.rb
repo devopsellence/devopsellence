@@ -19,7 +19,7 @@ module Releases
       assert_equal "services must be valid JSON", error.message
     end
 
-    test "raises invalid payload when service kind is blank" do
+    test "rejects explicit service kind fields" do
       error = assert_raises(RuntimeAttributes::InvalidPayload) do
         RuntimeAttributes.new(
           params: {
@@ -28,14 +28,14 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "   "
+                kind: "web"
               }
             }
           }
         ).to_h
       end
 
-      assert_equal "services.web.kind must be present", error.message
+      assert_equal "services.web.kind is no longer supported", error.message
     end
 
     test "rejects deprecated entrypoint fields" do
@@ -47,7 +47,6 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "web",
                 entrypoint: ["/app"],
                 ports: [{ name: "http", port: 3000 }],
                 healthcheck: { path: "/up", port: 3000 }
@@ -69,7 +68,6 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "web",
                 command: ["/app", 123],
                 ports: [{ name: "http", port: 3000 }],
                 healthcheck: { path: "/up", port: 3000 }
@@ -90,7 +88,6 @@ module Releases
           image_digest: "sha256:#{"b" * 64}",
           services: {
             web: {
-              kind: "web",
               command: ["/app"],
               args: ["web"],
               ports: [{ name: "http", port: 3000 }],
@@ -104,8 +101,17 @@ module Releases
             }
           },
           ingress: {
-            service: "web",
             hosts: ["app.example.test", "www.example.test"],
+            rules: [
+              {
+                match: { host: "app.example.test", path_prefix: "/" },
+                target: { service: "web", port: "http" }
+              },
+              {
+                match: { host: "www.example.test", path_prefix: "/" },
+                target: { service: "web", port: "http" }
+              }
+            ],
             tls: {
               mode: "manual"
             }
@@ -118,8 +124,38 @@ module Releases
       assert_equal ["web"], runtime.dig("services", "web", "args")
       assert_equal ["release"], runtime.dig("tasks", "release", "args")
       assert_equal ["app.example.test", "www.example.test"], runtime.dig("ingress", "hosts")
-      assert_equal "web", runtime.dig("ingress", "service")
+      assert_equal "web", runtime.dig("ingress", "rules", 0, "target", "service")
       assert_equal "manual", runtime.dig("ingress", "tls", "mode")
+    end
+
+    test "rejects legacy ingress service" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"],
+              service: "web",
+              rules: [
+                {
+                  match: { host: "app.example.com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.service is no longer supported", error.message
     end
 
     test "rejects non-boolean ingress redirect_http" do
@@ -131,14 +167,49 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "web",
                 ports: [{ name: "http", port: 3000 }],
                 healthcheck: { path: "/up", port: 3000 }
               }
             },
             ingress: {
-              service: "web",
+              hosts: ["app.example.test"],
+              rules: [
+                {
+                  match: { host: "app.example.test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ],
               redirect_http: "yes"
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.redirect_http must be a boolean", error.message
+    end
+
+    test "rejects null ingress redirect_http" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.test"],
+              rules: [
+                {
+                  match: { host: "app.example.test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ],
+              redirect_http: nil
             }
           }
         ).to_h
@@ -155,16 +226,21 @@ module Releases
           image_digest: "sha256:#{"b" * 64}",
           services: {
             web: {
-              kind: "web",
               ports: [{ name: "http", port: 3000 }],
               healthcheck: { path: "/up", port: 3000 }
             }
-          },
-          ingress: {
-            service: "web",
-            redirect_http: false
+            },
+            ingress: {
+              hosts: ["app.example.test"],
+              rules: [
+                {
+                  match: { host: "app.example.test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ],
+              redirect_http: false
+            }
           }
-        }
       ).to_h
 
       runtime = JSON.parse(attrs.fetch(:runtime_json))
@@ -180,14 +256,18 @@ module Releases
             image_digest: "sha256:#{"b" * 64}",
             services: {
               web: {
-                kind: "web",
                 ports: [{ name: "http", port: 3000 }],
                 healthcheck: { path: "/up", port: 3000 }
               }
             },
             ingress: {
-              service: "web",
-              hosts: ["App.Example.Test", "app.example.test"]
+              hosts: ["App.Example.Test", "app.example.test"],
+              rules: [
+                {
+                  match: { host: "app.example.test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
             }
           }
         ).to_h
@@ -202,20 +282,210 @@ module Releases
           image_digest: "sha256:#{"b" * 64}",
           services: {
             web: {
-              kind: "web",
               ports: [{ name: "http", port: 3000 }],
               healthcheck: { path: "/up", port: 3000 }
             }
+            },
+            ingress: {
+              hosts: ["App.Example.Test", "WWW.Example.Test"],
+              rules: [
+                {
+                  match: { host: "App.Example.Test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                },
+                {
+                  match: { host: "WWW.Example.Test", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+      ).to_h
+
+      runtime = JSON.parse(attrs.fetch(:runtime_json))
+      assert_equal ["app.example.test", "www.example.test"], runtime.dig("ingress", "hosts")
+      assert_equal "app.example.test", runtime.dig("ingress", "rules", 0, "match", "host")
+      assert_equal "www.example.test", runtime.dig("ingress", "rules", 1, "match", "host")
+    end
+
+    test "preserves explicit ingress rules payload" do
+      attrs = RuntimeAttributes.new(
+        params: {
+          git_sha: "a" * 40,
+          image_repository: "api",
+          image_digest: "sha256:#{"b" * 64}",
+          services: {
+            app: {
+              ports: [{ name: "http", port: 3000 }],
+              healthcheck: { path: "/up", port: 3000 }
+            },
+            api: {
+              ports: [{ name: "metrics", port: 9090 }]
+            }
           },
           ingress: {
-            service: "web",
-            hosts: ["App.Example.Test", "WWW.Example.Test"]
+            hosts: ["app.example.com"],
+            rules: [
+              {
+                match: { host: "app.example.com", path_prefix: "/api" },
+                target: { service: "api", port: "metrics" }
+              },
+              {
+                match: { host: "app.example.com", path_prefix: "/" },
+                target: { service: "app", port: "http" }
+              }
+            ]
           }
         }
       ).to_h
 
       runtime = JSON.parse(attrs.fetch(:runtime_json))
-      assert_equal ["app.example.test", "www.example.test"], runtime.dig("ingress", "hosts")
+      assert_equal ["app.example.com"], runtime.dig("ingress", "hosts")
+      assert_equal "api", runtime.dig("ingress", "rules", 0, "target", "service")
+      assert_equal "metrics", runtime.dig("ingress", "rules", 0, "target", "port")
+      assert_equal "/", runtime.dig("ingress", "rules", 1, "match", "path_prefix")
+    end
+
+    test "rejects ingress without hosts" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              rules: [
+                {
+                  match: { host: "app.example.com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.hosts must include at least one host", error.message
+    end
+
+    test "rejects ingress rule path prefixes without leading slash" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"],
+              rules: [
+                {
+                  match: { host: "app.example.com", path_prefix: "api" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.rules[0].match.path_prefix must start with /", error.message
+    end
+
+    test "rejects duplicate ingress rules after normalizing host and path prefix" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"],
+              rules: [
+                {
+                  match: { host: "app.example.com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                },
+                {
+                  match: { host: "App.Example.Com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.rules must be unique by host and path_prefix", error.message
+    end
+
+    test "rejects ingress rules whose hosts are not declared in ingress.hosts" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"],
+              rules: [
+                {
+                  match: { host: "admin.example.com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.rules[0].match.host must exist in ingress.hosts", error.message
+    end
+
+    test "rejects ingress without rules" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.rules must include at least one rule", error.message
     end
   end
 end

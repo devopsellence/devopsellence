@@ -1462,7 +1462,15 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
             ]
           )
         },
-        ingress: { service: "web" }
+        ingress: {
+          hosts: ["app.example.com"],
+          rules: [
+            {
+              match: { host: "app.example.com", path_prefix: "/" },
+              target: { service: "web", port: "http" }
+            }
+          ]
+        }
       },
       headers: auth_headers_for(user),
       as: :json
@@ -1490,7 +1498,15 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
           image_repository: "shop-app",
           image_digest: "sha256:#{'b' * 64}",
           services: { web: web_service_runtime(port: 80) },
-          ingress: { service: "web" }
+          ingress: {
+          hosts: ["app.example.com"],
+          rules: [
+            {
+              match: { host: "app.example.com", path_prefix: "/" },
+              target: { service: "web", port: "http" }
+            }
+          ]
+        }
         },
         headers: auth_headers_for(user),
         as: :json
@@ -1554,7 +1570,15 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
             volumes: [{ source: "app_storage", target: "/rails/storage" }]
           )
         },
-        ingress: { service: "web" }
+        ingress: {
+          hosts: ["app.example.com"],
+          rules: [
+            {
+              match: { host: "app.example.com", path_prefix: "/" },
+              target: { service: "web", port: "http" }
+            }
+          ]
+        }
       },
       headers: auth_headers_for(user),
       as: :json
@@ -1581,7 +1605,15 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
         services: {
           web: web_service_runtime(port: 80, env: { "RAILS_ENV" => "production" })
         },
-        ingress: { service: "web" }
+        ingress: {
+          hosts: ["app.example.com"],
+          rules: [
+            {
+              match: { host: "app.example.com", path_prefix: "/" },
+              target: { service: "web", port: "http" }
+            }
+          ]
+        }
       },
       headers: auth_headers_for(user),
       as: :json
@@ -1592,6 +1624,45 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_equal 80, runtime.dig("services", "web", "ports").first.fetch("port")
     assert_not runtime.fetch("services").key?("worker")
     assert_equal false, release.requires_label?("worker")
+  end
+
+  test "creates a release with explicit ingress rules" do
+    user = User.create!(email: "owner-#{SecureRandom.hex(4)}@example.com", confirmed_at: Time.current)
+    organization = Organization.create!(name: "acme")
+    OrganizationMembership.create!(organization: organization, user: user, role: OrganizationMembership::ROLE_OWNER)
+    project = organization.projects.create!(name: "ShopApp")
+
+    post "/api/v1/cli/projects/#{project.id}/releases",
+      params: {
+        git_sha: "a" * 40,
+        image_repository: "shop-app",
+        image_digest: "sha256:#{'b' * 64}",
+        services: {
+          web: web_service_runtime(port: 80, env: { "RAILS_ENV" => "production" }),
+          api: worker_service_runtime(command: ["./bin/api"]).merge(ports: [{ name: "metrics", port: 9090 }])
+        },
+        ingress: {
+          hosts: ["app.example.com"],
+          rules: [
+            {
+              match: { host: "app.example.com", path_prefix: "/api" },
+              target: { service: "api", port: "metrics" }
+            },
+            {
+              match: { host: "app.example.com", path_prefix: "/" },
+              target: { service: "web", port: "http" }
+            }
+          ]
+        }
+      },
+      headers: auth_headers_for(user),
+      as: :json
+
+    assert_response :created
+    release = project.releases.order(:id).last
+    runtime = JSON.parse(release.runtime_json)
+    assert_equal "metrics", runtime.dig("ingress", "rules", 0, "target", "port")
+    assert_equal "web", runtime.dig("ingress", "rules", 1, "target", "service")
   end
 
   test "rejects release create without web runtime config" do

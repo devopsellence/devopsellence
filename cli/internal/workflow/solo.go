@@ -323,15 +323,16 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.SoloNode) (string, error) {
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
+		serviceKind := config.InferredServiceKind(serviceName, service)
 		scheduled := false
 		for _, nodeName := range sortedSoloNodeNames(nodes) {
-			if soloNodeCanRunKind(nodes[nodeName], service.Kind) {
+			if soloNodeCanRunKind(nodes[nodeName], serviceKind) {
 				scheduled = true
 				break
 			}
 		}
 		if !scheduled {
-			return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q for service %q", service.Kind, serviceName)
+			return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q for service %q", serviceKind, serviceName)
 		}
 	}
 	release := cfg.ReleaseTask()
@@ -339,7 +340,7 @@ func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config
 		return "", nil
 	}
 	for _, nodeName := range sortedSoloNodeNames(nodes) {
-		if soloNodeCanRunKind(nodes[nodeName], cfg.Services[release.Service].Kind) {
+		if soloNodeCanRunKind(nodes[nodeName], config.InferredServiceKind(release.Service, cfg.Services[release.Service])) {
 			return nodeName, nil
 		}
 	}
@@ -362,11 +363,23 @@ func soloNodeCanRunIngress(node config.SoloNode, cfg *config.ProjectConfig) bool
 	if cfg == nil || cfg.Ingress == nil {
 		return false
 	}
-	service, ok := cfg.Services[cfg.Ingress.Service]
-	if !ok {
-		return false
+	serviceNames := map[string]bool{}
+	for _, rule := range cfg.Ingress.Rules {
+		serviceName := strings.TrimSpace(rule.Target.Service)
+		if serviceName == "" || serviceNames[serviceName] {
+			continue
+		}
+		serviceNames[serviceName] = true
+		service, ok := cfg.Services[serviceName]
+		if !ok {
+			return false
+		}
+		kind := config.InferredServiceKind(serviceName, service)
+		if !soloNodeCanRunKind(node, kind) {
+			return false
+		}
 	}
-	return soloNodeCanRunKind(node, service.Kind)
+	return len(serviceNames) > 0
 }
 
 func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
@@ -1702,8 +1715,8 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		return fmt.Errorf("ingress set requires at least one --host")
 	}
 	serviceName := strings.TrimSpace(opts.Service)
-	if serviceName == "" && cfg.Ingress != nil {
-		serviceName = strings.TrimSpace(cfg.Ingress.Service)
+	if serviceName == "" && cfg.Ingress != nil && len(cfg.Ingress.Rules) > 0 {
+		serviceName = strings.TrimSpace(cfg.Ingress.Rules[0].Target.Service)
 	}
 	if serviceName == "" {
 		var ok bool
@@ -1711,6 +1724,13 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		if !ok {
 			return fmt.Errorf("ingress set requires --service when the primary web service cannot be inferred")
 		}
+	}
+	rules := make([]config.IngressRuleConfig, 0, len(hosts))
+	for _, host := range hosts {
+		rules = append(rules, config.IngressRuleConfig{
+			Match:  config.IngressMatchConfig{Host: host, PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: serviceName, Port: "http"},
+		})
 	}
 	tlsMode := strings.TrimSpace(opts.TLSMode)
 	if tlsMode == "" {
@@ -1726,8 +1746,8 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		redirectHTTP = opts.RedirectHTTP
 	}
 	cfg.Ingress = &config.IngressConfig{
-		Hosts:   hosts,
-		Service: serviceName,
+		Hosts: hosts,
+		Rules: rules,
 		TLS: config.IngressTLSConfig{
 			Mode:           tlsMode,
 			Email:          strings.TrimSpace(opts.TLSEmail),
@@ -2145,9 +2165,6 @@ func applySoloRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, se
 	services := []string{}
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
-		if service.Kind == config.ServiceKindAccessory {
-			continue
-		}
 		if addServiceSecretRef(&service, railsMasterKeySecretName) {
 			cfg.Services[serviceName] = service
 			services = append(services, serviceName)

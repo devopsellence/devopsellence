@@ -55,7 +55,6 @@ type ServicePort struct {
 }
 
 type ServiceConfig struct {
-	Kind        string            `yaml:"kind" json:"kind"`
 	Image       string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Command     []string          `yaml:"command,omitempty" json:"command,omitempty"`
 	Args        []string          `yaml:"args,omitempty" json:"args,omitempty"`
@@ -96,10 +95,25 @@ type IngressTLSConfig struct {
 }
 
 type IngressConfig struct {
-	Hosts        []string         `yaml:"hosts,omitempty" json:"hosts,omitempty"`
-	Service      string           `yaml:"service,omitempty" json:"service,omitempty"`
-	TLS          IngressTLSConfig `yaml:"tls,omitempty" json:"tls,omitempty"`
-	RedirectHTTP *bool            `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
+	Hosts        []string            `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	Rules        []IngressRuleConfig `yaml:"rules,omitempty" json:"rules,omitempty"`
+	TLS          IngressTLSConfig    `yaml:"tls,omitempty" json:"tls,omitempty"`
+	RedirectHTTP *bool               `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
+}
+
+type IngressRuleConfig struct {
+	Match  IngressMatchConfig  `yaml:"match" json:"match"`
+	Target IngressTargetConfig `yaml:"target" json:"target"`
+}
+
+type IngressMatchConfig struct {
+	Host       string `yaml:"host" json:"host"`
+	PathPrefix string `yaml:"path_prefix,omitempty" json:"path_prefix,omitempty"`
+}
+
+type IngressTargetConfig struct {
+	Service string `yaml:"service" json:"service"`
+	Port    string `yaml:"port" json:"port"`
 }
 
 type HTTPHealthcheckOverlay struct {
@@ -108,7 +122,6 @@ type HTTPHealthcheckOverlay struct {
 }
 
 type ServiceConfigOverlay struct {
-	Kind        *string                 `yaml:"kind,omitempty" json:"kind,omitempty"`
 	Image       *string                 `yaml:"image,omitempty" json:"image,omitempty"`
 	Command     []string                `yaml:"command,omitempty" json:"command,omitempty"`
 	Args        []string                `yaml:"args,omitempty" json:"args,omitempty"`
@@ -138,7 +151,7 @@ type IngressTLSConfigOverlay struct {
 
 type IngressConfigOverlay struct {
 	Hosts        []string                 `yaml:"hosts,omitempty" json:"hosts,omitempty"`
-	Service      *string                  `yaml:"service,omitempty" json:"service,omitempty"`
+	Rules        []IngressRuleConfig      `yaml:"rules,omitempty" json:"rules,omitempty"`
 	TLS          *IngressTLSConfigOverlay `yaml:"tls,omitempty" json:"tls,omitempty"`
 	RedirectHTTP *bool                    `yaml:"redirect_http,omitempty" json:"redirect_http,omitempty"`
 }
@@ -310,7 +323,6 @@ func DefaultProjectConfigForType(organization, project, environment, appType str
 		},
 		Services: map[string]ServiceConfig{
 			DefaultWebServiceName: {
-				Kind:       ServiceKindWeb,
 				Env:        map[string]string{},
 				SecretRefs: []SecretRef{},
 				Volumes:    []Volume{},
@@ -376,18 +388,11 @@ func validateResolvedProjectConfig(cfg *ProjectConfig) error {
 	if len(cfg.Services) == 0 {
 		return errors.New("services must include at least one service")
 	}
-	webServices := 0
 	for _, name := range cfg.ServiceNames() {
 		service := cfg.Services[name]
 		if err := validateService(name, service); err != nil {
 			return err
 		}
-		if service.Kind == ServiceKindWeb {
-			webServices++
-		}
-	}
-	if webServices == 0 {
-		return errors.New("services must include at least one web service")
 	}
 	if err := validateTasks(cfg); err != nil {
 		return err
@@ -407,15 +412,11 @@ func validateResolvedProjectConfig(cfg *ProjectConfig) error {
 			}
 			seenHosts[host] = true
 		}
-		if strings.TrimSpace(cfg.Ingress.Service) == "" {
-			return errors.New("ingress.service is required")
+		if len(cfg.Ingress.Rules) == 0 {
+			return errors.New("ingress.rules is required")
 		}
-		service, ok := cfg.Services[cfg.Ingress.Service]
-		if !ok {
-			return fmt.Errorf("ingress.service %q not found in services", cfg.Ingress.Service)
-		}
-		if service.Kind != ServiceKindWeb {
-			return fmt.Errorf("ingress.service %q must be kind %q", cfg.Ingress.Service, ServiceKindWeb)
+		if err := validateIngressRules(cfg); err != nil {
+			return err
 		}
 		switch strings.TrimSpace(cfg.Ingress.TLS.Mode) {
 		case "", "auto", "off", "manual":
@@ -462,13 +463,8 @@ func applyDefaults(cfg *ProjectConfig) {
 			service.Volumes = []Volume{}
 		}
 		service.Ports = normalizeServicePorts(service.Ports)
-		if service.Kind == ServiceKindWeb {
-			if len(service.Ports) == 0 {
-				service.Ports = []ServicePort{{Name: "http", Port: DefaultWebPort}}
-			}
-			if service.Healthcheck == nil {
-				service.Healthcheck = &HTTPHealthcheck{}
-			}
+		if service.Healthcheck != nil {
+			service.Healthcheck.Path = strings.TrimSpace(service.Healthcheck.Path)
 			if strings.TrimSpace(service.Healthcheck.Path) == "" {
 				if cfg.App.Type == AppTypeGeneric {
 					service.Healthcheck.Path = "/"
@@ -489,8 +485,17 @@ func applyDefaults(cfg *ProjectConfig) {
 		cfg.Tasks.Release.Env = mergeStringMaps(cfg.Tasks.Release.Env)
 	}
 	if cfg.Ingress != nil {
-		cfg.Ingress.Hosts = normalizeStringList(cfg.Ingress.Hosts)
-		cfg.Ingress.Service = strings.TrimSpace(cfg.Ingress.Service)
+		cfg.Ingress.Hosts = normalizeIngressHostList(cfg.Ingress.Hosts)
+		for i, rule := range cfg.Ingress.Rules {
+			rule.Match.Host = normalizedIngressHost(rule.Match.Host)
+			rule.Match.PathPrefix = strings.TrimSpace(rule.Match.PathPrefix)
+			if rule.Match.PathPrefix == "" {
+				rule.Match.PathPrefix = "/"
+			}
+			rule.Target.Service = strings.TrimSpace(rule.Target.Service)
+			rule.Target.Port = strings.TrimSpace(rule.Target.Port)
+			cfg.Ingress.Rules[i] = rule
+		}
 		cfg.Ingress.TLS.Mode = strings.TrimSpace(cfg.Ingress.TLS.Mode)
 		if cfg.Ingress.TLS.Mode == "" {
 			cfg.Ingress.TLS.Mode = "auto"
@@ -571,6 +576,18 @@ func normalizeStringList(values []string) []string {
 	return normalized
 }
 
+func normalizeIngressHostList(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = normalizedIngressHost(value)
+		if value == "" {
+			continue
+		}
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
 func normalizeStringListKeepOrder(values []string) []string {
 	if values == nil {
 		return nil
@@ -600,11 +617,6 @@ func normalizeServicePorts(ports []ServicePort) []ServicePort {
 }
 
 func validateService(name string, service ServiceConfig) error {
-	switch service.Kind {
-	case ServiceKindWeb, ServiceKindWorker, ServiceKindAccessory:
-	default:
-		return fmt.Errorf("services.%s.kind must be one of %q, %q, or %q", name, ServiceKindWeb, ServiceKindWorker, ServiceKindAccessory)
-	}
 	for _, arg := range service.Command {
 		if strings.TrimSpace(arg) == "" {
 			return fmt.Errorf("services.%s.command entries must be present", name)
@@ -652,7 +664,8 @@ func validateService(name string, service ServiceConfig) error {
 		}
 		seenPorts[port.Name] = true
 	}
-	if service.Kind == ServiceKindWeb {
+	serviceKind := InferredServiceKind(name, service)
+	if serviceKind == ServiceKindWeb {
 		if service.HTTPPort(0) <= 0 {
 			return fmt.Errorf("services.%s must expose an http port", name)
 		}
@@ -702,6 +715,54 @@ func validateTasks(cfg *ProjectConfig) error {
 	return nil
 }
 
+func validateIngressRules(cfg *ProjectConfig) error {
+	if cfg == nil || cfg.Ingress == nil {
+		return nil
+	}
+	hostSet := map[string]bool{}
+	for _, host := range cfg.Ingress.Hosts {
+		hostSet[normalizedIngressHost(host)] = true
+	}
+	seenRoutes := map[string]bool{}
+	for i, rule := range cfg.Ingress.Rules {
+		host := normalizedIngressHost(rule.Match.Host)
+		pathPrefix := strings.TrimSpace(rule.Match.PathPrefix)
+		if pathPrefix == "" {
+			pathPrefix = "/"
+		}
+		serviceName := strings.TrimSpace(rule.Target.Service)
+		portName := strings.TrimSpace(rule.Target.Port)
+		if host == "" {
+			return fmt.Errorf("ingress.rules[%d].match.host is required", i)
+		}
+		if !hostSet[host] {
+			return fmt.Errorf("ingress.rules[%d].match.host must exist in ingress.hosts", i)
+		}
+		if !strings.HasPrefix(pathPrefix, "/") {
+			return fmt.Errorf("ingress.rules[%d].match.path_prefix must start with /", i)
+		}
+		if serviceName == "" {
+			return fmt.Errorf("ingress.rules[%d].target.service is required", i)
+		}
+		service, ok := cfg.Services[serviceName]
+		if !ok {
+			return fmt.Errorf("ingress.rules[%d].target.service %q not found in services", i, serviceName)
+		}
+		if portName == "" {
+			return fmt.Errorf("ingress.rules[%d].target.port is required", i)
+		}
+		if !service.HasPortNamed(portName) {
+			return fmt.Errorf("ingress.rules[%d].target.port %q not found on service %q", i, portName, serviceName)
+		}
+		key := host + "\n" + pathPrefix
+		if seenRoutes[key] {
+			return fmt.Errorf("ingress.rules contains duplicate route for host %q and path_prefix %q", host, pathPrefix)
+		}
+		seenRoutes[key] = true
+	}
+	return nil
+}
+
 func (cfg ProjectConfig) ServiceNames() []string {
 	names := make([]string, 0, len(cfg.Services))
 	for name := range cfg.Services {
@@ -711,25 +772,20 @@ func (cfg ProjectConfig) ServiceNames() []string {
 	return names
 }
 
-func (cfg ProjectConfig) ServicesByKind(kind string) []string {
-	names := []string{}
+func (cfg ProjectConfig) PrimaryWebServiceName() (string, bool) {
+	services := []string{}
 	for _, name := range cfg.ServiceNames() {
-		if cfg.Services[name].Kind == kind {
-			names = append(names, name)
+		if InferredServiceKind(name, cfg.Services[name]) == ServiceKindWeb {
+			services = append(services, name)
 		}
 	}
-	return names
-}
-
-func (cfg ProjectConfig) PrimaryWebServiceName() (string, bool) {
-	services := cfg.ServicesByKind(ServiceKindWeb)
 	if len(services) == 0 {
 		return "", false
 	}
 	if len(services) == 1 {
 		return services[0], true
 	}
-	if _, ok := cfg.Services[DefaultWebServiceName]; ok && cfg.Services[DefaultWebServiceName].Kind == ServiceKindWeb {
+	if service, ok := cfg.Services[DefaultWebServiceName]; ok && InferredServiceKind(DefaultWebServiceName, service) == ServiceKindWeb {
 		return DefaultWebServiceName, true
 	}
 	return "", false
@@ -746,6 +802,27 @@ func (service ServiceConfig) HTTPPort(fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func (service ServiceConfig) HasPortNamed(name string) bool {
+	name = strings.TrimSpace(name)
+	for _, port := range service.Ports {
+		if strings.TrimSpace(port.Name) == name && port.Port > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func InferredServiceKind(name string, service ServiceConfig) string {
+	if service.HasPortNamed("http") || service.Healthcheck != nil || strings.TrimSpace(name) == DefaultWebServiceName {
+		return ServiceKindWeb
+	}
+	return ServiceKindWorker
+}
+
+func normalizedIngressHost(host string) string {
+	return strings.ToLower(strings.TrimSpace(host))
 }
 
 func mergeStringMaps(parts ...map[string]string) map[string]string {
@@ -780,9 +857,6 @@ func validateEnvironmentOverlays(cfg *ProjectConfig) error {
 
 func validateEnvironmentOverlay(envName string, overlay EnvironmentOverlay, cfg *ProjectConfig) error {
 	if overlay.Ingress != nil {
-		if overlay.Ingress.Service != nil && strings.TrimSpace(*overlay.Ingress.Service) == "" {
-			return fmt.Errorf("environments.%s.ingress.service must be present", envName)
-		}
 		if overlay.Ingress.TLS != nil {
 			for field, value := range map[string]*string{
 				"mode":             overlay.Ingress.TLS.Mode,
@@ -800,7 +874,6 @@ func validateEnvironmentOverlay(envName string, overlay EnvironmentOverlay, cfg 
 			return fmt.Errorf("environments.%s.services.%s not found in services", envName, serviceName)
 		}
 		for field, value := range map[string]*string{
-			"kind":  service.Kind,
 			"image": service.Image,
 		} {
 			if value != nil && strings.TrimSpace(*value) == "" {
@@ -837,6 +910,7 @@ func cloneProjectConfig(cfg ProjectConfig) ProjectConfig {
 	if cfg.Ingress != nil {
 		ingress := *cfg.Ingress
 		ingress.Hosts = append([]string(nil), cfg.Ingress.Hosts...)
+		ingress.Rules = append([]IngressRuleConfig(nil), cfg.Ingress.Rules...)
 		if cfg.Ingress.RedirectHTTP != nil {
 			ingress.RedirectHTTP = boolPtr(*cfg.Ingress.RedirectHTTP)
 		}
@@ -863,9 +937,6 @@ func cloneServiceConfig(service ServiceConfig) ServiceConfig {
 
 func mergeServiceConfig(base ServiceConfig, overlay ServiceConfigOverlay) ServiceConfig {
 	merged := cloneServiceConfig(base)
-	if overlay.Kind != nil {
-		merged.Kind = strings.TrimSpace(*overlay.Kind)
-	}
 	if overlay.Image != nil {
 		merged.Image = strings.TrimSpace(*overlay.Image)
 	}
@@ -931,12 +1002,14 @@ func mergeIngressConfig(base *IngressConfig, overlay *IngressConfigOverlay) *Ing
 		}
 		cloned := *base
 		cloned.Hosts = append([]string(nil), base.Hosts...)
+		cloned.Rules = append([]IngressRuleConfig(nil), base.Rules...)
 		return &cloned
 	}
 	merged := &IngressConfig{}
 	if base != nil {
 		*merged = *base
 		merged.Hosts = append([]string(nil), base.Hosts...)
+		merged.Rules = append([]IngressRuleConfig(nil), base.Rules...)
 		if base.RedirectHTTP != nil {
 			merged.RedirectHTTP = boolPtr(*base.RedirectHTTP)
 		}
@@ -944,8 +1017,8 @@ func mergeIngressConfig(base *IngressConfig, overlay *IngressConfigOverlay) *Ing
 	if overlay.Hosts != nil {
 		merged.Hosts = append([]string(nil), overlay.Hosts...)
 	}
-	if overlay.Service != nil {
-		merged.Service = strings.TrimSpace(*overlay.Service)
+	if overlay.Rules != nil {
+		merged.Rules = append([]IngressRuleConfig(nil), overlay.Rules...)
 	}
 	if overlay.TLS != nil {
 		if overlay.TLS.Mode != nil {

@@ -60,8 +60,20 @@ func TestSoloDefaultProjectConfigBootstrapsExplicitCatchAllIngress(t *testing.T)
 	if cfg.Ingress == nil {
 		t.Fatal("expected bootstrapped ingress")
 	}
-	if got, want := cfg.Ingress.Service, config.DefaultWebServiceName; got != want {
-		t.Fatalf("ingress.service = %q, want %q", got, want)
+	if len(cfg.Ingress.Rules) != 1 {
+		t.Fatalf("ingress.rules = %#v, want single root rule", cfg.Ingress.Rules)
+	}
+	if got, want := cfg.Ingress.Rules[0].Target.Service, config.DefaultWebServiceName; got != want {
+		t.Fatalf("ingress.rules[0].target.service = %q, want %q", got, want)
+	}
+	if got, want := cfg.Ingress.Rules[0].Target.Port, "http"; got != want {
+		t.Fatalf("ingress.rules[0].target.port = %q, want %q", got, want)
+	}
+	if got, want := cfg.Ingress.Rules[0].Match.Host, "*"; got != want {
+		t.Fatalf("ingress.rules[0].match.host = %q, want %q", got, want)
+	}
+	if got, want := cfg.Ingress.Rules[0].Match.PathPrefix, "/"; got != want {
+		t.Fatalf("ingress.rules[0].match.path_prefix = %q, want %q", got, want)
 	}
 	if got, want := cfg.Ingress.Hosts, []string{"*"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ingress.hosts = %#v, want %#v", got, want)
@@ -85,7 +97,6 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
-				Kind:  config.ServiceKindWeb,
 				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{
 					Path: "/up",
@@ -93,7 +104,6 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 				},
 			},
 			"worker": {
-				Kind:    config.ServiceKindWorker,
 				Command: []string{"sidekiq"},
 			},
 		},
@@ -122,7 +132,6 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
-				Kind:  config.ServiceKindWeb,
 				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{
 					Path: "/up",
@@ -130,7 +139,6 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 				},
 			},
 			"worker": {
-				Kind:    config.ServiceKindWorker,
 				Command: []string{"sidekiq"},
 			},
 		},
@@ -143,10 +151,69 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 	}
 }
 
+func TestValidateSoloNodeScheduleInfersKindsWithoutStoredConfigKind(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Services: map[string]config.ServiceConfig{
+			config.DefaultWebServiceName: {
+				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
+				Healthcheck: &config.HTTPHealthcheck{
+					Path: "/up",
+					Port: 3000,
+				},
+			},
+			"worker": {
+				Command: []string{"sidekiq"},
+			},
+		},
+		Tasks: config.TasksConfig{
+			Release: &config.TaskConfig{
+				Service: config.DefaultWebServiceName,
+				Command: []string{"rails", "db:migrate"},
+			},
+		},
+	}
+	nodes := map[string]config.SoloNode{
+		"worker-a": {Labels: []string{config.DefaultWorkerRole}},
+		"web-a":    {Labels: []string{config.DefaultWebRole}},
+	}
+
+	got, err := validateSoloNodeSchedule(cfg, nodes)
+	if err != nil {
+		t.Fatalf("validateSoloNodeSchedule() error = %v", err)
+	}
+	if got != "web-a" {
+		t.Fatalf("release node = %q, want web-a", got)
+	}
+}
+
 func TestSoloNodeCanRunUnlabeledNode(t *testing.T) {
 	node := config.SoloNode{}
 	if !soloNodeCanRunKind(node, config.ServiceKindWeb) || !soloNodeCanRunKind(node, config.ServiceKindWorker) {
 		t.Fatal("unlabeled node should run all labels")
+	}
+}
+
+func TestSoloNodeCanRunIngressRequiresAllIngressTargetServices(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Services: map[string]config.ServiceConfig{
+			"web": {
+				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
+			},
+			"api": {
+				Ports: []config.ServicePort{{Name: "metrics", Port: 9090}},
+			},
+		},
+		Ingress: &config.IngressConfig{Rules: []config.IngressRuleConfig{
+			{Target: config.IngressTargetConfig{Service: "web", Port: "http"}},
+			{Target: config.IngressTargetConfig{Service: "api", Port: "metrics"}},
+		}},
+	}
+
+	if soloNodeCanRunIngress(config.SoloNode{Labels: []string{config.DefaultWebRole}}, cfg) {
+		t.Fatal("web-only node should not run ingress for mixed web/worker targets")
+	}
+	if !soloNodeCanRunIngress(config.SoloNode{Labels: []string{config.DefaultWebRole, config.DefaultWorkerRole}}, cfg) {
+		t.Fatal("web+worker node should run ingress when it hosts all targets")
 	}
 }
 
@@ -529,7 +596,7 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		Git:                git.Client{},
 		Cwd:                workspaceRoot,
 		DeployPollInterval: 5 * time.Millisecond,
-		DeployTimeout:      200 * time.Millisecond,
+		DeployTimeout:      time.Second,
 	}
 
 	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{}); err != nil {
@@ -556,7 +623,7 @@ func TestWaitForSoloRolloutIgnoresMissingAndStaleStatusUntilExpectedRevisionSett
 	app := &App{
 		Printer:            output.New(io.Discard, io.Discard, false),
 		DeployPollInterval: 5 * time.Millisecond,
-		DeployTimeout:      200 * time.Millisecond,
+		DeployTimeout:      time.Second,
 	}
 
 	err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
@@ -861,14 +928,12 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 		App: config.AppConfig{Type: config.AppTypeRails},
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
-				Kind:        config.ServiceKindWeb,
 				Env:         map[string]string{},
 				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
 			},
 			"worker": {
-				Kind: config.ServiceKindWorker,
-				Env:  map[string]string{},
+				Env: map[string]string{},
 			},
 		},
 	}
@@ -904,7 +969,6 @@ func TestApplySoloRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
 		App: config.AppConfig{Type: config.AppTypeRails},
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
-				Kind:        config.ServiceKindWeb,
 				Env:         map[string]string{},
 				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
@@ -1235,8 +1299,11 @@ func TestIngressSetInfersPrimaryWebService(t *testing.T) {
 	if written.Ingress == nil {
 		t.Fatal("ingress = nil, want populated ingress config")
 	}
-	if written.Ingress.Service != config.DefaultWebServiceName {
-		t.Fatalf("ingress.service = %q, want %q", written.Ingress.Service, config.DefaultWebServiceName)
+	if len(written.Ingress.Rules) != 1 {
+		t.Fatalf("ingress.rules = %#v, want one rule", written.Ingress.Rules)
+	}
+	if written.Ingress.Rules[0].Target.Service != config.DefaultWebServiceName {
+		t.Fatalf("ingress.rules[0].target.service = %q, want %q", written.Ingress.Rules[0].Target.Service, config.DefaultWebServiceName)
 	}
 }
 
@@ -1380,10 +1447,13 @@ func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
 	cfg.Services["frontend"] = cfg.Services[config.DefaultWebServiceName]
 	delete(cfg.Services, config.DefaultWebServiceName)
 	cfg.Ingress = &config.IngressConfig{
-		Service: "frontend",
-		Hosts:   []string{"old.devopsellence.io"},
-		TLS:     config.IngressTLSConfig{Mode: "manual"},
+		Hosts: []string{"old.devopsellence.io"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "old.devopsellence.io", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "frontend", Port: "http"},
+		}},
 	}
+
 	if _, err := config.Write(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -1407,8 +1477,11 @@ func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
 	if written.Ingress == nil {
 		t.Fatal("ingress = nil, want populated ingress config")
 	}
-	if written.Ingress.Service != "frontend" {
-		t.Fatalf("ingress.service = %q, want frontend", written.Ingress.Service)
+	if len(written.Ingress.Rules) != 1 {
+		t.Fatalf("ingress.rules = %#v, want one rule", written.Ingress.Rules)
+	}
+	if written.Ingress.Rules[0].Target.Service != "frontend" {
+		t.Fatalf("ingress.rules[0].target.service = %q, want frontend", written.Ingress.Rules[0].Target.Service)
 	}
 }
 

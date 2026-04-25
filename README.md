@@ -116,7 +116,6 @@ build:
     - linux/amd64
 services:
   web:
-    kind: web
     ports:
       - name: http
         port: 3000
@@ -130,9 +129,15 @@ tasks:
       - bin/rails
       - db:migrate
 ingress:
-  service: web
   hosts:
     - app.example.com
+  rules:
+    - match:
+        host: app.example.com
+        path_prefix: /
+      target:
+        service: web
+        port: http
   tls:
     mode: auto
     email: ops@example.com
@@ -142,6 +147,13 @@ environments:
     ingress:
       hosts:
         - staging.example.com
+      rules:
+        - match:
+            host: staging.example.com
+            path_prefix: /
+          target:
+            service: web
+            port: http
   production:
     services:
       web:
@@ -149,20 +161,18 @@ environments:
           RAILS_ENV: production
 ```
 
-### Example: run cloudflared as an accessory service
+### Example: run cloudflared as a normal service
 
-`kind: accessory` is already supported for non-web sidecars/helpers. That means Cloudflare Tunnel can live in normal app config instead of as special agent-managed behavior:
+Cloudflare Tunnel can live in normal app config instead of as special agent-managed behavior:
 
 ```yaml
 services:
   web:
-    kind: web
     ports:
       - name: http
         port: 3000
 
   cloudflared:
-    kind: accessory
     image: docker.io/cloudflare/cloudflared:latest
     command: ["cloudflared"]
     args: ["tunnel", "run"]
@@ -193,7 +203,7 @@ The product layering is deliberate:
 
 When you outgrow solo, `devopsellence mode use shared` switches to control-plane workflows. Same config, same agent, same deploy verbs.
 
-The design rationale lives in [`docs/vision.md`](docs/vision.md).
+The design rationale lives in [`docs/vision.md`](docs/vision.md). The explicit ingress-rules + generic-services schema change is documented in [`docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md`](docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md).
 
 ## Monorepo layout
 

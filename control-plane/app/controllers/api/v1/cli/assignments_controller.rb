@@ -39,8 +39,8 @@ module Api
             on_progress: on_progress
           ).call
 
-          ingress_service_name = environment.current_release&.ingress_service_name
-          if ingress_service_name.present? && environment.current_release.service_scheduled_on?(ingress_service_name, node)
+          ingress_service_names = environment.current_release&.ingress_target_service_names.to_a
+          if ingress_service_names.any? && environment.current_release.ingress_scheduled_on?(node)
             sse.write({ message: "Configuring Cloudflare ingress..." }, event: "progress")
             Cloudflare::EnvironmentIngressProvisioner.new(environment: environment).call
           end

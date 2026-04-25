@@ -10,8 +10,8 @@ module Api
 
         def create
           return render_error("forbidden", "direct_dns ingress is disabled for this environment", status: :forbidden) unless current_environment&.direct_dns_ingress?
-          ingress_service_name = current_environment&.current_release&.ingress_service_name
-          return render_error("forbidden", "node is not eligible for ingress", status: :forbidden) unless ingress_service_name.present? && current_environment.current_release.service_scheduled_on?(ingress_service_name, current_node)
+          ingress_service_names = current_environment&.current_release&.ingress_target_service_names.to_a
+          return render_error("forbidden", "node is not eligible for ingress", status: :forbidden) unless ingress_service_names.any? && current_environment.current_release.ingress_scheduled_on?(current_node)
           return render_error("forbidden", "node capability missing", status: :forbidden) unless current_node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
 
           ingress = current_environment.environment_ingress

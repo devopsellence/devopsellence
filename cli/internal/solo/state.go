@@ -203,17 +203,40 @@ func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 		snapshot.ReleaseTask = &releaseTask
 		snapshot.ReleaseService = cfg.ReleaseTask().Service
 		if service, ok := cfg.Services[cfg.ReleaseTask().Service]; ok {
-			snapshot.ReleaseServiceKind = service.Kind
+			snapshot.ReleaseServiceKind = config.InferredServiceKind(cfg.ReleaseTask().Service, service)
 		}
 	}
 	if cfg.Ingress != nil {
 		snapshot.Ingress = buildIngress(cfg.Ingress, environmentName)
-		snapshot.IngressService = cfg.Ingress.Service
-		if service, ok := cfg.Services[cfg.Ingress.Service]; ok {
-			snapshot.IngressServiceKind = service.Kind
+		if serviceName, ok := ingressSnapshotService(cfg); ok {
+			snapshot.IngressService = serviceName
+			if service, ok := cfg.Services[serviceName]; ok {
+				snapshot.IngressServiceKind = config.InferredServiceKind(serviceName, service)
+			}
 		}
 	}
 	return snapshot, nil
+}
+
+func ingressSnapshotService(cfg *config.ProjectConfig) (string, bool) {
+	if cfg == nil || cfg.Ingress == nil {
+		return "", false
+	}
+	serviceNames := map[string]struct{}{}
+	for _, rule := range cfg.Ingress.Rules {
+		serviceName := strings.TrimSpace(rule.Target.Service)
+		if serviceName == "" {
+			continue
+		}
+		serviceNames[serviceName] = struct{}{}
+	}
+	if len(serviceNames) != 1 {
+		return "", false
+	}
+	for serviceName := range serviceNames {
+		return serviceName, true
+	}
+	return "", false
 }
 
 func RedactDeploySnapshotSecrets(snapshot DeploySnapshot, cfg *config.ProjectConfig) DeploySnapshot {

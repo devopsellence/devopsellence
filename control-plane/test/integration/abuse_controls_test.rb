@@ -298,7 +298,15 @@ class AbuseControlsTest < ActionDispatch::IntegrationTest
       services: {
         web: web_service_runtime(port: 80)
       },
-      ingress: { service: "web" }
+      ingress: {
+        hosts: ["app.example.com"],
+        rules: [
+          {
+            match: { host: "app.example.com", path_prefix: "/" },
+            target: { service: "web", port: "http" }
+          }
+        ]
+      }
     }
   end
 

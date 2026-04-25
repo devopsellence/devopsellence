@@ -317,7 +317,6 @@ func TestRedactDeploySnapshotSecretsRemovesSecretValues(t *testing.T) {
 
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Services["web"] = config.ServiceConfig{
-		Kind: config.ServiceKindWeb,
 		Env:  map[string]string{"PLAIN": "value"},
 		SecretRefs: []config.SecretRef{
 			{Name: "DATABASE_URL"},
@@ -346,6 +345,66 @@ func TestRedactDeploySnapshotSecretsRemovesSecretValues(t *testing.T) {
 	}
 	if got := redacted.Services[0].Env["PLAIN"]; got != "value" {
 		t.Fatalf("plain env = %q, want value", got)
+	}
+}
+
+func TestBuildDeploySnapshotDerivesIngressServiceFromIngressRules(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["api"] = config.ServiceConfig{
+		Ports: []config.ServicePort{{Name: "metrics", Port: 9090}},
+	}
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/api"},
+			Target: config.IngressTargetConfig{Service: "api", Port: "metrics"},
+		}},
+	}
+
+	snapshot, err := BuildDeploySnapshot(&cfg, "/workspace/demo", "/workspace/demo/devopsellence.yml", "demo:abc1234", "abc1234", map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshot.IngressService; got != "api" {
+		t.Fatalf("ingress service = %q, want api", got)
+	}
+	if got := snapshot.IngressServiceKind; got != config.ServiceKindWorker {
+		t.Fatalf("ingress service kind = %q, want %q", got, config.ServiceKindWorker)
+	}
+}
+
+func TestBuildDeploySnapshotLeavesIngressServiceBlankForMultipleTargets(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["api"] = config.ServiceConfig{
+		Ports: []config.ServicePort{{Name: "metrics", Port: 9090}},
+	}
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{
+			{
+				Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+				Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+			},
+			{
+				Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/api"},
+				Target: config.IngressTargetConfig{Service: "api", Port: "metrics"},
+			},
+		},
+	}
+
+	snapshot, err := BuildDeploySnapshot(&cfg, "/workspace/demo", "/workspace/demo/devopsellence.yml", "demo:abc1234", "abc1234", map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.IngressService != "" {
+		t.Fatalf("ingress service = %q, want blank", snapshot.IngressService)
+	}
+	if snapshot.IngressServiceKind != "" {
+		t.Fatalf("ingress service kind = %q, want blank", snapshot.IngressServiceKind)
 	}
 }
 

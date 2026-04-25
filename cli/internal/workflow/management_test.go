@@ -207,8 +207,20 @@ func TestInitBootstrapsSharedIngressFromCanonicalDomain(t *testing.T) {
 	if loaded == nil || loaded.Ingress == nil {
 		t.Fatalf("expected bootstrapped ingress, got %#v", loaded)
 	}
-	if got, want := loaded.Ingress.Service, config.DefaultWebServiceName; got != want {
-		t.Fatalf("ingress.service = %q, want %q", got, want)
+	if len(loaded.Ingress.Rules) != 2 {
+		t.Fatalf("ingress.rules = %#v, want two host rules", loaded.Ingress.Rules)
+	}
+	if got, want := loaded.Ingress.Rules[0].Target.Service, config.DefaultWebServiceName; got != want {
+		t.Fatalf("ingress.rules[0].target.service = %q, want %q", got, want)
+	}
+	if got, want := loaded.Ingress.Rules[0].Target.Port, "http"; got != want {
+		t.Fatalf("ingress.rules[0].target.port = %q, want %q", got, want)
+	}
+	if got, want := loaded.Ingress.Rules[0].Match.Host, "www.prod-abc.devopsellence.io"; got != want {
+		t.Fatalf("ingress.rules[0].match.host = %q, want %q", got, want)
+	}
+	if got, want := loaded.Ingress.Rules[1].Match.Host, "prod-abc.devopsellence.io"; got != want {
+		t.Fatalf("ingress.rules[1].match.host = %q, want %q", got, want)
 	}
 	if got, want := loaded.Ingress.Hosts, []string{"www.prod-abc.devopsellence.io", "prod-abc.devopsellence.io"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ingress.hosts = %#v, want %#v", got, want)
@@ -478,13 +490,20 @@ func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 	root := makeRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
 	project.Ingress = &config.IngressConfig{
-		Hosts:   []string{"app.example.test"},
-		Service: "web",
+		Hosts: []string{"app.example.test"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.test", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
 	}
 	project.Environments = map[string]config.EnvironmentOverlay{
 		"staging": {
 			Ingress: &config.IngressConfigOverlay{
 				Hosts: []string{"staging.example.test"},
+				Rules: []config.IngressRuleConfig{{
+					Match:  config.IngressMatchConfig{Host: "staging.example.test", PathPrefix: "/"},
+					Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+				}},
 			},
 			Services: map[string]config.ServiceConfigOverlay{
 				"web": {
@@ -1427,6 +1446,13 @@ func TestDeployUsesResolveDeployTargetWhenAvailable(t *testing.T) {
 
 	root := makeGitGenericRoot(t)
 	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+	}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1502,6 +1528,12 @@ func TestDeployUsesResolveDeployTargetWhenAvailable(t *testing.T) {
 	if releaseCaptured.ImageRepository != "docker.io/mccutchen/go-httpbin" {
 		t.Fatalf("image repository = %q, want docker.io/mccutchen/go-httpbin", releaseCaptured.ImageRepository)
 	}
+	if got := stringValueAny(releaseCaptured.Ingress["hosts"].([]any)[0]); got != "app.example.com" {
+		t.Fatalf("ingress host = %q, want app.example.com", got)
+	}
+	if got := stringValueAny(releaseCaptured.Ingress["rules"].([]any)[0].(map[string]any)["target"].(map[string]any)["service"]); got != config.DefaultWebServiceName {
+		t.Fatalf("ingress target service = %q, want %q", got, config.DefaultWebServiceName)
+	}
 }
 
 func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
@@ -1511,7 +1543,6 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 	web.Env = map[string]string{"FROM_CONFIG": "1"}
 	project.Services[config.DefaultWebServiceName] = web
 	project.Services["worker"] = config.Service{
-		Kind:    config.ServiceKindWorker,
 		Command: []string{"./bin/jobs"},
 		Env:     map[string]string{"WORKER_FROM_CONFIG": "1"},
 	}
@@ -1596,6 +1627,12 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 
 	webPayload := releaseServicePayload(t, releaseCaptured, config.DefaultWebServiceName)
 	workerPayload := releaseServicePayload(t, releaseCaptured, "worker")
+	if _, ok := webPayload["kind"]; ok {
+		t.Fatalf("web payload unexpectedly includes kind: %#v", webPayload)
+	}
+	if _, ok := workerPayload["kind"]; ok {
+		t.Fatalf("worker payload unexpectedly includes kind: %#v", workerPayload)
+	}
 	if got, want := webPayload["env"], map[string]any{"FROM_CONFIG": "1", "RAILS_ENV": "production", "WEB_ONLY": "true"}; !equalJSONMap(got, want) {
 		t.Fatalf("web env = %#v, want %#v", got, want)
 	}
@@ -2130,7 +2167,7 @@ func TestDeployRailsSyncsMasterKeySecret(t *testing.T) {
 
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Command: []string{"bin/jobs"}}
+	project.Services["worker"] = config.ServiceConfig{Command: []string{"bin/jobs"}}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2296,6 +2333,105 @@ func TestDeployRailsCanSkipMasterKeySync(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "synced RAILS_MASTER_KEY") {
 		t.Fatalf("Deploy() output = %q, unexpected sync summary", stdout.String())
+	}
+}
+
+func TestDeployRailsDoesNotSyncMasterKeyToHelperServices(t *testing.T) {
+	t.Parallel()
+
+	root := makeGitRailsRoot(t, "ShopApp")
+	project := config.DefaultProjectConfig("default", "ShopApp", "production")
+	project.Services["worker"] = config.ServiceConfig{}
+	web := project.Services["web"]
+	web.Image = "ghcr.io/acme/shop:latest"
+	project.Services["web"] = web
+	project.Services["cloudflared"] = config.ServiceConfig{
+		Image:   "docker.io/cloudflare/cloudflared:latest",
+		Command: []string{"cloudflared"},
+		Args:    []string{"tunnel", "run"},
+	}
+	if _, err := config.Write(root, project); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "master.key"), []byte("master-key-value\n"), 0o600); err != nil {
+		t.Fatalf("write master.key: %v", err)
+	}
+	commitAll(t, root, "configure deploy state")
+
+	var stdout bytes.Buffer
+	secretValues := map[string]string{}
+	var secretValuesMu sync.Mutex
+	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
+			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
+			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
+			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
+			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode secret request: %v", err)
+			}
+			secretValuesMu.Lock()
+			secretValues[stringValueAny(payload["service_name"])] = stringValueAny(payload["value"])
+			secretValuesMu.Unlock()
+			return jsonResponse(t, map[string]any{"name": stringValueAny(payload["name"]), "service_name": stringValueAny(payload["service_name"]), "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
+			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
+			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
+				"deployment_id":  77,
+				"assigned_nodes": 1,
+				"public_url":     "https://shop.example.test",
+			}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/deployments/77":
+			return jsonResponse(t, map[string]any{
+				"id":          77,
+				"sequence":    1,
+				"status":      "published",
+				"environment": map[string]any{"id": 44, "name": "production"},
+				"release":     map[string]any{"id": 22, "revision": "rel-1"},
+				"summary": map[string]any{
+					"assigned_nodes": 1,
+					"pending":        0,
+					"reconciling":    0,
+					"settled":        1,
+					"error":          0,
+					"active":         false,
+					"complete":       true,
+					"failed":         false,
+				},
+				"nodes": []map[string]any{{"id": 1, "name": "node-a", "phase": "settled", "message": "revision healthy"}},
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	}))
+	app.Printer = output.New(&stdout, io.Discard, false)
+	app.DeployPollInterval = 5 * time.Millisecond
+	app.DeployTimeout = 500 * time.Millisecond
+
+	if err := app.Deploy(context.Background(), DeployOptions{Image: "example.com/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}); err != nil {
+		t.Fatalf("Deploy() error = %v", err)
+	}
+	secretValuesMu.Lock()
+	defer secretValuesMu.Unlock()
+	if got := secretValues["web"]; got != "master-key-value" {
+		t.Fatalf("web secret value = %q, want master-key-value", got)
+	}
+	if got := secretValues["worker"]; got != "master-key-value" {
+		t.Fatalf("worker secret value = %q, want master-key-value", got)
+	}
+	if _, ok := secretValues["cloudflared"]; ok {
+		t.Fatalf("cloudflared unexpectedly received Rails master key: %#v", secretValues)
+	}
+	if !strings.Contains(stdout.String(), "Rails: syncing RAILS_MASTER_KEY from config/master.key for web, worker.") {
+		t.Fatalf("Deploy() output = %q, want Rails sync notice limited to app services", stdout.String())
 	}
 }
 
@@ -3319,7 +3455,7 @@ func TestDeployRailsSecretSyncRunsConcurrently(t *testing.T) {
 
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Command: []string{"bin/jobs"}}
+	project.Services["worker"] = config.ServiceConfig{Command: []string{"bin/jobs"}}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

@@ -548,7 +548,6 @@ PY
       },
       "services" => {
         "web" => {
-          "kind" => "web",
           "ports" => [
             { "name" => "http", "port" => APP_PORT }
           ],

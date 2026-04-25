@@ -17,7 +17,6 @@ func boolPtr(value bool) *bool {
 func baseProject() *config.ProjectConfig {
 	cfg := config.DefaultProjectConfig("solo", "myapp", config.DefaultEnvironment)
 	cfg.Services["web"] = config.Service{
-		Kind:    config.ServiceKindWeb,
 		Command: []string{"rails", "server"},
 		Env:     map[string]string{"RAILS_ENV": "production"},
 		SecretRefs: []config.SecretRef{
@@ -75,7 +74,6 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
-		Kind:    config.ServiceKindWorker,
 		Command: []string{"sidekiq"},
 		Env:     map[string]string{"QUEUE": "default"},
 	}
@@ -110,7 +108,6 @@ func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 func TestBuildDesiredState_MapsArgsToContainerCommand(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["web"] = config.Service{
-		Kind:        config.ServiceKindWeb,
 		Command:     []string{"/app"},
 		Args:        []string{"web", "--port", "3000"},
 		Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
@@ -145,7 +142,6 @@ func TestBuildDesiredState_MapsArgsToContainerCommand(t *testing.T) {
 func TestBuildDesiredStateForLabelsFiltersServicesByKindLabel(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
-		Kind:    config.ServiceKindWorker,
 		Command: []string{"sidekiq"},
 	}
 	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"rails", "db:migrate"}}
@@ -191,8 +187,14 @@ func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 	cfg := baseProject()
 	cfg.Ingress = &config.IngressConfig{
-		Hosts:   []string{"app.example.com", "www.example.com"},
-		Service: "web",
+		Hosts: []string{"app.example.com", "www.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}, {
+			Match:  config.IngressMatchConfig{Host: "www.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
 		TLS: config.IngressTLSConfig{
 			Mode:           "auto",
 			Email:          "ops@example.com",
@@ -216,8 +218,8 @@ func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 	if ds.Ingress == nil {
 		t.Fatal("expected ingress")
 	}
-	if ds.Ingress.Mode != "" {
-		t.Fatalf("mode = %q, want empty", ds.Ingress.Mode)
+	if ds.Ingress.Mode != "public" {
+		t.Fatalf("mode = %q, want public", ds.Ingress.Mode)
 	}
 	if strings.Join(ds.Ingress.Hosts, ",") != "app.example.com,www.example.com" {
 		t.Fatalf("hosts = %#v", ds.Ingress.Hosts)
@@ -233,10 +235,15 @@ func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
-		Kind:    config.ServiceKindWorker,
 		Command: []string{"sidekiq"},
 	}
-	cfg.Ingress = &config.IngressConfig{Hosts: []string{"app.example.com"}, Service: "web"}
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
 
 	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWorkerRole}, true, false)
 	if err != nil {
@@ -248,6 +255,32 @@ func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
 	}
 	if ds.Ingress != nil {
 		t.Fatalf("ingress = %#v, want nil", ds.Ingress)
+	}
+}
+
+func TestBuildDesiredStateForNodeDefaultsIngressRedirectHTTPToTrue(t *testing.T) {
+	cfg := baseProject()
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
+
+	data, err := BuildDesiredStateForNode(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWebRole}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ds desiredStateJSON
+	if err := json.Unmarshal(data, &ds); err != nil {
+		t.Fatal(err)
+	}
+	if ds.Ingress == nil {
+		t.Fatal("expected ingress")
+	}
+	if !ds.Ingress.RedirectHTTP {
+		t.Fatalf("redirect_http = %v, want true", ds.Ingress.RedirectHTTP)
 	}
 }
 
@@ -360,9 +393,11 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 
 	snapshots := []DeploySnapshot{
 		{
+			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
 				Mode: "public",
 				TLS:  ingressTLSJSON{Mode: "auto"},
+				Hosts: []string{"app.example.com"},
 				Routes: []ingressRouteJSON{{
 					Match:  ingressMatchJSON{Hostname: "app.example.com"},
 					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "metrics"},
@@ -372,9 +407,11 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 			IngressServiceKind: config.ServiceKindWeb,
 		},
 		{
+			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
 				Mode: "public",
 				TLS:  ingressTLSJSON{Mode: "auto"},
+				Hosts: []string{"app.example.com"},
 				Routes: []ingressRouteJSON{{
 					Match:  ingressMatchJSON{Hostname: "app.example.com"},
 					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
@@ -402,6 +439,7 @@ func TestMergeIngressForNodeTreatsBlankAndPublicModeAsEquivalent(t *testing.T) {
 
 	snapshots := []DeploySnapshot{
 		{
+			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
 				TLS:   ingressTLSJSON{Mode: "auto"},
 				Hosts: []string{"a.example.com"},
@@ -414,6 +452,7 @@ func TestMergeIngressForNodeTreatsBlankAndPublicModeAsEquivalent(t *testing.T) {
 			IngressServiceKind: config.ServiceKindWeb,
 		},
 		{
+			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
 			Ingress: &ingressJSON{
 				Mode:  "public",
 				TLS:   ingressTLSJSON{Mode: "auto"},

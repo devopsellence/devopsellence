@@ -5,7 +5,6 @@ require "json"
 module Releases
   class RuntimeAttributes
     InvalidPayload = Class.new(StandardError)
-    SERVICE_KINDS = [ "web", "worker", "accessory" ].freeze
 
     def initialize(params:)
       @params = params
@@ -79,16 +78,10 @@ module Releases
 
     def parse_service(value, field:)
       service = parse_hash(value, field:)
+      reject_unsupported_kind!(service, field: :"#{field}.kind")
       reject_deprecated_key!(service, deprecated_key: :entrypoint, field: :"#{field}.entrypoint")
-      kind = optional_service_string(service["kind"] || service[:kind])
-      raise InvalidPayload, "#{field}.kind must be present" if kind.blank?
-
-      unless SERVICE_KINDS.include?(kind)
-        raise InvalidPayload, "#{field}.kind must be one of #{SERVICE_KINDS.join(', ')}"
-      end
 
       normalized = {
-        "kind" => kind,
         "image" => optional_service_string(service["image"] || service[:image]),
         "command" => optional_service_array(service["command"] || service[:command], field: :"#{field}.command"),
         "args" => optional_service_array(service["args"] || service[:args], field: :"#{field}.args"),
@@ -125,34 +118,67 @@ module Releases
       ingress = parse_hash(value, field: :ingress)
       return nil if ingress.blank?
 
-      redirect_http =
-        if ingress.key?("redirect_http")
-          ingress["redirect_http"]
-        elsif ingress.key?(:redirect_http)
-          ingress[:redirect_http]
-        end
+      reject_unsupported_key!(ingress, key: :service, field: :"ingress.service")
+
+      hosts = parse_ingress_hosts(ingress["hosts"] || ingress[:hosts])
+      raise InvalidPayload, "ingress.hosts must include at least one host" if hosts.blank?
+      host_set = hosts.index_with(true)
+      route_set = {}
+      rules = parse_array(ingress["rules"] || ingress[:rules], field: :"ingress.rules").map.with_index do |entry, index|
+        rule = parse_hash(entry, field: :"ingress.rules[#{index}]")
+        match = parse_hash(rule["match"] || rule[:match], field: :"ingress.rules[#{index}].match")
+        target = parse_hash(rule["target"] || rule[:target], field: :"ingress.rules[#{index}].target")
+        host = IngressHostnames.normalize(required_service_string(match["host"] || match[:host], field: :"ingress.rules[#{index}].match.host"))
+        path_prefix = optional_service_string(match["path_prefix"] || match[:path_prefix]) || "/"
+        raise InvalidPayload, "ingress.rules[#{index}].match.host must exist in ingress.hosts" unless host_set[host]
+        raise InvalidPayload, "ingress.rules[#{index}].match.path_prefix must start with /" unless path_prefix.start_with?("/")
+        route_key = [host, path_prefix]
+        raise InvalidPayload, "ingress.rules must be unique by host and path_prefix" if route_set[route_key]
+        route_set[route_key] = true
+
+        {
+          "match" => {
+            "host" => host,
+            "path_prefix" => path_prefix
+          }.compact,
+          "target" => {
+            "service" => required_service_string(target["service"] || target[:service], field: :"ingress.rules[#{index}].target.service"),
+            "port" => required_service_string(target["port"] || target[:port], field: :"ingress.rules[#{index}].target.port")
+          }
+        }
+      end
+      raise InvalidPayload, "ingress.rules must include at least one rule" if rules.blank?
+
+      normalized = {
+        "hosts" => hosts,
+        "rules" => rules.presence
+      }.compact
 
       tls = ingress["tls"] || ingress[:tls]
-      hosts = optional_service_array(ingress["hosts"] || ingress[:hosts], field: :"ingress.hosts")
-      normalized_hosts = IngressHostnames.normalize_all(hosts)
-      if hosts.present? && normalized_hosts.length != hosts.length
-        raise InvalidPayload, "ingress.hosts must be unique"
-      end
-
-      parsed = {
-        "hosts" => normalized_hosts.presence,
-        "service" => optional_service_string(ingress["service"] || ingress[:service]),
-        "redirect_http" => optional_boolean(redirect_http, field: :"ingress.redirect_http")
-      }.compact
       if tls.present?
         tls = parse_hash(tls, field: :"ingress.tls")
-        parsed["tls"] = {
+        normalized["tls"] = {
           "mode" => optional_service_string(tls["mode"] || tls[:mode]),
           "email" => optional_service_string(tls["email"] || tls[:email]),
           "ca_directory_url" => optional_service_string(tls["ca_directory_url"] || tls[:ca_directory_url])
         }.compact
       end
-      parsed
+
+      if ingress.key?("redirect_http") || ingress.key?(:redirect_http)
+        redirect_http = ingress.key?("redirect_http") ? ingress["redirect_http"] : ingress[:redirect_http]
+        normalized["redirect_http"] = parse_boolean!(redirect_http, field: :"ingress.redirect_http")
+      end
+      normalized.presence
+    end
+
+    def parse_ingress_hosts(value)
+      raw_hosts = optional_service_array(value, field: :"ingress.hosts")
+      return nil if raw_hosts.blank?
+
+      normalized_hosts = raw_hosts.map { |entry| IngressHostnames.normalize(entry) }.reject(&:blank?)
+      raise InvalidPayload, "ingress.hosts must be unique" if normalized_hosts.uniq.length != normalized_hosts.length
+
+      normalized_hosts
     end
 
     def parse_ports(value, field:)
@@ -229,6 +255,18 @@ module Releases
       raise InvalidPayload, "#{field} is no longer supported; use command or args"
     end
 
+    def reject_unsupported_key!(hash, key:, field:)
+      return unless hash.key?(key) || hash.key?(key.to_s)
+
+      raise InvalidPayload, "#{field} is no longer supported"
+    end
+
+    def reject_unsupported_kind!(hash, field:)
+      return unless hash.key?(:kind) || hash.key?("kind")
+
+      raise InvalidPayload, "#{field} is no longer supported"
+    end
+
     def required_service_string(value, field:)
       text = value.to_s.strip
       raise InvalidPayload, "#{field} is required" if text.blank?
@@ -251,8 +289,7 @@ module Releases
       integer
     end
 
-    def optional_boolean(value, field:)
-      return nil if value.nil? || value == ""
+    def parse_boolean!(value, field:)
       return value if value == true || value == false
 
       raise InvalidPayload, "#{field} must be a boolean"

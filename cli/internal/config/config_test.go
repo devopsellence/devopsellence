@@ -16,7 +16,6 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	root := t.TempDir()
 	project := DefaultProjectConfig("acme", "ShopApp", "staging")
 	project.Services["jobs"] = Service{
-		Kind:       ServiceKindWorker,
 		Command:    []string{"./bin/jobs"},
 		Env:        map[string]string{"QUEUE": "default"},
 		SecretRefs: []SecretRef{{Name: "API_KEY", Secret: "gsm://projects/test/secrets/api-key"}},
@@ -92,7 +91,6 @@ func TestLoadAppliesDefaultBuildPlatforms(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -130,7 +128,6 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -164,7 +161,6 @@ func TestLoadRejectsStringCommandSyntax(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    command: ./bin/server",
 		"    ports:",
 		"      - name: http",
@@ -191,7 +187,6 @@ func TestValidateAcceptsWorkerWithoutExtraPlacementFields(t *testing.T) {
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
 	project.Services["jobs"] = Service{
-		Kind:    ServiceKindWorker,
 		Command: []string{"./bin/jobs"},
 	}
 
@@ -216,7 +211,6 @@ func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -253,7 +247,6 @@ func TestLoadRejectsLegacySoloConfigBlock(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -284,6 +277,133 @@ func TestValidateRejectsBlankBuildPlatform(t *testing.T) {
 	err := Validate(&project)
 	if err == nil || !strings.Contains(err.Error(), "build.platforms entries must be present") {
 		t.Fatalf("expected build.platforms validation error, got %v", err)
+	}
+}
+
+func TestLoadNormalizesIngressHostsAndRuleHosts(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, FilePath)
+	content := strings.Join([]string{
+		"schema_version: 6",
+		"organization: acme",
+		"project: ShopApp",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+		"ingress:",
+		"  hosts:",
+		"    - App.Example.com",
+		"  rules:",
+		"    - match:",
+		"        host: APP.EXAMPLE.COM",
+		"        path_prefix: /",
+		"      target:",
+		"        service: web",
+		"        port: http",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := strings.Join(cfg.Ingress.Hosts, ","); got != "app.example.com" {
+		t.Fatalf("ingress.hosts = %q, want normalized host", got)
+	}
+	if got := cfg.Ingress.Rules[0].Match.Host; got != "app.example.com" {
+		t.Fatalf("rule match host = %q, want normalized host", got)
+	}
+}
+
+func TestLoadRejectsDuplicateIngressHostsAfterNormalization(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, FilePath)
+	content := strings.Join([]string{
+		"schema_version: 6",
+		"organization: acme",
+		"project: ShopApp",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+		"ingress:",
+		"  hosts:",
+		"    - App.Example.com",
+		"    - app.example.COM",
+		"  rules:",
+		"    - match:",
+		"        host: app.example.com",
+		"        path_prefix: /",
+		"      target:",
+		"        service: web",
+		"        port: http",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "ingress.hosts contains duplicate host") {
+		t.Fatalf("expected duplicate ingress host error, got %v", err)
+	}
+}
+
+func TestValidateIngressRulesTreatHostsCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	project := DefaultProjectConfig("acme", "ShopApp", "production")
+	project.Ingress = &IngressConfig{
+		Hosts: []string{"App.Example.com"},
+		Rules: []IngressRuleConfig{{
+			Match:  IngressMatchConfig{Host: "app.example.COM", PathPrefix: "/"},
+			Target: IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
+
+	if err := Validate(&project); err != nil {
+		t.Fatalf("expected ingress host matching to be case-insensitive, got %v", err)
+	}
+}
+
+func TestValidateIngressRulesRejectsCaseInsensitiveDuplicateRoutes(t *testing.T) {
+	t.Parallel()
+
+	project := DefaultProjectConfig("acme", "ShopApp", "production")
+	project.Ingress = &IngressConfig{
+		Hosts: []string{"App.Example.com"},
+		Rules: []IngressRuleConfig{{
+			Match:  IngressMatchConfig{Host: "App.Example.com", PathPrefix: "/"},
+			Target: IngressTargetConfig{Service: "web", Port: "http"},
+		}, {
+			Match:  IngressMatchConfig{Host: "app.example.COM", PathPrefix: "/"},
+			Target: IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
+
+	err := Validate(&project)
+	if err == nil || !strings.Contains(err.Error(), "duplicate route") {
+		t.Fatalf("expected duplicate route error, got %v", err)
 	}
 }
 
@@ -359,12 +479,14 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
 	project.Ingress = &IngressConfig{
-		Hosts:   []string{"app.example.test"},
-		Service: "web",
-		TLS:     IngressTLSConfig{Mode: "auto", Email: "ops@example.test"},
+		Hosts: []string{"app.example.test"},
+		Rules: []IngressRuleConfig{{
+			Match:  IngressMatchConfig{Host: "app.example.test", PathPrefix: "/"},
+			Target: IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+		TLS: IngressTLSConfig{Mode: "auto", Email: "ops@example.test"},
 	}
 	project.Services["web"] = Service{
-		Kind:       ServiceKindWeb,
 		Command:    []string{"bundle", "exec", "puma"},
 		Args:       []string{"-C", "config/puma.rb"},
 		Env:        map[string]string{"RAILS_ENV": "production", "BASE_ONLY": "1"},
@@ -382,14 +504,19 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 		Env:     map[string]string{"RELEASE_ONLY": "base"},
 	}
 	redirectHTTP := false
-	stagingService := "web"
 	stagingPath := "/healthz"
 	stagingPort := 8080
 	project.Environments = map[string]EnvironmentOverlay{
 		"staging": {
 			Ingress: &IngressConfigOverlay{
-				Hosts:   []string{"staging.example.test", "alt-staging.example.test"},
-				Service: &stagingService,
+				Hosts: []string{"staging.example.test", "alt-staging.example.test"},
+				Rules: []IngressRuleConfig{{
+					Match:  IngressMatchConfig{Host: "staging.example.test", PathPrefix: "/"},
+					Target: IngressTargetConfig{Service: "web", Port: "http"},
+				}, {
+					Match:  IngressMatchConfig{Host: "alt-staging.example.test", PathPrefix: "/"},
+					Target: IngressTargetConfig{Service: "web", Port: "http"},
+				}},
 				TLS: &IngressTLSConfigOverlay{
 					Email: stringPtr("staging@example.test"),
 				},
@@ -488,7 +615,6 @@ func TestLoadRejectsOverlayServiceNotInBase(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",
@@ -526,7 +652,6 @@ func TestLoadRejectsUnknownOverlayKeys(t *testing.T) {
 		"  dockerfile: Dockerfile",
 		"services:",
 		"  web:",
-		"    kind: web",
 		"    ports:",
 		"      - name: http",
 		"        port: 3000",

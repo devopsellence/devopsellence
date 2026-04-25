@@ -246,15 +246,9 @@ func validateIngressRoutes(state *desiredstatepb.DesiredState) error {
 		if service == nil {
 			return fmt.Errorf("ingress.routes[%d].target references missing service %s/%s", i, env, serviceName)
 		}
-		if ServiceKind(service) != ServiceKindWeb {
-			return fmt.Errorf("ingress.routes[%d].target service %s/%s must be kind web", i, env, serviceName)
-		}
 		portName := strings.TrimSpace(route.Target.Port)
 		if portName == "" {
-			portName = DefaultHTTPPortName
-		}
-		if portName != DefaultHTTPPortName {
-			return fmt.Errorf("ingress.routes[%d].target port must be %q", i, DefaultHTTPPortName)
+			return fmt.Errorf("ingress.routes[%d].target.port is required", i)
 		}
 		if !serviceHasPort(service, portName) {
 			return fmt.Errorf("ingress.routes[%d].target references missing port %s/%s:%s", i, env, serviceName, portName)

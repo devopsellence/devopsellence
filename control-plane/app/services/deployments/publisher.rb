@@ -19,7 +19,7 @@ module Deployments
 
       update_progress!("waiting for managed capacity") if environment.managed_runtime?
       ensure_managed_capacity!(deployment:) if environment.managed_runtime?
-      if release.ingress_service_name.present? && !ingress_ready?
+      if release.ingress_target_service_names.any? && !ingress_ready?
         update_progress!("provisioning ingress")
         provision_ingress!
       end
@@ -96,14 +96,20 @@ module Deployments
         raise SchedulingError, "at least one assigned node must match label #{label.inspect} for service #{service_name}"
       end
 
-      if environment.direct_dns_ingress? && release.ingress_service_name.present?
-        incompatible_nodes = nodes.select do |node|
-          release.service_scheduled_on?(release.ingress_service_name, node) &&
-            !node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
+      if release.ingress_target_service_names.any?
+        ingress_nodes = nodes.select { |node| release.ingress_scheduled_on?(node) }
+        if ingress_nodes.empty?
+          raise SchedulingError, "at least one assigned node must host every ingress-target service"
         end
-        if incompatible_nodes.any?
-          names = incompatible_nodes.map(&:name).sort.join(", ")
-          raise SchedulingError, "assigned ingress nodes do not support direct_dns ingress: #{names}"
+
+        if environment.direct_dns_ingress?
+          incompatible_nodes = ingress_nodes.reject do |node|
+            node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
+          end
+          if incompatible_nodes.any?
+            names = incompatible_nodes.map(&:name).sort.join(", ")
+            raise SchedulingError, "assigned ingress nodes do not support direct_dns ingress: #{names}"
+          end
         end
       end
 
@@ -118,6 +124,10 @@ module Deployments
     def ingress_ready?
       ingress = environment.environment_ingress
       return false unless ingress&.status == EnvironmentIngress::STATUS_READY
+
+      if environment.environment_bundle&.hostname.present?
+        return true
+      end
 
       desired_hosts = IngressHostnames.normalize_all(release.ingress_config&.dig("hosts"))
       return true if desired_hosts.empty?
@@ -232,7 +242,7 @@ module Deployments
       end
 
       sync_deployment_node_statuses!(deployment:, assigned_nodes:)
-      EnvironmentIngresses::ReconcileJob.perform_later(environment.id) if release.ingress_service_name.present?
+      EnvironmentIngresses::ReconcileJob.perform_later(environment.id) if release.ingress_target_service_names.any?
       update_progress!("waiting for node reconcile", deployment:)
     end
 

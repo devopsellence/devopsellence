@@ -77,12 +77,29 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      runtime_json: release_runtime_json(services: {
-        "web" => web_service_runtime(
-          env: { "RAILS_ENV" => "production" },
-          secret_refs: [ { "name" => "DATABASE_URL", "secret" => "projects/acme/secrets/db/versions/latest" } ]
-        )
-      }),
+      runtime_json: release_runtime_json(
+        services: {
+          "web" => web_service_runtime(
+            env: { "RAILS_ENV" => "production" },
+            secret_refs: [ { "name" => "DATABASE_URL", "secret" => "projects/acme/secrets/db/versions/latest" } ]
+          )
+        },
+        ingress: {
+          "hosts" => ["app.devopsellence.test"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.devopsellence.test", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ],
+          "tls" => {
+            "mode" => "manual",
+            "email" => "ops@example.com",
+            "ca_directory_url" => "https://ca.example.test/directory"
+          },
+          "redirect_http" => false
+        }
+      ),
       revision: "rel-1"
     )
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
@@ -125,7 +142,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal release.image_reference_for(organization), service.fetch("image")
     assert_equal 3000, service.dig("ports", 0, "port")
     assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, service.fetch("secretRefs"))
-    assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
+    assert_equal({ "mode" => "manual", "email" => "ops@example.com", "caDirectoryUrl" => "https://ca.example.test/directory" }, desired_state.dig("ingress", "tls"))
+    assert_equal false, desired_state.dig("ingress", "redirectHttp")
     assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnelTokenSecretRef")
     assert_equal "Production", desired_state.dig("ingress", "routes", 0, "target", "environment")
     assert_equal "/up", service.dig("healthcheck", "path")
@@ -134,59 +153,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal 3, service.dig("healthcheck", "retries")
   end
 
-  test "publishes desired state ingress routes for every configured host" do
-    organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
-    ensure_test_organization_runtime!(organization)
-    project = organization.projects.create!(name: "Project A")
-    environment = project.environments.create!(
-      name: "Production",
-      gcp_project_id: "gcp-proj-a",
-      gcp_project_number: "123456789",
-      service_account_email: "svc-a@gcp-proj-a.iam.gserviceaccount.com",
-      workload_identity_pool: "pool-a",
-      workload_identity_provider: "provider-a",
-      runtime_kind: Environment::RUNTIME_CUSTOMER_NODES
-    )
-    release = project.releases.create!(
-      git_sha: "abcd1234",
-      image_digest: "sha256:abc",
-      image_repository: "api",
-      runtime_json: release_runtime_json(ingress: {
-        "service" => "web",
-        "hosts" => [ "app.example.test", "www.example.test" ],
-        "tls" => { "mode" => "manual" },
-        "redirect_http" => false
-      }),
-      revision: "rel-1"
-    )
-    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
-    node.update!(environment: environment)
-    store = FakeObjectStore.new
-    ingress = environment.create_environment_ingress!(
-      hostname: "app.example.test",
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
-      status: EnvironmentIngress::STATUS_READY,
-      provisioned_at: Time.current
-    )
-    ingress.assign_hosts!([ "app.example.test", "www.example.test" ])
-
-    Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
-      Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
-    )
-    EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
-
-    Deployments::Publisher.new(environment: environment, release: release, store: store).call
-
-    desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal [ "app.example.test", "www.example.test" ], desired_state.dig("ingress", "hosts")
-    assert_equal [ "app.example.test", "www.example.test" ], desired_state.dig("ingress", "routes").map { |route| route.dig("match", "hostname") }
-    assert_equal false, desired_state.dig("ingress", "redirectHttp")
-    assert_equal "manual", desired_state.dig("ingress", "tls", "mode")
-  end
-
-  test "skips ingress reprovision when stored ingress hosts only differ by case" do
+  test "publishes configured explicit ingress rules into desired state" do
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     ensure_test_organization_runtime!(organization)
     project = organization.projects.create!(name: "Project A")
@@ -205,35 +172,122 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       image_repository: "api",
       runtime_json: JSON.generate(
         {
-          "services" => { "web" => web_service_runtime },
-          "tasks" => {},
+          "services" => {
+            "web" => web_service_runtime,
+            "api" => worker_service_runtime.merge("ports" => [{ "name" => "metrics", "port" => 9090 }])
+          },
           "ingress" => {
-            "service" => "web",
-            "hosts" => ["App.Example.Test", "WWW.Example.Test"]
+            "hosts" => ["app.example.com"],
+            "rules" => [
+              {
+                "match" => { "host" => "app.example.com", "path_prefix" => "/api" },
+                "target" => { "service" => "api", "port" => "metrics" }
+              },
+              {
+                "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+                "target" => { "service" => "web", "port" => "http" }
+              }
+            ]
           }
         }
       ),
       revision: "rel-1"
     )
-    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: ["web", "worker"])
     node.update!(environment: environment)
     store = FakeObjectStore.new
-    ingress = environment.create_environment_ingress!(
-      hostname: "app.example.test",
+    hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
+    environment.create_environment_ingress!(
+      hostname: hostname,
       cloudflare_tunnel_id: "tunnel-1",
       gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
-    ingress.assign_hosts!(["app.example.test", "www.example.test"])
 
     Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
-    EnvironmentIngresses::Reconciler.any_instance.expects(:call).never
+    EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
     Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
 
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
+
+    desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
+    assert_equal [hostname, "app.example.com"], desired_state.dig("ingress", "hosts")
+    assert_equal 2, desired_state.dig("ingress", "routes").size
+    assert_equal "app.example.com", desired_state.dig("ingress", "routes", 0, "match", "hostname")
+    assert_equal "/api", desired_state.dig("ingress", "routes", 0, "match", "pathPrefix")
+    assert_equal "api", desired_state.dig("ingress", "routes", 0, "target", "service")
+    assert_equal "metrics", desired_state.dig("ingress", "routes", 0, "target", "port")
+    assert_equal "app.example.com", desired_state.dig("ingress", "routes", 1, "match", "hostname")
+    assert_equal "/", desired_state.dig("ingress", "routes", 1, "match", "pathPrefix")
+    assert_equal "web", desired_state.dig("ingress", "routes", 1, "target", "service")
+  end
+
+  test "publishes configured ingress hosts and preserves per-rule host fan-out" do
+    organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+    ensure_test_organization_runtime!(organization)
+    project = organization.projects.create!(name: "Project A")
+    environment = project.environments.create!(
+      name: "Production",
+      gcp_project_id: "gcp-proj-a",
+      gcp_project_number: "123456789",
+      service_account_email: "svc-a@gcp-proj-a.iam.gserviceaccount.com",
+      workload_identity_pool: "pool-a",
+      workload_identity_provider: "provider-a",
+      runtime_kind: Environment::RUNTIME_CUSTOMER_NODES
+    )
+    release = project.releases.create!(
+      git_sha: "abcd1234",
+      image_digest: "sha256:abc",
+      image_repository: "api",
+      runtime_json: JSON.generate(
+        {
+          "services" => {
+            "web" => web_service_runtime,
+            "admin" => web_service_runtime(command: ["./bin/admin"])
+          },
+          "ingress" => {
+            "hosts" => ["App.Example.com", "ADMIN.example.com"],
+            "rules" => [
+              {
+                "match" => { "host" => "App.Example.com", "path_prefix" => "/" },
+                "target" => { "service" => "web", "port" => "http" }
+              },
+              {
+                "match" => { "host" => "ADMIN.example.com", "path_prefix" => "/" },
+                "target" => { "service" => "admin", "port" => "http" }
+              }
+            ]
+          }
+        }
+      ),
+      revision: "rel-1"
+    )
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: ["web"])
+    node.update!(environment: environment)
+    store = FakeObjectStore.new
+    environment.create_environment_ingress!(
+      hostname: "managed.example.devopsellence.test",
+      cloudflare_tunnel_id: "tunnel-1",
+      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
+      status: EnvironmentIngress::STATUS_READY,
+      provisioned_at: Time.current
+    )
+
+    Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
+      Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
+    )
+    EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
+    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
+
+    Deployments::Publisher.new(environment: environment, release: release, store: store).call
+
+    desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
+    assert_equal ["managed.example.devopsellence.test", "app.example.com", "admin.example.com"], desired_state.dig("ingress", "hosts")
+    assert_equal ["app.example.com", "admin.example.com"], desired_state.dig("ingress", "routes").map { |route| route.dig("match", "hostname") }
+    assert_equal ["web", "admin"], desired_state.dig("ingress", "routes").map { |route| route.dig("target", "service") }
   end
 
   test "publishes immutable desired state object plus pointer and direct desired state path" do
@@ -447,7 +501,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     services = desired_state_services(desired_state)
     assert_equal %w[web worker], services.map { |entry| entry.fetch("name") }
     assert_equal "./bin/jobs", services.second.dig("entrypoint", 0)
-    assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
   end
 
   test "renders environment-scoped volume names in desired state" do
@@ -562,7 +616,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       },
       desired_state_services(desired_state).first.fetch("secretRefs")
     )
-    assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
   end
 
   test "provisions ingress before publishing web releases" do
@@ -659,7 +713,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal [ hostname ], desired_state.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
     assert_equal Environment::INGRESS_STRATEGY_TUNNEL, desired_state.dig("ingress", "mode")
   end
 
@@ -829,9 +883,25 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       git_sha: "abcd1234",
       image_digest: "sha256:abc",
       image_repository: "api",
-      runtime_json: release_runtime_json(services: {
-        "web" => web_service_runtime(port: 80)
-      }),
+      runtime_json: release_runtime_json(
+        services: {
+          "web" => web_service_runtime(port: 80)
+        },
+        ingress: {
+          "hosts" => ["app.devopsellence.test"],
+          "rules" => [
+            {
+              "match" => { "host" => "app.devopsellence.test", "path_prefix" => "/" },
+              "target" => { "service" => "web", "port" => "http" }
+            }
+          ],
+          "tls" => {
+            "mode" => "manual",
+            "email" => "ops@example.com"
+          },
+          "redirect_http" => false
+        }
+      ),
       revision: "rel-1"
     )
     node_a, = issue_test_node!(organization: organization, name: "node-a", labels: ["web"], public_ip: "198.51.100.10")
@@ -852,7 +922,9 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
     state_a = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_a.reload.desired_state_object_path)
     state_b = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_b.reload.desired_state_object_path)
-    assert_equal [ hostname ], state_a.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), state_a.dig("ingress", "hosts")
+    assert_equal({ "mode" => "manual", "email" => "ops@example.com" }, state_a.dig("ingress", "tls"))
+    assert_equal false, state_a.dig("ingress", "redirectHttp")
 
     assert_equal [ "node-b", "worker-a" ], state_a.fetch("nodePeers").map { |peer| peer.fetch("name") }
     node_b_peer = state_a.fetch("nodePeers").find { |peer| peer.fetch("name") == "node-b" }

@@ -2645,12 +2645,28 @@ func (a *App) currentEnvironmentSecrets(ctx context.Context, callAuth authCall, 
 func railsRuntimeServices(cfg config.ProjectConfig) []string {
 	services := []string{}
 	for _, name := range cfg.ServiceNames() {
-		if cfg.Services[name].Kind == config.ServiceKindAccessory {
+		if looksLikeCloudflaredService(name, cfg.Services[name]) {
 			continue
 		}
 		services = append(services, name)
 	}
 	return services
+}
+
+func looksLikeCloudflaredService(name string, service config.ServiceConfig) bool {
+	if strings.EqualFold(strings.TrimSpace(name), "cloudflared") {
+		return true
+	}
+	image := strings.ToLower(strings.TrimSpace(service.Image))
+	if strings.Contains(image, "cloudflare/cloudflared") {
+		return true
+	}
+	for _, value := range append(append([]string{}, service.Command...), service.Args...) {
+		if strings.EqualFold(strings.TrimSpace(value), "cloudflared") {
+			return true
+		}
+	}
+	return false
 }
 
 func runtimeServices(cfg config.ProjectConfig) []string {
@@ -3730,9 +3746,16 @@ func applyBootstrapIngress(cfg config.ProjectConfig, hosts []string) config.Proj
 	if len(resolvedHosts) == 0 {
 		resolvedHosts = []string{"*"}
 	}
+	rules := make([]config.IngressRuleConfig, 0, len(resolvedHosts))
+	for _, host := range resolvedHosts {
+		rules = append(rules, config.IngressRuleConfig{
+			Match:  config.IngressMatchConfig{Host: host, PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: serviceName, Port: "http"},
+		})
+	}
 	cfg.Ingress = &config.IngressConfig{
-		Hosts:   resolvedHosts,
-		Service: serviceName,
+		Hosts: resolvedHosts,
+		Rules: rules,
 		TLS: config.IngressTLSConfig{
 			Mode: "off",
 		},
@@ -3750,9 +3773,16 @@ func applySharedBootstrapIngress(cfg config.ProjectConfig, hosts []string) confi
 	if len(resolvedHosts) == 0 {
 		return cfg
 	}
+	rules := make([]config.IngressRuleConfig, 0, len(resolvedHosts))
+	for _, host := range resolvedHosts {
+		rules = append(rules, config.IngressRuleConfig{
+			Match:  config.IngressMatchConfig{Host: host, PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: serviceName, Port: "http"},
+		})
+	}
 	cfg.Ingress = &config.IngressConfig{
-		Hosts:   resolvedHosts,
-		Service: serviceName,
+		Hosts: resolvedHosts,
+		Rules: rules,
 		TLS: config.IngressTLSConfig{
 			Mode: "off",
 		},
@@ -4060,12 +4090,11 @@ func findEnvironment(environments []api.Environment, name string) (api.Environme
 	return api.Environment{}, false
 }
 
-func servicePayload(service *config.Service) map[string]any {
+func servicePayload(_ string, service *config.Service) map[string]any {
 	if service == nil {
 		return nil
 	}
 	payload := map[string]any{
-		"kind":        service.Kind,
 		"image":       strings.TrimSpace(service.Image),
 		"env":         cloneEnv(service.Env),
 		"secret_refs": service.SecretRefs,
@@ -4096,7 +4125,7 @@ func servicePayloads(services map[string]config.ServiceConfig) map[string]any {
 	sort.Strings(names)
 	for _, name := range names {
 		service := services[name]
-		payloads[name] = servicePayload(&service)
+		payloads[name] = servicePayload(name, &service)
 	}
 	return payloads
 }
@@ -4123,25 +4152,30 @@ func taskPayloads(tasks config.TasksConfig) map[string]any {
 }
 
 func ingressPayload(cfg config.ProjectConfig) map[string]any {
-	serviceName := ""
-	if cfg.Ingress != nil && strings.TrimSpace(cfg.Ingress.Service) != "" {
-		serviceName = strings.TrimSpace(cfg.Ingress.Service)
-	} else if name, ok := cfg.PrimaryWebServiceName(); ok {
-		serviceName = name
-	}
-	if serviceName == "" {
+	if cfg.Ingress == nil || len(cfg.Ingress.Hosts) == 0 || len(cfg.Ingress.Rules) == 0 {
 		return nil
 	}
-
 	payload := map[string]any{
-		"service": serviceName,
+		"hosts": append([]string(nil), cfg.Ingress.Hosts...),
 	}
-	if cfg.Ingress == nil {
-		return payload
+	rules := make([]map[string]any, 0, len(cfg.Ingress.Rules))
+	for _, rule := range cfg.Ingress.Rules {
+		pathPrefix := strings.TrimSpace(rule.Match.PathPrefix)
+		if pathPrefix == "" {
+			pathPrefix = "/"
+		}
+		rules = append(rules, map[string]any{
+			"match": map[string]any{
+				"host":        strings.TrimSpace(rule.Match.Host),
+				"path_prefix": pathPrefix,
+			},
+			"target": map[string]any{
+				"service": strings.TrimSpace(rule.Target.Service),
+				"port":    strings.TrimSpace(rule.Target.Port),
+			},
+		})
 	}
-	if len(cfg.Ingress.Hosts) > 0 {
-		payload["hosts"] = append([]string(nil), cfg.Ingress.Hosts...)
-	}
+	payload["rules"] = rules
 	if cfg.Ingress.RedirectHTTP != nil {
 		payload["redirect_http"] = *cfg.Ingress.RedirectHTTP
 	}

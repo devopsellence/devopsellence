@@ -19,7 +19,7 @@ The same deploy model should work in solo and shared mode. Solo and shared are d
 
 ## Design priorities
 
-- one shared deployment core;
+- one common deployment core;
 - the agent as the only mandatory runtime component;
 - desired state as the stable control surface;
 - mode-independent runtime semantics;
@@ -51,7 +51,7 @@ This layer should define what is valid, what can transition, and what data must 
 
 ### 2. deployment core
 
-One shared deployment core should own deploy semantics:
+One common deployment core should own deploy semantics:
 
 - config interpretation;
 - validation;
@@ -95,7 +95,7 @@ Broker adapters should be cloud-specific when that produces a better result. The
 
 The CLI and control plane should stay thin relative to the core.
 
-- the CLI should run the shared core in-process for solo workflows;
+- the CLI should run the common core in-process for solo workflows;
 - the control plane should call the same core through APIs or RPC for shared workflows;
 - auth, orgs, billing, quotas, support tooling, and UI can live outside the deployment core.
 

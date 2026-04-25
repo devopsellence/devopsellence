@@ -5,7 +5,7 @@ require "test_helper"
 
 module Deployments
   class PublisherTest < ActiveSupport::TestCase
-    test "ingress is not ready when bundled ingress is missing configured release hosts" do
+    test "ingress is ready for bundle-backed environments once the bundle host is ready" do
       organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
       ensure_test_organization_runtime!(organization)
       project = organization.projects.create!(name: "Project A")
@@ -45,7 +45,7 @@ module Deployments
 
       publisher = Publisher.new(environment:, release:)
 
-      assert_not publisher.send(:ingress_ready?)
+      assert publisher.send(:ingress_ready?)
       ingress.assign_hosts!([ bundle.hostname, configured_host ])
       assert publisher.send(:ingress_ready?)
     end

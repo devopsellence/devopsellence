@@ -142,7 +142,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal release.image_reference_for(organization), service.fetch("image")
     assert_equal 3000, service.dig("ports", 0, "port")
     assert_equal({ "DATABASE_URL" => "projects/acme/secrets/db/versions/latest" }, service.fetch("secretRefs"))
-    assert_equal release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
     assert_equal({ "mode" => "manual", "email" => "ops@example.com", "caDirectoryUrl" => "https://ca.example.test/directory" }, desired_state.dig("ingress", "tls"))
     assert_equal false, desired_state.dig("ingress", "redirectHttp")
     assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnelTokenSecretRef")
@@ -214,7 +214,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal ["app.example.com"], desired_state.dig("ingress", "hosts")
+    assert_equal [hostname, "app.example.com"], desired_state.dig("ingress", "hosts")
     assert_equal 2, desired_state.dig("ingress", "routes").size
     assert_equal "app.example.com", desired_state.dig("ingress", "routes", 0, "match", "hostname")
     assert_equal "/api", desired_state.dig("ingress", "routes", 0, "match", "pathPrefix")
@@ -285,7 +285,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal ["app.example.com", "admin.example.com"], desired_state.dig("ingress", "hosts")
+    assert_equal ["managed.example.devopsellence.test", "app.example.com", "admin.example.com"], desired_state.dig("ingress", "hosts")
     assert_equal ["app.example.com", "admin.example.com"], desired_state.dig("ingress", "routes").map { |route| route.dig("match", "hostname") }
     assert_equal ["web", "admin"], desired_state.dig("ingress", "routes").map { |route| route.dig("target", "service") }
   end
@@ -501,7 +501,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     services = desired_state_services(desired_state)
     assert_equal %w[web worker], services.map { |entry| entry.fetch("name") }
     assert_equal "./bin/jobs", services.second.dig("entrypoint", 0)
-    assert_equal release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
   end
 
   test "renders environment-scoped volume names in desired state" do
@@ -616,7 +616,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       },
       desired_state_services(desired_state).first.fetch("secretRefs")
     )
-    assert_equal release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
   end
 
   test "provisions ingress before publishing web releases" do
@@ -713,7 +713,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
-    assert_equal release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
     assert_equal Environment::INGRESS_STRATEGY_TUNNEL, desired_state.dig("ingress", "mode")
   end
 
@@ -922,7 +922,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
     state_a = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_a.reload.desired_state_object_path)
     state_b = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_b.reload.desired_state_object_path)
-    assert_equal release.ingress_config.fetch("hosts"), state_a.dig("ingress", "hosts")
+    assert_equal [hostname] + release.ingress_config.fetch("hosts"), state_a.dig("ingress", "hosts")
     assert_equal({ "mode" => "manual", "email" => "ops@example.com" }, state_a.dig("ingress", "tls"))
     assert_equal false, state_a.dig("ingress", "redirectHttp")
 

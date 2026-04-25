@@ -118,26 +118,7 @@ func TestRootSecretSetRejectsExplicitEmptyValue(t *testing.T) {
 
 func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 	var stdout bytes.Buffer
-	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
-	if err := os.WriteFile(filepath.Join(cwd, "devopsellence.yml"), []byte(strings.Join([]string{
-		"schema_version: 6",
-		"organization: solo",
-		"project: demo",
-		"default_environment: production",
-		"build:",
-		"  context: .",
-		"  dockerfile: Dockerfile",
-		"services:",
-		"  web:",
-		"    ports:",
-		"      - name: http",
-		"        port: 3000",
-		"    healthcheck:",
-		"      path: /up",
-		"      port: 3000",
-	}, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	cwd := rootTestSoloWorkspace(t)
 	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stdout)
@@ -160,6 +141,34 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 	}
 	if got := values.Value("worker", "DATABASE_URL"); got != "" {
 		t.Fatalf("worker DATABASE_URL = %q", got)
+	}
+}
+
+func TestRootSoloSecretSetAcceptsOnePasswordReference(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestSoloWorkspace(t)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "DATABASE_URL", "--env", "staging", "--service", "web", "--store", "1password", "--op-ref", "op://app/db/password"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	current, err := solo.NewStateStore(solo.DefaultStatePath()).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := current.ListSecrets(cwd, "staging", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 1 {
+		t.Fatalf("secrets = %#v", secrets)
+	}
+	if secrets[0].Store != solo.SecretStoreOnePassword || secrets[0].Reference != "op://app/db/password" {
+		t.Fatalf("secret = %#v", secrets[0])
 	}
 }
 
@@ -258,6 +267,31 @@ func rootTestWorkspaceWithMode(t *testing.T, mode Mode) string {
 	cmd.SetArgs([]string{"mode", "use", string(mode)})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("mode use error = %v", err)
+	}
+	return cwd
+}
+
+func rootTestSoloWorkspace(t *testing.T) string {
+	t.Helper()
+	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
+	if err := os.WriteFile(filepath.Join(cwd, "devopsellence.yml"), []byte(strings.Join([]string{
+		"schema_version: 6",
+		"organization: solo",
+		"project: demo",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+		"      port: 3000",
+	}, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	return cwd
 }

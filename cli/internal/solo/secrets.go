@@ -1,13 +1,25 @@
 package solo
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 )
 
+const (
+	SecretStorePlaintext   = "plaintext"
+	SecretStoreOnePassword = "1password"
+)
+
 type ScopedSecrets map[string]map[string]string
+
+type SecretMaterial struct {
+	Store     string
+	Value     string
+	Reference string
+}
 
 func (s ScopedSecrets) ValuesForService(serviceName string) map[string]string {
 	values := s[strings.TrimSpace(serviceName)]
@@ -41,9 +53,20 @@ func (s ScopedSecrets) Set(serviceName, name, value string) {
 	s[serviceName][name] = value
 }
 
-func (s *State) SetSecret(workspaceRoot, environment, serviceName, name, value string) (SecretRecord, error) {
+func NormalizeSecretStore(store string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(store)) {
+	case "", SecretStorePlaintext:
+		return SecretStorePlaintext, nil
+	case SecretStoreOnePassword, "onepassword", "op":
+		return SecretStoreOnePassword, nil
+	default:
+		return "", fmt.Errorf("unsupported secret store %q", store)
+	}
+}
+
+func (s *State) SetSecret(workspaceRoot, environment, serviceName, name string, material SecretMaterial) (SecretRecord, error) {
 	s.ensureDefaults()
-	key, record, err := buildSecretRecord(workspaceRoot, environment, serviceName, name, value)
+	key, record, err := buildSecretRecord(workspaceRoot, environment, serviceName, name, material)
 	if err != nil {
 		return SecretRecord{}, err
 	}
@@ -54,7 +77,7 @@ func (s *State) SetSecret(workspaceRoot, environment, serviceName, name, value s
 
 func (s *State) DeleteSecret(workspaceRoot, environment, serviceName, name string) (SecretRecord, error) {
 	s.ensureDefaults()
-	key, record, err := buildSecretRecord(workspaceRoot, environment, serviceName, name, "")
+	key, record, err := buildSecretRecordScope(workspaceRoot, environment, serviceName, name)
 	if err != nil {
 		return SecretRecord{}, err
 	}
@@ -96,14 +119,13 @@ func (s *State) ListSecrets(workspaceRoot, environment, serviceName string) ([]S
 
 func (s *State) ScopedSecretValues(workspaceRoot, environment string) (ScopedSecrets, error) {
 	s.ensureDefaults()
-	workspaceKey, err := CanonicalWorkspaceKey(workspaceRoot)
+	records, err := s.SecretRecords(workspaceRoot, environment)
 	if err != nil {
 		return nil, err
 	}
-	environment = defaultEnvironmentName(environment)
 	values := ScopedSecrets{}
-	for _, record := range s.Secrets {
-		if record.WorkspaceKey != workspaceKey || record.Environment != environment {
+	for _, record := range records {
+		if record.Store != SecretStorePlaintext {
 			continue
 		}
 		values.Set(record.ServiceName, record.Name, record.Value)
@@ -111,7 +133,62 @@ func (s *State) ScopedSecretValues(workspaceRoot, environment string) (ScopedSec
 	return values, nil
 }
 
-func buildSecretRecord(workspaceRoot, environment, serviceName, name, value string) (string, SecretRecord, error) {
+func (s *State) SecretRecords(workspaceRoot, environment string) ([]SecretRecord, error) {
+	s.ensureDefaults()
+	workspaceKey, err := CanonicalWorkspaceKey(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	environment = defaultEnvironmentName(environment)
+	records := []SecretRecord{}
+	for _, record := range s.Secrets {
+		if record.WorkspaceKey != workspaceKey || record.Environment != environment {
+			continue
+		}
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].ServiceName != records[j].ServiceName {
+			return records[i].ServiceName < records[j].ServiceName
+		}
+		return records[i].Name < records[j].Name
+	})
+	return records, nil
+}
+
+func buildSecretRecord(workspaceRoot, environment, serviceName, name string, material SecretMaterial) (string, SecretRecord, error) {
+	key, record, err := buildSecretRecordScope(workspaceRoot, environment, serviceName, name)
+	if err != nil {
+		return "", SecretRecord{}, err
+	}
+	store, err := NormalizeSecretStore(material.Store)
+	if err != nil {
+		return "", SecretRecord{}, err
+	}
+	material.Value = strings.TrimSpace(material.Value)
+	material.Reference = strings.TrimSpace(material.Reference)
+	switch store {
+	case SecretStorePlaintext:
+		if material.Value == "" {
+			return "", SecretRecord{}, errors.New("secret value is required")
+		}
+	case SecretStoreOnePassword:
+		if material.Reference == "" {
+			return "", SecretRecord{}, errors.New("1Password secret reference is required")
+		}
+		if !strings.HasPrefix(strings.ToLower(material.Reference), "op://") {
+			return "", SecretRecord{}, errors.New("1Password secret reference must start with op://")
+		}
+	default:
+		return "", SecretRecord{}, fmt.Errorf("unsupported secret store %q", store)
+	}
+	record.Store = store
+	record.Value = material.Value
+	record.Reference = material.Reference
+	return key, record, nil
+}
+
+func buildSecretRecordScope(workspaceRoot, environment, serviceName, name string) (string, SecretRecord, error) {
 	workspaceKey, err := CanonicalWorkspaceKey(workspaceRoot)
 	if err != nil {
 		return "", SecretRecord{}, err
@@ -131,7 +208,6 @@ func buildSecretRecord(workspaceRoot, environment, serviceName, name, value stri
 		Environment:   environment,
 		ServiceName:   serviceName,
 		Name:          name,
-		Value:         value,
 	}
 	if record.WorkspaceRoot == "" {
 		record.WorkspaceRoot = workspaceKey

@@ -85,6 +85,7 @@ type App struct {
 	soloNodeCreateFn    func(context.Context, SoloNodeCreateOptions) error
 	soloNodeAttachFn    func(context.Context, SoloNodeAttachOptions) error
 	soloRuntimeDoctorFn func(context.Context, SoloDoctorOptions) error
+	soloSecretResolveFn func(context.Context, solo.SecretRecord) (string, error)
 	promptReaderSource  io.Reader
 	promptReader        *bufio.Reader
 }

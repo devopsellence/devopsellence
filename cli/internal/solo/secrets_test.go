@@ -7,16 +7,16 @@ func TestStateSecretsCRUDScopesByWorkspaceEnvironmentAndService(t *testing.T) {
 	otherRoot := t.TempDir()
 	current := newState()
 
-	if _, err := current.SetSecret(root, "production", "web", "DATABASE_URL", "postgres://prod-web"); err != nil {
+	if _, err := current.SetSecret(root, "production", "web", "DATABASE_URL", SecretMaterial{Value: "postgres://prod-web"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := current.SetSecret(root, "production", "worker", "DATABASE_URL", "postgres://prod-worker"); err != nil {
+	if _, err := current.SetSecret(root, "production", "worker", "DATABASE_URL", SecretMaterial{Value: "postgres://prod-worker"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := current.SetSecret(root, "staging", "web", "DATABASE_URL", "postgres://staging-web"); err != nil {
+	if _, err := current.SetSecret(root, "staging", "web", "DATABASE_URL", SecretMaterial{Value: "postgres://staging-web"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := current.SetSecret(otherRoot, "production", "web", "DATABASE_URL", "postgres://other-web"); err != nil {
+	if _, err := current.SetSecret(otherRoot, "production", "web", "DATABASE_URL", SecretMaterial{Value: "postgres://other-web"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -62,10 +62,31 @@ func TestStateSecretsCRUDScopesByWorkspaceEnvironmentAndService(t *testing.T) {
 
 func TestStateSecretValidation(t *testing.T) {
 	current := newState()
-	if _, err := current.SetSecret(t.TempDir(), "production", "", "DATABASE_URL", "value"); err == nil {
+	if _, err := current.SetSecret(t.TempDir(), "production", "", "DATABASE_URL", SecretMaterial{Value: "value"}); err == nil {
 		t.Fatal("SetSecret missing service error = nil")
 	}
-	if _, err := current.SetSecret(t.TempDir(), "production", "web", "", "value"); err == nil {
+	if _, err := current.SetSecret(t.TempDir(), "production", "web", "", SecretMaterial{Value: "value"}); err == nil {
 		t.Fatal("SetSecret missing name error = nil")
+	}
+}
+
+func TestStateSecretOnePasswordReference(t *testing.T) {
+	current := newState()
+	record, err := current.SetSecret(t.TempDir(), "production", "web", "DATABASE_URL", SecretMaterial{
+		Store:     SecretStoreOnePassword,
+		Reference: "op://app-prod/db/password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Store != SecretStoreOnePassword || record.Reference != "op://app-prod/db/password" || record.Value != "" {
+		t.Fatalf("record = %#v", record)
+	}
+
+	if _, err := current.SetSecret(t.TempDir(), "production", "web", "BROKEN", SecretMaterial{
+		Store:     SecretStoreOnePassword,
+		Reference: "not-op-ref",
+	}); err == nil {
+		t.Fatal("SetSecret invalid 1Password reference error = nil")
 	}
 }

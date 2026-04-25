@@ -959,6 +959,39 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 	}
 }
 
+func TestResolveSoloSecretValuesUsesStoreResolver(t *testing.T) {
+	root := t.TempDir()
+	var current solo.State
+	if _, err := current.SetSecret(root, "production", "web", "DATABASE_URL", solo.SecretMaterial{Value: "postgres://plain"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SetSecret(root, "production", "worker", "DATABASE_URL", solo.SecretMaterial{
+		Store:     solo.SecretStoreOnePassword,
+		Reference: "op://app/db/password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		soloSecretResolveFn: func(_ context.Context, record solo.SecretRecord) (string, error) {
+			if record.Store == solo.SecretStoreOnePassword {
+				return "postgres://op", nil
+			}
+			return record.Value, nil
+		},
+	}
+
+	values, err := app.resolveSoloSecretValues(context.Background(), current, root, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := values.Value("web", "DATABASE_URL"); got != "postgres://plain" {
+		t.Fatalf("web DATABASE_URL = %q", got)
+	}
+	if got := values.Value("worker", "DATABASE_URL"); got != "postgres://op" {
+		t.Fatalf("worker DATABASE_URL = %q", got)
+	}
+}
+
 func TestApplySoloRailsMasterKeyLetsManagedSecretOverrideMasterKey(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {

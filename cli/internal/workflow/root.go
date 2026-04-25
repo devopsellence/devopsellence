@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -654,6 +655,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var secretValueStdin bool
 	var secretEnvironment string
 	var secretServiceName string
+	var secretStore string
+	var secretReference string
 	secretCommand := &cobra.Command{
 		Use:   "secret",
 		Short: "Manage secrets for the selected workspace mode",
@@ -666,6 +669,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			secretSoloSetOpts.Key = strings.TrimSpace(args[0])
 			secretSoloSetOpts.Environment = secretEnvironment
 			secretSoloSetOpts.ServiceName = secretServiceName
+			secretSoloSetOpts.Store = secretStore
+			secretSoloSetOpts.Reference = secretReference
 			secretSoloSetOpts.Value = secretValue
 			secretSoloSetOpts.ValueStdin = secretValueStdin
 			secretSharedSetOpts.Name = strings.TrimSpace(args[0])
@@ -676,6 +681,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return runByMode(func(ctx context.Context) error {
 				return app.SoloSecretsSet(ctx, secretSoloSetOpts)
 			}, func(ctx context.Context) error {
+				if strings.TrimSpace(secretReference) != "" {
+					return ExitError{Code: 2, Err: errors.New("--op-ref is only supported in solo mode")}
+				}
+				if strings.TrimSpace(secretStore) != "" && !strings.EqualFold(strings.TrimSpace(secretStore), "plaintext") {
+					return ExitError{Code: 2, Err: errors.New("--store is only supported in solo mode")}
+				}
 				secretSharedSetOpts.ValueProvided = cmd.Flags().Changed("value")
 				return app.SecretSet(ctx, secretSharedSetOpts)
 			})(cmd, args)
@@ -685,11 +696,14 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Project, "project", "", "Project name override (shared mode)")
 	secretSetCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
 	secretSetCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name")
+	secretSetCommand.Flags().StringVar(&secretStore, "store", "", "Solo secret store: plaintext or 1password")
+	secretSetCommand.Flags().StringVar(&secretReference, "op-ref", "", "1Password secret reference for solo mode")
 	secretSetCommand.Flags().StringVar(&secretValue, "value", "", "Secret value")
 	secretSetCommand.Flags().BoolVar(&secretValueStdin, "stdin", false, "Read secret value from stdin")
 	secretSetCommand.Example = strings.Join([]string{
 		"  devopsellence secret set SECRET_KEY_BASE --service web --value super-secret",
 		"  printf '%s' \"$VALUE\" | devopsellence secret set SECRET_KEY_BASE --service web --stdin",
+		"  devopsellence secret set DATABASE_URL --service web --env production --store 1password --op-ref op://app-prod/db/password",
 	}, "\n")
 	secretListCommand := &cobra.Command{
 		Use:   "list",

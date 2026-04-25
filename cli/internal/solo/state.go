@@ -64,7 +64,9 @@ type SecretRecord struct {
 	Environment   string `json:"environment"`
 	ServiceName   string `json:"service_name"`
 	Name          string `json:"name"`
+	Store         string `json:"store,omitempty"`
 	Value         string `json:"value"`
+	Reference     string `json:"reference,omitempty"`
 	UpdatedAt     string `json:"updated_at,omitempty"`
 }
 
@@ -429,6 +431,11 @@ func normalizeSecretRecord(key string, secret SecretRecord) (string, SecretRecor
 	secret.Environment = defaultEnvironmentName(firstNonEmpty(secret.Environment, keyEnvironment))
 	secret.ServiceName = strings.TrimSpace(firstNonEmpty(secret.ServiceName, keyService))
 	secret.Name = strings.TrimSpace(firstNonEmpty(secret.Name, keyName))
+	normalizedStore, err := NormalizeSecretStore(secret.Store)
+	if err != nil {
+		return "", SecretRecord{}, err
+	}
+	secret.Store = normalizedStore
 	if secret.ServiceName == "" {
 		return "", SecretRecord{}, errors.New("service name is required")
 	}

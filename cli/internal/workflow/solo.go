@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,8 @@ type SoloSecretsSetOptions struct {
 	Key         string
 	ServiceName string
 	Environment string
+	Store       string
+	Reference   string
 	Value       string
 	ValueStdin  bool
 }
@@ -283,7 +286,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return fmt.Errorf("docker build: %w", err)
 	}
 
-	secrets, err := current.ScopedSecretValues(workspaceRoot, environmentName)
+	secrets, err := a.resolveSoloSecretValues(ctx, current, workspaceRoot, environmentName)
 	if err != nil {
 		return fmt.Errorf("load secrets: %w", err)
 	}
@@ -571,7 +574,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	prepared := make(map[string]preparedSoloNodeState, len(sortedNodeNames))
 	resolvedSnapshotCache := map[string]solo.DeploySnapshot{}
 	for _, nodeName := range sortedNodeNames {
-		inputs, err := a.preparedSoloNodeDesiredStateInputs(current, nodeName, nodes[nodeName], resolvedSnapshotCache)
+		inputs, err := a.preparedSoloNodeDesiredStateInputs(ctx, current, nodeName, nodes[nodeName], resolvedSnapshotCache)
 		if err != nil {
 			return nil, err
 		}
@@ -667,7 +670,7 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	return revisions, nil
 }
 
-func (a *App) resolveStoredDeploySnapshot(current solo.State, snapshot solo.DeploySnapshot) (solo.DeploySnapshot, error) {
+func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.State, snapshot solo.DeploySnapshot) (solo.DeploySnapshot, error) {
 	cfg, err := a.ConfigStore.Read(snapshot.WorkspaceRoot)
 	if err != nil {
 		return solo.DeploySnapshot{}, err
@@ -675,7 +678,7 @@ func (a *App) resolveStoredDeploySnapshot(current solo.State, snapshot solo.Depl
 	if cfg == nil {
 		return solo.DeploySnapshot{}, fmt.Errorf("missing devopsellence.yml for %s", snapshot.WorkspaceRoot)
 	}
-	secrets, err := current.ScopedSecretValues(snapshot.WorkspaceRoot, snapshot.Environment)
+	secrets, err := a.resolveSoloSecretValues(ctx, current, snapshot.WorkspaceRoot, snapshot.Environment)
 	if err != nil {
 		return solo.DeploySnapshot{}, fmt.Errorf("load secrets for %s: %w", snapshot.WorkspaceRoot, err)
 	}
@@ -689,7 +692,71 @@ func (a *App) resolveStoredDeploySnapshot(current solo.State, snapshot solo.Depl
 	return solo.BuildDeploySnapshotWithScopedSecrets(cfg, snapshot.WorkspaceRoot, configPath, snapshot.Image, snapshot.Revision, secrets)
 }
 
-func (a *App) preparedSoloNodeDesiredStateInputs(current solo.State, nodeName string, node config.SoloNode, resolvedSnapshotCache map[string]solo.DeploySnapshot) (struct {
+func (a *App) resolveSoloSecretValues(ctx context.Context, current solo.State, workspaceRoot, environment string) (solo.ScopedSecrets, error) {
+	records, err := current.SecretRecords(workspaceRoot, environment)
+	if err != nil {
+		return nil, err
+	}
+	values := solo.ScopedSecrets{}
+	for _, record := range records {
+		value, err := a.resolveSoloSecretRecord(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		values.Set(record.ServiceName, record.Name, value)
+	}
+	return values, nil
+}
+
+func (a *App) resolveSoloSecretRecord(ctx context.Context, record solo.SecretRecord) (string, error) {
+	if a.soloSecretResolveFn != nil {
+		return a.soloSecretResolveFn(ctx, record)
+	}
+	store, err := solo.NormalizeSecretStore(record.Store)
+	if err != nil {
+		return "", err
+	}
+	switch store {
+	case solo.SecretStorePlaintext:
+		return record.Value, nil
+	case solo.SecretStoreOnePassword:
+		return a.resolveOnePasswordSecret(ctx, record.Reference)
+	default:
+		return "", fmt.Errorf("unsupported secret store %q", store)
+	}
+}
+
+func (a *App) resolveOnePasswordSecret(ctx context.Context, reference string) (string, error) {
+	if strings.TrimSpace(reference) == "" {
+		return "", errors.New("1Password secret reference is required")
+	}
+	lookPath := a.LookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	opPath, err := lookPath("op")
+	if err != nil {
+		return "", fmt.Errorf("1Password CLI `op` not found; install and sign in to 1Password CLI before deploying secrets from 1Password: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, opPath, "read", reference)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return "", fmt.Errorf("read 1Password secret %s: %w: %s", reference, err, detail)
+		}
+		return "", fmt.Errorf("read 1Password secret %s: %w", reference, err)
+	}
+	value := strings.TrimRight(string(out), "\r\n")
+	if value == "" {
+		return "", fmt.Errorf("read 1Password secret %s: empty value", reference)
+	}
+	return value, nil
+}
+
+func (a *App) preparedSoloNodeDesiredStateInputs(ctx context.Context, current solo.State, nodeName string, node config.SoloNode, resolvedSnapshotCache map[string]solo.DeploySnapshot) (struct {
 	snapshots    []solo.DeploySnapshot
 	releaseNodes map[string]string
 	peers        []solo.NodePeer
@@ -710,7 +777,7 @@ func (a *App) preparedSoloNodeDesiredStateInputs(current solo.State, nodeName st
 		key := strings.TrimSpace(snapshot.WorkspaceKey) + "\n" + strings.TrimSpace(snapshot.Environment)
 		resolvedSnapshot, ok := resolvedSnapshotCache[key]
 		if !ok {
-			resolvedSnapshot, err = a.resolveStoredDeploySnapshot(current, snapshot)
+			resolvedSnapshot, err = a.resolveStoredDeploySnapshot(ctx, current, snapshot)
 			if err != nil {
 				return struct {
 					snapshots    []solo.DeploySnapshot
@@ -929,6 +996,13 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 }
 
 func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) error {
+	store, err := soloSecretStore(opts)
+	if err != nil {
+		return err
+	}
+	if opts.ValueStdin && store != solo.SecretStorePlaintext {
+		return ExitError{Code: 2, Err: errors.New("--stdin is only supported for plaintext solo secrets")}
+	}
 	if opts.ValueStdin {
 		data, err := io.ReadAll(a.In)
 		if err != nil {
@@ -939,8 +1013,9 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if strings.TrimSpace(opts.Key) == "" {
 		return ExitError{Code: 2, Err: errors.New("secret name is required")}
 	}
-	if strings.TrimSpace(opts.Value) == "" {
-		return ExitError{Code: 2, Err: errors.New("secret value is required")}
+	material, err := soloSecretMaterial(store, opts)
+	if err != nil {
+		return err
 	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
@@ -954,7 +1029,7 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if err != nil {
 		return err
 	}
-	record, err := current.SetSecret(workspaceRoot, environmentName, opts.ServiceName, opts.Key, opts.Value)
+	record, err := current.SetSecret(workspaceRoot, environmentName, opts.ServiceName, opts.Key, material)
 	if err != nil {
 		return err
 	}
@@ -962,10 +1037,51 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 		return err
 	}
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "action": "saved"})
+		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "store": record.Store, "reference": record.Reference, "action": "saved"})
+	}
+	if record.Store == solo.SecretStoreOnePassword {
+		a.Printer.Println(fmt.Sprintf("Secret %q saved for %s in %s from 1Password", record.Name, record.ServiceName, record.Environment))
+		return nil
 	}
 	a.Printer.Println(fmt.Sprintf("Secret %q saved for %s in %s", record.Name, record.ServiceName, record.Environment))
 	return nil
+}
+
+func soloSecretStore(opts SoloSecretsSetOptions) (string, error) {
+	store := opts.Store
+	if strings.TrimSpace(store) == "" && strings.TrimSpace(opts.Reference) != "" {
+		store = solo.SecretStoreOnePassword
+	}
+	normalized, err := solo.NormalizeSecretStore(store)
+	if err != nil {
+		return "", ExitError{Code: 2, Err: err}
+	}
+	return normalized, nil
+}
+
+func soloSecretMaterial(store string, opts SoloSecretsSetOptions) (solo.SecretMaterial, error) {
+	value := strings.TrimSpace(opts.Value)
+	reference := strings.TrimSpace(opts.Reference)
+	switch store {
+	case solo.SecretStorePlaintext:
+		if reference != "" {
+			return solo.SecretMaterial{}, ExitError{Code: 2, Err: errors.New("--op-ref requires --store 1password")}
+		}
+		if value == "" {
+			return solo.SecretMaterial{}, ExitError{Code: 2, Err: errors.New("secret value is required")}
+		}
+		return solo.SecretMaterial{Store: store, Value: opts.Value}, nil
+	case solo.SecretStoreOnePassword:
+		if value != "" {
+			return solo.SecretMaterial{}, ExitError{Code: 2, Err: errors.New("1Password solo secrets use --op-ref instead of --value")}
+		}
+		if reference == "" {
+			return solo.SecretMaterial{}, ExitError{Code: 2, Err: errors.New("missing required option: --op-ref")}
+		}
+		return solo.SecretMaterial{Store: store, Reference: reference}, nil
+	default:
+		return solo.SecretMaterial{}, ExitError{Code: 2, Err: fmt.Errorf("unsupported secret store %q", store)}
+	}
 }
 
 func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) error {
@@ -990,7 +1106,11 @@ func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) er
 		return nil
 	}
 	for _, secret := range secrets {
-		a.Printer.Println(secret.ServiceName + " " + secret.Name)
+		line := secret.ServiceName + " " + secret.Name + " [" + secret.Store + "]"
+		if secret.Reference != "" {
+			line += " -> " + secret.Reference
+		}
+		a.Printer.Println(line)
 	}
 	return nil
 }

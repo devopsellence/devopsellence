@@ -248,7 +248,7 @@ func validateIngressRoutes(state *desiredstatepb.DesiredState) error {
 		}
 		portName := strings.TrimSpace(route.Target.Port)
 		if portName == "" {
-			return fmt.Errorf("ingress.routes[%d].target.port required", i)
+			return fmt.Errorf("ingress.routes[%d].target.port is required", i)
 		}
 		if !serviceHasPort(service, portName) {
 			return fmt.Errorf("ingress.routes[%d].target references missing port %s/%s:%s", i, env, serviceName, portName)

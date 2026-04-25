@@ -268,8 +268,12 @@ func TestValidateIngressRouteTargetRequiresNamedPort(t *testing.T) {
 		Hosts:  []string{"app.example.com"},
 		Routes: []*desiredstatepb.IngressRoute{route("app.example.com", "production", "web", "")},
 	}
-	if err := Validate(state); err == nil {
+	err := Validate(state)
+	if err == nil {
 		t.Fatal("expected error")
+	}
+	if got, want := err.Error(), "ingress.routes[0].target.port is required"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
 	}
 }
 

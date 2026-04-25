@@ -249,14 +249,14 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
             "admin" => web_service_runtime(command: ["./bin/admin"])
           },
           "ingress" => {
-            "hosts" => ["app.example.com", "admin.example.com"],
+            "hosts" => ["App.Example.com", "ADMIN.example.com"],
             "rules" => [
               {
-                "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+                "match" => { "host" => "App.Example.com", "path_prefix" => "/" },
                 "target" => { "service" => "web", "port" => "http" }
               },
               {
-                "match" => { "host" => "admin.example.com", "path_prefix" => "/" },
+                "match" => { "host" => "ADMIN.example.com", "path_prefix" => "/" },
                 "target" => { "service" => "admin", "port" => "http" }
               }
             ]

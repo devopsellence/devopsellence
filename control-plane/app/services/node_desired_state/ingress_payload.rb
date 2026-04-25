@@ -48,7 +48,7 @@ module NodeDesiredState
         target = rule["target"].is_a?(Hash) ? rule["target"] : {}
         {
           match: {
-            hostname: match["host"].to_s.strip.presence || ingress.hostname,
+            hostname: IngressHostnames.normalize(match["host"].to_s.strip.presence || ingress.hostname),
             pathPrefix: match["path_prefix"].to_s.strip.presence || "/"
           },
           target: {
@@ -61,10 +61,12 @@ module NodeDesiredState
     end
 
     def self.configured_hosts(release)
-      Array(release.ingress_config["hosts"]).filter_map do |host|
+      hosts = Array(release.ingress_config["hosts"]).filter_map do |host|
         value = host.to_s.strip
         value.presence
-      end.uniq
+      end
+
+      IngressHostnames.normalize_all(hosts)
     end
 
     def self.configured_tls(release)

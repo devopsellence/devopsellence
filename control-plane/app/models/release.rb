@@ -289,7 +289,22 @@ class Release < ApplicationRecord
     ingress = ingress_config
     return if ingress.blank?
 
-    hosts = Array(ingress["hosts"])
+    hosts = ingress["hosts"]
+    hosts_valid = true
+    unless hosts.is_a?(Array)
+      errors.add(:runtime_json, "ingress.hosts must be an array")
+      hosts_valid = false
+    end
+
+    rules = ingress["rules"]
+    rules_valid = true
+    unless rules.is_a?(Array)
+      errors.add(:runtime_json, "ingress.rules must be an array")
+      rules_valid = false
+    end
+
+    return unless hosts_valid && rules_valid
+
     if hosts.blank?
       errors.add(:runtime_json, "ingress.hosts must include at least one host")
       return
@@ -303,7 +318,7 @@ class Release < ApplicationRecord
       errors.add(:runtime_json, "ingress.hosts must be unique")
     end
 
-    rules = Array(ingress["rules"])
+    rules = ingress["rules"]
     if rules.blank?
       errors.add(:runtime_json, "ingress.rules must include at least one rule")
       return

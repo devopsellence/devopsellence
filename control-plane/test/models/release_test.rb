@@ -110,6 +110,24 @@ class ReleaseTest < ActiveSupport::TestCase
     assert_includes release.errors[:runtime_json], "ingress must be an object"
   end
 
+  test "rejects non-array ingress hosts and rules" do
+    release = build_release(
+      runtime_json: release_runtime_json(
+        ingress: {
+          "hosts" => "app.example.com",
+          "rules" => {
+            "match" => { "host" => "app.example.com", "path_prefix" => "/" },
+            "target" => { "service" => "web", "port" => "http" }
+          }
+        }
+      )
+    )
+
+    assert_not release.valid?
+    assert_includes release.errors[:runtime_json], "ingress.hosts must be an array"
+    assert_includes release.errors[:runtime_json], "ingress.rules must be an array"
+  end
+
   test "rejects invalid ingress tls and redirect settings" do
     release = build_release(
       runtime_json: release_runtime_json(

@@ -1845,7 +1845,7 @@ func (a *App) loadSoloProjectConfig() (*config.ProjectConfig, string, error) {
 		return nil, "", err
 	}
 	if cfg == nil {
-		return nil, "", fmt.Errorf("no devopsellence.yml found; run `devopsellence setup --mode solo`")
+		return nil, "", fmt.Errorf("no devopsellence.yml found; run `devopsellence mode use solo` and `devopsellence setup`")
 	}
 	return cfg, workspaceRoot, nil
 }

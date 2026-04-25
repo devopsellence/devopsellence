@@ -3163,7 +3163,7 @@ func (a *App) resolveOrganizationReadOnly(ctx context.Context, token, input stri
 		return match, nil
 	}
 	if len(orgs) == 0 {
-		return api.Organization{}, ExitError{Code: 2, Err: errors.New("no organizations found. run `devopsellence setup --mode shared` first")}
+		return api.Organization{}, ExitError{Code: 2, Err: errors.New("no organizations found. run `devopsellence mode use shared` and `devopsellence setup` first")}
 	}
 	if len(orgs) == 1 {
 		_ = a.rememberOrganization(orgs[0].ID)

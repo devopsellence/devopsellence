@@ -208,7 +208,7 @@ func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 	}
 	if cfg.Ingress != nil {
 		snapshot.Ingress = buildIngress(cfg.Ingress, environmentName)
-		if serviceName, ok := cfg.PrimaryWebServiceName(); ok {
+		if serviceName, ok := ingressSnapshotService(cfg); ok {
 			snapshot.IngressService = serviceName
 			if service, ok := cfg.Services[serviceName]; ok {
 				snapshot.IngressServiceKind = config.InferredServiceKind(serviceName, service)
@@ -216,6 +216,27 @@ func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 		}
 	}
 	return snapshot, nil
+}
+
+func ingressSnapshotService(cfg *config.ProjectConfig) (string, bool) {
+	if cfg == nil || cfg.Ingress == nil {
+		return "", false
+	}
+	serviceNames := map[string]struct{}{}
+	for _, rule := range cfg.Ingress.Rules {
+		serviceName := strings.TrimSpace(rule.Target.Service)
+		if serviceName == "" {
+			continue
+		}
+		serviceNames[serviceName] = struct{}{}
+	}
+	if len(serviceNames) != 1 {
+		return "", false
+	}
+	for serviceName := range serviceNames {
+		return serviceName, true
+	}
+	return "", false
 }
 
 func RedactDeploySnapshotSecrets(snapshot DeploySnapshot, cfg *config.ProjectConfig) DeploySnapshot {

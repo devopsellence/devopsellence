@@ -314,6 +314,64 @@ module Releases
       assert_equal "ingress.hosts must include at least one host", error.message
     end
 
+    test "rejects ingress rule path prefixes without leading slash" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"],
+              rules: [
+                {
+                  match: { host: "app.example.com", path_prefix: "api" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.rules[0].match.path_prefix must start with /", error.message
+    end
+
+    test "rejects ingress rules whose hosts are not declared in ingress.hosts" do
+      error = assert_raises(RuntimeAttributes::InvalidPayload) do
+        RuntimeAttributes.new(
+          params: {
+            git_sha: "a" * 40,
+            image_repository: "api",
+            image_digest: "sha256:#{"b" * 64}",
+            services: {
+              web: {
+                ports: [{ name: "http", port: 3000 }],
+                healthcheck: { path: "/up", port: 3000 }
+              }
+            },
+            ingress: {
+              hosts: ["app.example.com"],
+              rules: [
+                {
+                  match: { host: "admin.example.com", path_prefix: "/" },
+                  target: { service: "web", port: "http" }
+                }
+              ]
+            }
+          }
+        ).to_h
+      end
+
+      assert_equal "ingress.rules[0].match.host must exist in ingress.hosts", error.message
+    end
+
     test "rejects ingress without rules" do
       error = assert_raises(RuntimeAttributes::InvalidPayload) do
         RuntimeAttributes.new(

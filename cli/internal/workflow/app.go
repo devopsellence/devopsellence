@@ -2643,7 +2643,15 @@ func (a *App) currentEnvironmentSecrets(ctx context.Context, callAuth authCall, 
 }
 
 func railsRuntimeServices(cfg config.ProjectConfig) []string {
-	return cfg.ServiceNames()
+	services := []string{}
+	for _, name := range cfg.ServiceNames() {
+		service := cfg.Services[name]
+		if strings.TrimSpace(service.Image) != "" {
+			continue
+		}
+		services = append(services, name)
+	}
+	return services
 }
 
 func runtimeServices(cfg config.ProjectConfig) []string {

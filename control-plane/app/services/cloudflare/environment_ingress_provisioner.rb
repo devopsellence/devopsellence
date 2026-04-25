@@ -116,10 +116,15 @@ module Cloudflare
     end
 
     def desired_hosts_for(ingress)
-      return [ environment.environment_bundle.hostname ] if environment.environment_bundle&.hostname.present?
+      desired_hosts = []
+      if environment.environment_bundle&.hostname.present?
+        desired_hosts << environment.environment_bundle.hostname
+      end
 
       configured = IngressHostnames.normalize_all(release&.ingress_config&.dig("hosts"))
-      return configured if configured.any?
+      desired_hosts.concat(configured)
+      desired_hosts = desired_hosts.uniq
+      return desired_hosts if desired_hosts.any?
       return ingress.hosts if ingress.hosts.any?
 
       [ next_hostname! ]

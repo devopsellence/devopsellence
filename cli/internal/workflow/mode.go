@@ -188,6 +188,20 @@ func (a *App) ResolveMode(interactive bool) (Mode, error) {
 	return mode, nil
 }
 
+func (a *App) ResolveSetupMode(explicit string, interactive bool) (Mode, error) {
+	if strings.TrimSpace(explicit) == "" {
+		return a.ResolveMode(interactive)
+	}
+	mode, err := normalizeMode(explicit)
+	if err != nil {
+		return "", ExitError{Code: 2, Err: err}
+	}
+	if err := a.SetMode(mode); err != nil {
+		return "", ExitError{Code: 1, Err: err}
+	}
+	return mode, nil
+}
+
 func (a *App) ModeShow() error {
 	mode, ok, err := a.savedMode()
 	if err != nil {

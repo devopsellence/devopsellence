@@ -509,6 +509,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(aliasCommand)
 
 	var setupSharedOpts InitOptions
+	var setupMode string
 	setupCommand := &cobra.Command{
 		Use:   "setup",
 		Short: "Prepare the current workspace for its selected mode",
@@ -517,12 +518,24 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			"  solo   - initialize config if needed, register or create a node, attach it, and install the agent",
 			"  shared - sign in, create/select org/project/env, and write workspace config",
 		}, "\n"),
-		RunE: runByMode(func(ctx context.Context) error {
-			return app.SoloSetup(ctx, SoloSetupOptions{})
-		}, func(ctx context.Context) error {
-			return app.Init(ctx, setupSharedOpts)
-		}),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runWithTimeout(cmd, func(ctx context.Context) error {
+				mode, modeErr := app.ResolveSetupMode(setupMode, app.Printer.Interactive)
+				if modeErr != nil {
+					return modeErr
+				}
+				switch mode {
+				case ModeSolo:
+					return app.SoloSetup(ctx, SoloSetupOptions{})
+				case ModeShared:
+					return app.Init(ctx, setupSharedOpts)
+				default:
+					return ExitError{Code: 2, Err: fmt.Errorf("unsupported mode %q", mode)}
+				}
+			})
+		},
 	}
+	setupCommand.Flags().StringVar(&setupMode, "mode", "", "Set and use workspace mode for setup (solo or shared)")
 	setupCommand.Flags().StringVar(&setupSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
 	setupCommand.Flags().StringVar(&setupSharedOpts.ProjectName, "project", "", "Project name override (shared mode)")
 	setupCommand.Flags().StringVar(&setupSharedOpts.Environment, "env", "", "Environment name override (shared mode)")

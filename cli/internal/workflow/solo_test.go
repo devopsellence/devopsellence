@@ -97,7 +97,6 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
-				Kind:  config.ServiceKindWeb,
 				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{
 					Path: "/up",
@@ -105,7 +104,6 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 				},
 			},
 			"worker": {
-				Kind:    config.ServiceKindWorker,
 				Command: []string{"sidekiq"},
 			},
 		},
@@ -134,7 +132,6 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
-				Kind:  config.ServiceKindWeb,
 				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{
 					Path: "/up",
@@ -142,7 +139,6 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 				},
 			},
 			"worker": {
-				Kind:    config.ServiceKindWorker,
 				Command: []string{"sidekiq"},
 			},
 		},
@@ -152,6 +148,41 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "worker") {
 		t.Fatalf("expected missing worker error, got %v", err)
+	}
+}
+
+func TestValidateSoloNodeScheduleInfersKindsWithoutStoredConfigKind(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Services: map[string]config.ServiceConfig{
+			config.DefaultWebServiceName: {
+				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
+				Healthcheck: &config.HTTPHealthcheck{
+					Path: "/up",
+					Port: 3000,
+				},
+			},
+			"worker": {
+				Command: []string{"sidekiq"},
+			},
+		},
+		Tasks: config.TasksConfig{
+			Release: &config.TaskConfig{
+				Service: config.DefaultWebServiceName,
+				Command: []string{"rails", "db:migrate"},
+			},
+		},
+	}
+	nodes := map[string]config.SoloNode{
+		"worker-a": {Labels: []string{config.DefaultWorkerRole}},
+		"web-a":    {Labels: []string{config.DefaultWebRole}},
+	}
+
+	got, err := validateSoloNodeSchedule(cfg, nodes)
+	if err != nil {
+		t.Fatalf("validateSoloNodeSchedule() error = %v", err)
+	}
+	if got != "web-a" {
+		t.Fatalf("release node = %q, want web-a", got)
 	}
 }
 
@@ -166,11 +197,9 @@ func TestSoloNodeCanRunIngressRequiresAllIngressTargetServices(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			"web": {
-				Kind:  config.ServiceKindWeb,
 				Ports: []config.ServicePort{{Name: "http", Port: 3000}},
 			},
 			"api": {
-				Kind:  config.ServiceKindWorker,
 				Ports: []config.ServicePort{{Name: "metrics", Port: 9090}},
 			},
 		},
@@ -899,13 +928,11 @@ func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
 		App: config.AppConfig{Type: config.AppTypeRails},
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
-				Kind:        config.ServiceKindWeb,
 				Env:         map[string]string{},
 				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
 			},
 			"worker": {
-				Kind: config.ServiceKindWorker,
 				Env:  map[string]string{},
 			},
 		},
@@ -942,7 +969,6 @@ func TestApplySoloRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
 		App: config.AppConfig{Type: config.AppTypeRails},
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
-				Kind:        config.ServiceKindWeb,
 				Env:         map[string]string{},
 				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
 				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},

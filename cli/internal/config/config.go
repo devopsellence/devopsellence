@@ -55,9 +55,6 @@ type ServicePort struct {
 }
 
 type ServiceConfig struct {
-	// Kind is inferred after load/defaulting for internal scheduling and placement logic.
-	// It is not part of the repo config schema and is never serialized back to YAML/JSON.
-	Kind        string            `yaml:"-" json:"-"`
 	Image       string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Command     []string          `yaml:"command,omitempty" json:"command,omitempty"`
 	Args        []string          `yaml:"args,omitempty" json:"args,omitempty"`
@@ -326,7 +323,6 @@ func DefaultProjectConfigForType(organization, project, environment, appType str
 		},
 		Services: map[string]ServiceConfig{
 			DefaultWebServiceName: {
-				Kind:       ServiceKindWeb,
 				Env:        map[string]string{},
 				SecretRefs: []SecretRef{},
 				Volumes:    []Volume{},
@@ -480,7 +476,6 @@ func applyDefaults(cfg *ProjectConfig) {
 				service.Healthcheck.Port = service.HTTPPort(DefaultWebPort)
 			}
 		}
-		service.Kind = inferredServiceKind(name, service)
 		cfg.Services[name] = service
 	}
 	if cfg.Tasks.Release != nil {
@@ -657,7 +652,7 @@ func validateService(name string, service ServiceConfig) error {
 		}
 		seenPorts[port.Name] = true
 	}
-	serviceKind := inferredServiceKind(name, service)
+	serviceKind := InferredServiceKind(name, service)
 	if serviceKind == ServiceKindWeb {
 		if service.HTTPPort(0) <= 0 {
 			return fmt.Errorf("services.%s must expose an http port", name)
@@ -765,25 +760,20 @@ func (cfg ProjectConfig) ServiceNames() []string {
 	return names
 }
 
-func (cfg ProjectConfig) ServicesByKind(kind string) []string {
-	names := []string{}
+func (cfg ProjectConfig) PrimaryWebServiceName() (string, bool) {
+	services := []string{}
 	for _, name := range cfg.ServiceNames() {
-		if cfg.Services[name].Kind == kind {
-			names = append(names, name)
+		if InferredServiceKind(name, cfg.Services[name]) == ServiceKindWeb {
+			services = append(services, name)
 		}
 	}
-	return names
-}
-
-func (cfg ProjectConfig) PrimaryWebServiceName() (string, bool) {
-	services := cfg.ServicesByKind(ServiceKindWeb)
 	if len(services) == 0 {
 		return "", false
 	}
 	if len(services) == 1 {
 		return services[0], true
 	}
-	if _, ok := cfg.Services[DefaultWebServiceName]; ok && cfg.Services[DefaultWebServiceName].Kind == ServiceKindWeb {
+	if service, ok := cfg.Services[DefaultWebServiceName]; ok && InferredServiceKind(DefaultWebServiceName, service) == ServiceKindWeb {
 		return DefaultWebServiceName, true
 	}
 	return "", false
@@ -812,7 +802,7 @@ func (service ServiceConfig) HasPortNamed(name string) bool {
 	return false
 }
 
-func inferredServiceKind(name string, service ServiceConfig) string {
+func InferredServiceKind(name string, service ServiceConfig) string {
 	if service.HasPortNamed("http") || service.Healthcheck != nil || strings.TrimSpace(name) == DefaultWebServiceName {
 		return ServiceKindWeb
 	}

@@ -203,7 +203,7 @@ func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 		snapshot.ReleaseTask = &releaseTask
 		snapshot.ReleaseService = cfg.ReleaseTask().Service
 		if service, ok := cfg.Services[cfg.ReleaseTask().Service]; ok {
-			snapshot.ReleaseServiceKind = service.Kind
+			snapshot.ReleaseServiceKind = config.InferredServiceKind(cfg.ReleaseTask().Service, service)
 		}
 	}
 	if cfg.Ingress != nil {
@@ -211,7 +211,7 @@ func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 		if serviceName, ok := cfg.PrimaryWebServiceName(); ok {
 			snapshot.IngressService = serviceName
 			if service, ok := cfg.Services[serviceName]; ok {
-				snapshot.IngressServiceKind = service.Kind
+				snapshot.IngressServiceKind = config.InferredServiceKind(serviceName, service)
 			}
 		}
 	}

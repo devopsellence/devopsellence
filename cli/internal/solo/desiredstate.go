@@ -150,7 +150,6 @@ func BuildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 		if !shouldScheduleService(labels, serviceKind) {
 			continue
 		}
-		service.Kind = serviceKind
 		rendered, err := buildService(serviceName, service, imageTag, secrets)
 		if err != nil {
 			return nil, fmt.Errorf("build service %s: %w", serviceName, err)
@@ -545,7 +544,7 @@ func shouldScheduleReleaseTask(labels []string, cfg *config.ProjectConfig) bool 
 	if !ok {
 		return false
 	}
-	return shouldScheduleService(labels, service.Kind)
+	return shouldScheduleService(labels, effectiveServiceKind(release.Service, service))
 }
 
 func hasLabel(labels []string, want string) bool {
@@ -559,14 +558,7 @@ func hasLabel(labels []string, want string) bool {
 }
 
 func effectiveServiceKind(name string, svc config.ServiceConfig) string {
-	kind := strings.TrimSpace(svc.Kind)
-	if kind != "" {
-		return kind
-	}
-	if svc.HasPortNamed("http") || svc.Healthcheck != nil || strings.TrimSpace(name) == config.DefaultWebServiceName {
-		return config.ServiceKindWeb
-	}
-	return config.ServiceKindWorker
+	return config.InferredServiceKind(name, svc)
 }
 
 func buildService(serviceName string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (serviceJSON, error) {
@@ -580,7 +572,7 @@ func buildService(serviceName string, svc config.ServiceConfig, imageTag string,
 	}
 	c := serviceJSON{
 		Name:  serviceName,
-		Kind:  svc.Kind,
+		Kind:  effectiveServiceKind(serviceName, svc),
 		Image: image,
 		Env:   env,
 	}

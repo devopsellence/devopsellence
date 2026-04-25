@@ -317,7 +317,6 @@ func TestRedactDeploySnapshotSecretsRemovesSecretValues(t *testing.T) {
 
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Services["web"] = config.ServiceConfig{
-		Kind: config.ServiceKindWeb,
 		Env:  map[string]string{"PLAIN": "value"},
 		SecretRefs: []config.SecretRef{
 			{Name: "DATABASE_URL"},

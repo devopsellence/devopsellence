@@ -17,7 +17,6 @@ func boolPtr(value bool) *bool {
 func baseProject() *config.ProjectConfig {
 	cfg := config.DefaultProjectConfig("solo", "myapp", config.DefaultEnvironment)
 	cfg.Services["web"] = config.Service{
-		Kind:    config.ServiceKindWeb,
 		Command: []string{"rails", "server"},
 		Env:     map[string]string{"RAILS_ENV": "production"},
 		SecretRefs: []config.SecretRef{
@@ -75,7 +74,6 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
-		Kind:    config.ServiceKindWorker,
 		Command: []string{"sidekiq"},
 		Env:     map[string]string{"QUEUE": "default"},
 	}
@@ -110,7 +108,6 @@ func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 func TestBuildDesiredState_MapsArgsToContainerCommand(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["web"] = config.Service{
-		Kind:        config.ServiceKindWeb,
 		Command:     []string{"/app"},
 		Args:        []string{"web", "--port", "3000"},
 		Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
@@ -145,7 +142,6 @@ func TestBuildDesiredState_MapsArgsToContainerCommand(t *testing.T) {
 func TestBuildDesiredStateForLabelsFiltersServicesByKindLabel(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
-		Kind:    config.ServiceKindWorker,
 		Command: []string{"sidekiq"},
 	}
 	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"rails", "db:migrate"}}
@@ -239,7 +235,6 @@ func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
 	cfg := baseProject()
 	cfg.Services["jobs"] = config.Service{
-		Kind:    config.ServiceKindWorker,
 		Command: []string{"sidekiq"},
 	}
 	cfg.Ingress = &config.IngressConfig{

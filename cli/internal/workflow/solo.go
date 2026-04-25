@@ -323,15 +323,16 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.SoloNode) (string, error) {
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
+		serviceKind := config.InferredServiceKind(serviceName, service)
 		scheduled := false
 		for _, nodeName := range sortedSoloNodeNames(nodes) {
-			if soloNodeCanRunKind(nodes[nodeName], service.Kind) {
+			if soloNodeCanRunKind(nodes[nodeName], serviceKind) {
 				scheduled = true
 				break
 			}
 		}
 		if !scheduled {
-			return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q for service %q", service.Kind, serviceName)
+			return "", fmt.Errorf("solo deploy requires at least one selected node labeled %q for service %q", serviceKind, serviceName)
 		}
 	}
 	release := cfg.ReleaseTask()
@@ -339,7 +340,7 @@ func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config
 		return "", nil
 	}
 	for _, nodeName := range sortedSoloNodeNames(nodes) {
-		if soloNodeCanRunKind(nodes[nodeName], cfg.Services[release.Service].Kind) {
+		if soloNodeCanRunKind(nodes[nodeName], config.InferredServiceKind(release.Service, cfg.Services[release.Service])) {
 			return nodeName, nil
 		}
 	}
@@ -373,14 +374,7 @@ func soloNodeCanRunIngress(node config.SoloNode, cfg *config.ProjectConfig) bool
 		if !ok {
 			return false
 		}
-		kind := strings.TrimSpace(service.Kind)
-		if kind == "" {
-			if service.HasPortNamed("http") || service.Healthcheck != nil || serviceName == config.DefaultWebServiceName {
-				kind = config.ServiceKindWeb
-			} else {
-				kind = config.ServiceKindWorker
-			}
-		}
+		kind := config.InferredServiceKind(serviceName, service)
 		if !soloNodeCanRunKind(node, kind) {
 			return false
 		}
@@ -2171,9 +2165,6 @@ func applySoloRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, se
 	services := []string{}
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
-		if service.Kind == config.ServiceKindAccessory {
-			continue
-		}
 		if addServiceSecretRef(&service, railsMasterKeySecretName) {
 			cfg.Services[serviceName] = service
 			services = append(services, serviceName)

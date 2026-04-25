@@ -1543,7 +1543,6 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 	web.Env = map[string]string{"FROM_CONFIG": "1"}
 	project.Services[config.DefaultWebServiceName] = web
 	project.Services["worker"] = config.Service{
-		Kind:    config.ServiceKindWorker,
 		Command: []string{"./bin/jobs"},
 		Env:     map[string]string{"WORKER_FROM_CONFIG": "1"},
 	}
@@ -1628,6 +1627,12 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 
 	webPayload := releaseServicePayload(t, releaseCaptured, config.DefaultWebServiceName)
 	workerPayload := releaseServicePayload(t, releaseCaptured, "worker")
+	if _, ok := webPayload["kind"]; ok {
+		t.Fatalf("web payload unexpectedly includes kind: %#v", webPayload)
+	}
+	if _, ok := workerPayload["kind"]; ok {
+		t.Fatalf("worker payload unexpectedly includes kind: %#v", workerPayload)
+	}
 	if got, want := webPayload["env"], map[string]any{"FROM_CONFIG": "1", "RAILS_ENV": "production", "WEB_ONLY": "true"}; !equalJSONMap(got, want) {
 		t.Fatalf("web env = %#v, want %#v", got, want)
 	}
@@ -2162,7 +2167,7 @@ func TestDeployRailsSyncsMasterKeySecret(t *testing.T) {
 
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Command: []string{"bin/jobs"}}
+	project.Services["worker"] = config.ServiceConfig{Command: []string{"bin/jobs"}}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -3351,7 +3356,7 @@ func TestDeployRailsSecretSyncRunsConcurrently(t *testing.T) {
 
 	root := makeGitRailsRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{Kind: config.ServiceKindWorker, Command: []string{"bin/jobs"}}
+	project.Services["worker"] = config.ServiceConfig{Command: []string{"bin/jobs"}}
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

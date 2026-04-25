@@ -16,7 +16,6 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	root := t.TempDir()
 	project := DefaultProjectConfig("acme", "ShopApp", "staging")
 	project.Services["jobs"] = Service{
-		Kind:       ServiceKindWorker,
 		Command:    []string{"./bin/jobs"},
 		Env:        map[string]string{"QUEUE": "default"},
 		SecretRefs: []SecretRef{{Name: "API_KEY", Secret: "gsm://projects/test/secrets/api-key"}},
@@ -188,7 +187,6 @@ func TestValidateAcceptsWorkerWithoutExtraPlacementFields(t *testing.T) {
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
 	project.Services["jobs"] = Service{
-		Kind:    ServiceKindWorker,
 		Command: []string{"./bin/jobs"},
 	}
 
@@ -400,7 +398,6 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 		TLS: IngressTLSConfig{Mode: "auto", Email: "ops@example.test"},
 	}
 	project.Services["web"] = Service{
-		Kind:       ServiceKindWeb,
 		Command:    []string{"bundle", "exec", "puma"},
 		Args:       []string{"-C", "config/puma.rb"},
 		Env:        map[string]string{"RAILS_ENV": "production", "BASE_ONLY": "1"},

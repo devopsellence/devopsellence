@@ -2643,14 +2643,7 @@ func (a *App) currentEnvironmentSecrets(ctx context.Context, callAuth authCall, 
 }
 
 func railsRuntimeServices(cfg config.ProjectConfig) []string {
-	services := []string{}
-	for _, name := range cfg.ServiceNames() {
-		if cfg.Services[name].Kind == config.ServiceKindAccessory {
-			continue
-		}
-		services = append(services, name)
-	}
-	return services
+	return cfg.ServiceNames()
 }
 
 func runtimeServices(cfg config.ProjectConfig) []string {
@@ -4074,12 +4067,11 @@ func findEnvironment(environments []api.Environment, name string) (api.Environme
 	return api.Environment{}, false
 }
 
-func servicePayload(service *config.Service) map[string]any {
+func servicePayload(_ string, service *config.Service) map[string]any {
 	if service == nil {
 		return nil
 	}
 	payload := map[string]any{
-		"kind":        service.Kind,
 		"image":       strings.TrimSpace(service.Image),
 		"env":         cloneEnv(service.Env),
 		"secret_refs": service.SecretRefs,
@@ -4110,7 +4102,7 @@ func servicePayloads(services map[string]config.ServiceConfig) map[string]any {
 	sort.Strings(names)
 	for _, name := range names {
 		service := services[name]
-		payloads[name] = servicePayload(&service)
+		payloads[name] = servicePayload(name, &service)
 	}
 	return payloads
 }

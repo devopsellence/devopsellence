@@ -11,8 +11,7 @@ module NodeDesiredState
       ingress = environment.environment_ingress
       return nil unless ingress&.hostname.present?
 
-      hosts = configured_hosts(release)
-      hosts = [ingress.hostname] if hosts.empty?
+      hosts = desired_hosts(ingress:, release:)
 
       tls = configured_tls(release)
       redirect_http = configured_redirect_http(release)
@@ -79,6 +78,14 @@ module NodeDesiredState
         value.presence
       end
 
+      IngressHostnames.normalize_all(hosts)
+    end
+
+    def self.desired_hosts(ingress:, release:)
+      hosts = IngressHostnames.normalize_all(ingress.hosts)
+      hosts.concat(configured_hosts(release))
+      hosts = hosts.uniq
+      hosts = [ingress.hostname] if hosts.empty?
       IngressHostnames.normalize_all(hosts)
     end
 

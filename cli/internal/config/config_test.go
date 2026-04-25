@@ -327,6 +327,48 @@ func TestLoadNormalizesIngressHostsAndRuleHosts(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsDuplicateIngressHostsAfterNormalization(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, FilePath)
+	content := strings.Join([]string{
+		"schema_version: 6",
+		"organization: acme",
+		"project: ShopApp",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+		"ingress:",
+		"  hosts:",
+		"    - App.Example.com",
+		"    - app.example.COM",
+		"  rules:",
+		"    - match:",
+		"        host: app.example.com",
+		"        path_prefix: /",
+		"      target:",
+		"        service: web",
+		"        port: http",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "ingress.hosts contains duplicate host") {
+		t.Fatalf("expected duplicate ingress host error, got %v", err)
+	}
+}
+
 func TestValidateIngressRulesTreatHostsCaseInsensitively(t *testing.T) {
 	t.Parallel()
 

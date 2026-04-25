@@ -577,14 +577,12 @@ func normalizeStringList(values []string) []string {
 }
 
 func normalizeIngressHostList(values []string) []string {
-	seen := make(map[string]bool, len(values))
 	normalized := make([]string, 0, len(values))
 	for _, value := range values {
 		value = normalizedIngressHost(value)
-		if value == "" || seen[value] {
+		if value == "" {
 			continue
 		}
-		seen[value] = true
 		normalized = append(normalized, value)
 	}
 	return normalized

@@ -28,6 +28,7 @@ Critical defaults:
 | `agent/` | Go | Single-node reconciler: desired state, Docker, Envoy, cloudflared, status. |
 | `cli/` | Go | `devopsellence` CLI: login, deploy, secrets, nodes, solo/shared workflows. |
 | `control-plane/` | Rails 8 | Web/API app: tenants, deployments, nodes, GCP/standalone resources. |
+| `deployment-core/` | Go | Common deployment core: config interpretation, validation, planning, desired-state generation. |
 | `test/e2e/` | Ruby + shell | Root-owned integration harness across agent, CLI, control plane, GCP mock. |
 | `test/support/gcp-mock/` | Go | Local emulator for GCP APIs used by hermetic e2e tests. |
 
@@ -40,6 +41,7 @@ Use `mise`.
 ```sh
 mise run test:agent
 mise run test:cli
+mise run test:core
 mise run test:cp
 mise run e2e-shared
 mise run e2e-solo

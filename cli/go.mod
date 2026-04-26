@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/keygen v0.5.4
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/devopsellence/devopsellence/deployment-core v0.0.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.50.0
 	golang.org/x/term v0.42.0
@@ -37,3 +38,5 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 )
+
+replace github.com/devopsellence/devopsellence/deployment-core => ../deployment-core

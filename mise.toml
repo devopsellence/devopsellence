@@ -12,6 +12,11 @@ description = "Run CLI tests"
 dir = "cli"
 run = "mise run test"
 
+[tasks."test:core"]
+description = "Run deployment core tests"
+dir = "deployment-core"
+run = "mise run test"
+
 [tasks."test:cp"]
 description = "Run control plane tests"
 dir = "control-plane"
@@ -31,7 +36,7 @@ run = "docker build -f test/e2e/runner.Dockerfile -t ${DEVOPSELLENCE_E2E_RUNNER_
 
 [tasks."test:all"]
 description = "Run all tests"
-depends = ["test:agent", "test:cli", "test:cp"]
+depends = ["test:agent", "test:cli", "test:core", "test:cp"]
 
 [tasks."build:agent"]
 description = "Build agent"

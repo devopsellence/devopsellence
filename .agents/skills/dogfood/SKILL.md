@@ -32,13 +32,16 @@ Dogfood is not only e2e. It asks: can a target user complete the job, understand
    - Read `references/scenarios.md` only when scenario detail is needed.
 
 2. Create run artifact.
-   - Prefer `ruby .agents/skills/dogfood/scripts/new_run.rb <scenario-slug>` from repo root.
-   - Use `/tmp/devopsellence-dogfood/...` unless the user asks for repo-tracked reports.
+   - Prefer `ruby .agents/skills/dogfood/scripts/new_run.rb <scenario>` from repo root; multi-word scenarios may be quoted or passed as multiple words.
+   - If the user names a devopsellence version, pass `--version <version>`.
+   - If no version is named, omit `--version` and dogfood the default stable installer/control-plane version.
+   - Use the temp run path printed by the helper unless the user asks for repo-tracked reports.
    - Keep `commands.log` as you go.
 
 3. Blind pass.
    - Use docs, CLI help, UI, and terminal feedback.
    - Do not inspect source.
+   - Install the requested target from `commands.log`: preview versions use `curl -fsSL https://www.devopsellence.com/lfg.sh?version=<version> | bash`; default stable uses `curl -fsSL https://www.devopsellence.com/lfg.sh | bash`.
    - Work from user goals, not privileged steps.
    - Stop only for hard blockers; otherwise recover like a user would.
 

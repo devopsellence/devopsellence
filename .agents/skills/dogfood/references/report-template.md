@@ -2,6 +2,8 @@
 
 Scenario:
 Persona:
+Target version:
+Install command:
 Date:
 Commit:
 Run path:

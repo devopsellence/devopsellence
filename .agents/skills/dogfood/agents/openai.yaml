@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dogfood"
+  short_description: "Repeatable devopsellence dogfooding runs"
+  default_prompt: "Dogfood devopsellence: pick a scenario, run a blind pass, then an expert pass, and write a report."

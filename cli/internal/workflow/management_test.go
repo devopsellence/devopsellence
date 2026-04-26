@@ -50,8 +50,10 @@ func TestInitWritesConfigOnly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, config.FilePath)); err != nil {
 		t.Fatalf("stat config: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "AGENTS.md")); !os.IsNotExist(err) {
-		t.Fatalf("AGENTS.md stat error = %v, want not exist", err)
+	if _, err := os.Stat(filepath.Join(root, "AGENTS.md")); err == nil {
+		t.Fatal("AGENTS.md exists, want not exist")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat AGENTS.md: %v", err)
 	}
 }
 

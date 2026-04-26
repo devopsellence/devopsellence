@@ -30,7 +30,7 @@ curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 Install the agent skill:
 
 ```bash
-npx skills add elvinefendi/devopsellence --skill devopsellence -g
+npx skills add devopsellence/devopsellence --skill devopsellence -g
 ```
 
 Check local tooling:

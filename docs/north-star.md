@@ -160,7 +160,7 @@ Publishing desired state should be durable, auditable, and mode-independent.
 
 - solo should be able to publish through local artifacts;
 - shared should be able to publish through object storage and service APIs;
-- the node-agent-facing document shape should remain stable.
+- the node agent facing document shape should remain stable.
 
 ### Reconciliation
 
@@ -233,7 +233,7 @@ When tradeoffs appear, bias toward this order:
 
 1. strengthen the shared deploy model;
 2. make solo and shared semantics converge;
-3. stabilize the desired-state contract and node-agent adapter seams;
+3. stabilize the desired-state contract and node agent adapter seams;
 4. keep product shells thin;
 5. add provider-specific capabilities through adapters;
 6. only then expand outward into richer workflow and product layers.

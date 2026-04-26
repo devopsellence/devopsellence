@@ -8,7 +8,7 @@ devopsellence starts from a simple belief: most teams do not need a new compute 
 
 The problem is not that infrastructure providers failed to invent enough abstractions. The problem is that using the primitives well still requires too much glue code, too many sharp edges, and too much operational ceremony. devopsellence aims to be that missing glue. It is a toolkit and a building block, not a new universe. The closest framing is Mitchell Hashimoto's [building block economy](https://mitchellh.com/writing/building-block-economy): choose strong primitives, compose them cleanly, avoid replacing them with a grander but leakier abstraction.
 
-In practical terms, devopsellence is very close to "take a small compose-style application description and apply it consistently across a fleet of VMs." Today the concrete configuration is `devopsellence.yml` and the node-agent desired-state schema, not a literal `docker-compose.yml`, but the mental model is intentionally that simple.
+In practical terms, devopsellence is very close to "take a small compose-style application description and apply it consistently across a fleet of VMs." Today the concrete configuration is `devopsellence.yml` and the node agent desired-state schema, not a literal `docker-compose.yml`, but the mental model is intentionally that simple.
 
 ## Strong opinions
 
@@ -57,7 +57,7 @@ These assumptions are visible in the code today. The product has a solo path tha
 - The node agent is the mandatory runtime component. Everything else is replaceable.
 - Desired state is the control surface. The node agent should not need imperative per-deploy shell choreography to know what to run.
 - Desired state should describe node runtime state in a mode-independent shape. Solo should be able to use that shape through local function calls and files; shared should be able to use that shape through service calls and remote stores.
-- Mode is management-plane vocabulary, not node-agent vocabulary. The node-agent runtime should not branch on solo or shared; it should be wired with concrete adapters for desired-state source, secret resolution, status reporting, registry auth, and related IO.
+- Mode is management-plane vocabulary, not node agent vocabulary. The node agent runtime should not branch on solo or shared; it should be wired with concrete adapters for desired-state source, secret resolution, status reporting, registry auth, and related IO.
 - Solo mode uses the local filesystem as the source of truth for desired state and local status artifacts.
 - Shared mode should use simple external primitives: object storage for desired state, a secret manager for secrets, and a container registry for images.
 - The runtime data plane should stay decoupled from the management plane as much as possible.

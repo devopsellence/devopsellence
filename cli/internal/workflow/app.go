@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -9,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +29,6 @@ import (
 	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/cli/internal/ui"
 
-	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -81,8 +78,6 @@ type App struct {
 	soloNodeAttachFn    func(context.Context, SoloNodeAttachOptions) error
 	soloRuntimeDoctorFn func(context.Context, SoloDoctorOptions) error
 	soloSecretResolveFn func(context.Context, solo.SecretRecord) (string, error)
-	promptReaderSource  io.Reader
-	promptReader        *bufio.Reader
 }
 
 type deployTimings struct {
@@ -348,7 +343,7 @@ type resolvedDeployTarget struct {
 	CreatedEnv     bool
 }
 
-func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
+func NewApp(in io.Reader, out, err io.Writer, cwd string) *App {
 	apiBase := firstNonEmpty(os.Getenv("DEVOPSELLENCE_BASE_URL"), authDefaultBase())
 	loginBase := apiBase
 	store := state.New(state.DefaultPath(filepath.Join("devopsellence", "auth.json")))
@@ -357,7 +352,7 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 	soloStateStore := solo.NewStateStore(solo.DefaultStatePath())
 	return &App{
 		In:                 in,
-		Printer:            output.New(out, err, jsonMode),
+		Printer:            output.New(out, err),
 		Auth:               auth.New(store, apiBase, loginBase),
 		API:                api.New(apiBase),
 		State:              store,
@@ -1085,35 +1080,7 @@ func (a *App) waitForDeployment(ctx context.Context, token string, result map[st
 	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if a.Printer.Interactive {
-		return a.waitForDeploymentInteractive(rolloutCtx, token, result, deploymentID, pollInterval)
-	}
 	return a.waitForDeploymentPlain(rolloutCtx, token, deploymentID, pollInterval)
-}
-
-func (a *App) waitForDeploymentInteractive(ctx context.Context, token string, result map[string]any, deploymentID int, pollInterval time.Duration) (api.DeploymentProgress, error) {
-	var latest api.DeploymentProgress
-	_, err := ui.MonitorDeployment(ctx, a.Printer.Out, "Rollout progress", pollInterval, func(fetchCtx context.Context) (ui.DeploymentSnapshot, error) {
-		fetchErr := a.callWithAuthRetry(fetchCtx, &token, a.Printer.Interactive, nil, func(accessToken string) error {
-			var callErr error
-			latest, callErr = a.API.DeploymentProgress(fetchCtx, accessToken, deploymentID)
-			return callErr
-		})
-		if fetchErr != nil {
-			if isTransientServerError(fetchErr) {
-				return deploymentSnapshot(result, latest), nil
-			}
-			return ui.DeploymentSnapshot{}, fetchErr
-		}
-		return deploymentSnapshot(result, latest), nil
-	})
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return latest, ExitError{Code: 1, Err: rolloutTimeoutError(latest)}
-		}
-		return latest, err
-	}
-	return latest, rolloutOutcome(latest)
 }
 
 func (a *App) waitForDeploymentPlain(ctx context.Context, token string, deploymentID int, pollInterval time.Duration) (api.DeploymentProgress, error) {
@@ -1571,38 +1538,7 @@ func (a *App) NodeAssign(ctx context.Context, opts NodeAssignOptions) error {
 		return err
 	}
 	if opts.NodeID <= 0 {
-		if !a.Printer.Interactive {
-			return ExitError{Code: 2, Err: errors.New("node id required: node attach <id>")}
-		}
-		organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, opts.Organization)
-		if err != nil {
-			return err
-		}
-		nodes, err := a.API.ListNodes(ctx, tokens.AccessToken, organization.ID)
-		if err != nil {
-			return wrapError(err)
-		}
-		var unassigned []api.Node
-		for _, n := range nodes {
-			if len(n.Environment) == 0 && strings.TrimSpace(n.RevokedAt) == "" {
-				unassigned = append(unassigned, n)
-			}
-		}
-		if len(unassigned) == 0 {
-			return ExitError{Code: 1, Err: errors.New("no unassigned nodes")}
-		}
-		for i, n := range unassigned {
-			a.Printer.Println(fmt.Sprintf("%d) node #%d  %s  labels=%s", i+1, n.ID, firstNonEmpty(n.Name, "(unnamed)"), strings.Join(n.Labels, ",")))
-		}
-		choice, err := a.promptLine("Select node", "")
-		if err != nil {
-			return ExitError{Code: 1, Err: err}
-		}
-		idx, err := strconv.Atoi(strings.TrimSpace(choice))
-		if err != nil || idx < 1 || idx > len(unassigned) {
-			return ExitError{Code: 2, Err: fmt.Errorf("invalid selection: %s", choice)}
-		}
-		opts.NodeID = unassigned[idx-1].ID
+		return ExitError{Code: 2, Err: errors.New("node id required: node attach <id>")}
 	}
 	workspace, err := a.resolveWorkspace(ctx, tokens.AccessToken, opts.Organization, opts.Project, opts.Environment, false)
 	if err != nil {
@@ -2095,13 +2031,6 @@ func (a *App) removeWorkspaceSecretRef(workspaceRoot, serviceName, name string) 
 
 func (a *App) Claim(ctx context.Context, opts ClaimOptions) error {
 	email := strings.TrimSpace(opts.Email)
-	if email == "" && a.Printer.Interactive {
-		value, err := a.promptLine("Claim email", "")
-		if err != nil {
-			return ExitError{Code: 1, Err: err}
-		}
-		email = strings.TrimSpace(value)
-	}
 	if email == "" {
 		return ExitError{Code: 1, Err: errors.New("claim email is required")}
 	}
@@ -2698,21 +2627,6 @@ func (a *App) resolveDeployTarget(ctx context.Context, callAuth authCall, input 
 
 	preferredOrganizationID, _ := a.lastOrganizationID()
 	response, err := request(preferredOrganizationID)
-	if err != nil && shouldPromptForOrganization(err, input) {
-		orgInput, promptErr := a.chooseOrganizationInput(ctx, callAuth)
-		if promptErr != nil {
-			return resolvedDeployTarget{}, promptErr
-		}
-		response, err = func() (api.DeployTargetResponse, error) {
-			var resolved api.DeployTargetResponse
-			callErr := callAuth(func(accessToken string) error {
-				var innerErr error
-				resolved, innerErr = a.API.ResolveDeployTarget(ctx, accessToken, orgInput, input.Project, input.Environment, 0)
-				return innerErr
-			})
-			return resolved, callErr
-		}()
-	}
 	if err != nil {
 		return resolvedDeployTarget{}, ExitError{Code: 1, Err: err}
 	}
@@ -2725,41 +2639,6 @@ func (a *App) resolveDeployTarget(ctx context.Context, callAuth authCall, input 
 		CreatedProject: response.ProjectCreated,
 		CreatedEnv:     response.EnvironmentCreated,
 	}, nil
-}
-
-func shouldPromptForOrganization(err error, input resolveDeployTargetInput) bool {
-	if !input.Interactive || input.NonInteractive || strings.TrimSpace(input.Organization) != "" {
-		return false
-	}
-	var statusErr *api.StatusError
-	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnprocessableEntity {
-		return false
-	}
-	return strings.Contains(strings.ToLower(statusErr.Error()), "multiple organizations available")
-}
-
-func (a *App) chooseOrganizationInput(ctx context.Context, callAuth authCall) (string, error) {
-	var orgs []api.Organization
-	if err := callAuth(func(accessToken string) error {
-		var callErr error
-		orgs, callErr = a.API.ListOrganizations(ctx, accessToken)
-		return callErr
-	}); err != nil {
-		return "", ExitError{Code: 1, Err: err}
-	}
-	if len(orgs) == 0 {
-		return "", ExitError{Code: 2, Err: errors.New("no organizations found")}
-	}
-	sort.Slice(orgs, func(i, j int) bool { return orgs[i].Name < orgs[j].Name })
-	a.Printer.Println("Organizations:")
-	for _, org := range orgs {
-		a.Printer.Println(" ", fmt.Sprintf("%d", org.ID), org.Name)
-	}
-	choice, err := a.promptLine("Organization id or name", "")
-	if err != nil {
-		return "", ExitError{Code: 1, Err: err}
-	}
-	return choice, nil
 }
 
 func parseRuntimeValueOverrides(raw string, fieldName string) (runtimeValueOverrides, error) {
@@ -3002,42 +2881,6 @@ func isTransientServerError(err error) bool {
 	return false
 }
 
-func deploymentSnapshot(result map[string]any, progress api.DeploymentProgress) ui.DeploymentSnapshot {
-	nodes := make([]ui.DeploymentNode, 0, len(progress.Nodes))
-	for _, node := range progress.Nodes {
-		nodes = append(nodes, ui.DeploymentNode{
-			Name:       firstNonEmpty(node.Name, fmt.Sprintf("node-%d", node.ID)),
-			Phase:      node.Phase,
-			Detail:     firstNonEmpty(node.Error, node.Message),
-			ReportedAt: node.ReportedAt,
-		})
-	}
-
-	publicURL := stringFromMap(result, "public_url")
-	if publicURL == "" && progress.Ingress != nil {
-		publicURL = progress.Ingress.PublicURL
-	}
-
-	return ui.DeploymentSnapshot{
-		Project:       nestedString(result, "project", "name"),
-		Environment:   progress.Environment.Name,
-		Revision:      nestedString(progress.Release, "revision"),
-		PublicURL:     publicURL,
-		Status:        progress.Status,
-		StatusMessage: firstNonEmpty(progress.ErrorMessage, progress.StatusMessage, stringFromMap(result, "error_message"), stringFromMap(result, "status_message")),
-		Summary: ui.DeploymentSummary{
-			AssignedNodes: progress.Summary.AssignedNodes,
-			Pending:       progress.Summary.Pending,
-			Reconciling:   progress.Summary.Reconciling,
-			Settled:       progress.Summary.Settled,
-			Error:         progress.Summary.Error,
-			Complete:      progress.Summary.Complete,
-			Failed:        progress.Summary.Failed,
-		},
-		Nodes: nodes,
-	}
-}
-
 func deploymentProgressMap(progress api.DeploymentProgress) map[string]any {
 	return map[string]any{
 		"id":             progress.ID,
@@ -3139,7 +2982,7 @@ func randomRequestToken() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func (a *App) resolveOrganization(ctx context.Context, token, input string, interactive bool) (api.Organization, bool, error) {
+func (a *App) resolveOrganization(ctx context.Context, token, input string, _ bool) (api.Organization, bool, error) {
 	orgs, err := a.API.ListOrganizations(ctx, token)
 	if err != nil {
 		return api.Organization{}, false, ExitError{Code: 1, Err: err}
@@ -3175,24 +3018,7 @@ func (a *App) resolveOrganization(ctx context.Context, token, input string, inte
 			}
 		}
 	}
-	if !interactive {
-		return api.Organization{}, false, ExitError{Code: 2, Err: errors.New("multiple organizations available; rerun with --org or interactive mode")}
-	}
-
-	sort.Slice(orgs, func(i, j int) bool { return orgs[i].Name < orgs[j].Name })
-	a.Printer.Println("Organizations:")
-	for _, org := range orgs {
-		a.Printer.Println(" ", fmt.Sprintf("%d", org.ID), org.Name)
-	}
-	choice, err := a.promptLine("Organization id or name", "")
-	if err != nil {
-		return api.Organization{}, false, ExitError{Code: 1, Err: err}
-	}
-	if match, ok := findOrganization(orgs, choice); ok {
-		_ = a.rememberOrganization(match.ID)
-		return match, false, nil
-	}
-	return api.Organization{}, false, ExitError{Code: 2, Err: errors.New("organization not found")}
+	return api.Organization{}, false, ExitError{Code: 2, Err: errors.New("multiple organizations available; pass --org")}
 }
 
 func (a *App) resolveOrganizationReadOnly(ctx context.Context, token, input string) (api.Organization, error) {
@@ -3847,28 +3673,6 @@ func joinNotices(parts ...string) string {
 	return strings.Join(values, "; ")
 }
 
-func (a *App) promptLine(label, fallback string) (string, error) {
-	a.Printer.Printf("%s", label)
-	if fallback != "" {
-		a.Printer.Printf(" [%s]", fallback)
-	}
-	a.Printer.Printf(": ")
-	if a.promptReader == nil || a.promptReaderSource != a.In {
-		a.promptReaderSource = a.In
-		a.promptReader = bufio.NewReader(a.In)
-	}
-	reader := a.promptReader
-	line, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	text := strings.TrimSpace(line)
-	if text == "" {
-		return fallback, nil
-	}
-	return text, nil
-}
-
 func (a *App) secretValue(opts SecretSetOptions) (string, error) {
 	if opts.ValueStdin {
 		data, err := io.ReadAll(a.In)
@@ -3887,35 +3691,7 @@ func (a *App) secretValue(opts SecretSetOptions) (string, error) {
 	if opts.ValueProvided {
 		return "", ExitError{Code: 2, Err: errors.New("secret value is required")}
 	}
-	if !a.Printer.Interactive {
-		return "", ExitError{Code: 2, Err: errors.New("missing required option: --value or --stdin")}
-	}
-	return a.promptSecretValue("Secret value")
-}
-
-func (a *App) promptSecretValue(label string) (string, error) {
-	a.Printer.Printf("%s: ", label)
-	file, ok := a.In.(*os.File)
-	if !ok || !term.IsTerminal(int(file.Fd())) {
-		line, err := a.promptLine(label, "")
-		if err != nil {
-			return "", ExitError{Code: 1, Err: err}
-		}
-		if strings.TrimSpace(line) == "" {
-			return "", ExitError{Code: 2, Err: errors.New("secret value is required")}
-		}
-		return line, nil
-	}
-	bytes, err := term.ReadPassword(int(file.Fd()))
-	a.Printer.Println()
-	if err != nil {
-		return "", ExitError{Code: 1, Err: err}
-	}
-	value := string(bytes)
-	if strings.TrimSpace(value) == "" {
-		return "", ExitError{Code: 2, Err: errors.New("secret value is required")}
-	}
-	return value, nil
+	return "", ExitError{Code: 2, Err: errors.New("missing required option: --value or --stdin")}
 }
 
 func (a *App) registryPassword(opts OrganizationRegistrySetOptions) (string, error) {
@@ -3936,10 +3712,7 @@ func (a *App) registryPassword(opts OrganizationRegistrySetOptions) (string, err
 	if opts.PasswordProvided {
 		return "", ExitError{Code: 2, Err: errors.New("registry password is required")}
 	}
-	if !a.Printer.Interactive {
-		return "", ExitError{Code: 2, Err: errors.New("missing required option: --password or --password-stdin")}
-	}
-	return a.promptSecretValue("Registry password")
+	return "", ExitError{Code: 2, Err: errors.New("missing required option: --password or --password-stdin")}
 }
 
 func (a *App) rememberOrganization(id int) error {
@@ -3996,14 +3769,6 @@ func (a *App) lastOrganizationID() (int, bool) {
 		return value, true
 	}
 	return 0, false
-}
-
-func inputIsTTY(reader io.Reader) bool {
-	file, ok := reader.(*os.File)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(file.Fd()))
 }
 
 func wrapError(err error) error {

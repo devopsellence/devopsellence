@@ -16,12 +16,9 @@ import (
 )
 
 func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command {
-	var (
-		jsonMode    bool
-		verboseMode bool
-	)
+	var verboseMode bool
 
-	app := NewApp(in, out, err, jsonMode, cwd)
+	app := NewApp(in, out, err, cwd)
 
 	withTimeout := func(run func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
@@ -80,11 +77,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 
 	root := &cobra.Command{
 		Use:   "devopsellence",
-		Short: "Deploy containerized apps on VMs with devopsellence",
+		Short: "Agent-primary deployment toolkit for containerized apps on VMs",
 		Long: strings.Join([]string{
-			"devopsellence uses one root command vocabulary for two workspace modes:",
-			"  solo   - SSH-driven workflows with local source of truth",
-			"  shared - control-plane-backed workflows for team use",
+			"devopsellence is an agent-primary deployment toolkit for containerized apps on VMs.",
+			"Commands emit structured JSON by default and avoid terminal-only interaction.",
+			"Use explicit flags, stdin, plans, and desired-state operations instead of prompts.",
 			"",
 			"Pick a workspace mode once with `devopsellence mode use solo|shared`.",
 		}, "\n"),
@@ -98,12 +95,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		SilenceUsage:  true,
 		Version:       version.String(),
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
-			app.Printer.JSON = jsonMode
-			app.Printer.Interactive = !jsonMode && inputIsTTY(in) && app.Printer.Interactive
+			app.Printer.JSON = true
+			app.Printer.Interactive = false
 			app.Verbose = verboseMode
 		},
 	}
-	root.PersistentFlags().BoolVar(&jsonMode, "json", false, "Emit machine-readable JSON output")
 	root.PersistentFlags().BoolVar(&verboseMode, "verbose", false, "Emit detailed progress logs")
 	root.SetVersionTemplate("{{.Version}}\n")
 

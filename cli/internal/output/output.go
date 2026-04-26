@@ -4,11 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-
-	"golang.org/x/term"
 )
 
+// Printer writes command results. The CLI is agent-primary, so JSON is the
+// default and prompt-driven affordances are disabled.
 type Printer struct {
 	Out         io.Writer
 	Err         io.Writer
@@ -16,26 +15,19 @@ type Printer struct {
 	Interactive bool
 }
 
-func New(out, err io.Writer, jsonMode bool) Printer {
+func New(out, err io.Writer) Printer {
 	return Printer{
 		Out:         out,
 		Err:         err,
-		JSON:        jsonMode,
-		Interactive: !jsonMode && IsTTY(out),
+		JSON:        true,
+		Interactive: false,
 	}
-}
-
-func IsTTY(writer io.Writer) bool {
-	file, ok := writer.(*os.File)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(file.Fd()))
 }
 
 func (p Printer) PrintJSON(value any) error {
 	encoder := json.NewEncoder(p.Out)
 	encoder.SetIndent("", "  ")
+	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)
 }
 

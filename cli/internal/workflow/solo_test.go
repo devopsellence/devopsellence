@@ -385,7 +385,7 @@ func TestSoloStatusNodesWithoutAttachmentsReturnsEmptySet(t *testing.T) {
 	}
 
 	app := &App{
-		Printer:     output.New(io.Discard, io.Discard, true),
+		Printer:     output.New(io.Discard, io.Discard),
 		SoloState:   soloState,
 		ConfigStore: config.NewStore(),
 		Cwd:         workspaceRoot,
@@ -425,7 +425,7 @@ func TestRepublishSoloNodesReportsRemoteDockerCheck(t *testing.T) {
 	}
 
 	app := &App{
-		Printer:     output.New(io.Discard, io.Discard, false),
+		Printer:     output.New(io.Discard, io.Discard),
 		Docker:      &fakeDocker{imageMetadataErr: errors.New("Error response from daemon: No such image: demo:missing")},
 		ConfigStore: config.NewStore(),
 	}
@@ -535,7 +535,7 @@ func TestSoloNodeAttachPersistsDesiredStateOnRepublishError(t *testing.T) {
 	}
 
 	app := &App{
-		Printer:     output.New(io.Discard, io.Discard, false),
+		Printer:     output.New(io.Discard, io.Discard),
 		SoloState:   soloState,
 		ConfigStore: config.NewStore(),
 		Cwd:         workspaceRoot,
@@ -590,7 +590,7 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &App{
-		Printer:            output.New(&stdout, io.Discard, false),
+		Printer:            output.New(&stdout, io.Discard),
 		SoloState:          soloState,
 		ConfigStore:        config.NewStore(),
 		Git:                git.Client{},
@@ -606,9 +606,13 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	if got := readFakeSSHStatusCount(t, statusCountPath); got != 3 {
 		t.Fatalf("status poll count = %d, want 3", got)
 	}
-	outputText := stdout.String()
-	if !strings.Contains(outputText, "Deployed revision") {
-		t.Fatalf("stdout = %q, want deploy success line", outputText)
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment"] != "production" || payload["workload_revision"] == "" {
+		t.Fatalf("payload = %#v, want deploy JSON", payload)
+	}
+	revisions := jsonMapFromAny(t, payload["desired_state_revisions"])
+	if revisions["node-a"] == "" {
+		t.Fatalf("desired_state_revisions = %#v, want node revision", revisions)
 	}
 }
 
@@ -621,7 +625,7 @@ func TestWaitForSoloRolloutIgnoresMissingAndStaleStatusUntilExpectedRevisionSett
 	})
 
 	app := &App{
-		Printer:            output.New(io.Discard, io.Discard, false),
+		Printer:            output.New(io.Discard, io.Discard),
 		DeployPollInterval: 5 * time.Millisecond,
 		DeployTimeout:      time.Second,
 	}
@@ -645,7 +649,7 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	})
 
 	app := &App{
-		Printer:            output.New(io.Discard, io.Discard, false),
+		Printer:            output.New(io.Discard, io.Discard),
 		DeployPollInterval: 5 * time.Millisecond,
 		DeployTimeout:      100 * time.Millisecond,
 	}
@@ -678,7 +682,7 @@ func TestWaitForSoloRolloutTimesOutWhenExpectedRevisionNeverSettles(t *testing.T
 	})
 
 	app := &App{
-		Printer:            output.New(io.Discard, io.Discard, false),
+		Printer:            output.New(io.Discard, io.Discard),
 		DeployPollInterval: 5 * time.Millisecond,
 		DeployTimeout:      20 * time.Millisecond,
 	}
@@ -727,7 +731,7 @@ func TestWaitForSoloRolloutFailsClearlyOnStatusReadAndParseErrors(t *testing.T) 
 			installFakeSoloCommands(t, tt.responses)
 
 			app := &App{
-				Printer:            output.New(io.Discard, io.Discard, false),
+				Printer:            output.New(io.Discard, io.Discard),
 				DeployPollInterval: 5 * time.Millisecond,
 				DeployTimeout:      100 * time.Millisecond,
 			}
@@ -1134,7 +1138,7 @@ func TestEnsureSoloNodeCreateSSHPublicKeyGeneratesWhenNoDefaultKey(t *testing.T)
 
 	workspaceRoot := t.TempDir()
 	var stdout bytes.Buffer
-	app := &App{Printer: output.New(&stdout, io.Discard, false)}
+	app := &App{Printer: output.New(&stdout, io.Discard)}
 	opts := SoloNodeCreateOptions{}
 
 	if err := app.ensureSoloNodeCreateSSHPublicKey(&opts, workspaceRoot); err != nil {
@@ -1151,9 +1155,6 @@ func TestEnsureSoloNodeCreateSSHPublicKeyGeneratesWhenNoDefaultKey(t *testing.T)
 	}
 	if _, err := os.Stat(strings.TrimSuffix(opts.SSHPublicKey, ".pub")); err != nil {
 		t.Fatalf("expected generated private key: %v", err)
-	}
-	if !strings.Contains(stdout.String(), "Generated workspace SSH key") {
-		t.Fatalf("output = %q, want generated key message", stdout.String())
 	}
 }
 
@@ -1172,7 +1173,7 @@ func TestEnsureSoloNodeCreateSSHPublicKeyGeneratesWhenDefaultKeyIsEmpty(t *testi
 	}
 
 	workspaceRoot := t.TempDir()
-	app := &App{Printer: output.New(io.Discard, io.Discard, false)}
+	app := &App{Printer: output.New(io.Discard, io.Discard)}
 	opts := SoloNodeCreateOptions{}
 
 	if err := app.ensureSoloNodeCreateSSHPublicKey(&opts, workspaceRoot); err != nil {
@@ -1193,7 +1194,7 @@ func TestEnsureSoloNodeCreateSSHPublicKeyKeepsExplicitKey(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	customPublicKey := filepath.Join(t.TempDir(), "custom.pub")
 	opts := SoloNodeCreateOptions{SSHPublicKey: customPublicKey}
-	app := &App{Printer: output.New(io.Discard, io.Discard, false)}
+	app := &App{Printer: output.New(io.Discard, io.Discard)}
 
 	if err := app.ensureSoloNodeCreateSSHPublicKey(&opts, t.TempDir()); err != nil {
 		t.Fatal(err)
@@ -1203,83 +1204,15 @@ func TestEnsureSoloNodeCreateSSHPublicKeyKeepsExplicitKey(t *testing.T) {
 	}
 }
 
-func TestSoloSetupDefaultsToHetznerAndGeneratedWorkspaceKey(t *testing.T) {
-	stateDir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", stateDir)
+func TestSoloSetupRequiresExplicitInputs(t *testing.T) {
+	app := &App{Printer: output.New(io.Discard, io.Discard)}
 
-	workspaceRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
-		t.Fatal(err)
+	err := app.SoloSetup(context.Background(), SoloSetupOptions{})
+	if err == nil {
+		t.Fatal("SoloSetup() error = nil, want explicit input error")
 	}
-	var stdout bytes.Buffer
-	var created SoloNodeCreateOptions
-	app := &App{
-		In:          strings.NewReader("\nprod-1\nweb\nash\ncpx11\n\n"),
-		Printer:     output.New(&stdout, io.Discard, false),
-		ConfigStore: config.NewStore(),
-		Cwd:         workspaceRoot,
-		soloNodeCreateFn: func(_ context.Context, opts SoloNodeCreateOptions) error {
-			created = opts
-			return nil
-		},
-		soloNodeAttachFn:    func(context.Context, SoloNodeAttachOptions) error { return nil },
-		soloRuntimeDoctorFn: func(context.Context, SoloDoctorOptions) error { return nil },
-	}
-	app.Printer.Interactive = true
-
-	if err := app.SoloSetup(context.Background(), SoloSetupOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if created.Provider != "hetzner" {
-		t.Fatalf("provider = %q, want hetzner", created.Provider)
-	}
-	if created.SSHPublicKey == "" {
-		t.Fatal("generated SSH public key path empty")
-	}
-	if !strings.HasSuffix(created.SSHPublicKey, ".pub") {
-		t.Fatalf("SSH public key path = %q, want .pub suffix", created.SSHPublicKey)
-	}
-	if _, err := os.Stat(created.SSHPublicKey); err != nil {
-		t.Fatalf("expected generated public key: %v", err)
-	}
-	if _, err := os.Stat(strings.TrimSuffix(created.SSHPublicKey, ".pub")); err != nil {
-		t.Fatalf("expected generated private key: %v", err)
-	}
-	if !strings.Contains(stdout.String(), "workspace SSH key") {
-		t.Fatalf("output = %q, want workspace SSH key message", stdout.String())
-	}
-}
-
-func TestSoloSetupHetznerExistingUsesPromptedPublicKeyPath(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	customPublicKey := filepath.Join(t.TempDir(), "custom.pub")
-	if err := os.WriteFile(customPublicKey, []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBexample\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var created SoloNodeCreateOptions
-	app := &App{
-		In:          strings.NewReader("hetzner\nprod-1\nweb\nash\ncpx11\nexisting\n" + customPublicKey + "\n"),
-		Printer:     output.New(io.Discard, io.Discard, false),
-		ConfigStore: config.NewStore(),
-		Cwd:         workspaceRoot,
-		soloNodeCreateFn: func(_ context.Context, opts SoloNodeCreateOptions) error {
-			created = opts
-			return nil
-		},
-		soloNodeAttachFn:    func(context.Context, SoloNodeAttachOptions) error { return nil },
-		soloRuntimeDoctorFn: func(context.Context, SoloDoctorOptions) error { return nil },
-	}
-	app.Printer.Interactive = true
-
-	if err := app.SoloSetup(context.Background(), SoloSetupOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if created.SSHPublicKey != customPublicKey {
-		t.Fatalf("SSH public key path = %q, want %q", created.SSHPublicKey, customPublicKey)
+	if !strings.Contains(err.Error(), "solo setup requires explicit inputs") {
+		t.Fatalf("SoloSetup() error = %v", err)
 	}
 }
 
@@ -1344,7 +1277,7 @@ func TestIngressSetInfersPrimaryWebService(t *testing.T) {
 	app := &App{
 		Cwd:         dir,
 		ConfigStore: config.NewStore(),
-		Printer:     output.New(io.Discard, io.Discard, false),
+		Printer:     output.New(io.Discard, io.Discard),
 	}
 	if err := app.IngressSet(context.Background(), IngressSetOptions{
 		Hosts:   []string{"demo.devopsellence.io"},
@@ -1522,7 +1455,7 @@ func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
 	app := &App{
 		Cwd:         dir,
 		ConfigStore: config.NewStore(),
-		Printer:     output.New(io.Discard, io.Discard, false),
+		Printer:     output.New(io.Discard, io.Discard),
 	}
 	if err := app.IngressSet(context.Background(), IngressSetOptions{
 		Hosts:   []string{"new.devopsellence.io"},

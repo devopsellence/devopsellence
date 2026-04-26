@@ -1,9 +1,8 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
 type Row struct {
@@ -30,7 +29,7 @@ func (r Renderer) Card(card Card) string {
 
 	if title != "" {
 		if status != "" {
-			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r.Title(title), "  ", r.Accent(status)))
+			lines = append(lines, fmt.Sprintf("%s  %s", r.Title(title), r.Accent(status)))
 		} else {
 			lines = append(lines, r.Title(title))
 		}
@@ -38,7 +37,7 @@ func (r Renderer) Card(card Card) string {
 
 	labelWidth := 0
 	for _, row := range card.Rows {
-		if width := lipgloss.Width(strings.TrimSpace(row.Label)); width > labelWidth {
+		if width := len([]rune(strings.TrimSpace(row.Label))); width > labelWidth {
 			labelWidth = width
 		}
 	}
@@ -59,12 +58,11 @@ func (r Renderer) Card(card Card) string {
 		lines = append(lines, r.Muted(footer))
 	}
 
-	return r.theme.Card.Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 func (r Renderer) renderRow(labelWidth int, label, value string) string {
-	paddedLabel := lipgloss.NewStyle().Width(labelWidth).Render(r.Label(label))
-	return lipgloss.JoinHorizontal(lipgloss.Top, paddedLabel, "  ", r.Value(value))
+	return fmt.Sprintf("%-*s  %s", labelWidth, r.Label(label), r.Value(value))
 }
 
 func RenderCommandBlock(title, command string) string {
@@ -73,12 +71,10 @@ func RenderCommandBlock(title, command string) string {
 
 func (r Renderer) CommandBlock(title, command string) string {
 	r = r.normalized()
-	style := r.theme.Card.
-		BorderForeground(lipgloss.Color("#FF9F1C"))
 	lines := []string{}
 	if t := strings.TrimSpace(title); t != "" {
 		lines = append(lines, r.Muted(t), "")
 	}
 	lines = append(lines, r.Accent(strings.TrimSpace(command)))
-	return style.Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }

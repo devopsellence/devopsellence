@@ -19,10 +19,6 @@ const (
 	defaultHetznerSize   = "cpx11"
 )
 
-var runProviderLogin = func(a *App, ctx context.Context, opts ProviderLoginOptions) error {
-	return a.ProviderLogin(ctx, opts)
-}
-
 type ProviderLoginOptions struct {
 	Provider   string
 	Token      string
@@ -154,10 +150,7 @@ func (a *App) ensureInteractiveProviderLogin(ctx context.Context, provider strin
 	if strings.TrimSpace(token) != "" {
 		return nil
 	}
-	if !a.Printer.Interactive {
-		return ExitError{Code: 2, Err: fmt.Errorf("run `devopsellence provider login %s --token <token>` or configure DEVOPSELLENCE_HETZNER_API_TOKEN/HCLOUD_TOKEN", providerSlug)}
-	}
-	return runProviderLogin(a, ctx, ProviderLoginOptions{Provider: providerSlug})
+	return ExitError{Code: 2, Err: fmt.Errorf("run `devopsellence provider login %s --token <token>` or configure DEVOPSELLENCE_HETZNER_API_TOKEN/HCLOUD_TOKEN", providerSlug)}
 }
 
 func (a *App) providerLoginToken(opts ProviderLoginOptions) (string, error) {
@@ -175,10 +168,7 @@ func (a *App) providerLoginToken(opts ProviderLoginOptions) (string, error) {
 	if strings.TrimSpace(opts.Token) != "" {
 		return opts.Token, nil
 	}
-	if !a.Printer.Interactive {
-		return "", ExitError{Code: 2, Err: errors.New("missing required option: --token or --stdin")}
-	}
-	return a.promptSecretValue("Hetzner API token")
+	return "", ExitError{Code: 2, Err: errors.New("missing required option: --token or --stdin")}
 }
 
 func normalizeProvider(provider string) (string, error) {

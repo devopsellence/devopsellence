@@ -129,7 +129,7 @@ func (m *Manager) EnsureAuthenticated(ctx context.Context, interactive bool, all
 		return m.BootstrapAnonymous(ctx, anonymous, notify)
 	}
 	if !interactive {
-		return Tokens{}, errors.New("authentication requires an interactive terminal; run `devopsellence auth login`")
+		return Tokens{}, errors.New("authentication required; provide DEVOPSELLENCE_TOKEN or run `devopsellence auth login` before invoking agent workflows")
 	}
 	return m.Login(ctx, notify)
 }

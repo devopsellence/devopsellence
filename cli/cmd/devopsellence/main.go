@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,12 +26,31 @@ func main() {
 			code = 130
 		}
 		if !errors.Is(err, context.Canceled) && !errors.As(err, &renderedErr) {
-			fmt.Fprintln(os.Stderr, err)
+			writeError(command.CommandPath(), code, err)
 		}
 		stop()
 		os.Exit(code)
 	}
 	stop()
+}
+
+func writeError(operation string, exitCode int, err error) {
+	payload := map[string]any{
+		"ok":             false,
+		"schema_version": 1,
+		"operation":      operation,
+		"error": map[string]any{
+			"code":      "command_failed",
+			"message":   err.Error(),
+			"exit_code": exitCode,
+		},
+	}
+	encoder := json.NewEncoder(os.Stderr)
+	encoder.SetIndent("", "  ")
+	encoder.SetEscapeHTML(false)
+	if encodeErr := encoder.Encode(payload); encodeErr != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+	}
 }
 
 func mustGetwd() string {

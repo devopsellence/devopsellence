@@ -1,28 +1,23 @@
 package ui
 
 import (
-	"strings"
+	"context"
 	"testing"
-
-	"github.com/charmbracelet/bubbles/spinner"
 )
 
-func TestDeploymentMonitorRendersPendingNodeAsActive(t *testing.T) {
-	model := deploymentMonitorModel{
-		renderer: DefaultRenderer(),
-		spinner:  spinner.New(),
-	}
-
-	view := model.renderNode(DeploymentNode{
-		Name:   "node-a",
-		Phase:  "pending",
-		Detail: "waiting for node to reconcile",
+func TestMonitorDeploymentPollsUntilComplete(t *testing.T) {
+	calls := 0
+	snapshot, err := MonitorDeployment(t.Context(), nil, "ignored", 1, func(context.Context) (DeploymentSnapshot, error) {
+		calls++
+		return DeploymentSnapshot{Summary: DeploymentSummary{Complete: calls == 2}}, nil
 	})
-
-	if !strings.Contains(view, "node-a - waiting for node to reconcile") {
-		t.Fatalf("expected pending node detail in view, got %q", view)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(view, "[ ]") {
-		t.Fatalf("expected pending node to render as active, got %q", view)
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	if !snapshot.Summary.Complete {
+		t.Fatalf("snapshot = %#v, want complete", snapshot)
 	}
 }

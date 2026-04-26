@@ -6,6 +6,12 @@ This document turns [vision.md](vision.md) into a more concrete target. The visi
 
 devopsellence should be the simplest serious system for running a small-to-medium containerized application on VMs you control.
 
+It is agent-primary: the product is designed first as the production-safe deployment target for AI coding and operations agents. Humans can still use the CLI directly, inspect files and JSON, approve changes, and recover with ordinary tools, but the CLI, APIs, and control plane should optimize for autonomous agents that need deterministic, structured, auditable operations instead of terminal-only UX.
+
+Short version:
+
+> built for agents, transparent for humans.
+
 Its core job is narrow:
 
 - interpret application config;
@@ -19,6 +25,7 @@ The same deploy model should work in solo and shared mode. Solo and shared are d
 
 ## Design priorities
 
+- agent-primary operations surfaces with structured JSON and explicit schemas;
 - one common deployment core;
 - the node agent as the only mandatory runtime component;
 - desired state as the stable control surface;
@@ -96,6 +103,9 @@ Infrastructure adapters should be cloud-specific when that produces a better res
 The CLI and control plane should stay thin relative to the core.
 
 - the CLI should run the common core in-process for solo workflows;
+- the CLI should be agent-primary: JSON by default, non-interactive by default, stable operation names, stable error codes, structured findings, explicit dry-run/plan/apply boundaries, and deterministic exit codes;
+- human-readable terminal styling, prompts, spinners, and TTY-only flows should not be the product center;
+- MCP should be a thin adapter over the same core operations, not a second deployment brain;
 - the control plane should call the same core through APIs or RPC for shared workflows;
 - auth, orgs, billing, quotas, support tooling, and UI can live outside the deployment core.
 
@@ -242,6 +252,7 @@ When tradeoffs appear, bias toward this order:
 
 This north star is being met if the following become true:
 
+- an AI coding agent can inspect, validate, plan, deploy, observe, explain, and propose rollback through structured devopsellence operations without scraping terminal text or improvising shell mutations;
 - the same app model works in solo and shared without semantic drift;
 - moving from local to hosted changes adapters more than it changes concepts;
 - the release, publication, reconcile, and status path is understandable end to end;

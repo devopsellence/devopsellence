@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,28 +24,7 @@ func TestRootVersionCommand(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if stdout.Len() == 0 {
-		t.Fatal("version command wrote no output")
-	}
-}
-
-func TestRootVersionCommandJSON(t *testing.T) {
-	t.Parallel()
-
-	var stdout bytes.Buffer
-	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stdout)
-	cmd.SetArgs([]string{"--json", "version"})
-
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		t.Fatalf("version --json output is not valid JSON: %v\n%s", err, stdout.String())
-	}
+	payload := decodeJSONOutput(t, &stdout)
 	if payload["schema_version"] != float64(outputSchemaVersion) {
 		t.Fatalf("schema_version = %v, want %d", payload["schema_version"], outputSchemaVersion)
 	}
@@ -85,17 +63,17 @@ func TestSetupModeFlagPersistsWorkspaceMode(t *testing.T) {
 
 	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("Execute() error = nil, want solo setup to require interactive terminal")
+		t.Fatal("Execute() error = nil, want solo setup to require explicit inputs")
 	}
-	if !strings.Contains(err.Error(), "solo setup requires an interactive terminal") {
-		t.Fatalf("error = %v, want solo setup path", err)
+	if !strings.Contains(err.Error(), "solo setup requires explicit inputs") {
+		t.Fatalf("error = %v, want explicit input setup path", err)
 	}
 	var exitErr ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
 		t.Fatalf("error = %#v, want ExitError code 2", err)
 	}
 
-	app := NewApp(bytes.NewBuffer(nil), &stdout, &stdout, false, cwd)
+	app := NewApp(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
 	mode, ok, modeErr := app.savedMode()
 	if modeErr != nil {
 		t.Fatalf("savedMode error = %v", modeErr)
@@ -178,14 +156,29 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("list Execute() error = %v", err)
 	}
-	output := stdout.String()
-	for _, want := range []string{
-		"web DATABASE_URL exposed=yes configured=yes stored=yes store=plaintext -> devopsellence://plaintext/DATABASE_URL",
-		"web ONLY_IN_CONFIG exposed=yes configured=yes stored=no store=plaintext -> devopsellence://plaintext/ONLY_IN_CONFIG",
-		"web ONLY_IN_STORE exposed=no configured=no stored=yes store=plaintext -> devopsellence://plaintext/ONLY_IN_STORE",
+	payload := decodeJSONOutput(t, &stdout)
+	secrets := jsonArrayFromMap(t, payload, "secrets")
+	if len(secrets) != 3 {
+		t.Fatalf("secrets = %#v, want 3 entries", secrets)
+	}
+	seen := map[string]map[string]any{}
+	for _, value := range secrets {
+		item := jsonMapFromAny(t, value)
+		seen[stringValueAny(item["name"])] = item
+	}
+	for name, want := range map[string]map[string]any{
+		"DATABASE_URL":   {"configured": true, "stored": true, "exposed": true, "store": "plaintext"},
+		"ONLY_IN_CONFIG": {"configured": true, "stored": false, "exposed": true, "store": "plaintext"},
+		"ONLY_IN_STORE":  {"configured": false, "stored": true, "exposed": false, "store": "plaintext"},
 	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("secret list output = %q, missing %q", output, want)
+		item := seen[name]
+		if item == nil {
+			t.Fatalf("secret %s missing from %#v", name, secrets)
+		}
+		for key, expected := range want {
+			if item[key] != expected {
+				t.Fatalf("secret %s %s = %#v, want %#v", name, key, item[key], expected)
+			}
 		}
 	}
 }

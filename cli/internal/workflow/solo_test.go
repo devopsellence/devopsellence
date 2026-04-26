@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -443,8 +444,78 @@ func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
 		t.Fatalf("error = %#v, want ExitError code 1", err)
 	}
+	var renderedErr RenderedError
+	if !errors.As(exitErr.Err, &renderedErr) {
+		t.Fatalf("exit error = %#v, want RenderedError", exitErr.Err)
+	}
 	if !strings.Contains(stdout.String(), "[node-a] error: ssh root@203.0.113.10:") {
 		t.Fatalf("stdout = %q, want node read error", stdout.String())
+	}
+}
+
+func TestSoloStatusJSONReturnsFailureWithRenderedPayload(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stderr: "permission denied\n", exitCode: 1},
+	})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.SoloNode{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				NodeNames:     []string{"node-a"},
+			},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard, true),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	err := app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	var renderedErr RenderedError
+	if !errors.As(exitErr.Err, &renderedErr) {
+		t.Fatalf("exit error = %#v, want RenderedError", exitErr.Err)
+	}
+
+	var payload struct {
+		Nodes []struct {
+			Node  string `json:"node"`
+			Error string `json:"error"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal stdout JSON: %v\n%s", err, stdout.String())
+	}
+	if len(payload.Nodes) != 1 {
+		t.Fatalf("nodes = %#v, want one entry", payload.Nodes)
+	}
+	if payload.Nodes[0].Node != "node-a" || !strings.Contains(payload.Nodes[0].Error, "permission denied") {
+		t.Fatalf("payload = %#v, want node-a permission error", payload)
 	}
 }
 
@@ -543,6 +614,42 @@ func TestSoloNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Removed solo node manual-a from local state") {
 		t.Fatalf("stdout = %q, want local removal message", stdout.String())
+	}
+}
+
+func TestSoloNodeRemoveRejectsIncompleteProviderMetadata(t *testing.T) {
+	t.Parallel()
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.SoloNode{
+			"managed-a": {Host: "203.0.113.10", User: "root", Provider: "hetzner"},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		Printer:   output.New(io.Discard, io.Discard, false),
+		SoloState: soloState,
+	}
+
+	err := app.SoloNodeRemove(context.Background(), SoloNodeRemoveOptions{Name: "managed-a", Yes: true})
+	if err == nil {
+		t.Fatal("expected incomplete provider metadata error")
+	}
+	if !strings.Contains(err.Error(), "incomplete provider metadata") {
+		t.Fatalf("error = %v, want incomplete provider metadata", err)
+	}
+
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Nodes["managed-a"]; !ok {
+		t.Fatalf("managed node removed despite incomplete metadata: %#v", loaded.Nodes)
 	}
 }
 

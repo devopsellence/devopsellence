@@ -1077,12 +1077,12 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			return err
 		}
 		if readErrors > 0 {
-			return ExitError{Code: 1, Err: fmt.Errorf("status failed for %d node(s)", readErrors)}
+			return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status failed for %d node(s)", readErrors)}}
 		}
 		return nil
 	}
 	if readErrors > 0 {
-		return ExitError{Code: 1, Err: fmt.Errorf("status failed for %d node(s)", readErrors)}
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status failed for %d node(s)", readErrors)}}
 	}
 	return nil
 }
@@ -1965,7 +1965,9 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	if current.NodeHasAttachments(opts.Name) {
 		return fmt.Errorf("node %q still has attached environments; detach it first", opts.Name)
 	}
-	if node.Provider == "" || node.ProviderServerID == "" {
+	provider := strings.TrimSpace(node.Provider)
+	providerServerID := strings.TrimSpace(node.ProviderServerID)
+	if provider == "" && providerServerID == "" {
 		current.RemoveNode(opts.Name)
 		if err := a.writeSoloState(current); err != nil {
 			return err
@@ -1976,11 +1978,14 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		a.Printer.Println("Removed solo node " + opts.Name + " from local state")
 		return nil
 	}
-	provider, err := a.resolveSoloProvider(node.Provider)
+	if provider == "" || providerServerID == "" {
+		return fmt.Errorf("node %q has incomplete provider metadata; refusing provider delete", opts.Name)
+	}
+	resolvedProvider, err := a.resolveSoloProvider(provider)
 	if err != nil {
 		return err
 	}
-	if err := provider.DeleteServer(ctx, node.ProviderServerID); err != nil {
+	if err := resolvedProvider.DeleteServer(ctx, providerServerID); err != nil {
 		return err
 	}
 	current.RemoveNode(opts.Name)

@@ -9,7 +9,6 @@ import (
 
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/solo"
-	"github.com/devopsellence/cli/internal/ui"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
@@ -192,26 +191,17 @@ func (a *App) ModeShow() error {
 	if err != nil {
 		return ExitError{Code: 1, Err: err}
 	}
-	if a.Printer.JSON {
-		payload := map[string]any{
-			"schema_version": outputSchemaVersion,
-			"workspace_key":  a.modeWorkspaceKey(),
-			"set":            ok,
-		}
-		if ok {
-			payload["mode"] = string(mode)
-		}
-		return a.Printer.PrintJSON(payload)
+
+	payload := map[string]any{
+		"schema_version": outputSchemaVersion,
+		"workspace_key":  a.modeWorkspaceKey(),
+		"set":            ok,
 	}
-	if !ok {
-		a.Printer.Println("Mode: not set")
-		a.Printer.Println("Workspace:", a.modeWorkspaceKey())
-		a.Printer.Println("Next step: run `devopsellence mode use solo|shared`.")
-		return nil
+	if ok {
+		payload["mode"] = string(mode)
 	}
-	a.Printer.Println("Mode:", mode)
-	a.Printer.Println("Workspace:", a.modeWorkspaceKey())
-	return nil
+	return a.Printer.PrintJSON(payload)
+
 }
 
 func (a *App) ContextShow() error {
@@ -241,20 +231,7 @@ func (a *App) ContextShow() error {
 	selectedEnvironment := a.effectiveEnvironment("", cfg)
 	result["environment"] = selectedEnvironment
 	result["selected_environment"] = selectedEnvironment
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	rows := []ui.Row{
-		{Label: "Workspace", Value: firstNonEmpty(discovered.WorkspaceRoot, a.modeWorkspaceKey())},
-		{Label: "Mode", Value: firstNonEmpty(string(mode), "not set")},
-		{Label: "Organization", Value: safeConfigValue(cfg, func(value *config.ProjectConfig) string { return value.Organization })},
-		{Label: "Project", Value: safeConfigValue(cfg, func(value *config.ProjectConfig) string { return value.Project })},
-		{Label: "Default Env", Value: safeConfigValue(cfg, func(value *config.ProjectConfig) string { return value.DefaultEnvironment })},
-		{Label: "Selected Env", Value: selectedEnvironment},
-	}
-	a.Printer.Println(ui.RenderCard(ui.Card{Title: "Context", Rows: rows}))
-	if !ok {
-		a.Printer.Println("Next step: run `devopsellence mode use solo|shared`.")
-	}
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }

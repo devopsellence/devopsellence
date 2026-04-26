@@ -282,7 +282,6 @@ func TestContextShowJSONIncludesWorkspaceContext(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
-	app.Printer.JSON = true
 
 	if err := app.ContextShow(); err != nil {
 		t.Fatalf("ContextShow() error = %v", err)
@@ -503,7 +502,6 @@ func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
-	app.Printer.JSON = true
 
 	if err := app.ConfigResolve(ConfigResolveOptions{Environment: "staging"}); err != nil {
 		t.Fatalf("ConfigResolve() error = %v", err)
@@ -568,7 +566,6 @@ func TestStatusUsesSavedWorkspaceEnvironment(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
-	app.Printer.JSON = true
 
 	if err := app.Status(context.Background(), StatusOptions{}); err != nil {
 		t.Fatalf("Status() error = %v", err)
@@ -3056,27 +3053,6 @@ func TestDeployFailsWhenExistingConfigIsUncommitted(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "git add "+config.GenericFilePath) {
 		t.Fatalf("Deploy() error = %v", err)
-	}
-}
-
-func TestWarnAboutPrebuiltImageConfigForRails(t *testing.T) {
-	t.Parallel()
-
-	root := makeRailsRoot(t, "ShopApp")
-	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		return nil, nil
-	}))
-	var stderr bytes.Buffer
-	app.Printer = output.New(io.Discard, &stderr)
-
-	cfg := config.DefaultProjectConfig("default", "ShopApp", "production")
-	app.warnAboutPrebuiltImageConfig(DeployOptions{
-		Image: "docker.io/mccutchen/go-httpbin@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	}, cfg)
-
-	if stderr.String() != "" {
-		t.Fatalf("warning output = %q, want no unstructured warning output in JSON mode", stderr.String())
 	}
 }
 

@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"io"
-	"strings"
 
 	"github.com/devopsellence/cli/internal/output"
 )
@@ -15,22 +14,10 @@ type soloInstallReporter struct {
 }
 
 func newSoloInstallReporter(_ context.Context, printer output.Printer, nodeName string) soloInstallReporter {
-	if printer.JSON {
-		return soloInstallReporter{
-			progress: func(string) {},
-			stream:   io.Discard,
-			close:    func() {},
-		}
-	}
-
-	progress := func(message string) {
-		printer.Println("[" + nodeName + "] " + strings.TrimSpace(message))
-	}
-	writer := &lineProgressWriter{progress: progress}
 	return soloInstallReporter{
-		progress: progress,
-		stream:   writer,
-		close:    writer.Flush,
+		progress: func(string) {},
+		stream:   io.Discard,
+		close:    func() {},
 	}
 }
 

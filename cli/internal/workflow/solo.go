@@ -20,7 +20,6 @@ import (
 
 	"github.com/devopsellence/cli/internal/api"
 	"github.com/devopsellence/cli/internal/discovery"
-	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/solo/providers"
 	cliversion "github.com/devopsellence/cli/internal/version"
@@ -188,9 +187,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
-	if !a.Printer.JSON {
-		a.Printer.Println("Creating " + providerSlug + " server " + opts.Name + "...")
-	}
+
 	providerLabels := map[string]string{}
 	if strings.TrimSpace(projectName) != "" {
 		providerLabels["devopsellence_project"] = discovery.Slugify(projectName)
@@ -276,9 +273,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		shortSHA = shortSHA[:7]
 	}
 	imageTag := soloImageTag(cfg.Project, shortSHA)
-	if !a.Printer.JSON {
-		a.Printer.Println("Building image " + imageTag + " ...")
-	}
+
 	buildCtx := filepath.Join(workspaceRoot, cfg.Build.Context)
 	dockerfile := filepath.Join(workspaceRoot, cfg.Build.Dockerfile)
 	if err := dockerBuild(ctx, buildCtx, dockerfile, imageTag, cfg.Build.Platforms); err != nil {
@@ -310,18 +305,15 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return err
 	}
 
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version":          outputSchemaVersion,
-			"workload_revision":       shortSHA,
-			"desired_state_revisions": desiredStateRevisions,
-			"image":                   imageTag,
-			"environment":             environmentName,
-			"nodes":                   sortedNodeNames(nodes),
-		})
-	}
-	a.Printer.Println(fmt.Sprintf("Deployed revision %s to %d node(s)", shortSHA, len(nodes)))
-	return nil
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version":          outputSchemaVersion,
+		"workload_revision":       shortSHA,
+		"desired_state_revisions": desiredStateRevisions,
+		"image":                   imageTag,
+		"environment":             environmentName,
+		"nodes":                   sortedNodeNames(nodes),
+	})
+
 }
 
 func validateNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.Node) (string, error) {
@@ -435,7 +427,6 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	lastSummary := ""
 	latestSummary := "rollout pending"
 	nodeNames := sortedNodeNames(nodes)
 	for {
@@ -483,10 +474,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 		if len(details) > 0 {
 			latestSummary += " - " + strings.Join(details, ", ")
 		}
-		if !a.Printer.JSON && latestSummary != lastSummary {
-			a.Printer.Println(latestSummary)
-			lastSummary = latestSummary
-		}
+
 		if pendingCount == 0 && reconcilingCount == 0 {
 			return nil
 		}
@@ -617,10 +605,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 					mu.Unlock()
 					return
 				}
-				if !a.Printer.JSON {
-					a.Printer.Println(fmt.Sprintf("[%s] Transferring image %s...", name, image))
-				}
-				if err := transferImage(ctx, node, image, a.soloProgress(name)); err != nil {
+				if err := transferImage(ctx, node, image, func(string) {}); err != nil {
 					mu.Lock()
 					errs = append(errs, fmt.Sprintf("[%s] image transfer: %s", name, err))
 					mu.Unlock()
@@ -641,9 +626,6 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 				return
 			}
 			desiredStateJSON := publication.DesiredStateJSON
-			if !a.Printer.JSON {
-				a.Printer.Println(fmt.Sprintf("[%s] Writing desired state...", name))
-			}
 			overridePath := desiredStateOverridePath(node)
 			cmd := remoteDesiredStateOverrideCommand(overridePath)
 			if _, err := solo.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
@@ -1034,58 +1016,36 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		result, err := readNodeStatus(ctx, node)
 		if err != nil {
 			readErrors++
-			if a.Printer.JSON {
-				jsonResults = append(jsonResults, map[string]any{
-					"node":  name,
-					"error": err.Error(),
-				})
-			} else {
-				a.Printer.Printf("[%s] error: %s\n", name, err)
-			}
+
+			jsonResults = append(jsonResults, map[string]any{
+				"node":  name,
+				"error": err.Error(),
+			})
+
 			continue
 		}
 
 		if result.Missing {
 			message := "no deploy status yet; run `devopsellence deploy`"
-			if a.Printer.JSON {
-				jsonResults = append(jsonResults, map[string]any{
-					"node":    name,
-					"status":  nil,
-					"message": message,
-				})
-			} else {
-				a.Printer.Printf("[%s] status=missing message=%s\n", name, message)
-			}
+
+			jsonResults = append(jsonResults, map[string]any{
+				"node":    name,
+				"status":  nil,
+				"message": message,
+			})
+
 			continue
 		}
 
-		if a.Printer.JSON {
-			jsonResults = append(jsonResults, map[string]any{
-				"node":   name,
-				"status": result.Raw,
-			})
-		} else {
-			line := fmt.Sprintf("[%s] phase=%s revision=%s", name, result.Status.Phase, result.Status.Revision)
-			if result.Status.Error != "" {
-				line += " error=" + result.Status.Error
-			}
-			for _, environment := range result.Status.Environments {
-				for _, service := range environment.Services {
-					line += fmt.Sprintf(" %s/%s=%s", environment.Name, service.Name, service.State)
-				}
-			}
-			a.Printer.Println(line)
-		}
+		jsonResults = append(jsonResults, map[string]any{
+			"node":   name,
+			"status": result.Raw,
+		})
+
 	}
 
-	if a.Printer.JSON {
-		if err := a.Printer.PrintJSON(map[string]any{"nodes": jsonResults}); err != nil {
-			return err
-		}
-		if readErrors > 0 {
-			return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status failed for %d node(s)", readErrors)}}
-		}
-		return nil
+	if err := a.Printer.PrintJSON(map[string]any{"nodes": jsonResults}); err != nil {
+		return err
 	}
 	if readErrors > 0 {
 		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status failed for %d node(s)", readErrors)}}
@@ -1151,18 +1111,9 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 			return fmt.Errorf("secret saved locally but update devopsellence.yml failed: %w", err)
 		}
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "store": record.Store, "reference": record.Reference, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "saved"})
-	}
-	if record.Store == solo.SecretStoreOnePassword {
-		a.Printer.Println(fmt.Sprintf("Secret %q saved for %s in %s from 1Password", record.Name, record.ServiceName, record.Environment))
-	} else {
-		a.Printer.Println(fmt.Sprintf("Secret %q saved for %s in %s", record.Name, record.ServiceName, record.Environment))
-	}
-	if configUpdated {
-		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspaceRoot))
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "store": record.Store, "reference": record.Reference, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "saved"})
+
 }
 
 func soloSecretStore(opts SoloSecretsSetOptions) (string, error) {
@@ -1294,17 +1245,9 @@ func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) er
 		return err
 	}
 	items := soloSecretListItems(cfg, secrets, opts.ServiceName)
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "environment": environmentName, "secrets": items})
-	}
-	if len(items) == 0 {
-		a.Printer.Println("No secrets configured")
-		return nil
-	}
-	for _, item := range items {
-		a.Printer.Println(formatListedSecret(item))
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "environment": environmentName, "secrets": items})
+
 }
 
 func soloSecretListItems(cfg *config.ProjectConfig, secrets []solo.SecretRecord, serviceFilter string) []listedSecret {
@@ -1384,25 +1327,13 @@ func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {
 			CurrentEnvironmentBound: bound,
 		})
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"nodes":          current.Nodes,
-			"node_items":     items,
-		})
-	}
-	if len(items) == 0 {
-		a.Printer.Println("No nodes.")
-		return nil
-	}
-	for _, item := range items {
-		line := fmt.Sprintf("%s  host=%s  labels=%s  attachments=%d", item.Name, item.Node.Host, strings.Join(item.Node.Labels, ","), len(item.Attachments))
-		if item.CurrentEnvironmentBound {
-			line += "  current=yes"
-		}
-		a.Printer.Println(line)
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"nodes":          current.Nodes,
+		"node_items":     items,
+	})
+
 }
 
 func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) error {
@@ -1427,19 +1358,13 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 			return err
 		}
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"node":        opts.Node,
-			"environment": environmentName,
-			"changed":     changed,
-		})
-	}
-	if changed {
-		a.Printer.Println("Attached solo node " + opts.Node + " to " + environmentName)
-	} else {
-		a.Printer.Println("Solo node " + opts.Node + " already attached to " + environmentName)
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"node":        opts.Node,
+		"environment": environmentName,
+		"changed":     changed,
+	})
+
 }
 
 func (a *App) runSoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) error {
@@ -1479,15 +1404,13 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	if _, err := a.republishNodes(ctx, current, affectedNodeNames); err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"node":        opts.Node,
-			"environment": environmentName,
-			"changed":     true,
-		})
-	}
-	a.Printer.Println("Detached solo node " + opts.Node + " from " + environmentName)
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"node":        opts.Node,
+		"environment": environmentName,
+		"changed":     true,
+	})
+
 }
 
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
@@ -1520,14 +1443,9 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 			return fmt.Errorf("secret deleted locally but update devopsellence.yml failed: %w", err)
 		}
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "deleted"})
-	}
-	a.Printer.Println(fmt.Sprintf("Secret %q deleted for %s in %s", record.Name, record.ServiceName, record.Environment))
-	if configUpdated {
-		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspaceRoot))
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "deleted"})
+
 }
 
 func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
@@ -1576,14 +1494,12 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"node":   opts.Node,
-			"labels": labels,
-		})
-	}
-	a.Printer.Println("Updated solo node " + opts.Node + " labels: " + strings.Join(labels, ","))
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"node":   opts.Node,
+		"labels": labels,
+	})
+
 }
 
 func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions) error {
@@ -1595,17 +1511,13 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 	if !ok {
 		return fmt.Errorf("node %q not found", opts.Node)
 	}
-	if !a.Printer.JSON {
-		a.Printer.Println("Installing solo agent on " + opts.Node + "...")
-	}
+
 	if err := a.installSoloAgent(ctx, opts.Node, node, opts); err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "action": "installed"})
-	}
-	a.Printer.Println("Installed solo agent on " + opts.Node)
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "action": "installed"})
+
 }
 
 func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
@@ -1636,23 +1548,12 @@ func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) err
 				failed = true
 			}
 			results = append(results, map[string]any{"node": name, "check": check.name, "ok": ok})
-			if !a.Printer.JSON {
-				state := "ok"
-				if !ok {
-					state = "fail"
-				}
-				a.Printer.Println(fmt.Sprintf("[%s] %s=%s", name, check.name, state))
-			}
+
 		}
 	}
-	if a.Printer.JSON {
-		if err := a.Printer.PrintJSON(map[string]any{"checks": results}); err != nil {
-			return err
-		}
-		if failed {
-			return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
-		}
-		return nil
+
+	if err := a.Printer.PrintJSON(map[string]any{"checks": results}); err != nil {
+		return err
 	}
 	if failed {
 		return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
@@ -1741,24 +1642,12 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		}
 	}
 
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             ok,
-			"checks":         checks,
-		})
-	}
-	for _, check := range checks {
-		prefix := "FAIL"
-		if check["ok"] == true {
-			prefix = "OK"
-		}
-		a.Printer.Println(prefix, fmt.Sprintf("%v:", check["name"]), check["detail"])
-	}
-	if ok && len(current.Nodes) > 0 {
-		return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{})
-	}
-	return nil
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             ok,
+		"checks":         checks,
+	})
+
 }
 
 func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
@@ -1790,9 +1679,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 		return err
 	}
 	if !opts.NoInstall {
-		if !a.Printer.JSON {
-			a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
-		}
+
 		if err := waitForSoloSSH(ctx, created.Node, 3*time.Minute); err != nil {
 			return err
 		}
@@ -1800,18 +1687,16 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 			return err
 		}
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"node":               opts.Name,
-			"host":               created.Node.Host,
-			"labels":             created.Labels,
-			"provider":           created.ProviderSlug,
-			"provider_server_id": created.Server.ID,
-			"config_path":        a.ConfigStore.PathFor(workspaceRoot),
-		})
-	}
-	a.Printer.Println("Created solo node " + opts.Name + " at " + created.Node.Host)
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"node":               opts.Name,
+		"host":               created.Node.Host,
+		"labels":             created.Labels,
+		"provider":           created.ProviderSlug,
+		"provider_server_id": created.Server.ID,
+		"config_path":        a.ConfigStore.PathFor(workspaceRoot),
+	})
+
 }
 
 func (a *App) runSoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
@@ -1833,13 +1718,7 @@ func (a *App) ensureSoloNodeCreateSSHPublicKey(opts *SoloNodeCreateOptions, work
 		return err
 	}
 	opts.SSHPublicKey = generatedKey.PublicKeyPath
-	if !a.Printer.JSON {
-		action := "Reusing"
-		if generatedKey.Generated {
-			action = "Generated"
-		}
-		a.Printer.Println(fmt.Sprintf("%s workspace SSH key %s (%s)", action, generatedKey.PrivateKeyPath, generatedKey.Fingerprint))
-	}
+
 	return nil
 }
 
@@ -1872,66 +1751,57 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 		return err
 	}
 	if opts.NoInstall {
-		if a.Printer.JSON {
-			return a.Printer.PrintJSON(map[string]any{
-				"schema_version":     outputSchemaVersion,
-				"node":               opts.Name,
-				"host":               created.Node.Host,
-				"labels":             created.Labels,
-				"provider":           created.ProviderSlug,
-				"provider_server_id": created.Server.ID,
-				"registered":         false,
-			})
-		}
-		a.Printer.Println("Created shared node " + opts.Name + " at " + created.Node.Host + " without installing the agent")
-		return nil
-	}
 
-	installCommand := strings.TrimSpace(stringFromMap(bootstrap.Result, "install_command"))
-	if installCommand == "" {
-		return fmt.Errorf("node bootstrap response did not include install_command")
-	}
-	if !a.Printer.JSON {
-		a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
-	}
-	if err := waitForSoloSSH(ctx, created.Node, 3*time.Minute); err != nil {
-		return err
-	}
-	if !a.Printer.JSON {
-		a.Printer.Println("Installing and registering devopsellence agent on " + opts.Name + "...")
-	}
-	stdout, stderr := a.Printer.Out, a.Printer.Err
-	if a.Printer.JSON {
-		stdout, stderr = io.Discard, io.Discard
-	}
-	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, stdout, stderr); err != nil {
-		return err
-	}
-
-	if a.Printer.JSON {
-		result := map[string]any{
+		return a.Printer.PrintJSON(map[string]any{
 			"schema_version":     outputSchemaVersion,
 			"node":               opts.Name,
 			"host":               created.Node.Host,
 			"labels":             created.Labels,
 			"provider":           created.ProviderSlug,
 			"provider_server_id": created.Server.ID,
-			"organization_id":    bootstrap.Organization.ID,
-			"organization_name":  bootstrap.Organization.Name,
-			"registered":         true,
-		}
-		if opts.Unassigned {
-			result["assignment_mode"] = "unassigned"
-		} else {
-			result["assignment_mode"] = firstNonEmpty(stringFromMap(bootstrap.Result, "assignment_mode"), "environment")
-			result["project_name"] = bootstrap.Workspace.Project.Name
-			result["environment_id"] = bootstrap.Workspace.Environment.ID
-			result["environment_name"] = bootstrap.Workspace.Environment.Name
-		}
-		return a.Printer.PrintJSON(result)
+			"registered":         false,
+		})
+
 	}
-	a.Printer.Println("Created shared node " + opts.Name + " at " + created.Node.Host)
-	return nil
+
+	installCommand := strings.TrimSpace(stringFromMap(bootstrap.Result, "install_command"))
+	if installCommand == "" {
+		return fmt.Errorf("node bootstrap response did not include install_command")
+	}
+
+	if err := waitForSoloSSH(ctx, created.Node, 3*time.Minute); err != nil {
+		return err
+	}
+
+	stdout, stderr := a.Printer.Out, a.Printer.Err
+
+	stdout, stderr = io.Discard, io.Discard
+
+	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, stdout, stderr); err != nil {
+		return err
+	}
+
+	result := map[string]any{
+		"schema_version":     outputSchemaVersion,
+		"node":               opts.Name,
+		"host":               created.Node.Host,
+		"labels":             created.Labels,
+		"provider":           created.ProviderSlug,
+		"provider_server_id": created.Server.ID,
+		"organization_id":    bootstrap.Organization.ID,
+		"organization_name":  bootstrap.Organization.Name,
+		"registered":         true,
+	}
+	if opts.Unassigned {
+		result["assignment_mode"] = "unassigned"
+	} else {
+		result["assignment_mode"] = firstNonEmpty(stringFromMap(bootstrap.Result, "assignment_mode"), "environment")
+		result["project_name"] = bootstrap.Workspace.Project.Name
+		result["environment_id"] = bootstrap.Workspace.Environment.ID
+		result["environment_name"] = bootstrap.Workspace.Environment.Name
+	}
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {
@@ -1956,11 +1826,9 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		if err := a.writeSoloState(current); err != nil {
 			return err
 		}
-		if a.Printer.JSON {
-			return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "forgotten"})
-		}
-		a.Printer.Println("Removed solo node " + opts.Name + " from local state")
-		return nil
+
+		return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "forgotten"})
+
 	}
 	if provider == "" || providerServerID == "" {
 		return fmt.Errorf("node %q has incomplete provider metadata; refusing provider delete", opts.Name)
@@ -1976,11 +1844,9 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "deleted"})
-	}
-	a.Printer.Println("Removed solo node " + opts.Name)
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "deleted"})
+
 }
 
 func (a *App) SoloSetup(context.Context, SoloSetupOptions) error {
@@ -2068,17 +1934,13 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 	if err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ingress":        written.Ingress,
-			"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
-		})
-	}
-	a.Printer.Println("Ingress hosts:", strings.Join(written.Ingress.Hosts, ","))
-	a.Printer.Println("TLS:", written.Ingress.TLS.Mode)
-	a.Printer.Println("Config:", a.ConfigStore.PathFor(discovered.WorkspaceRoot))
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ingress":        written.Ingress,
+		"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
+	})
+
 }
 
 func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {
@@ -2108,13 +1970,11 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 			return err
 		}
 		if report.OK || opts.Wait <= 0 || time.Now().After(deadline) {
-			if a.Printer.JSON {
-				if err := a.Printer.PrintJSON(report); err != nil {
-					return err
-				}
-			} else {
-				printIngressDNSReport(a.Printer, report)
+
+			if err := a.Printer.PrintJSON(report); err != nil {
+				return err
 			}
+
 			if !report.OK {
 				return ExitError{Code: 1, Err: fmt.Errorf("ingress DNS is not ready")}
 			}
@@ -2125,15 +1985,6 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 			return ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
-	}
-}
-
-func (a *App) soloProgress(nodeName string) func(string) {
-	if a.Printer.JSON {
-		return func(string) {}
-	}
-	return func(message string) {
-		a.Printer.Println("[" + nodeName + "] " + message)
 	}
 }
 
@@ -2274,9 +2125,7 @@ func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectC
 	if report.OK {
 		return nil
 	}
-	if !a.Printer.JSON {
-		printIngressDNSReport(a.Printer, report)
-	}
+
 	return fmt.Errorf("ingress DNS is not ready; update DNS or pass --skip-dns-check")
 }
 
@@ -2313,27 +2162,6 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 		report.Hosts = append(report.Hosts, result)
 	}
 	return report, nil
-}
-
-func printIngressDNSReport(printer output.Printer, report ingressDNSReportResult) {
-	printer.Println("Expected IPs:", strings.Join(report.ExpectedIPs, ","))
-	for _, host := range report.Hosts {
-		state := "ok"
-		if !host.OK {
-			state = "fail"
-		}
-		line := fmt.Sprintf("%s  %s", state, host.Host)
-		if len(host.Resolved) > 0 {
-			line += " resolved=" + strings.Join(host.Resolved, ",")
-		}
-		if len(host.Missing) > 0 {
-			line += " missing=" + strings.Join(host.Missing, ",")
-		}
-		if host.Error != "" {
-			line += " error=" + host.Error
-		}
-		printer.Println(line)
-	}
 }
 
 func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Node) []string {

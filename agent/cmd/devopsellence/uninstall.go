@@ -47,7 +47,7 @@ func runUninstall(args []string) error {
 		run("systemctl", "reset-failed", "devopsellence-agent")
 	}
 
-	fmt.Println("Removing agent files...")
+	fmt.Println("Removing node agent files...")
 	removeFile(agentBin)
 	removeFile(envFile)
 	removeFile(authState)
@@ -61,7 +61,7 @@ func runUninstall(args []string) error {
 		}
 	}
 
-	fmt.Println("devopsellence agent uninstalled.")
+		fmt.Println("devopsellence node agent uninstalled.")
 	if *purgeRuntime {
 		fmt.Println("Managed Docker runtime resources removed.")
 	} else {

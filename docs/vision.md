@@ -8,7 +8,7 @@ devopsellence starts from a simple belief: most teams do not need a new compute 
 
 The problem is not that infrastructure providers failed to invent enough abstractions. The problem is that using the primitives well still requires too much glue code, too many sharp edges, and too much operational ceremony. devopsellence aims to be that missing glue. It is a toolkit and a building block, not a new universe. The closest framing is Mitchell Hashimoto's [building block economy](https://mitchellh.com/writing/building-block-economy): choose strong primitives, compose them cleanly, avoid replacing them with a grander but leakier abstraction.
 
-In practical terms, devopsellence is very close to "take a small compose-style application description and apply it consistently across a fleet of VMs." Today the concrete configuration is `devopsellence.yml` and the agent desired-state schema, not a literal `docker-compose.yml`, but the mental model is intentionally that simple.
+In practical terms, devopsellence is very close to "take a small compose-style application description and apply it consistently across a fleet of VMs." Today the concrete configuration is `devopsellence.yml` and the node-agent desired-state schema, not a literal `docker-compose.yml`, but the mental model is intentionally that simple.
 
 ## Strong opinions
 
@@ -24,14 +24,14 @@ devopsellence is a reconciler and toolkit for running containerized applications
 
 At its core:
 
-- The agent runs on a VM.
-- The agent reads desired state.
-- The agent pulls images, resolves secrets, starts containers, updates ingress, and reports status.
-- The agent keeps reconciling until the machine matches that desired state.
+- The node agent runs on a VM.
+- The node agent reads desired state.
+- The node agent pulls images, resolves secrets, starts containers, updates ingress, and reports status.
+- The node agent keeps reconciling until the machine matches that desired state.
 
 Everything else is optional convenience around that loop.
 
-The CLI is convenience. The control plane is convenience. Hosted workflows are convenience. Those pieces matter, but they are not the essence of the system. The essence is the contract between desired state and the agent that enforces it.
+The CLI is convenience. The control plane is convenience. Hosted workflows are convenience. Those pieces matter, but they are not the essence of the system. The essence is the contract between desired state and the node agent that enforces it.
 
 The product should grow from a shared, fundamental core. The closer code is to that core, the more stable, explicit, and mode-independent it should be. The further a feature sits from the core, the more malleable it can become for solo workflows, hosted workflows, managed infrastructure, user interfaces, and policy choices.
 
@@ -45,7 +45,7 @@ devopsellence also does not try to own the rest of the application stack. It doe
 - A deployment target may choose one environment per machine, but that should be placement policy, not a hard limit in the runtime model.
 - Teams value debuggability and explicitness more than maximum infrastructure utilization.
 - Provider-native primitives are usually better than rebuilding weaker versions of them inside devopsellence.
-- Users should be able to adopt devopsellence incrementally, starting from just the agent.
+- Users should be able to adopt devopsellence incrementally, starting from just the node agent.
 
 These assumptions are visible in the code today. The product has a solo path that reads desired state from local files and a shared path that fetches desired state and secrets from external systems. Over time, those paths should converge on the same planning, validation, and desired-state core, with only ownership, persistence, transport, and policy changing by mode.
 
@@ -54,10 +54,10 @@ These assumptions are visible in the code today. The product has a solo path tha
 - Solo and shared mode should behave the same at the deployment-model level. They differ in user, organization, project, ownership, persistence, and transport concerns.
 - The core runtime model should allow a node to carry one or more environment instances. Whether a deployment target permits that is placement policy.
 - A node may run multiple services for an environment, including multiple workers. Service identity should be explicit, not inferred from fixed names such as one `web` and one `worker`.
-- The agent is the mandatory runtime component. Everything else is replaceable.
-- Desired state is the control surface. The agent should not need imperative per-deploy shell choreography to know what to run.
+- The node agent is the mandatory runtime component. Everything else is replaceable.
+- Desired state is the control surface. The node agent should not need imperative per-deploy shell choreography to know what to run.
 - Desired state should describe node runtime state in a mode-independent shape. Solo should be able to use that shape through local function calls and files; shared should be able to use that shape through service calls and remote stores.
-- Mode is management-plane vocabulary, not agent vocabulary. The agent runtime should not branch on solo or shared; it should be wired with concrete adapters for desired-state source, secret resolution, status reporting, registry auth, and related IO.
+- Mode is management-plane vocabulary, not node-agent vocabulary. The node-agent runtime should not branch on solo or shared; it should be wired with concrete adapters for desired-state source, secret resolution, status reporting, registry auth, and related IO.
 - Solo mode uses the local filesystem as the source of truth for desired state and local status artifacts.
 - Shared mode should use simple external primitives: object storage for desired state, a secret manager for secrets, and a container registry for images.
 - The runtime data plane should stay decoupled from the management plane as much as possible.
@@ -74,12 +74,12 @@ Solo mode is the minimal expression of devopsellence.
 In solo mode:
 
 - desired state lives on the local filesystem;
-- the agent reads it directly;
+- the node agent reads it directly;
 - status is written back to local files;
-- secrets can be resolved before the desired state ever reaches the agent;
+- secrets can be resolved before the desired state ever reaches the node agent;
 - users can manage the state with any tool they want.
 
-This is the composability story in its purest form. If you can write the right file to disk, you can use devopsellence. You do not need a hosted control plane to get value from the agent.
+This is the composability story in its purest form. If you can write the right file to disk, you can use devopsellence. You do not need a hosted control plane to get value from the node agent.
 
 Shared mode exists to preserve the same model while moving the source of truth off the machine.
 
@@ -88,7 +88,7 @@ In shared mode:
 - desired state belongs in object storage;
 - secrets belong in a secret manager;
 - images belong in a container registry;
-- the agent reads and reconciles those primitives directly.
+- the node agent reads and reconciles those primitives directly.
 
 Today the repo's main shared path is GCP-shaped: Cloud Storage, Secret Manager, Artifact Registry, and control-plane-issued identity. That is an implementation of the vision, not the vision itself. The deeper idea is that shared mode should still be made of understandable building blocks rather than a proprietary all-in-one substrate.
 
@@ -158,13 +158,13 @@ A user should be able to adopt devopsellence in layers.
 
 Layer 1:
 
-- install the agent;
+- install the node agent;
 - write desired state to the local filesystem;
-- let the agent reconcile it.
+- let the node agent reconcile it.
 
 Layer 2:
 
-- keep the same agent;
+- keep the same node agent;
 - move desired state, images, and secrets to remote systems;
 - publish to those systems with standard APIs or custom automation.
 

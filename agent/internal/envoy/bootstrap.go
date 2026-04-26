@@ -32,7 +32,7 @@ type publicIngressListenerConfig struct {
 }
 
 // xdsSocketName is the Unix socket filename placed alongside the bootstrap YAML.
-// The agent binds this socket; Envoy connects to it through the shared volume mount.
+// The node agent binds this socket; Envoy connects to it through the shared volume mount.
 const xdsSocketName = "xds.sock"
 
 func xdsSocketPath(bootstrapPath string) string {

@@ -1450,7 +1450,7 @@ func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) erro
 	}
 	rows = append(rows, ui.Row{Label: "Token expires", Value: expiresAt})
 	a.Printer.Println(ui.RenderCard(ui.Card{Rows: rows}))
-	a.Printer.Println("\n" + ui.DefaultRenderer().Muted("⚡ Run on your server to install the devopsellence agent and register it:"))
+	a.Printer.Println("\n" + ui.DefaultRenderer().Muted("⚡ Run on your server to install the devopsellence node agent and register it:"))
 	r := ui.DefaultRenderer()
 	a.Printer.Println(r.Accent(stringFromMap(result, "install_command")))
 	a.Printer.Println("")
@@ -1462,7 +1462,7 @@ func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) erro
 	}
 	a.Printer.Println(r.Muted("· Installs Docker Engine if absent (auto-install: Ubuntu 22.04/24.04 only)"))
 	a.Printer.Println(r.Muted("  └ Other Linux distros: install Docker Engine manually before running"))
-	a.Printer.Println(r.Muted("· Downloads and verifies the devopsellence agent binary"))
+	a.Printer.Println(r.Muted("· Downloads and verifies the devopsellence node agent binary"))
 	a.Printer.Println(r.Muted("· Registers and starts a systemd service"))
 	a.Printer.Println(r.Muted("· Requires: Linux x86_64 or arm64, sudo access"))
 	a.Printer.Println("")
@@ -1677,7 +1677,7 @@ func (a *App) NodeDelete(ctx context.Context, opts NodeDeleteOptions) error {
 		return nil
 	}
 	a.Printer.Println("Removed node #" + strconv.Itoa(intFromMap(result, "id")) + ".")
-	a.Printer.Println("If the agent is still installed, run `devopsellence-agent uninstall --purge-runtime` on the machine to clean it up.")
+	a.Printer.Println("If the node agent is still installed, run `devopsellence-agent uninstall --purge-runtime` on the machine to clean it up.")
 	return nil
 }
 
@@ -4341,9 +4341,9 @@ func rolloutMilestone(progress api.DeploymentProgress) string {
 		return "capacity claimed; publishing desired state to the node"
 	case "waiting for node reconcile":
 		if progress.Summary.Pending > 0 || progress.Summary.Reconciling > 0 {
-			return "node claimed; waiting for the agent to apply the new revision"
+				return "node claimed; waiting for the node agent to apply the new revision"
 		}
-		return "node claimed; waiting for agent acknowledgement"
+			return "node claimed; waiting for node-agent acknowledgement"
 	case "rollout settled":
 		return "new revision is healthy"
 	case "publish failed":

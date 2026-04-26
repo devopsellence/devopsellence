@@ -209,17 +209,17 @@ class CliInstallsController < ActionController::Base
       case "$INSTALL_AGENT_SKILL" in
         1|true|TRUE|yes|YES)
           if command -v npx >/dev/null 2>&1; then
-            echo "installing devopsellence agent skill..."
+            echo "installing devopsellence AI-agent skill..."
             npx skills add devopsellence/devopsellence --skill devopsellence -g
           else
-            echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
+            echo "devopsellence CLI installed. AI-agent skill install requested, but npx was not found." >&2
             echo "Install the skill later with:" >&2
             echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g" >&2
             exit 1
           fi
           ;;
         *)
-          echo "agent skill available:"
+          echo "AI-agent skill available:"
           echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g"
           echo "or install CLI + skill together with:"
           echo "  curl -fsSL \"$INSTALL_SCRIPT_URL?version=$CLI_VERSION\" | bash -s -- --install-agent-skill"

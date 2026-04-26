@@ -420,7 +420,7 @@ func containerServiceKey(c engine.ContainerState) string {
 }
 
 // tearDownFailedContainer stops a container that failed to become healthy,
-// collects its last 100 log lines into the agent's structured log stream so
+// collects its last 100 log lines into the node agent's structured log stream so
 // operators can diagnose the failure, then removes the container.
 // Uses a background context so a cancelled reconcile context does not
 // prevent cleanup.

@@ -101,7 +101,7 @@ class InstallsController < ActionController::Base
         purge_runtime
       fi
 
-      echo "devopsellence agent uninstalled."
+      echo "devopsellence node agent uninstalled."
       if [[ "$PURGE_RUNTIME" == "1" ]]; then
         echo "managed Docker runtime resources removed."
       else

@@ -29,7 +29,7 @@ curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 
 The installer writes to `~/.local/bin` by default. If that directory is not already on your `PATH`, it prints the shell command to add it.
 
-devopsellence is agent-first. The installer prints the agent skill command; to install the CLI and skill together:
+devopsellence is agent-first for AI operators. The installer prints the AI-agent skill command; to install the CLI and skill together:
 
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
@@ -47,7 +47,7 @@ Choose the workspace mode once:
 devopsellence mode use solo
 ```
 
-Prepare the app, connect a node, and install the agent:
+Prepare the app, connect a node, and install the node agent:
 
 ```bash
 devopsellence provider login hetzner
@@ -171,7 +171,7 @@ environments:
 
 ### Example: run cloudflared as a normal service
 
-Cloudflare Tunnel can live in normal app config instead of as special agent-managed behavior:
+Cloudflare Tunnel can live in normal app config instead of as special node-agent-managed behavior:
 
 ```yaml
 services:
@@ -209,7 +209,7 @@ The product layering is deliberate:
 - shared mode when coordination matters.
 - hosted or self-hosted depending on how much convenience you want.
 
-When you outgrow solo, `devopsellence mode use shared` switches to control-plane workflows. Same config, same agent, same deploy verbs.
+When you outgrow solo, `devopsellence mode use shared` switches to control-plane workflows. Same config, same node agent, same deploy verbs.
 
 The design rationale lives in [`docs/vision.md`](docs/vision.md). The explicit ingress-rules + generic-services schema change is documented in [`docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md`](docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md).
 
@@ -219,7 +219,7 @@ This repo contains three components plus a root-owned test harness:
 
 | Directory | Description |
 |---|---|
-| [`agent/`](agent/) | Single-node reconciliation daemon |
+| [`agent/`](agent/) | Node agent: single-node reconciliation daemon |
 | [`cli/`](cli/) | End-user CLI for solo and shared workflows |
 | [`control-plane/`](control-plane/) | Rails API and web app |
 | [`test/e2e/`](test/e2e/) | Hermetic monorepo integration lane |
@@ -255,7 +255,7 @@ cd control-plane
 bin/dev
 ```
 
-GitHub binary releases for the agent and CLI are published from a manual public GitHub Actions workflow. Trigger `devopsellence release`, choose a branch/tag/SHA, and provide the release version for stable releases; for prereleases, `version` can be left blank and will be auto-derived. The workflow always rebuilds and republishes both binaries for the same shared release tag; prereleases can be rerun to replace an existing prerelease tag.
+GitHub binary releases for the node agent and CLI are published from a manual public GitHub Actions workflow. Trigger `devopsellence release`, choose a branch/tag/SHA, and provide the release version for stable releases; for prereleases, `version` can be left blank and will be auto-derived. The workflow always rebuilds and republishes both binaries for the same shared release tag; prereleases can be rerun to replace an existing prerelease tag.
 
 ## Contributing
 

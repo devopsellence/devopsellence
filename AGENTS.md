@@ -9,12 +9,12 @@ Read [`docs/vision.md`](docs/vision.md) and [`docs/north-star.md`](docs/north-st
 Critical defaults:
 
 - devopsellence targets containerized apps on VMs; do not introduce PaaS/Kubernetes-lite abstractions.
-- Desired state is the stable control surface; agent reconciliation is the core loop.
+- Desired state is the stable control surface; node-agent reconciliation is the core loop.
 - Solo/shared are management topologies, not separate deployment systems.
 - Prefer one common Go deployment core for config interpretation, validation, planning, desired-state generation, ingress, placement, and status interpretation.
 - CLI should call the common core in-process for solo; Rails should eventually call it through service/RPC for shared.
 - Rails owns product state: accounts, authz, billing, hosted persistence, API surfaces.
-- Agent runtime should stay mode-agnostic; wire concrete adapters for desired-state source, secret resolver, status sink, registry auth, etc.
+- Node-agent runtime should stay mode-agnostic; wire concrete adapters for desired-state source, secret resolver, status sink, registry auth, etc.
 - Placement is policy, not runtime schema. Shared may require one environment per node; solo may allow multiple environments per node.
 - Provider-specific integration belongs behind infrastructure adapters; do not leak cloud/provider concepts into the core runtime model.
 - Desired-state/status payloads backed by protobuf use protobuf JSON casing; Rails-owned JSON/API payloads use snake_case.
@@ -25,10 +25,10 @@ Critical defaults:
 
 | Path | Stack | Purpose |
 |---|---|---|
-| `agent/` | Go | Single-node reconciler: desired state, Docker, Envoy, cloudflared, status. |
+| `agent/` | Go | Node agent: single-node reconciler for desired state, Docker, Envoy, cloudflared, status. |
 | `cli/` | Go | `devopsellence` CLI: login, deploy, secrets, nodes, solo/shared workflows. |
 | `control-plane/` | Rails 8 | Web/API app: tenants, deployments, nodes, GCP/standalone resources. |
-| `test/e2e/` | Ruby + shell | Root-owned integration harness across agent, CLI, control plane, GCP mock. |
+| `test/e2e/` | Ruby + shell | Root-owned integration harness across node agent, CLI, control plane, GCP mock. |
 | `test/support/gcp-mock/` | Go | Local emulator for GCP APIs used by hermetic e2e tests. |
 
 Each component still owns its tests and CI, while repo-level `mise` now declares the shared Go and Ruby toolchains used across the monorepo. There is still no shared build system.
@@ -76,7 +76,7 @@ cd control-plane && mise run test -- test/path/file_test.rb
 
 ## Key Paths
 
-- `agent/cmd/devopsellence/`: agent entrypoint.
+- `agent/cmd/devopsellence/`: node-agent entrypoint.
 - `agent/internal/`: engine, reconcile, envoy, gcp, auth, cloudflared, etc.
 - `agent/proto/`: desired-state protobuf.
 - `cli/cmd/devopsellence/`: CLI entrypoint.

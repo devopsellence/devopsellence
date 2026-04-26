@@ -28,7 +28,7 @@ class AgentDownloadsTest < ActionDispatch::IntegrationTest
     end
 
     assert_response :service_unavailable
-    assert_includes response.body, "agent binary unavailable"
+    assert_includes response.body, "node agent binary unavailable"
   end
 
   test "redirects explicit version to the configured release asset url" do

@@ -1577,7 +1577,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		return fmt.Errorf("node %q not found", opts.Node)
 	}
 	if !a.Printer.JSON {
-		a.Printer.Println("Installing solo agent on " + opts.Node + "...")
+		a.Printer.Println("Installing solo node agent on " + opts.Node + "...")
 	}
 	if err := a.installSoloAgent(ctx, opts.Node, node, opts); err != nil {
 		return err
@@ -1585,7 +1585,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "action": "installed"})
 	}
-	a.Printer.Println("Installed solo agent on " + opts.Node)
+	a.Printer.Println("Installed solo node agent on " + opts.Node)
 	return nil
 }
 
@@ -1888,7 +1888,7 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 				"registered":         false,
 			})
 		}
-		a.Printer.Println("Created shared node " + opts.Name + " at " + created.Node.Host + " without installing the agent")
+			a.Printer.Println("Created shared node " + opts.Name + " at " + created.Node.Host + " without installing the node agent")
 		return nil
 	}
 
@@ -1903,7 +1903,7 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 		return err
 	}
 	if !a.Printer.JSON {
-		a.Printer.Println("Installing and registering devopsellence agent on " + opts.Name + "...")
+			a.Printer.Println("Installing and registering devopsellence node agent on " + opts.Name + "...")
 	}
 	stdout, stderr := a.Printer.Out, a.Printer.Err
 	if a.Printer.JSON {
@@ -2551,17 +2551,17 @@ func parseSoloLabels(value string) ([]string, error) {
 func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentInstallOptions, reporter soloInstallReporter) error {
 	if strings.TrimSpace(opts.AgentBinary) != "" {
 		remotePath := fmt.Sprintf("/tmp/devopsellence-agent-%d", time.Now().UnixNano())
-		reporter.Progress("Uploading agent binary...")
+		reporter.Progress("Uploading node agent binary...")
 		file, err := os.Open(opts.AgentBinary)
 		if err != nil {
-			return fmt.Errorf("open agent binary: %w", err)
+			return fmt.Errorf("open node agent binary: %w", err)
 		}
 		defer file.Close()
 		if err := solo.RunSSHStream(ctx, node, "cat > "+shellQuote(remotePath), file); err != nil {
-			return fmt.Errorf("upload agent binary: %w", err)
+			return fmt.Errorf("upload node agent binary: %w", err)
 		}
 		defer solo.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remotePath), io.Discard, io.Discard)
-		reporter.Progress("Installing Docker, agent, and systemd service...")
+		reporter.Progress("Installing Docker, node agent, and systemd service...")
 		return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
 			StateDir:        firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 			LocalBinaryPath: remotePath,
@@ -2569,7 +2569,7 @@ func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentI
 	}
 
 	baseURL := strings.TrimRight(firstNonEmpty(opts.BaseURL, os.Getenv("DEVOPSELLENCE_BASE_URL"), api.DefaultBaseURL), "/")
-	reporter.Progress("Installing Docker, agent, and systemd service...")
+	reporter.Progress("Installing Docker, node agent, and systemd service...")
 	return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
 		StateDir:     firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 		BaseURL:      baseURL,
@@ -2682,10 +2682,10 @@ cleanup() {
 trap cleanup EXIT
 
 if [ -n "$LOCAL_BINARY" ]; then
-  echo "progress: installing uploaded agent binary"
+  echo "progress: installing uploaded node agent binary"
   run_root install -m 0755 "$LOCAL_BINARY" "$AGENT_BIN"
 else
-  echo "progress: downloading agent binary"
+  echo "progress: downloading node agent binary"
   OS=linux
   ARCH_RAW="$(uname -m)"
   case "$ARCH_RAW" in
@@ -2709,7 +2709,7 @@ else
   fi
   actual="$(sha256sum "$TMP_BIN" | awk '{print $1}')"
   if [ "$actual" != "$expected" ]; then
-    echo "checksum mismatch for downloaded agent" >&2
+    echo "checksum mismatch for downloaded node agent" >&2
     exit 1
   fi
   chmod +x "$TMP_BIN"
@@ -2718,7 +2718,7 @@ fi
 
 run_root tee "$SERVICE_FILE" >/dev/null <<EOF_SERVICE
 [Unit]
-Description=devopsellence agent
+Description=devopsellence node agent
 After=network-online.target docker.service docker.socket
 Wants=network-online.target docker.service docker.socket
 
@@ -3033,7 +3033,7 @@ func remoteJournalctlCommand(args string) string {
 
 func remoteDesiredStateOverrideCommand(overridePath string) string {
 	quotedPath := shellQuote(overridePath)
-	return fmt.Sprintf("agent_bin=$(command -v devopsellence-agent || command -v devopsellence || true); if [ -z \"$agent_bin\" ]; then echo 'devopsellence agent binary not found' >&2; exit 127; fi; override_dir=$(dirname -- %[1]s); if [ \"$(id -u)\" = 0 ] || [ -w \"$override_dir\" ]; then exec \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; echo 'Cannot write desired state override. Make the SSH user able to write the agent state directory or enable passwordless sudo.' >&2; exit 1", quotedPath)
+	return fmt.Sprintf("agent_bin=$(command -v devopsellence-agent || command -v devopsellence || true); if [ -z \"$agent_bin\" ]; then echo 'devopsellence node agent binary not found' >&2; exit 127; fi; override_dir=$(dirname -- %[1]s); if [ \"$(id -u)\" = 0 ] || [ -w \"$override_dir\" ]; then exec \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; echo 'Cannot write desired state override. Make the SSH user able to write the node-agent state directory or enable passwordless sudo.' >&2; exit 1", quotedPath)
 }
 
 type progressReader struct {

@@ -11,7 +11,7 @@ import (
 	"github.com/devopsellence/cli/internal/config"
 )
 
-// Desired-state JSON types matching the agent protobuf schema (camelCase keys).
+// Desired-state JSON types matching the node-agent protobuf schema (camelCase keys).
 // We use plain encoding/json rather than importing protobuf.
 
 type desiredStateJSON struct {

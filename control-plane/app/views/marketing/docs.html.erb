@@ -42,10 +42,10 @@
 
   <section class="prose-section" id="overview">
     <h2>Overview</h2>
-    <p>devopsellence is a VM-native deployment toolkit for containerized applications. It has two modes: <strong>solo</strong> for SSH-first local workflows and <strong>shared</strong> for control-plane-backed team workflows. Both modes use the same agent and the same deploy verbs.</p>
+    <p>devopsellence is a VM-native deployment toolkit for containerized applications. It has two modes: <strong>solo</strong> for SSH-first local workflows and <strong>shared</strong> for control-plane-backed team workflows. Both modes use the same node agent and the same deploy verbs.</p>
     <p>The system has three parts:</p>
     <ul>
-      <li><strong>Agent</strong> &mdash; runs on your servers. Reconciles containers with zero-downtime rollouts via Envoy proxy. Used in both modes.</li>
+      <li><strong>Node agent</strong> &mdash; runs on your servers. Reconciles containers with zero-downtime rollouts via Envoy proxy. Used in both modes.</li>
       <li><strong>CLI</strong> &mdash; runs on your workstation or CI. Builds images, manages secrets and nodes. Used in both modes.</li>
       <li><strong>Control plane</strong> &mdash; coordination layer for releases, secrets, HTTPS certificates, and rollout state. Used in shared mode only.</li>
     </ul>
@@ -57,7 +57,7 @@
 
   <section class="prose-section" id="compare-modes">
     <h2>Compare modes</h2>
-    <p>Both modes share the same CLI verbs, the same agent, and the same <code>devopsellence.yml</code> config. The mode decides how state and images reach the agent.</p>
+    <p>Both modes share the same CLI verbs, the same node agent, and the same <code>devopsellence.yml</code> config. The mode decides how state and images reach the node agent.</p>
 
     <table class="compare-table">
       <thead>
@@ -76,7 +76,7 @@
         <tr>
           <td>Transport</td>
           <td>SSH</td>
-          <td>Agent pulls from control plane</td>
+          <td>Node agent pulls from control plane</td>
         </tr>
         <tr>
           <td>Auth</td>
@@ -164,7 +164,7 @@
         <div class="tl"><span class="tp">$</span> <%= @cli_install_command %></div>
       </div>
     </div>
-    <p>This installs the <code>devopsellence</code> binary to <code>~/.local/bin</code> by default and prints the shell command to add that directory to your <code>PATH</code> when needed. devopsellence is agent-first; the installer also prints the agent skill command, and accepts <code>--install-agent-skill</code> when you want the CLI and skill installed together. Run <code>devopsellence doctor</code> to verify your setup.</p>
+    <p>This installs the <code>devopsellence</code> binary to <code>~/.local/bin</code> by default and prints the shell command to add that directory to your <code>PATH</code> when needed. devopsellence is agent-first for AI operators; the installer also prints the AI-agent skill command, and accepts <code>--install-agent-skill</code> when you want the CLI and skill installed together. Run <code>devopsellence doctor</code> to verify your setup.</p>
 
     <h3>2. Choose a workspace mode</h3>
     <div class="terminal">
@@ -190,7 +190,7 @@
       </div>
       <div class="terminal-body">
         <div class="tl"><span class="tp">$</span> devopsellence setup</div>
-        <div class="tl tl-muted"># solo: initialize config if needed, register or create a node, attach it, and install the agent.</div>
+        <div class="tl tl-muted"># solo: initialize config if needed, register or create a node, attach it, and install the node agent.</div>
         <div class="tl tl-muted"># shared: sign in, create or select org/project/env, and write workspace config.</div>
       </div>
     </div>
@@ -209,7 +209,7 @@
         <div class="tl"><span class="tp">$</span> devopsellence context show</div>
       </div>
     </div>
-    <p>In solo mode, the CLI builds locally, transfers the image to each node, writes desired state on disk, and lets the agent reconcile. In shared mode, it builds, pushes, publishes a release, and waits for assigned nodes to converge.</p>
+    <p>In solo mode, the CLI builds locally, transfers the image to each node, writes desired state on disk, and lets the node agent reconcile. In shared mode, it builds, pushes, publishes a release, and waits for assigned nodes to converge.</p>
 
     <h3>5. Switch modes when the workflow changes</h3>
     <p>Start with <code>solo</code> when you want the shortest path to your own VM. Switch to <code>shared</code> when you want browser auth, hosted workflows, managed nodes, or a self-hosted management layer. The public managed path starts at <a href="https://www.devopsellence.com">www.devopsellence.com</a>; the self-hosted shared path lives in <code>control-plane/</code> in this repo.</p>
@@ -219,7 +219,7 @@
 
   <section class="prose-section" id="connect-servers">
     <h2>Shared nodes <span class="mode-badge mode-badge--shared">shared</span></h2>
-    <p>In shared mode, nodes are Linux servers or VMs running the devopsellence agent and attached to an organization. Manual node management is available in paid orgs; preview accounts start on managed capacity. Use <code>devopsellence node create</code> to provision a Hetzner node and register it, or <code>devopsellence node register</code> when the server already exists.</p>
+    <p>In shared mode, nodes are Linux servers or VMs running the devopsellence node agent and attached to an organization. Manual node management is available in paid orgs; preview accounts start on managed capacity. Use <code>devopsellence node create</code> to provision a Hetzner node and register it, or <code>devopsellence node register</code> when the server already exists.</p>
 
     <h3>Provider create: auto-attach to the current environment</h3>
     <div class="terminal">
@@ -231,7 +231,7 @@
       <div class="terminal-body">
         <div class="tl"><span class="tp">$</span> devopsellence provider login hetzner</div>
         <div class="tl"><span class="tp">$</span> devopsellence node create prod-1 --provider hetzner</div>
-        <div class="tl tl-muted"># Server is created, the agent is installed, and the node is registered.</div>
+        <div class="tl tl-muted"># Server is created, the node agent is installed, and the node is registered.</div>
       </div>
     </div>
     <p>In shared mode, create uses the same provider flags as solo mode, then runs the registration install command on the new server.</p>
@@ -246,10 +246,10 @@
       <div class="terminal-body">
         <div class="tl"><span class="tp">$</span> devopsellence node register</div>
         <div class="tl tl-muted"># Node is registered and attached to the current environment.</div>
-        <div class="tl tl-muted"># Run the output command on your server to install the agent.</div>
+        <div class="tl tl-muted"># Run the output command on your server to install the node agent.</div>
       </div>
     </div>
-    <p>By default, register generates a token scoped to your current environment. The node starts receiving deployments immediately after the agent is installed.</p>
+    <p>By default, register generates a token scoped to your current environment. The node starts receiving deployments immediately after the node agent is installed.</p>
 
     <h3>Unassigned: register at org level</h3>
     <div class="terminal">
@@ -290,7 +290,7 @@
         <div class="tl tl-muted"># Run it again with the full label set you want to keep.</div>
         <div class="tl">&nbsp;</div>
         <div class="tl"><span class="tp">$</span> devopsellence node diagnose 42</div>
-        <div class="tl tl-muted"># Shows node health, agent status, and connectivity.</div>
+        <div class="tl tl-muted"># Shows node health, node-agent status, and connectivity.</div>
         <div class="tl">&nbsp;</div>
         <div class="tl"><span class="tp">$</span> devopsellence node remove 42</div>
         <div class="tl tl-muted"># Removes an unassigned shared node.</div>
@@ -303,8 +303,8 @@
 
   <section class="prose-section" id="solo-mode">
     <h2>Solo mode <span class="mode-badge mode-badge--solo">solo</span></h2>
-    <p>Solo mode deploys over SSH without the control plane. The CLI builds the image locally, streams it to each configured node, writes desired state on the node, and the agent reconciles containers from local files.</p>
-    <p>Public ingress uses Envoy in solo and shared mode. Add hostnames with <code>devopsellence ingress set</code>; pass <code>--service</code> when the target web service is not already obvious. The agent answers HTTP-01 challenges and keeps HTTPS certificates on the node.</p>
+    <p>Solo mode deploys over SSH without the control plane. The CLI builds the image locally, streams it to each configured node, writes desired state on the node, and the node agent reconciles containers from local files.</p>
+    <p>Public ingress uses Envoy in solo and shared mode. Add hostnames with <code>devopsellence ingress set</code>; pass <code>--service</code> when the target web service is not already obvious. The node agent answers HTTP-01 challenges and keeps HTTPS certificates on the node.</p>
 
     <h3>Set up a node</h3>
     <p>Use the setup wizard for an existing SSH node or a Hetzner node created by the CLI:</p>
@@ -395,7 +395,7 @@ tasks:
       </div>
     </div>
     <p>Solo deploy scope comes from workspace/environment attachments, not a deploy flag. Use <code>devopsellence node attach &lt;name&gt;</code> and <code>devopsellence node detach &lt;name&gt;</code> to choose which attached nodes receive the rollout.</p>
-    <p>During deploy, the CLI shows image transfer phases and compressed bytes sent. Remote Docker access uses plain <code>docker</code> when available and falls back to passwordless <code>sudo</code> for Docker, desired-state writes, status reads, and agent logs.</p>
+    <p>During deploy, the CLI shows image transfer phases and compressed bytes sent. Remote Docker access uses plain <code>docker</code> when available and falls back to passwordless <code>sudo</code> for Docker, desired-state writes, status reads, and node-agent logs.</p>
 
     <h3>Solo secrets and Rails</h3>
     <p>Solo mode stores deploy secrets in a local <code>.env</code> file next to <code>devopsellence.yml</code>. Do not commit this file.</p>
@@ -672,7 +672,7 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>services.*.healthcheck</code></dt>
-        <dd>HTTP path and port for health checks. The agent hits this before shifting traffic.</dd>
+        <dd>HTTP path and port for health checks. The node agent hits this before shifting traffic.</dd>
       </div>
       <div class="docs-field">
         <dt><code>services.*.volumes</code></dt>
@@ -771,7 +771,7 @@ tasks:
     </div>
 
     <h3>Health checks</h3>
-    <p>For web services with a <code>healthcheck</code> configured, the agent checks the health endpoint before routing traffic to new containers. This ensures zero-downtime deploys &mdash; old containers keep serving until new ones are healthy.</p>
+    <p>For web services with a <code>healthcheck</code> configured, the node agent checks the health endpoint before routing traffic to new containers. This ensures zero-downtime deploys &mdash; old containers keep serving until new ones are healthy.</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -786,7 +786,7 @@ tasks:
     port: 3000</code></pre>
       </div>
     </div>
-    <p>The agent sends HTTP requests to <code>healthcheck.path</code> on <code>healthcheck.port</code>. A 200 response means healthy. The Envoy proxy shifts traffic only after health checks pass.</p>
+    <p>The node agent sends HTTP requests to <code>healthcheck.path</code> on <code>healthcheck.port</code>. A 200 response means healthy. The Envoy proxy shifts traffic only after health checks pass.</p>
   </section>
 
   <%# ─── Ingress ─── %>
@@ -816,7 +816,7 @@ tasks:
         <div class="tl"><span class="tp">$</span> devopsellence context env ingress --ingress-strategy direct_dns</div>
       </div>
     </div>
-    <p>In direct DNS mode, the agent generates its own TLS certificate via Let's Encrypt and terminates HTTPS directly on public web nodes. DNS can point one hostname at more than one node, and one environment can serve more than one hostname.</p>
+    <p>In direct DNS mode, the node agent generates its own TLS certificate via Let's Encrypt and terminates HTTPS directly on public web nodes. DNS can point one hostname at more than one node, and one environment can serve more than one hostname.</p>
     <p>To use your own domain:</p>
     <ol>
       <li>Create a <strong>CNAME</strong> or <strong>ALIAS</strong> record pointing your domain to the canonical hostname devopsellence assigns to your environment.</li>
@@ -908,11 +908,11 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node list</code></dt>
-        <dd>List nodes for the current mode. In shared mode this shows assignment and agent status.</dd>
+        <dd>List nodes for the current mode. In shared mode this shows assignment and node-agent status.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node create &lt;name&gt;</code></dt>
-        <dd>Create a provider-managed node. In shared mode this provisions the server, installs the agent, and registers the node.</dd>
+        <dd>Create a provider-managed node. In shared mode this provisions the server, installs the node agent, and registers the node.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node attach</code></dt>
@@ -956,15 +956,15 @@ tasks:
     <dl class="docs-fields">
       <div class="docs-field">
         <dt><code>devopsellence setup</code></dt>
-        <dd>In solo mode, configure a node, write local node inventory, install the agent over SSH, and run diagnostics.</dd>
+        <dd>In solo mode, configure a node, write local node inventory, install the node agent over SSH, and run diagnostics.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence deploy</code></dt>
-        <dd>In solo mode, build locally, transfer the image over SSH, and write desired state for the agent to reconcile.</dd>
+        <dd>In solo mode, build locally, transfer the image over SSH, and write desired state for the node agent to reconcile.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence status</code></dt>
-        <dd>In solo mode, read agent status from configured nodes over SSH.</dd>
+        <dd>In solo mode, read node-agent status from configured nodes over SSH.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence ingress set --service web --host app.example.com</code></dt>
@@ -980,11 +980,11 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>devopsellence doctor</code></dt>
-        <dd>In solo mode, check SSH, Docker access, config, and agent service health.</dd>
+        <dd>In solo mode, check SSH, Docker access, config, and node-agent service health.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence agent install &lt;name&gt;</code></dt>
-        <dd>Install or update the solo agent over SSH. Use <code>--agent-binary</code> for a local agent build.</dd>
+        <dd>Install or update the solo node agent over SSH. Use <code>--agent-binary</code> for a local node-agent build.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node label set &lt;name&gt; --labels ...</code></dt>
@@ -1103,12 +1103,12 @@ tasks:
 
   <section class="prose-section" id="migrating">
     <h2>Migrating from solo to shared</h2>
-    <p>When you outgrow solo mode, switching to shared keeps most of your setup intact. The agent reconciliation loop, your <code>devopsellence.yml</code> config, your Dockerfile, and your deploy verbs all stay the same.</p>
+    <p>When you outgrow solo mode, switching to shared keeps most of your setup intact. The node-agent reconciliation loop, your <code>devopsellence.yml</code> config, your Dockerfile, and your deploy verbs all stay the same.</p>
 
     <h3>What changes</h3>
     <ul>
       <li><strong>Mode</strong> &mdash; run <code>devopsellence mode use shared</code>, then <code>devopsellence setup</code> to sign in and create org/project/env context.</li>
-      <li><strong>Nodes</strong> &mdash; register your existing servers with <code>devopsellence node register</code> and run the install command on each server. The agent switches from file-watching to control-plane polling.</li>
+      <li><strong>Nodes</strong> &mdash; register your existing servers with <code>devopsellence node register</code> and run the install command on each server. The node agent switches from file-watching to control-plane polling.</li>
       <li><strong>Images</strong> &mdash; instead of streaming over SSH, images are pushed to a container registry. The control plane handles registry credentials.</li>
       <li><strong>Secrets</strong> &mdash; re-create secrets with <code>devopsellence secret set &lt;name&gt; --service web --stdin</code>. They move from your local <code>.env</code> to encrypted server-side storage.</li>
       <li><strong>Config</strong> &mdash; the <code>direct.nodes</code> block in <code>devopsellence.yml</code> is no longer used. You can remove it or leave it; the CLI ignores it in shared mode.</li>
@@ -1118,7 +1118,7 @@ tasks:
     <ul>
       <li>Your <code>devopsellence.yml</code> app config (build, services, tasks, ingress, health checks, volumes).</li>
       <li>Your Dockerfile and application code.</li>
-      <li>The agent's reconciliation loop, zero-downtime rollouts, health checks, and Envoy proxy.</li>
+      <li>The node agent's reconciliation loop, zero-downtime rollouts, health checks, and Envoy proxy.</li>
       <li>CLI verbs: <code>deploy</code>, <code>status</code>, <code>secret</code>, <code>doctor</code>.</li>
     </ul>
   </section>
@@ -1133,7 +1133,7 @@ tasks:
       <li><strong>Auth expired?</strong> Run <code>devopsellence auth login</code> to refresh, then <code>devopsellence doctor</code> to verify.</li>
       <li><strong>Deploy hangs?</strong> Check the deploy output. A failing health check or crashing container will stall the rollout. Fix the app and redeploy.</li>
       <li><strong>Release task failing?</strong> The command runs in a container with its configured service image. Check that migrations or setup scripts work with your current database state.</li>
-      <li><strong>Node not picking up deploys?</strong> Run <code>devopsellence node diagnose &lt;id&gt;</code> to check agent status and connectivity. Verify the node is assigned to the correct environment.</li>
+      <li><strong>Node not picking up deploys?</strong> Run <code>devopsellence node diagnose &lt;id&gt;</code> to check node-agent status and connectivity. Verify the node is assigned to the correct environment.</li>
       <li><strong>Secrets not available?</strong> In shared mode, secrets are scoped to a service. Make sure you set the secret with the correct <code>--service</code> flag matching your service name (<code>web</code> or <code>worker</code>), then confirm with <code>devopsellence secret list</code>.</li>
       <li><strong>Solo deploy transfer looks slow?</strong> The CLI prints compressed bytes while streaming the image over SSH. If it fails before transfer, run <code>devopsellence doctor</code> in a solo workspace and check SSH plus Docker or passwordless sudo access.</li>
       <li><strong>Solo Rails app missing <code>secret_key_base</code>?</strong> Put <code>RAILS_MASTER_KEY</code> in the solo <code>.env</code>, or keep <code>config/master.key</code> available locally during deploy.</li>
@@ -1156,7 +1156,7 @@ tasks:
       </div>
       <div class="terminal-body">
         <div class="tl"><span class="tp">$</span> devopsellence node detach 42</div>
-        <div class="tl tl-muted"># Then on the server, run the agent uninstall:</div>
+        <div class="tl tl-muted"># Then on the server, run the node-agent uninstall:</div>
         <div class="tl"><span class="tp">$</span> <%= @agent_uninstall_command %></div>
       </div>
     </div>

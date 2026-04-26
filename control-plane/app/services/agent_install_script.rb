@@ -214,7 +214,7 @@ class AgentInstallScript
 
           actual="$(checksum_value "$TMP_BIN")"
           if [[ "$actual" != "$expected" ]]; then
-            echo "checksum mismatch for downloaded agent" >&2
+            echo "checksum mismatch for downloaded node agent" >&2
             exit 1
           fi
         }
@@ -235,7 +235,7 @@ class AgentInstallScript
           exit 1
         fi
 
-        echo "downloading devopsellence agent..."
+        echo "downloading devopsellence node agent..."
         run_root mkdir -p "$ENV_DIR"
         curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BIN"
         curl -fsSL "$CHECKSUM_URL" -o "$TMP_SUMS"
@@ -250,7 +250,7 @@ class AgentInstallScript
 
         run_root tee "$SERVICE_FILE" >/dev/null <<EOF_SERVICE
         [Unit]
-        Description=devopsellence agent
+        Description=devopsellence node agent
         After=network-online.target docker.service docker.socket
         Wants=network-online.target docker.service docker.socket
 
@@ -269,7 +269,7 @@ class AgentInstallScript
         run_root install -m 0755 "$TMP_BIN" "$AGENT_BIN"
         run_root systemctl enable --now devopsellence-agent
 
-        echo "devopsellence agent installed and started."
+        echo "devopsellence node agent installed and started."
       SH
     end
   end

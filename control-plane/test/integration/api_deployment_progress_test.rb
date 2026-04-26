@@ -7,7 +7,7 @@ require "test_helper"
 class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
   include ActiveSupport::Testing::TimeHelpers
 
-  test "agent status updates deployment progress and cli can read it" do
+  test "node agent status updates deployment progress and cli can read it" do
     user = User.create!(email: "owner-#{SecureRandom.hex(4)}@example.com", confirmed_at: Time.current)
     organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
     OrganizationMembership.create!(organization: organization, user: user, role: OrganizationMembership::ROLE_OWNER)

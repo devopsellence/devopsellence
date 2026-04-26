@@ -1839,7 +1839,7 @@ func TestDeployShowsWarmCapacityMilestones(t *testing.T) {
 	for _, fragment := range []string{
 		"milestone: warm capacity available; claiming a node bundle",
 		"milestone: capacity claimed; publishing desired state to the node",
-		"milestone: node claimed; waiting for the agent to apply the new revision",
+		"milestone: node claimed; waiting for the node agent to apply the new revision",
 		"milestone: new revision is healthy",
 	} {
 		if !strings.Contains(stdout.String(), fragment) {

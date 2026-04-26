@@ -1,16 +1,16 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# End-to-end test for solo mode (CLI + Agent, no control plane).
+# End-to-end test for solo mode (CLI + node agent, no control plane).
 #
 # Flow:
-#   1. Build CLI + Agent binaries
+#   1. Build CLI + node agent binaries
 #   2. Start a Docker container acting as the "remote node":
 #      - OpenSSH server for CLI access
 #      - Docker (via docker.sock mount)
 #      - Fake systemctl/journalctl shims so CLI agent install can run in-container
 #   3. Scaffold a test app with a solo-mode devopsellence.yml
-#   4. Seed global solo state, attach the node, install the agent, set secrets,
+#   4. Seed global solo state, attach the node, install the node agent, set secrets,
 #      deploy, check status
 #   5. Assert: app container running, status.json terminal, secrets resolved
 #
@@ -21,7 +21,7 @@
 #   DEVOPSELLENCE_E2E_RUN_ID            - unique run ID (auto-generated)
 #   DEVOPSELLENCE_E2E_RELEASE_VERSION   - release version (auto-generated)
 #   DEVOPSELLENCE_CLI_ROOT              - CLI repo root override
-#   DEVOPSELLENCE_AGENT_ROOT            - Agent repo root override
+#   DEVOPSELLENCE_AGENT_ROOT            - Node-agent repo root override
 #   DEVOPSELLENCE_E2E_KEEP=1            - preserve runtime after test
 #   DEVOPSELLENCE_E2E_GO_BIN            - custom Go binary path
 #   DEVOPSELLENCE_E2E_SSH_PORT          - custom SSH port for the node container
@@ -652,8 +652,8 @@ PY
       env: ssh_env
     )
 
-    raise "agent install did not report success" unless output.include?("Installed solo agent on node-1")
-    puts "[ok] Agent installed via CLI"
+    raise "node agent install did not report success" unless output.include?("Installed solo node agent on node-1")
+    puts "[ok] Node agent installed via CLI"
   end
 
   def run_deploy!
@@ -705,7 +705,7 @@ PY
     raise "unexpected environment revisions: #{environment_revisions.inspect}" unless environment_revisions == [current_revision]
     workload_revision = environment_revisions.first
 
-    # Wait for agent to reconcile and write status for the deployed revision.
+    # Wait for node agent to reconcile and write status for the deployed revision.
     wait_until!(timeout: 120) do
       output = ssh_to_node!("cat #{@status_path} 2>/dev/null || echo '{}'")
       begin
@@ -715,7 +715,7 @@ PY
         false
       end
     end
-    puts "[ok] Agent wrote status"
+    puts "[ok] Node agent wrote status"
 
     # Read final status.
     status_output = ssh_to_node!("cat #{@status_path}")

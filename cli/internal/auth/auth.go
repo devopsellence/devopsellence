@@ -96,7 +96,7 @@ func (m *Manager) AccessTokenValid(tokens Tokens) bool {
 	return expiresAt.After(time.Now().Add(accessTokenSkew))
 }
 
-func (m *Manager) EnsureAuthenticated(ctx context.Context, interactive bool, allowAnonymousCreate bool, notify func(string)) (Tokens, error) {
+func (m *Manager) EnsureAuthenticated(ctx context.Context, allowAnonymousCreate bool, notify func(string)) (Tokens, error) {
 	if token := strings.TrimSpace(os.Getenv("DEVOPSELLENCE_TOKEN")); token != "" {
 		return Tokens{AccessToken: token, APIBase: m.APIBase}, nil
 	}
@@ -128,10 +128,7 @@ func (m *Manager) EnsureAuthenticated(ctx context.Context, interactive bool, all
 		}
 		return m.BootstrapAnonymous(ctx, anonymous, notify)
 	}
-	if !interactive {
-		return Tokens{}, errors.New("authentication requires an interactive terminal; run `devopsellence auth login`")
-	}
-	return m.Login(ctx, notify)
+	return Tokens{}, errors.New("authentication required; provide DEVOPSELLENCE_TOKEN or run `devopsellence auth login` before invoking agent workflows")
 }
 
 func (m *Manager) Refresh(ctx context.Context, tokens Tokens) (Tokens, error) {

@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -9,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,11 +29,12 @@ import (
 	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/cli/internal/ui"
 
-	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
-const outputSchemaVersion = 1
+const OutputSchemaVersion = 1
+
+const outputSchemaVersion = OutputSchemaVersion
 
 var digestRefPattern = regexp.MustCompile(`\A(.+)@(sha256:[0-9a-f]{64})\z`)
 
@@ -71,7 +70,6 @@ type App struct {
 	Docker              DockerClient
 	Git                 git.Client
 	Cwd                 string
-	Verbose             bool
 	ExecutablePath      func() (string, error)
 	LookPath            func(string) (string, error)
 	Symlink             func(string, string) error
@@ -81,8 +79,6 @@ type App struct {
 	soloNodeAttachFn    func(context.Context, SoloNodeAttachOptions) error
 	soloRuntimeDoctorFn func(context.Context, SoloDoctorOptions) error
 	soloSecretResolveFn func(context.Context, solo.SecretRecord) (string, error)
-	promptReaderSource  io.Reader
-	promptReader        *bufio.Reader
 }
 
 type deployTimings struct {
@@ -104,9 +100,8 @@ type deployBuildHeartbeat struct {
 type authCall func(func(string) error) error
 
 type authSession struct {
-	app         *App
-	interactive bool
-	notify      func(string)
+	app    *App
+	notify func(string)
 
 	mu         sync.Mutex
 	cond       *sync.Cond
@@ -348,7 +343,7 @@ type resolvedDeployTarget struct {
 	CreatedEnv     bool
 }
 
-func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
+func NewApp(in io.Reader, out, err io.Writer, cwd string) *App {
 	apiBase := firstNonEmpty(os.Getenv("DEVOPSELLENCE_BASE_URL"), authDefaultBase())
 	loginBase := apiBase
 	store := state.New(state.DefaultPath(filepath.Join("devopsellence", "auth.json")))
@@ -357,7 +352,7 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 	soloStateStore := solo.NewStateStore(solo.DefaultStatePath())
 	return &App{
 		In:                 in,
-		Printer:            output.New(out, err, jsonMode),
+		Printer:            output.New(out, err),
 		Auth:               auth.New(store, apiBase, loginBase),
 		API:                api.New(apiBase),
 		State:              store,
@@ -377,32 +372,30 @@ func NewApp(in io.Reader, out, err io.Writer, jsonMode bool, cwd string) *App {
 }
 
 func (a *App) Login(ctx context.Context) error {
-	renderer := ui.DefaultRenderer()
-	var tokens auth.Tokens
-	var err error
-	if a.Printer.Interactive {
-		err = ui.RunTask(ctx, a.Printer.Out, "Sign in to devopsellence", func(taskCtx context.Context, update, _ func(string)) error {
-			var loginErr error
-			tokens, loginErr = a.Auth.Login(taskCtx, update)
-			return loginErr
-		})
-	} else {
-		tokens, err = a.Auth.Login(ctx, func(message string) {
-			a.Printer.Errorln(message)
-		})
-	}
+	tokens, err := a.Auth.Login(ctx, a.authLoginEvent)
 	if err != nil {
 		return ExitError{Code: 1, Err: err}
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"signed_in":      true,
-			"api_base":       firstNonEmpty(tokens.APIBase, a.API.BaseURL),
-		})
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"signed_in":      true,
+		"api_base":       firstNonEmpty(tokens.APIBase, a.API.BaseURL),
+	})
+}
+
+func (a *App) authLoginEvent(message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
 	}
-	a.Printer.Println(renderer.Success("Signed in."))
-	return nil
+	encoder := json.NewEncoder(a.Printer.Err)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"operation":      "auth.login",
+		"event":          "progress",
+		"message":        message,
+	})
 }
 
 func (a *App) Logout() error {
@@ -425,7 +418,7 @@ func (a *App) Logout() error {
 }
 
 func (a *App) Whoami(ctx context.Context, _ WhoamiOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -517,7 +510,7 @@ func (a *App) installAlias(aliasName string) (aliasInstallResult, error) {
 
 func (a *App) Init(ctx context.Context, opts InitOptions) error {
 	renderer := ui.DefaultRenderer()
-	tokens, err := a.ensureAuth(ctx, !opts.NonInteractive, true)
+	tokens, err := a.ensureAuth(ctx, true)
 	if err != nil {
 		return err
 	}
@@ -527,7 +520,7 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 		ctx := runCtx
 		var initErr error
 		initialized, initErr = a.initializeWorkspace(ctx, func(fn func(string) error) error {
-			return a.callWithAuthRetry(ctx, &tokens.AccessToken, !opts.NonInteractive, update, fn)
+			return a.callWithAuthRetry(ctx, &tokens.AccessToken, update, fn)
 		}, opts, update)
 		if initErr != nil {
 			return initErr
@@ -552,11 +545,7 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 		return nil
 	}
 
-	if a.Printer.Interactive && !opts.NonInteractive {
-		err = ui.RunTask(ctx, a.Printer.Out, "Initialize workspace", run)
-	} else {
-		err = run(ctx, func(string) {}, func(string) {})
-	}
+	err = run(ctx, func(string) {}, func(string) {})
 	if err != nil {
 		return err
 	}
@@ -634,13 +623,13 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 		}
 
 		preflightCfg := deployPreflightConfig(discovered, existing, opts)
-		preflight, err := a.runDeployReadOnlyPreflight(ctx, !opts.NonInteractive, opts, discovered.WorkspaceRoot, preflightCfg, update)
+		preflight, err := a.runDeployReadOnlyPreflight(ctx, opts, discovered.WorkspaceRoot, preflightCfg, update)
 		if err != nil {
 			return err
 		}
 		deployTokens = preflight.Tokens
 		accessToken = preflight.Tokens.AccessToken
-		session := newAuthSession(a, preflight.Tokens.AccessToken, !opts.NonInteractive, update)
+		session := newAuthSession(a, preflight.Tokens.AccessToken, update)
 		withAuth := func(fn func(string) error) error {
 			return session.Call(ctx, fn)
 		}
@@ -695,11 +684,9 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 		} else {
 			update("Resolving deploy target…")
 			target, err := a.resolveDeployTarget(ctx, withAuth, resolveDeployTargetInput{
-				Organization:   firstNonEmpty(opts.Organization, cfg.Organization),
-				Project:        firstNonEmpty(opts.Project, cfg.Project),
-				Environment:    cfg.DefaultEnvironment,
-				Interactive:    !opts.NonInteractive,
-				NonInteractive: opts.NonInteractive,
+				Organization: firstNonEmpty(opts.Organization, cfg.Organization),
+				Project:      firstNonEmpty(opts.Project, cfg.Project),
+				Environment:  cfg.DefaultEnvironment,
 			}, update)
 			if err != nil {
 				return err
@@ -799,25 +786,8 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 	}
 
 	var err error
-	if a.Printer.Interactive {
-		err = ui.RunTask(ctx, a.Printer.Out, "Deploy to devopsellence", run)
-	} else {
-		status := func(string) {}
-		log := func(string) {}
-		if !a.Printer.JSON {
-			status = func(message string) {
-				a.Printer.Errorln(message)
-			}
-			log = func(message string) {
-				a.Printer.Errorln(message)
-			}
-		}
-		err = run(ctx, status, log)
-	}
+	err = run(ctx, func(string) {}, func(string) {})
 	if err != nil {
-		if a.Printer.Interactive {
-			return wrapError(RenderedError{Err: err})
-		}
 		return wrapError(err)
 	}
 	if !a.Printer.JSON && autoInitSummary != "" {
@@ -888,7 +858,7 @@ func deployPreflightConfig(discovered discovery.Result, existing *config.Project
 	return config.DefaultProjectConfigForType("", discovered.ProjectName, firstNonEmpty(opts.Environment, config.DefaultEnvironment), discovered.AppType)
 }
 
-func (a *App) runDeployReadOnlyPreflight(ctx context.Context, interactive bool, opts DeployOptions, workspaceRoot string, cfg config.ProjectConfig, update func(string)) (deployReadOnlyPreflight, error) {
+func (a *App) runDeployReadOnlyPreflight(ctx context.Context, opts DeployOptions, workspaceRoot string, cfg config.ProjectConfig, update func(string)) (deployReadOnlyPreflight, error) {
 	type authResult struct {
 		tokens auth.Tokens
 		err    error
@@ -903,7 +873,7 @@ func (a *App) runDeployReadOnlyPreflight(ctx context.Context, interactive bool, 
 
 	update("Checking session…")
 	go func() {
-		tokens, err := a.ensureAuth(ctx, interactive, true)
+		tokens, err := a.ensureAuth(ctx, true)
 		authCh <- authResult{tokens: tokens, err: err}
 	}()
 
@@ -965,7 +935,7 @@ func (a *App) validateDeployInputs(opts DeployOptions, workspaceRoot string, cfg
 }
 
 func (a *App) Delete(ctx context.Context, opts DeleteOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1085,35 +1055,7 @@ func (a *App) waitForDeployment(ctx context.Context, token string, result map[st
 	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if a.Printer.Interactive {
-		return a.waitForDeploymentInteractive(rolloutCtx, token, result, deploymentID, pollInterval)
-	}
 	return a.waitForDeploymentPlain(rolloutCtx, token, deploymentID, pollInterval)
-}
-
-func (a *App) waitForDeploymentInteractive(ctx context.Context, token string, result map[string]any, deploymentID int, pollInterval time.Duration) (api.DeploymentProgress, error) {
-	var latest api.DeploymentProgress
-	_, err := ui.MonitorDeployment(ctx, a.Printer.Out, "Rollout progress", pollInterval, func(fetchCtx context.Context) (ui.DeploymentSnapshot, error) {
-		fetchErr := a.callWithAuthRetry(fetchCtx, &token, a.Printer.Interactive, nil, func(accessToken string) error {
-			var callErr error
-			latest, callErr = a.API.DeploymentProgress(fetchCtx, accessToken, deploymentID)
-			return callErr
-		})
-		if fetchErr != nil {
-			if isTransientServerError(fetchErr) {
-				return deploymentSnapshot(result, latest), nil
-			}
-			return ui.DeploymentSnapshot{}, fetchErr
-		}
-		return deploymentSnapshot(result, latest), nil
-	})
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return latest, ExitError{Code: 1, Err: rolloutTimeoutError(latest)}
-		}
-		return latest, err
-	}
-	return latest, rolloutOutcome(latest)
 }
 
 func (a *App) waitForDeploymentPlain(ctx context.Context, token string, deploymentID int, pollInterval time.Duration) (api.DeploymentProgress, error) {
@@ -1123,7 +1065,7 @@ func (a *App) waitForDeploymentPlain(ctx context.Context, token string, deployme
 	nodeStates := map[int]string{}
 
 	for {
-		err := a.callWithAuthRetry(ctx, &token, a.Printer.Interactive, nil, func(accessToken string) error {
+		err := a.callWithAuthRetry(ctx, &token, nil, func(accessToken string) error {
 			var callErr error
 			latest, callErr = a.API.DeploymentProgress(ctx, accessToken, deploymentID)
 			return callErr
@@ -1190,7 +1132,7 @@ func (a *App) waitForDeploymentPlain(ctx context.Context, token string, deployme
 }
 
 func (a *App) Status(ctx context.Context, opts StatusOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1381,7 +1323,7 @@ func (a *App) ConfigResolve(opts ConfigResolveOptions) error {
 }
 
 func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1396,14 +1338,8 @@ func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) erro
 		return nil
 	}
 
-	if !a.Printer.JSON && a.Printer.Interactive {
-		if err := ui.RunTask(ctx, a.Printer.Out, "Node Bootstrap", run); err != nil {
-			return err
-		}
-	} else {
-		if err := run(ctx, func(string) {}, func(string) {}); err != nil {
-			return err
-		}
+	if err := run(ctx, func(string) {}, func(string) {}); err != nil {
+		return err
 	}
 
 	result := bootstrap.Result
@@ -1499,7 +1435,7 @@ func (a *App) createNodeBootstrapToken(ctx context.Context, tokens *auth.Tokens,
 		environmentID = workspace.Environment.ID
 	}
 	var result map[string]any
-	err = a.callWithAuthRetry(ctx, &tokens.AccessToken, a.Printer.Interactive, update, func(accessToken string) error {
+	err = a.callWithAuthRetry(ctx, &tokens.AccessToken, update, func(accessToken string) error {
 		var callErr error
 		result, callErr = a.API.CreateNodeBootstrapToken(ctx, accessToken, organization.ID, environmentID)
 		return callErr
@@ -1516,7 +1452,7 @@ func (a *App) createNodeBootstrapToken(ctx context.Context, tokens *auth.Tokens,
 }
 
 func (a *App) NodeList(ctx context.Context, opts NodeListOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1566,43 +1502,12 @@ func (a *App) NodeList(ctx context.Context, opts NodeListOptions) error {
 }
 
 func (a *App) NodeAssign(ctx context.Context, opts NodeAssignOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
 	if opts.NodeID <= 0 {
-		if !a.Printer.Interactive {
-			return ExitError{Code: 2, Err: errors.New("node id required: node attach <id>")}
-		}
-		organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, opts.Organization)
-		if err != nil {
-			return err
-		}
-		nodes, err := a.API.ListNodes(ctx, tokens.AccessToken, organization.ID)
-		if err != nil {
-			return wrapError(err)
-		}
-		var unassigned []api.Node
-		for _, n := range nodes {
-			if len(n.Environment) == 0 && strings.TrimSpace(n.RevokedAt) == "" {
-				unassigned = append(unassigned, n)
-			}
-		}
-		if len(unassigned) == 0 {
-			return ExitError{Code: 1, Err: errors.New("no unassigned nodes")}
-		}
-		for i, n := range unassigned {
-			a.Printer.Println(fmt.Sprintf("%d) node #%d  %s  labels=%s", i+1, n.ID, firstNonEmpty(n.Name, "(unnamed)"), strings.Join(n.Labels, ",")))
-		}
-		choice, err := a.promptLine("Select node", "")
-		if err != nil {
-			return ExitError{Code: 1, Err: err}
-		}
-		idx, err := strconv.Atoi(strings.TrimSpace(choice))
-		if err != nil || idx < 1 || idx > len(unassigned) {
-			return ExitError{Code: 2, Err: fmt.Errorf("invalid selection: %s", choice)}
-		}
-		opts.NodeID = unassigned[idx-1].ID
+		return ExitError{Code: 2, Err: errors.New("node id required: node attach <id>")}
 	}
 	workspace, err := a.resolveWorkspace(ctx, tokens.AccessToken, opts.Organization, opts.Project, opts.Environment, false)
 	if err != nil {
@@ -1635,7 +1540,7 @@ func (a *App) NodeUnassign(ctx context.Context, opts NodeUnassignOptions) error 
 	if opts.NodeID <= 0 {
 		return ExitError{Code: 2, Err: errors.New("node id required: node detach <id>")}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1660,7 +1565,7 @@ func (a *App) NodeDelete(ctx context.Context, opts NodeDeleteOptions) error {
 	if opts.NodeID <= 0 {
 		return ExitError{Code: 2, Err: errors.New("node id required: node remove <id>")}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1688,7 +1593,7 @@ func (a *App) NodeLabelSet(ctx context.Context, opts NodeLabelSetOptions) error 
 	if strings.TrimSpace(opts.Labels) == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --labels")}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1714,7 +1619,7 @@ func (a *App) NodeDiagnose(ctx context.Context, opts NodeDiagnoseOptions) error 
 		waitTimeout = defaultNodeDiagnoseWaitTimeout
 	}
 
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1769,7 +1674,7 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 	if err != nil {
 		return err
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1825,7 +1730,7 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 }
 
 func (a *App) SecretList(ctx context.Context, opts SecretListOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -1868,7 +1773,7 @@ func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error 
 	if strings.TrimSpace(opts.Name) == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --name")}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2095,18 +2000,11 @@ func (a *App) removeWorkspaceSecretRef(workspaceRoot, serviceName, name string) 
 
 func (a *App) Claim(ctx context.Context, opts ClaimOptions) error {
 	email := strings.TrimSpace(opts.Email)
-	if email == "" && a.Printer.Interactive {
-		value, err := a.promptLine("Claim email", "")
-		if err != nil {
-			return ExitError{Code: 1, Err: err}
-		}
-		email = strings.TrimSpace(value)
-	}
 	if email == "" {
 		return ExitError{Code: 1, Err: errors.New("claim email is required")}
 	}
 
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2123,7 +2021,7 @@ func (a *App) Claim(ctx context.Context, opts ClaimOptions) error {
 }
 
 func (a *App) TokenCreate(ctx context.Context, opts TokenCreateOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2147,7 +2045,7 @@ func (a *App) TokenCreate(ctx context.Context, opts TokenCreateOptions) error {
 }
 
 func (a *App) TokenList(ctx context.Context, _ TokenListOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2190,7 +2088,7 @@ func (a *App) TokenRevoke(ctx context.Context, opts TokenRevokeOptions) error {
 	if opts.ID <= 0 {
 		return ExitError{Code: 2, Err: errors.New("token id required: auth token revoke <id>")}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2210,7 +2108,7 @@ func (a *App) TokenRevoke(ctx context.Context, opts TokenRevokeOptions) error {
 }
 
 func (a *App) OrganizationList(ctx context.Context, _ OrganizationListOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2247,7 +2145,7 @@ func (a *App) OrganizationUse(ctx context.Context, opts OrganizationUseOptions) 
 	if err != nil {
 		return wrapError(err)
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2276,7 +2174,7 @@ func (a *App) OrganizationUse(ctx context.Context, opts OrganizationUseOptions) 
 }
 
 func (a *App) OrganizationRegistryShow(ctx context.Context, opts OrganizationRegistryShowOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2325,7 +2223,7 @@ func (a *App) OrganizationRegistrySet(ctx context.Context, opts OrganizationRegi
 		return err
 	}
 
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2361,7 +2259,7 @@ func (a *App) OrganizationRegistrySet(ctx context.Context, opts OrganizationRegi
 }
 
 func (a *App) ProjectList(ctx context.Context, opts ProjectListOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2396,7 +2294,7 @@ func (a *App) ProjectCreate(ctx context.Context, opts ProjectCreateOptions) erro
 	if strings.TrimSpace(opts.Name) == "" {
 		return ExitError{Code: 2, Err: errors.New("project name required: devopsellence context project create <name>")}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2425,7 +2323,7 @@ func (a *App) ProjectDelete(ctx context.Context, opts ProjectDeleteOptions) erro
 	if strings.TrimSpace(opts.Name) == "" {
 		return ExitError{Code: 2, Err: errors.New("project name required: project delete <name>")}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2459,7 +2357,7 @@ func (a *App) ProjectUse(ctx context.Context, opts ProjectUseOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2491,7 +2389,7 @@ func (a *App) ProjectUse(ctx context.Context, opts ProjectUseOptions) error {
 }
 
 func (a *App) EnvironmentList(ctx context.Context, opts EnvironmentListOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2531,7 +2429,7 @@ func (a *App) EnvironmentCreate(ctx context.Context, opts EnvironmentCreateOptio
 	if err != nil {
 		return ExitError{Code: 2, Err: err}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2566,7 +2464,7 @@ func (a *App) EnvironmentIngress(ctx context.Context, opts EnvironmentIngressOpt
 	if err != nil {
 		return ExitError{Code: 2, Err: err}
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2599,7 +2497,7 @@ func (a *App) EnvironmentUse(ctx context.Context, opts EnvironmentUseOptions) er
 	if err != nil {
 		return wrapError(err)
 	}
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2631,7 +2529,7 @@ func (a *App) EnvironmentUse(ctx context.Context, opts EnvironmentUseOptions) er
 }
 
 func (a *App) EnvironmentOpen(ctx context.Context, opts EnvironmentOpenOptions) error {
-	tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -2664,12 +2562,8 @@ func (a *App) EnvironmentOpen(ctx context.Context, opts EnvironmentOpenOptions) 
 	return nil
 }
 
-func (a *App) ensureAuth(ctx context.Context, interactive bool, allowAnonymousCreate bool) (auth.Tokens, error) {
-	tokens, err := a.Auth.EnsureAuthenticated(ctx, interactive, allowAnonymousCreate, func(message string) {
-		if !a.Printer.Interactive {
-			a.Printer.Errorln(message)
-		}
-	})
+func (a *App) ensureAuth(ctx context.Context, allowAnonymousCreate bool) (auth.Tokens, error) {
+	tokens, err := a.Auth.EnsureAuthenticated(ctx, allowAnonymousCreate, func(string) {})
 	if err != nil {
 		return auth.Tokens{}, ExitError{Code: 1, Err: err}
 	}
@@ -2678,11 +2572,9 @@ func (a *App) ensureAuth(ctx context.Context, interactive bool, allowAnonymousCr
 }
 
 type resolveDeployTargetInput struct {
-	Organization   string
-	Project        string
-	Environment    string
-	Interactive    bool
-	NonInteractive bool
+	Organization string
+	Project      string
+	Environment  string
 }
 
 func (a *App) resolveDeployTarget(ctx context.Context, callAuth authCall, input resolveDeployTargetInput, update func(string)) (resolvedDeployTarget, error) {
@@ -2698,21 +2590,6 @@ func (a *App) resolveDeployTarget(ctx context.Context, callAuth authCall, input 
 
 	preferredOrganizationID, _ := a.lastOrganizationID()
 	response, err := request(preferredOrganizationID)
-	if err != nil && shouldPromptForOrganization(err, input) {
-		orgInput, promptErr := a.chooseOrganizationInput(ctx, callAuth)
-		if promptErr != nil {
-			return resolvedDeployTarget{}, promptErr
-		}
-		response, err = func() (api.DeployTargetResponse, error) {
-			var resolved api.DeployTargetResponse
-			callErr := callAuth(func(accessToken string) error {
-				var innerErr error
-				resolved, innerErr = a.API.ResolveDeployTarget(ctx, accessToken, orgInput, input.Project, input.Environment, 0)
-				return innerErr
-			})
-			return resolved, callErr
-		}()
-	}
 	if err != nil {
 		return resolvedDeployTarget{}, ExitError{Code: 1, Err: err}
 	}
@@ -2725,41 +2602,6 @@ func (a *App) resolveDeployTarget(ctx context.Context, callAuth authCall, input 
 		CreatedProject: response.ProjectCreated,
 		CreatedEnv:     response.EnvironmentCreated,
 	}, nil
-}
-
-func shouldPromptForOrganization(err error, input resolveDeployTargetInput) bool {
-	if !input.Interactive || input.NonInteractive || strings.TrimSpace(input.Organization) != "" {
-		return false
-	}
-	var statusErr *api.StatusError
-	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnprocessableEntity {
-		return false
-	}
-	return strings.Contains(strings.ToLower(statusErr.Error()), "multiple organizations available")
-}
-
-func (a *App) chooseOrganizationInput(ctx context.Context, callAuth authCall) (string, error) {
-	var orgs []api.Organization
-	if err := callAuth(func(accessToken string) error {
-		var callErr error
-		orgs, callErr = a.API.ListOrganizations(ctx, accessToken)
-		return callErr
-	}); err != nil {
-		return "", ExitError{Code: 1, Err: err}
-	}
-	if len(orgs) == 0 {
-		return "", ExitError{Code: 2, Err: errors.New("no organizations found")}
-	}
-	sort.Slice(orgs, func(i, j int) bool { return orgs[i].Name < orgs[j].Name })
-	a.Printer.Println("Organizations:")
-	for _, org := range orgs {
-		a.Printer.Println(" ", fmt.Sprintf("%d", org.ID), org.Name)
-	}
-	choice, err := a.promptLine("Organization id or name", "")
-	if err != nil {
-		return "", ExitError{Code: 1, Err: err}
-	}
-	return choice, nil
 }
 
 func parseRuntimeValueOverrides(raw string, fieldName string) (runtimeValueOverrides, error) {
@@ -2854,7 +2696,7 @@ func mergeStringMaps(parts ...map[string]string) map[string]string {
 	return merged
 }
 
-func (a *App) callWithAuthRetry(ctx context.Context, token *string, interactive bool, notify func(string), fn func(string) error) error {
+func (a *App) callWithAuthRetry(ctx context.Context, token *string, notify func(string), fn func(string) error) error {
 	if token == nil {
 		return errors.New("missing access token")
 	}
@@ -2863,7 +2705,7 @@ func (a *App) callWithAuthRetry(ctx context.Context, token *string, interactive 
 		return err
 	}
 
-	tokens, authErr := a.reauthenticate(ctx, interactive, notify)
+	tokens, authErr := a.reauthenticate(ctx, notify)
 	if authErr != nil {
 		return authErr
 	}
@@ -2872,12 +2714,11 @@ func (a *App) callWithAuthRetry(ctx context.Context, token *string, interactive 
 	return fn(*token)
 }
 
-func newAuthSession(app *App, token string, interactive bool, notify func(string)) *authSession {
+func newAuthSession(app *App, token string, notify func(string)) *authSession {
 	session := &authSession{
-		app:         app,
-		interactive: interactive,
-		notify:      notify,
-		token:       token,
+		app:    app,
+		notify: notify,
+		token:  token,
 	}
 	session.cond = sync.NewCond(&session.mu)
 	return session
@@ -2921,7 +2762,7 @@ func (s *authSession) refresh(ctx context.Context, staleToken string) (string, e
 	s.refreshing = true
 	s.mu.Unlock()
 
-	tokens, err := s.app.reauthenticate(ctx, s.interactive, s.notify)
+	tokens, err := s.app.reauthenticate(ctx, s.notify)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2937,7 +2778,7 @@ func (s *authSession) refresh(ctx context.Context, staleToken string) (string, e
 	return s.token, nil
 }
 
-func (a *App) reauthenticate(ctx context.Context, interactive bool, notify func(string)) (auth.Tokens, error) {
+func (a *App) reauthenticate(ctx context.Context, notify func(string)) (auth.Tokens, error) {
 	if notify == nil {
 		notify = func(string) {}
 	}
@@ -2958,18 +2799,7 @@ func (a *App) reauthenticate(ctx context.Context, interactive bool, notify func(
 		}
 	}
 
-	if !interactive {
-		return auth.Tokens{}, errors.New("session expired. Run `devopsellence auth login`.")
-	}
-	notify("Session expired. Starting sign-in again…")
-	return a.Auth.Login(ctx, func(message string) {
-		if notify != nil {
-			notify(message)
-		}
-		if !a.Printer.Interactive {
-			a.Printer.Errorln(message)
-		}
-	})
+	return auth.Tokens{}, errors.New("session expired. Run `devopsellence auth login`.")
 }
 
 func authRetryable(err error) bool {
@@ -3000,42 +2830,6 @@ func isTransientServerError(err error) bool {
 		}
 	}
 	return false
-}
-
-func deploymentSnapshot(result map[string]any, progress api.DeploymentProgress) ui.DeploymentSnapshot {
-	nodes := make([]ui.DeploymentNode, 0, len(progress.Nodes))
-	for _, node := range progress.Nodes {
-		nodes = append(nodes, ui.DeploymentNode{
-			Name:       firstNonEmpty(node.Name, fmt.Sprintf("node-%d", node.ID)),
-			Phase:      node.Phase,
-			Detail:     firstNonEmpty(node.Error, node.Message),
-			ReportedAt: node.ReportedAt,
-		})
-	}
-
-	publicURL := stringFromMap(result, "public_url")
-	if publicURL == "" && progress.Ingress != nil {
-		publicURL = progress.Ingress.PublicURL
-	}
-
-	return ui.DeploymentSnapshot{
-		Project:       nestedString(result, "project", "name"),
-		Environment:   progress.Environment.Name,
-		Revision:      nestedString(progress.Release, "revision"),
-		PublicURL:     publicURL,
-		Status:        progress.Status,
-		StatusMessage: firstNonEmpty(progress.ErrorMessage, progress.StatusMessage, stringFromMap(result, "error_message"), stringFromMap(result, "status_message")),
-		Summary: ui.DeploymentSummary{
-			AssignedNodes: progress.Summary.AssignedNodes,
-			Pending:       progress.Summary.Pending,
-			Reconciling:   progress.Summary.Reconciling,
-			Settled:       progress.Summary.Settled,
-			Error:         progress.Summary.Error,
-			Complete:      progress.Summary.Complete,
-			Failed:        progress.Summary.Failed,
-		},
-		Nodes: nodes,
-	}
 }
 
 func deploymentProgressMap(progress api.DeploymentProgress) map[string]any {
@@ -3139,7 +2933,7 @@ func randomRequestToken() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func (a *App) resolveOrganization(ctx context.Context, token, input string, interactive bool) (api.Organization, bool, error) {
+func (a *App) resolveOrganization(ctx context.Context, token, input string) (api.Organization, bool, error) {
 	orgs, err := a.API.ListOrganizations(ctx, token)
 	if err != nil {
 		return api.Organization{}, false, ExitError{Code: 1, Err: err}
@@ -3175,24 +2969,7 @@ func (a *App) resolveOrganization(ctx context.Context, token, input string, inte
 			}
 		}
 	}
-	if !interactive {
-		return api.Organization{}, false, ExitError{Code: 2, Err: errors.New("multiple organizations available; rerun with --org or interactive mode")}
-	}
-
-	sort.Slice(orgs, func(i, j int) bool { return orgs[i].Name < orgs[j].Name })
-	a.Printer.Println("Organizations:")
-	for _, org := range orgs {
-		a.Printer.Println(" ", fmt.Sprintf("%d", org.ID), org.Name)
-	}
-	choice, err := a.promptLine("Organization id or name", "")
-	if err != nil {
-		return api.Organization{}, false, ExitError{Code: 1, Err: err}
-	}
-	if match, ok := findOrganization(orgs, choice); ok {
-		_ = a.rememberOrganization(match.ID)
-		return match, false, nil
-	}
-	return api.Organization{}, false, ExitError{Code: 2, Err: errors.New("organization not found")}
+	return api.Organization{}, false, ExitError{Code: 2, Err: errors.New("multiple organizations available; pass --org")}
 }
 
 func (a *App) resolveOrganizationReadOnly(ctx context.Context, token, input string) (api.Organization, error) {
@@ -3304,7 +3081,7 @@ func (a *App) resolveWorkspace(ctx context.Context, token, organizationInput, pr
 
 	var organization api.Organization
 	if autoCreateDefault {
-		organization, _, err = a.resolveOrganization(ctx, token, orgInput, a.Printer.Interactive)
+		organization, _, err = a.resolveOrganization(ctx, token, orgInput)
 	} else {
 		organization, err = a.resolveOrganizationReadOnly(ctx, token, orgInput)
 	}
@@ -3352,12 +3129,12 @@ func (a *App) ensureNodeBootstrapWorkspace(ctx context.Context, accessToken *str
 	if existing == nil {
 		update("Initializing workspace…")
 		initialized, err := a.initializeWorkspace(ctx, func(fn func(string) error) error {
-			return a.callWithAuthRetry(ctx, accessToken, a.Printer.Interactive, update, fn)
+			return a.callWithAuthRetry(ctx, accessToken, update, fn)
 		}, InitOptions{
 			Organization:   opts.Organization,
 			ProjectName:    opts.Project,
 			Environment:    opts.Environment,
-			NonInteractive: !a.Printer.Interactive,
+			NonInteractive: true,
 		}, update)
 		if err != nil {
 			return Workspace{}, nil, err
@@ -3400,11 +3177,9 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 
 	update("Resolving deploy target…")
 	target, err := a.resolveDeployTarget(ctx, callAuth, resolveDeployTargetInput{
-		Organization:   orgInput,
-		Project:        projectName,
-		Environment:    environmentName,
-		Interactive:    a.Printer.Interactive,
-		NonInteractive: opts.NonInteractive,
+		Organization: orgInput,
+		Project:      projectName,
+		Environment:  environmentName,
 	}, update)
 	if err != nil {
 		return initializedWorkspace{}, err
@@ -3847,28 +3622,6 @@ func joinNotices(parts ...string) string {
 	return strings.Join(values, "; ")
 }
 
-func (a *App) promptLine(label, fallback string) (string, error) {
-	a.Printer.Printf("%s", label)
-	if fallback != "" {
-		a.Printer.Printf(" [%s]", fallback)
-	}
-	a.Printer.Printf(": ")
-	if a.promptReader == nil || a.promptReaderSource != a.In {
-		a.promptReaderSource = a.In
-		a.promptReader = bufio.NewReader(a.In)
-	}
-	reader := a.promptReader
-	line, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	text := strings.TrimSpace(line)
-	if text == "" {
-		return fallback, nil
-	}
-	return text, nil
-}
-
 func (a *App) secretValue(opts SecretSetOptions) (string, error) {
 	if opts.ValueStdin {
 		data, err := io.ReadAll(a.In)
@@ -3887,35 +3640,7 @@ func (a *App) secretValue(opts SecretSetOptions) (string, error) {
 	if opts.ValueProvided {
 		return "", ExitError{Code: 2, Err: errors.New("secret value is required")}
 	}
-	if !a.Printer.Interactive {
-		return "", ExitError{Code: 2, Err: errors.New("missing required option: --value or --stdin")}
-	}
-	return a.promptSecretValue("Secret value")
-}
-
-func (a *App) promptSecretValue(label string) (string, error) {
-	a.Printer.Printf("%s: ", label)
-	file, ok := a.In.(*os.File)
-	if !ok || !term.IsTerminal(int(file.Fd())) {
-		line, err := a.promptLine(label, "")
-		if err != nil {
-			return "", ExitError{Code: 1, Err: err}
-		}
-		if strings.TrimSpace(line) == "" {
-			return "", ExitError{Code: 2, Err: errors.New("secret value is required")}
-		}
-		return line, nil
-	}
-	bytes, err := term.ReadPassword(int(file.Fd()))
-	a.Printer.Println()
-	if err != nil {
-		return "", ExitError{Code: 1, Err: err}
-	}
-	value := string(bytes)
-	if strings.TrimSpace(value) == "" {
-		return "", ExitError{Code: 2, Err: errors.New("secret value is required")}
-	}
-	return value, nil
+	return "", ExitError{Code: 2, Err: errors.New("missing required option: --value or --stdin")}
 }
 
 func (a *App) registryPassword(opts OrganizationRegistrySetOptions) (string, error) {
@@ -3936,10 +3661,7 @@ func (a *App) registryPassword(opts OrganizationRegistrySetOptions) (string, err
 	if opts.PasswordProvided {
 		return "", ExitError{Code: 2, Err: errors.New("registry password is required")}
 	}
-	if !a.Printer.Interactive {
-		return "", ExitError{Code: 2, Err: errors.New("missing required option: --password or --password-stdin")}
-	}
-	return a.promptSecretValue("Registry password")
+	return "", ExitError{Code: 2, Err: errors.New("missing required option: --password or --password-stdin")}
 }
 
 func (a *App) rememberOrganization(id int) error {
@@ -3996,14 +3718,6 @@ func (a *App) lastOrganizationID() (int, bool) {
 		return value, true
 	}
 	return 0, false
-}
-
-func inputIsTTY(reader io.Reader) bool {
-	file, ok := reader.(*os.File)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(file.Fd()))
 }
 
 func wrapError(err error) error {

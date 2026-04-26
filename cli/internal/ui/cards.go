@@ -1,10 +1,6 @@
 package ui
 
-import (
-	"strings"
-
-	"github.com/charmbracelet/lipgloss"
-)
+import "strings"
 
 type Row struct {
 	Label string
@@ -30,16 +26,9 @@ func (r Renderer) Card(card Card) string {
 
 	if title != "" {
 		if status != "" {
-			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r.Title(title), "  ", r.Accent(status)))
+			lines = append(lines, r.Title(title)+"  "+r.Accent(status))
 		} else {
 			lines = append(lines, r.Title(title))
-		}
-	}
-
-	labelWidth := 0
-	for _, row := range card.Rows {
-		if width := lipgloss.Width(strings.TrimSpace(row.Label)); width > labelWidth {
-			labelWidth = width
 		}
 	}
 
@@ -49,7 +38,7 @@ func (r Renderer) Card(card Card) string {
 		if label == "" && value == "" {
 			continue
 		}
-		lines = append(lines, r.renderRow(labelWidth, label, value))
+		lines = append(lines, r.renderRow(label, value))
 	}
 
 	if footer := strings.TrimSpace(card.Footer); footer != "" {
@@ -59,12 +48,17 @@ func (r Renderer) Card(card Card) string {
 		lines = append(lines, r.Muted(footer))
 	}
 
-	return r.theme.Card.Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
-func (r Renderer) renderRow(labelWidth int, label, value string) string {
-	paddedLabel := lipgloss.NewStyle().Width(labelWidth).Render(r.Label(label))
-	return lipgloss.JoinHorizontal(lipgloss.Top, paddedLabel, "  ", r.Value(value))
+func (r Renderer) renderRow(label, value string) string {
+	if label == "" {
+		return r.Value(value)
+	}
+	if value == "" {
+		return r.Label(label)
+	}
+	return r.Label(label) + ": " + r.Value(value)
 }
 
 func RenderCommandBlock(title, command string) string {
@@ -73,12 +67,10 @@ func RenderCommandBlock(title, command string) string {
 
 func (r Renderer) CommandBlock(title, command string) string {
 	r = r.normalized()
-	style := r.theme.Card.
-		BorderForeground(lipgloss.Color("#FF9F1C"))
 	lines := []string{}
 	if t := strings.TrimSpace(title); t != "" {
 		lines = append(lines, r.Muted(t), "")
 	}
 	lines = append(lines, r.Accent(strings.TrimSpace(command)))
-	return style.Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }

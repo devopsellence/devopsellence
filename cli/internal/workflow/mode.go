@@ -164,33 +164,18 @@ func (a *App) workspaceHasSoloState(workspaceRoot string) bool {
 	return false
 }
 
-func (a *App) ResolveMode(interactive bool) (Mode, error) {
+func (a *App) ResolveMode() (Mode, error) {
 	if saved, ok, err := a.savedMode(); err != nil {
 		return "", ExitError{Code: 1, Err: err}
 	} else if ok {
 		return saved, nil
 	}
-	if !interactive {
-		return "", ExitError{Code: 2, Err: errors.New(modeUnsetError)}
-	}
-
-	choice, err := a.promptLine("Workspace mode (solo/shared)", string(a.suggestedMode()))
-	if err != nil {
-		return "", ExitError{Code: 1, Err: err}
-	}
-	mode, err := normalizeMode(choice)
-	if err != nil {
-		return "", ExitError{Code: 2, Err: err}
-	}
-	if err := a.SetMode(mode); err != nil {
-		return "", ExitError{Code: 1, Err: err}
-	}
-	return mode, nil
+	return "", ExitError{Code: 2, Err: errors.New(modeUnsetError)}
 }
 
-func (a *App) ResolveSetupMode(explicit string, interactive bool) (Mode, error) {
+func (a *App) ResolveSetupMode(explicit string) (Mode, error) {
 	if strings.TrimSpace(explicit) == "" {
-		return a.ResolveMode(interactive)
+		return a.ResolveMode()
 	}
 	mode, err := normalizeMode(explicit)
 	if err != nil {

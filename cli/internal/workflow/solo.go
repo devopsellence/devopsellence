@@ -24,7 +24,6 @@ import (
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/solo/providers"
-	"github.com/devopsellence/cli/internal/ui"
 	cliversion "github.com/devopsellence/cli/internal/version"
 )
 
@@ -98,7 +97,6 @@ type SoloNodeCreateOptions struct {
 	Labels       string
 	SSHPublicKey string
 	NoInstall    bool
-	Deploy       bool
 }
 
 type SoloNodeRemoveOptions struct {
@@ -178,7 +176,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if providerSlug == providerHetzner && strings.EqualFold(strings.TrimSpace(opts.Size), "cx22") {
 		return providerNodeCreateResult{}, fmt.Errorf("Hetzner size %q is deprecated; use %q", opts.Size, defaultHetznerSize)
 	}
-	if err := a.ensureInteractiveProviderLogin(ctx, providerSlug); err != nil {
+	if err := a.ensureProviderTokenConfigured(ctx, providerSlug); err != nil {
 		return providerNodeCreateResult{}, err
 	}
 	provider, err := a.resolveSoloProvider(providerSlug)
@@ -1535,16 +1533,18 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 	}
 
 	if opts.Follow {
-		// Stream directly to the user's terminal — do not buffer.
-		return solo.RunSSHInteractive(ctx, node, remoteJournalctlCommand("-u devopsellence-agent -f"), a.Printer.Out, a.Printer.Out)
+		return ExitError{Code: 2, Err: errors.New("--follow streams raw logs and is not supported by the JSON-only CLI")}
 	}
 
 	out, err := solo.RunSSH(ctx, node, remoteJournalctlCommand("-u devopsellence-agent --no-pager -n 100"), nil)
 	if err != nil {
 		return err
 	}
-	a.Printer.Printf("%s", out)
-	return nil
+	lines := strings.Split(out, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines})
 }
 
 func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {
@@ -1765,9 +1765,6 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if opts.Name == "" {
 		return fmt.Errorf("node name is required")
 	}
-	if opts.Deploy && a.Printer.JSON {
-		return fmt.Errorf("node create --deploy is not supported with --json")
-	}
 	if _, ok := current.Nodes[opts.Name]; ok {
 		return fmt.Errorf("solo node %q already exists", opts.Name)
 	}
@@ -1784,7 +1781,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if !opts.NoInstall || opts.Deploy {
+	if !opts.NoInstall {
 		if !a.Printer.JSON {
 			a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
 		}
@@ -1792,17 +1789,6 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 			return err
 		}
 		if err := a.installSoloAgent(ctx, opts.Name, created.Node, SoloAgentInstallOptions{}); err != nil {
-			return err
-		}
-	}
-	if opts.Deploy {
-		if _, _, err := a.attachSoloNode(&current, workspaceRoot, soloEnvironmentName(cfg, ""), opts.Name); err != nil {
-			return err
-		}
-		if err := a.writeSoloState(current); err != nil {
-			return err
-		}
-		if err := a.SoloDeploy(ctx, SoloDeployOptions{}); err != nil {
 			return err
 		}
 	}
@@ -1853,13 +1839,9 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 	if opts.Name == "" {
 		return fmt.Errorf("node name is required")
 	}
-	if opts.Deploy {
-		return fmt.Errorf("node create --deploy is only available in solo mode")
-	}
-
 	var bootstrap nodeBootstrapToken
 	if !opts.NoInstall {
-		tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+		tokens, err := a.ensureAuth(ctx, false)
 		if err != nil {
 			return err
 		}
@@ -1868,14 +1850,8 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 			bootstrap, err = a.createNodeBootstrapToken(ctx, &tokens, opts.NodeBootstrapOptions, update)
 			return err
 		}
-		if !a.Printer.JSON && a.Printer.Interactive {
-			if err := ui.RunTask(ctx, a.Printer.Out, "Node Bootstrap", run); err != nil {
-				return err
-			}
-		} else {
-			if err := run(ctx, func(string) {}, func(string) {}); err != nil {
-				return err
-			}
+		if err := run(ctx, func(string) {}, func(string) {}); err != nil {
+			return err
 		}
 	}
 
@@ -1999,119 +1975,8 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	return nil
 }
 
-func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
-	if !a.Printer.Interactive {
-		return ExitError{Code: 2, Err: fmt.Errorf("solo setup requires an interactive terminal; use `devopsellence node create <name> --provider hetzner` for provider-managed nodes, or run `devopsellence setup` in a terminal to add an existing SSH node")}
-	}
-	mode, err := a.promptLine("Node source (existing/hetzner)", "hetzner")
-	if err != nil {
-		return err
-	}
-	name, err := a.promptLine("Node name", "prod-1")
-	if err != nil {
-		return err
-	}
-	labels, err := a.promptLine("Labels", strings.Join(config.SoloDefaultLabels, ","))
-	if err != nil {
-		return err
-	}
-	cfg, workspaceRoot, err := a.ensureSoloProjectConfig()
-	if err != nil {
-		return err
-	}
-	if strings.EqualFold(strings.TrimSpace(mode), "hetzner") {
-		region, err := a.promptLine("Hetzner region", defaultHetznerRegion)
-		if err != nil {
-			return err
-		}
-		size, err := a.promptLine("Hetzner size", defaultHetznerSize)
-		if err != nil {
-			return err
-		}
-		sshKeySource, err := a.promptLine("SSH key source (generate/existing)", "generate")
-		if err != nil {
-			return err
-		}
-		sshKeySource, err = normalizeSoloSSHKeySource(sshKeySource)
-		if err != nil {
-			return err
-		}
-		sshPublicKey := ""
-		if sshKeySource == "generate" {
-			generatedKey, err := ensureGeneratedWorkspaceSSHKey(workspaceRoot)
-			if err != nil {
-				return err
-			}
-			if !a.Printer.JSON {
-				action := "Reusing"
-				if generatedKey.Generated {
-					action = "Generated"
-				}
-				a.Printer.Println(fmt.Sprintf("%s workspace SSH key %s (%s)", action, generatedKey.PrivateKeyPath, generatedKey.Fingerprint))
-			}
-			sshPublicKey = generatedKey.PublicKeyPath
-		} else {
-			sshPublicKey, err = a.promptLine("SSH public key path", defaultSoloSSHPublicKeyPath())
-			if err != nil {
-				return err
-			}
-		}
-		if err := a.runSoloNodeCreate(ctx, SoloNodeCreateOptions{
-			Name:         name,
-			Provider:     "hetzner",
-			Region:       region,
-			Size:         size,
-			Labels:       labels,
-			SSHPublicKey: sshPublicKey,
-		}); err != nil {
-			return err
-		}
-		if err := a.runSoloNodeAttach(ctx, SoloNodeAttachOptions{Node: name}); err != nil {
-			return err
-		}
-		return a.runSoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
-	}
-	host, err := a.promptLine("Host", "")
-	if err != nil {
-		return err
-	}
-	user, err := a.promptLine("SSH user", "root")
-	if err != nil {
-		return err
-	}
-	sshKey, err := a.promptLine("SSH private key path", defaultSoloSSHPrivateKeyPath())
-	if err != nil {
-		return err
-	}
-	current, err := a.readSoloState()
-	if err != nil {
-		return err
-	}
-	parsedLabels, err := parseSoloLabels(labels)
-	if err != nil {
-		return err
-	}
-	node := config.SoloNode{
-		Host:          host,
-		User:          user,
-		SSHKey:        strings.TrimSpace(sshKey),
-		Port:          22,
-		AgentStateDir: "/var/lib/devopsellence",
-		Labels:        parsedLabels,
-	}
-	if err := current.SetNode(name, node); err != nil {
-		return err
-	}
-	if _, _, err := a.attachSoloNode(&current, workspaceRoot, soloEnvironmentName(cfg, ""), name); err != nil {
-		return err
-	}
-	if err := a.writeSoloState(current); err != nil {
-		return err
-	}
-	if err := a.installSoloAgent(ctx, name, node, SoloAgentInstallOptions{}); err != nil {
-		return err
-	}
-	return a.SoloRuntimeDoctor(ctx, SoloDoctorOptions{Nodes: []string{name}})
+func (a *App) SoloSetup(context.Context, SoloSetupOptions) error {
+	return ExitError{Code: 2, Err: fmt.Errorf("solo setup requires explicit inputs; use `devopsellence node create <name> --provider hetzner` for provider-managed nodes or `devopsellence node attach <name> --host <host> --user <user> --ssh-key <path>` for existing nodes")}
 }
 
 func (a *App) ensureSoloProjectConfig() (*config.ProjectConfig, string, error) {

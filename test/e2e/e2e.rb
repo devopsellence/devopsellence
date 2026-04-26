@@ -660,7 +660,6 @@ class E2E
       set_workspace_mode!
       run!(
         cli_binary.to_s, "setup",
-        "--json",
         "--non-interactive",
         "--project", @project_name,
         "--env", @environment_name,
@@ -681,7 +680,8 @@ class E2E
         timeout: 30,
         env: cli_env
       )
-      raise "mode use shared did not confirm shared mode" unless output.include?("Mode: shared")
+      result = parse_json_output(output)
+      raise "mode use shared did not confirm shared mode" unless result["mode"] == "shared"
     end
 
     def write_app_files!
@@ -965,11 +965,15 @@ class E2E
     end
 
     def cli_json!(*args, timeout:)
-      JSON.parse(run!(cli_binary.to_s, "--json", *args, chdir: @app_dir.to_s, timeout: timeout, env: cli_env))
+      parse_json_output(run!(cli_binary.to_s, *args, chdir: @app_dir.to_s, timeout: timeout, env: cli_env))
     end
 
     def deploy_succeeded?(output)
-      output.include?("rollout settled") || output.include?("[ok] Deploy complete.")
+      result = parse_json_output(output)
+      rollout = result.fetch("rollout", {})
+      rollout.dig("summary", "complete") == true || rollout.fetch("status", "") == "settled"
+    rescue JSON::ParserError, KeyError, RuntimeError
+      false
     end
 
     def go_binary
@@ -1254,8 +1258,17 @@ class E2E
     end
 
     def parse_json_output(output)
-      line = output.to_s.lines.reverse.find { |entry| entry.to_s.strip.start_with?("{", "[") }
-      JSON.parse(line || output.to_s)
+      text = output.to_s
+      starts = []
+      text.each_char.with_index { |char, index| starts << index if char == "{" || char == "[" }
+      starts.reverse_each do |index|
+        begin
+          return JSON.parse(text[index..].strip)
+        rescue JSON::ParserError
+          next
+        end
+      end
+      raise "output did not contain JSON: #{excerpt(output, 20)}"
     end
 end
 

@@ -283,7 +283,6 @@ func TestContextShowJSONIncludesWorkspaceContext(t *testing.T) {
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
 	app.Printer.JSON = true
-	app.Printer.Interactive = false
 
 	if err := app.ContextShow(); err != nil {
 		t.Fatalf("ContextShow() error = %v", err)
@@ -449,17 +448,19 @@ func TestEnvironmentOpenUsesWorkspaceContext(t *testing.T) {
 		}
 	}))
 
-	var opened string
+	var stdout bytes.Buffer
+	app.Printer = output.New(&stdout, io.Discard)
 	app.Auth.OpenURL = func(value string) error {
-		opened = value
+		t.Fatalf("OpenURL(%q) should not run in agent-primary JSON mode", value)
 		return nil
 	}
 
 	if err := app.EnvironmentOpen(context.Background(), EnvironmentOpenOptions{}); err != nil {
 		t.Fatalf("EnvironmentOpen() error = %v", err)
 	}
-	if opened != "https://shop.example.test" {
-		t.Fatalf("opened = %q, want https://shop.example.test", opened)
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["url"] != "https://shop.example.test" {
+		t.Fatalf("url = %v, want https://shop.example.test", payload["url"])
 	}
 }
 
@@ -503,7 +504,6 @@ func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
 	app.Printer.JSON = true
-	app.Printer.Interactive = false
 
 	if err := app.ConfigResolve(ConfigResolveOptions{Environment: "staging"}); err != nil {
 		t.Fatalf("ConfigResolve() error = %v", err)
@@ -569,7 +569,6 @@ func TestStatusUsesSavedWorkspaceEnvironment(t *testing.T) {
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
 	app.Printer.JSON = true
-	app.Printer.Interactive = false
 
 	if err := app.Status(context.Background(), StatusOptions{}); err != nil {
 		t.Fatalf("Status() error = %v", err)
@@ -690,7 +689,7 @@ func TestNodeBootstrapUnassignedUsesOrganizationOnly(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
+	app.Printer = output.New(&stdout, io.Discard)
 
 	if err := app.NodeBootstrap(context.Background(), NodeBootstrapOptions{Unassigned: true}); err != nil {
 		t.Fatalf("NodeBootstrap() error = %v", err)
@@ -698,8 +697,9 @@ func TestNodeBootstrapUnassignedUsesOrganizationOnly(t *testing.T) {
 	if _, ok := captured["environment_id"]; ok {
 		t.Fatalf("environment_id unexpectedly present: %#v", captured)
 	}
-	if !strings.Contains(stdout.String(), "Unassigned") {
-		t.Fatalf("NodeBootstrap() output = %q, want unassigned summary", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["assignment_mode"] != "unassigned" {
+		t.Fatalf("assignment_mode = %v, want unassigned", payload["assignment_mode"])
 	}
 }
 
@@ -767,16 +767,15 @@ func TestStatusPrintsWarningWhenPresent(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
+	app.Printer = output.New(&stdout, io.Discard)
 
 	if err := app.Status(context.Background(), StatusOptions{}); err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Warning:") {
-		t.Fatalf("Status() output = %q, want warning prefix", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "devopsellence node register") {
-		t.Fatalf("Status() output = %q, want register hint", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	warning, _ := payload["warning"].(string)
+	if !strings.Contains(warning, "devopsellence node register") {
+		t.Fatalf("warning = %q, want register hint", warning)
 	}
 }
 
@@ -813,44 +812,21 @@ func TestNodeAssignUsesWorkspaceEnvironmentAndNodeID(t *testing.T) {
 	}
 }
 
-func TestNodeAssignInteractiveSelectsUnassignedNode(t *testing.T) {
+func TestNodeAssignRequiresExplicitNodeID(t *testing.T) {
 	t.Parallel()
 
 	root := makeRailsRoot(t, "ShopApp")
-	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "production")); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	var captured map[string]any
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
-			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations/7/nodes":
-			return jsonResponse(t, map[string]any{"nodes": []map[string]any{
-				{"id": 10, "name": "node-assigned", "labels": []string{"web"}, "environment": map[string]any{"name": "production"}},
-				{"id": 12, "name": "node-revoked", "labels": []string{"worker"}, "revoked_at": "2026-03-29T12:00:00Z"},
-				{"id": 55, "name": "node-free", "labels": []string{"worker"}},
-			}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
-			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
-			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/assignments":
-			_ = json.NewDecoder(r.Body).Decode(&captured)
-			return sseResponse(t, "complete", map[string]any{"node_id": 55, "environment_id": 44, "desired_state_uri": "gs://bucket/nodes/55/desired_state.json"}), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, nil
-		}
+		t.Fatalf("unexpected request without explicit node ID: %s %s", r.Method, r.URL.Path)
+		return nil, nil
 	}))
-	app.In = strings.NewReader("1\n")
-	app.Printer.Interactive = true
-	if err := app.NodeAssign(context.Background(), NodeAssignOptions{}); err != nil {
-		t.Fatalf("NodeAssign() error = %v", err)
+
+	err := app.NodeAssign(context.Background(), NodeAssignOptions{})
+	if err == nil {
+		t.Fatal("NodeAssign() error = nil, want node id error")
 	}
-	if nodeID := intValueAny(captured["node_id"]); nodeID != 55 {
-		t.Fatalf("node_id = %v, want 55", captured["node_id"])
+	if !strings.Contains(err.Error(), "node id required") {
+		t.Fatalf("NodeAssign() error = %v", err)
 	}
 }
 
@@ -872,11 +848,9 @@ func TestNodeUnassignDeletesAssignment(t *testing.T) {
 	if err := app.NodeUnassign(context.Background(), NodeUnassignOptions{NodeID: 55}); err != nil {
 		t.Fatalf("NodeUnassign() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Unassigned node #55 from env #44.") {
-		t.Fatalf("NodeUnassign() output = %q", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "devopsellence-agent uninstall --purge-runtime") {
-		t.Fatalf("NodeUnassign() output = %q, want uninstall hint", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if intValueAny(payload["id"]) != 55 || intValueAny(payload["environment_id"]) != 44 {
+		t.Fatalf("payload = %#v, want node and environment IDs", payload)
 	}
 }
 
@@ -898,8 +872,9 @@ func TestNodeUnassignManagedNodeSignalsDelete(t *testing.T) {
 	if err := app.NodeUnassign(context.Background(), NodeUnassignOptions{NodeID: 55}); err != nil {
 		t.Fatalf("NodeUnassign() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Unassigned managed node #55; server scheduled for delete.") {
-		t.Fatalf("NodeUnassign() output = %q", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if intValueAny(payload["id"]) != 55 || payload["managed"] != true {
+		t.Fatalf("payload = %#v, want managed node", payload)
 	}
 }
 
@@ -921,8 +896,9 @@ func TestNodeDeleteDeletesUnassignedManagedNode(t *testing.T) {
 	if err := app.NodeDelete(context.Background(), NodeDeleteOptions{NodeID: 55}); err != nil {
 		t.Fatalf("NodeDelete() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Delete requested for managed node #55; server scheduled for delete.") {
-		t.Fatalf("NodeDelete() output = %q", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if intValueAny(payload["id"]) != 55 || payload["managed"] != true {
+		t.Fatalf("payload = %#v, want managed node", payload)
 	}
 }
 
@@ -944,11 +920,9 @@ func TestNodeDeleteDeletesUnassignedCustomerManagedNode(t *testing.T) {
 	if err := app.NodeDelete(context.Background(), NodeDeleteOptions{NodeID: 55}); err != nil {
 		t.Fatalf("NodeDelete() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Removed node #55.") {
-		t.Fatalf("NodeDelete() output = %q", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "devopsellence-agent uninstall --purge-runtime") {
-		t.Fatalf("NodeDelete() output = %q", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if intValueAny(payload["id"]) != 55 || payload["managed"] != false {
+		t.Fatalf("payload = %#v, want customer-managed node", payload)
 	}
 }
 
@@ -1068,20 +1042,27 @@ func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 	if err := app.SecretList(context.Background(), SecretListOptions{}); err != nil {
 		t.Fatalf("SecretList() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "SECRET_KEY_BASE") {
-		t.Fatalf("SecretList() output = %q, want secret listing", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	secrets := jsonArrayFromMap(t, payload, "secrets")
+	seen := map[string]map[string]any{}
+	for _, value := range secrets {
+		item := jsonMapFromAny(t, value)
+		seen[stringValueAny(item["name"])] = item
 	}
-	if !strings.Contains(stdout.String(), "web SECRET_KEY_BASE exposed=yes configured=yes stored=yes store=managed -> gsm://projects/test/secrets/abc/versions/latest") {
-		t.Fatalf("SecretList() output = %q, want exposed configured secret", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "web ONLY_IN_CONFIG exposed=yes configured=yes stored=no store=managed -> gsm://projects/test/secrets/config-only/versions/latest") {
-		t.Fatalf("SecretList() output = %q, want config-only secret", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "web RAILS_MASTER_KEY exposed=no configured=no stored=yes store=managed -> gsm://projects/test/secrets/rails/versions/latest") {
-		t.Fatalf("SecretList() output = %q, want store-only Rails secret listing", stdout.String())
-	}
-	if strings.Contains(stdout.String(), "auto-managed") {
-		t.Fatalf("SecretList() output = %q, unexpected auto-managed note", stdout.String())
+	for name, want := range map[string]map[string]any{
+		"SECRET_KEY_BASE":  {"configured": true, "stored": true, "exposed": true, "store": "managed"},
+		"ONLY_IN_CONFIG":   {"configured": true, "stored": false, "exposed": true, "store": "managed"},
+		"RAILS_MASTER_KEY": {"configured": false, "stored": true, "exposed": false, "store": "managed"},
+	} {
+		item := seen[name]
+		if item == nil {
+			t.Fatalf("secret %s missing from %#v", name, secrets)
+		}
+		for key, expected := range want {
+			if item[key] != expected {
+				t.Fatalf("secret %s %s = %#v, want %#v", name, key, item[key], expected)
+			}
+		}
 	}
 }
 
@@ -1117,8 +1098,9 @@ func TestSecretDeleteUsesWorkspaceEnvironment(t *testing.T) {
 	if err := app.SecretDelete(context.Background(), SecretDeleteOptions{ServiceName: " web ", Name: "SECRET_KEY_BASE"}); err != nil {
 		t.Fatalf("SecretDelete() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Deleted secret SECRET_KEY_BASE for web.") {
-		t.Fatalf("SecretDelete() output = %q", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["name"] != "SECRET_KEY_BASE" || payload["service_name"] != "web" || payload["config_updated"] != true {
+		t.Fatalf("payload = %#v, want deleted secret JSON", payload)
 	}
 	cfg, err := config.LoadFromRoot(root)
 	if err != nil {
@@ -1168,8 +1150,9 @@ func TestAliasLFGCreatesSymlinkNextToExecutable(t *testing.T) {
 	if linkTarget != "devopsellence" {
 		t.Fatalf("alias target = %q, want devopsellence", linkTarget)
 	}
-	if !strings.Contains(stdout.String(), "Created lfg alias at "+aliasPath+".") {
-		t.Fatalf("AliasLFG() output = %q", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["alias_path"] != aliasPath || payload["created"] != true {
+		t.Fatalf("payload = %#v, want alias JSON", payload)
 	}
 }
 
@@ -1237,20 +1220,18 @@ func TestNodeListAndLabelSet(t *testing.T) {
 	if err := app.NodeList(context.Background(), NodeListOptions{}); err != nil {
 		t.Fatalf("NodeList() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "node #8") {
-		t.Fatalf("NodeList() output = %q, want node listing", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	if len(nodes) != 3 {
+		t.Fatalf("nodes = %#v, want 3", nodes)
 	}
-	if !strings.Contains(stdout.String(), "project=ShopApp") {
-		t.Fatalf("NodeList() output = %q, want project name", stdout.String())
+	first := jsonMapFromAny(t, nodes[0])
+	if intValueAny(first["id"]) != 8 || first["name"] != "node-a" {
+		t.Fatalf("first node = %#v", first)
 	}
-	if !strings.Contains(stdout.String(), "env=production") {
-		t.Fatalf("NodeList() output = %q, want env name", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "[unassigned]") {
-		t.Fatalf("NodeList() output = %q, want unassigned marker", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "[revoked]") {
-		t.Fatalf("NodeList() output = %q, want revoked marker", stdout.String())
+	environment := jsonMapFromAny(t, first["environment"])
+	if environment["project_name"] != "ShopApp" || environment["name"] != "production" {
+		t.Fatalf("environment = %#v", environment)
 	}
 	if err := app.NodeLabelSet(context.Background(), NodeLabelSetOptions{NodeID: 8, Labels: "web,worker"}); err != nil {
 		t.Fatalf("NodeLabelSet() error = %v", err)
@@ -1326,14 +1307,20 @@ func TestNodeDiagnose(t *testing.T) {
 	if err := app.NodeDiagnose(context.Background(), NodeDiagnoseOptions{NodeID: 8, Wait: 2 * time.Second}); err != nil {
 		t.Fatalf("NodeDiagnose() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Node diagnose #41") {
-		t.Fatalf("NodeDiagnose() output = %q, want request header", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	request := jsonMapFromAny(t, payload["request"])
+	if intValueAny(request["id"]) != 41 || request["status"] != "completed" {
+		t.Fatalf("request = %#v, want completed request #41", request)
 	}
-	if !strings.Contains(stdout.String(), "status=degraded") {
-		t.Fatalf("NodeDiagnose() output = %q, want summary", stdout.String())
+	result := jsonMapFromAny(t, request["result"])
+	summary := jsonMapFromAny(t, result["summary"])
+	if summary["status"] != "degraded" {
+		t.Fatalf("summary = %#v, want degraded", summary)
 	}
-	if !strings.Contains(stdout.String(), "boot failed") {
-		t.Fatalf("NodeDiagnose() output = %q, want log tail", stdout.String())
+	containers := jsonArrayFromMap(t, result, "containers")
+	container := jsonMapFromAny(t, containers[0])
+	if container["log_tail"] != "boot failed" {
+		t.Fatalf("container = %#v, want log tail", container)
 	}
 }
 
@@ -1431,7 +1418,7 @@ func TestDeployWaitsForRolloutProgress(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
+	app.Printer = output.New(&stdout, io.Discard)
 	app.DeployPollInterval = 5 * time.Millisecond
 	app.DeployTimeout = 500 * time.Millisecond
 
@@ -1441,17 +1428,17 @@ func TestDeployWaitsForRolloutProgress(t *testing.T) {
 	if progressCalls < 2 {
 		t.Fatalf("progressCalls = %d, want at least 2", progressCalls)
 	}
-	if !strings.Contains(stdout.String(), "rollout pending=1 reconciling=1 settled=0 error=0") {
-		t.Fatalf("Deploy() output = %q, want rollout progress", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	rollout := jsonMapFromAny(t, payload["rollout"])
+	summary := jsonMapFromAny(t, rollout["summary"])
+	if summary["settled"] != float64(2) || summary["complete"] != true {
+		t.Fatalf("rollout summary = %#v, want complete rollout", summary)
 	}
-	if !strings.Contains(stdout.String(), "Deploy complete.") {
-		t.Fatalf("Deploy() output = %q, want completion", stdout.String())
+	if payload["release_id"] != float64(22) || payload["deployment_id"] != float64(77) {
+		t.Fatalf("payload = %#v, want release and deployment IDs", payload)
 	}
-	if strings.Contains(stdout.String(), "Release ID") || strings.Contains(stdout.String(), "Deploy ID") {
-		t.Fatalf("Deploy() output = %q, want ids omitted", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "Total") {
-		t.Fatalf("Deploy() output = %q, want timing rows", stdout.String())
+	if _, ok := payload["timings"].(map[string]any); !ok {
+		t.Fatalf("payload = %#v, want timings", payload)
 	}
 }
 
@@ -1724,18 +1711,20 @@ func TestDeployShowsSchedulingStatusWhileManagedNodeBoots(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
+	app.Printer = output.New(&stdout, io.Discard)
 	app.DeployPollInterval = 5 * time.Millisecond
 	app.DeployTimeout = 500 * time.Millisecond
 
 	if err := app.Deploy(context.Background(), DeployOptions{Image: "example.com/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}); err != nil {
 		t.Fatalf("Deploy() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "rollout pending=0 reconciling=0 settled=0 error=0 - booting managed node") {
-		t.Fatalf("Deploy() output = %q, want scheduling detail", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["status"] != "scheduling" || payload["status_message"] != "booting managed node" {
+		t.Fatalf("payload = %#v, want scheduling status", payload)
 	}
-	if !strings.Contains(stdout.String(), "milestone: managed capacity requested; waiting for the node to boot") {
-		t.Fatalf("Deploy() output = %q, want scheduling milestone", stdout.String())
+	rollout := jsonMapFromAny(t, payload["rollout"])
+	if rollout["status_message"] != "rollout settled" {
+		t.Fatalf("rollout = %#v, want final rollout status", rollout)
 	}
 }
 
@@ -1829,22 +1818,23 @@ func TestDeployShowsWarmCapacityMilestones(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
+	app.Printer = output.New(&stdout, io.Discard)
 	app.DeployPollInterval = 5 * time.Millisecond
 	app.DeployTimeout = 500 * time.Millisecond
 
 	if err := app.Deploy(context.Background(), DeployOptions{Image: "example.com/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}); err != nil {
 		t.Fatalf("Deploy() error = %v", err)
 	}
-	for _, fragment := range []string{
-		"milestone: warm capacity available; claiming a node bundle",
-		"milestone: capacity claimed; publishing desired state to the node",
-		"milestone: node claimed; waiting for the agent to apply the new revision",
-		"milestone: new revision is healthy",
-	} {
-		if !strings.Contains(stdout.String(), fragment) {
-			t.Fatalf("Deploy() output = %q, want %q", stdout.String(), fragment)
-		}
+	payload := decodeJSONOutput(t, &stdout)
+	if progressCalls < 4 {
+		t.Fatalf("progressCalls = %d, want at least 4", progressCalls)
+	}
+	if payload["status"] != "scheduling" || payload["status_message"] != "waiting for managed capacity" {
+		t.Fatalf("payload = %#v, want initial scheduling status", payload)
+	}
+	rollout := jsonMapFromAny(t, payload["rollout"])
+	if rollout["status_message"] != "rollout settled" {
+		t.Fatalf("rollout = %#v, want final rollout status", rollout)
 	}
 }
 
@@ -1908,7 +1898,7 @@ func TestDeployReportsManagedCapacityFallback(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
+	app.Printer = output.New(&stdout, io.Discard)
 	app.DeployPollInterval = 5 * time.Millisecond
 	app.DeployTimeout = 500 * time.Millisecond
 
@@ -1919,8 +1909,8 @@ func TestDeployReportsManagedCapacityFallback(t *testing.T) {
 	if !strings.Contains(err.Error(), capacityError) {
 		t.Fatalf("Deploy() error = %q, want %q", err.Error(), capacityError)
 	}
-	if !strings.Contains(stdout.String(), capacityError) {
-		t.Fatalf("Deploy() output = %q, want %q", stdout.String(), capacityError)
+	if stdout.String() != "" {
+		t.Fatalf("Deploy() output = %q, want no success JSON on failure", stdout.String())
 	}
 }
 
@@ -2088,7 +2078,7 @@ func TestDeployBuildsAndPushesMultiArchImage(t *testing.T) {
 		}
 	}))
 	app.Docker = dockerStub
-	app.Printer = output.New(&stdout, io.Discard, false)
+	app.Printer = output.New(&stdout, io.Discard)
 	app.DeployPollInterval = 5 * time.Millisecond
 	app.DeployTimeout = 500 * time.Millisecond
 
@@ -2107,8 +2097,10 @@ func TestDeployBuildsAndPushesMultiArchImage(t *testing.T) {
 	if releaseCaptured.ImageRepository != "shopapp" {
 		t.Fatalf("image repository = %q, want shopapp", releaseCaptured.ImageRepository)
 	}
-	if !strings.Contains(stdout.String(), "Image Build/Push") || !strings.Contains(stdout.String(), "Control Plane") || !strings.Contains(stdout.String(), "Total") {
-		t.Fatalf("Deploy() output = %q, want timing summary", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	timings := jsonMapFromAny(t, payload["timings"])
+	if timings["build_push_seconds"] == nil || timings["control_plane_seconds"] == nil || timings["total_seconds"] == nil {
+		t.Fatalf("timings = %#v, want deploy timings", timings)
 	}
 }
 
@@ -2141,16 +2133,14 @@ func TestDeleteUsesWorkspaceEnvironment(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
+	app.Printer = output.New(&stdout, io.Discard)
 
 	if err := app.Delete(context.Background(), DeleteOptions{Environment: "staging"}); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Deleted environment staging.") {
-		t.Fatalf("Delete() output = %q", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "Customer nodes unassigned: 2 Managed servers scheduled for delete: 1") {
-		t.Fatalf("Delete() output = %q", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["name"] != "staging" || len(jsonArrayFromMap(t, payload, "customer_node_ids")) != 2 || len(jsonArrayFromMap(t, payload, "managed_node_ids")) != 1 {
+		t.Fatalf("payload = %#v, want deleted environment JSON", payload)
 	}
 }
 
@@ -2792,16 +2782,23 @@ func TestTokenListPrintsCurrentAndRevokedTokens(t *testing.T) {
 		}
 	}))
 	var stdout bytes.Buffer
-	app.Printer = output.New(&stdout, &stdout, false)
+	app.Printer = output.New(&stdout, &stdout)
 
 	if err := app.TokenList(context.Background(), TokenListOptions{}); err != nil {
 		t.Fatalf("TokenList() error = %v", err)
 	}
-	text := stdout.String()
-	for _, snippet := range []string{"#10", "deploy", "current", "#11", "revoked"} {
-		if !strings.Contains(text, snippet) {
-			t.Fatalf("output missing %q: %q", snippet, text)
-		}
+	payload := decodeJSONOutput(t, &stdout)
+	tokens := jsonArrayFromMap(t, payload, "tokens")
+	if len(tokens) != 2 {
+		t.Fatalf("tokens = %#v, want 2", tokens)
+	}
+	first := jsonMapFromAny(t, tokens[0])
+	second := jsonMapFromAny(t, tokens[1])
+	if intValueAny(first["id"]) != 10 || first["name"] != "deploy" || first["current"] != true {
+		t.Fatalf("first token = %#v", first)
+	}
+	if intValueAny(second["id"]) != 11 || second["revoked_at"] == "" {
+		t.Fatalf("second token = %#v", second)
 	}
 }
 
@@ -2914,7 +2911,7 @@ func TestDeployClaimReminderPrintsOncePerAnonymousAccount(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	app.Printer = output.New(&stdout, &stderr, false)
+	app.Printer = output.New(&stdout, &stderr)
 	app.Docker = &fakeDocker{imageMetadata: docker.ImageMetadata{ExposedPorts: []int{3000}}}
 
 	opts := DeployOptions{
@@ -2924,9 +2921,9 @@ func TestDeployClaimReminderPrintsOncePerAnonymousAccount(t *testing.T) {
 	if err := app.Deploy(context.Background(), opts); err != nil {
 		t.Fatalf("first Deploy() error = %v", err)
 	}
-	firstOutput := stdout.String()
-	if !strings.Contains(firstOutput, "Claim this account before local state is lost") {
-		t.Fatalf("first deploy output missing claim reminder: %q", firstOutput)
+	firstPayload := decodeJSONOutput(t, &stdout)
+	if firstPayload["trial_expires_at"] != "2026-03-29T19:00:00Z" {
+		t.Fatalf("first deploy payload = %#v, want trial expiry", firstPayload)
 	}
 
 	stdout.Reset()
@@ -2934,8 +2931,9 @@ func TestDeployClaimReminderPrintsOncePerAnonymousAccount(t *testing.T) {
 	if err := app.Deploy(context.Background(), opts); err != nil {
 		t.Fatalf("second Deploy() error = %v", err)
 	}
-	if strings.Contains(stdout.String(), "Claim this account before local state is lost") {
-		t.Fatalf("second deploy output unexpectedly repeated claim reminder: %q", stdout.String())
+	secondPayload := decodeJSONOutput(t, &stdout)
+	if secondPayload["trial_expires_at"] != "2026-03-29T19:00:00Z" {
+		t.Fatalf("second deploy payload = %#v, want trial expiry", secondPayload)
 	}
 }
 
@@ -3070,19 +3068,15 @@ func TestWarnAboutPrebuiltImageConfigForRails(t *testing.T) {
 		return nil, nil
 	}))
 	var stderr bytes.Buffer
-	app.Printer = output.New(io.Discard, &stderr, false)
+	app.Printer = output.New(io.Discard, &stderr)
 
 	cfg := config.DefaultProjectConfig("default", "ShopApp", "production")
 	app.warnAboutPrebuiltImageConfig(DeployOptions{
 		Image: "docker.io/mccutchen/go-httpbin@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}, cfg)
 
-	text := stderr.String()
-	if !strings.Contains(text, "Using --image skips the local build.") {
-		t.Fatalf("warning output = %q", text)
-	}
-	if !strings.Contains(text, "If this image is not a Rails image, update devopsellence.yml before deploy.") {
-		t.Fatalf("warning output = %q", text)
+	if stderr.String() != "" {
+		t.Fatalf("warning output = %q, want no unstructured warning output in JSON mode", stderr.String())
 	}
 }
 
@@ -3106,7 +3100,7 @@ func TestAuthSessionRefreshesOnlyOnceForConcurrentCalls(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	session := newAuthSession(app, "token", true, nil)
+	session := newAuthSession(app, "token", nil)
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -3206,7 +3200,7 @@ func newTestAppWithTransport(t *testing.T, cwd string, transport http.RoundTripp
 	apiClient.HTTPClient = client
 	return &App{
 		In:             strings.NewReader(""),
-		Printer:        output.New(io.Discard, io.Discard, false),
+		Printer:        output.New(io.Discard, io.Discard),
 		Auth:           authManager,
 		API:            apiClient,
 		State:          store,

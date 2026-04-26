@@ -55,73 +55,15 @@ func TestProviderTokenFallsBackToEnv(t *testing.T) {
 	}
 }
 
-func TestEnsureInteractiveProviderLogin(t *testing.T) {
+func TestEnsureProviderLoginRequiresExplicitTokenWhenMissing(t *testing.T) {
 	t.Setenv("HCLOUD_TOKEN", "")
 	t.Setenv("DEVOPSELLENCE_HETZNER_API_TOKEN", "")
-	store := state.New(filepath.Join(t.TempDir(), "providers.json"))
 	app := &App{
-		Printer:       output.New(io.Discard, io.Discard, false),
-		ProviderState: store,
-	}
-	app.Printer.Interactive = true
-
-	original := runProviderLogin
-	t.Cleanup(func() { runProviderLogin = original })
-
-	var calls int
-	runProviderLogin = func(gotApp *App, _ context.Context, opts ProviderLoginOptions) error {
-		calls++
-		if gotApp != app {
-			t.Fatalf("runProviderLogin app = %#v, want %#v", gotApp, app)
-		}
-		if opts.Provider != providerHetzner {
-			t.Fatalf("runProviderLogin provider = %q, want %q", opts.Provider, providerHetzner)
-		}
-		return nil
-	}
-
-	if err := app.ensureInteractiveProviderLogin(context.Background(), providerHetzner); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 {
-		t.Fatalf("runProviderLogin calls = %d, want 1", calls)
-	}
-
-	if err := saveProviderToken(store, providerHetzner, "stored-token"); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.ensureInteractiveProviderLogin(context.Background(), providerHetzner); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 {
-		t.Fatalf("runProviderLogin calls after stored token = %d, want 1", calls)
-	}
-}
-
-func TestEnsureInteractiveProviderLoginSkipsEnvAndNonInteractive(t *testing.T) {
-	t.Setenv("DEVOPSELLENCE_HETZNER_API_TOKEN", "env-token")
-
-	original := runProviderLogin
-	t.Cleanup(func() { runProviderLogin = original })
-
-	runProviderLogin = func(*App, context.Context, ProviderLoginOptions) error {
-		t.Fatal("runProviderLogin should not be called")
-		return nil
-	}
-
-	app := &App{
-		Printer:       output.New(io.Discard, io.Discard, false),
+		Printer:       output.New(io.Discard, io.Discard),
 		ProviderState: state.New(filepath.Join(t.TempDir(), "providers.json")),
 	}
-	app.Printer.Interactive = true
-	if err := app.ensureInteractiveProviderLogin(context.Background(), providerHetzner); err != nil {
-		t.Fatal(err)
-	}
 
-	app.Printer.Interactive = false
-	t.Setenv("DEVOPSELLENCE_HETZNER_API_TOKEN", "")
-	t.Setenv("HCLOUD_TOKEN", "")
-	err := app.ensureInteractiveProviderLogin(context.Background(), providerHetzner)
+	err := app.ensureProviderTokenConfigured(context.Background(), providerHetzner)
 	if err == nil {
 		t.Fatal("expected missing provider token error")
 	}
@@ -131,5 +73,24 @@ func TestEnsureInteractiveProviderLoginSkipsEnvAndNonInteractive(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "devopsellence provider login hetzner --token <token>") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestEnsureProviderLoginUsesStoredOrEnvToken(t *testing.T) {
+	app := &App{
+		Printer:       output.New(io.Discard, io.Discard),
+		ProviderState: state.New(filepath.Join(t.TempDir(), "providers.json")),
+	}
+	if err := saveProviderToken(app.ProviderState, providerHetzner, "stored-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ensureProviderTokenConfigured(context.Background(), providerHetzner); err != nil {
+		t.Fatal(err)
+	}
+
+	app.ProviderState = state.New(filepath.Join(t.TempDir(), "providers.json"))
+	t.Setenv("DEVOPSELLENCE_HETZNER_API_TOKEN", "env-token")
+	if err := app.ensureProviderTokenConfigured(context.Background(), providerHetzner); err != nil {
+		t.Fatal(err)
 	}
 }

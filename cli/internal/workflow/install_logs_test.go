@@ -8,49 +8,22 @@ import (
 	"github.com/devopsellence/cli/internal/output"
 )
 
-func TestInstallLogStateKeepsRecentLines(t *testing.T) {
-	state := newInstallLogState(2)
-	state.SetProgress("installing Docker Engine")
-	state.AddLine("Get:1 packages")
-	state.AddLine("Get:2 packages")
-	state.AddLine("Get:3 packages")
+func TestNewSoloInstallReporterJSONDiscardsInstallNoise(t *testing.T) {
+	var out bytes.Buffer
+	reporter := newSoloInstallReporter(t.Context(), output.Printer{Out: &out, JSON: true}, "prod-2")
 
-	if got, want := state.StatusLine("[prod-2]"), "[+] [prod-2] installing Docker Engine"; got != want {
-		t.Fatalf("StatusLine() = %q, want %q", got, want)
+	reporter.Progress("Installing Docker, agent, and systemd service...")
+	if _, err := reporter.Stream().Write([]byte("progress: downloading agent binary\nplain log\npartial")); err != nil {
+		t.Fatal(err)
 	}
-	if got, want := state.ViewportContent(), "-> Get:2 packages\n-> Get:3 packages"; got != want {
-		t.Fatalf("ViewportContent() = %q, want %q", got, want)
-	}
-}
+	reporter.Close()
 
-func TestInstallLogModelPinsStatusAndShowsLatestLines(t *testing.T) {
-	model := newInstallLogModel("[prod-2]", 2, 80)
-
-	next, _ := model.Update(installProgressMsg{text: "downloading agent binary"})
-	model = next.(installLogModel)
-	next, _ = model.Update(installLogLineMsg{text: "Get:1 packages"})
-	model = next.(installLogModel)
-	next, _ = model.Update(installLogLineMsg{text: "Get:2 packages"})
-	model = next.(installLogModel)
-	next, _ = model.Update(installLogLineMsg{text: "Get:3 packages"})
-	model = next.(installLogModel)
-
-	view := model.View()
-	for _, fragment := range []string{
-		"[+] [prod-2] downloading agent binary",
-		"-> Get:2 packages",
-		"-> Get:3 packages",
-	} {
-		if !strings.Contains(view, fragment) {
-			t.Fatalf("View() = %q, want fragment %q", view, fragment)
-		}
-	}
-	if strings.Contains(view, "-> Get:1 packages") {
-		t.Fatalf("View() = %q, want viewport scrolled past oldest line", view)
+	if got := out.String(); got != "" {
+		t.Fatalf("reporter output = %q, want no unstructured output in JSON mode", got)
 	}
 }
 
-func TestNewSoloInstallReporterNonInteractiveFallsBackToPrefixedLines(t *testing.T) {
+func TestNewSoloInstallReporterPlainLinesWhenJSONDisabled(t *testing.T) {
 	var out bytes.Buffer
 	reporter := newSoloInstallReporter(t.Context(), output.Printer{Out: &out}, "prod-2")
 

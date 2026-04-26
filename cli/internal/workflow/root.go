@@ -16,12 +16,7 @@ import (
 )
 
 func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command {
-	var (
-		jsonMode    bool
-		verboseMode bool
-	)
-
-	app := NewApp(in, out, err, jsonMode, cwd)
+	app := NewApp(in, out, err, cwd)
 
 	withTimeout := func(run func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
@@ -32,7 +27,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runByMode := func(solo, shared func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode()
 				if modeErr != nil {
 					return modeErr
 				}
@@ -51,7 +46,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runSoloOnly := func(name string, run func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode()
 				if modeErr != nil {
 					return modeErr
 				}
@@ -66,7 +61,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runSharedOnly := func(name string, run func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode()
 				if modeErr != nil {
 					return modeErr
 				}
@@ -80,11 +75,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 
 	root := &cobra.Command{
 		Use:   "devopsellence",
-		Short: "Deploy containerized apps on VMs with devopsellence",
+		Short: "Agent-primary deployment toolkit for containerized apps on VMs",
 		Long: strings.Join([]string{
-			"devopsellence uses one root command vocabulary for two workspace modes:",
-			"  solo   - SSH-driven workflows with local source of truth",
-			"  shared - control-plane-backed workflows for team use",
+			"devopsellence is an agent-primary deployment toolkit for containerized apps on VMs.",
+			"Commands emit structured JSON by default and avoid terminal-only interaction.",
+			"Use explicit flags, stdin, plans, and desired-state operations instead of prompts.",
 			"",
 			"Pick a workspace mode once with `devopsellence mode use solo|shared`.",
 		}, "\n"),
@@ -96,17 +91,10 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}, "\n"),
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Version:       version.String(),
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
-			app.Printer.JSON = jsonMode
-			app.Printer.Interactive = !jsonMode && inputIsTTY(in) && app.Printer.Interactive
-			app.Verbose = verboseMode
+			app.Printer.JSON = true
 		},
 	}
-	root.PersistentFlags().BoolVar(&jsonMode, "json", false, "Emit machine-readable JSON output")
-	root.PersistentFlags().BoolVar(&verboseMode, "verbose", false, "Emit detailed progress logs")
-	root.SetVersionTemplate("{{.Version}}\n")
-
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI version",
@@ -521,7 +509,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveSetupMode(setupMode, app.Printer.Interactive)
+				mode, modeErr := app.ResolveSetupMode(setupMode)
 				if modeErr != nil {
 					return modeErr
 				}
@@ -803,7 +791,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Labels, "labels", "", "Comma-separated labels")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")
 	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.NoInstall, "no-install", false, "Create the provider machine without installing the agent")
-	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Deploy, "deploy", false, "Install the agent and deploy after create (solo mode only)")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Organization, "org", "", "Shared-mode organization name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Project, "project", "", "Shared-mode project name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Environment, "env", "", "Shared-mode environment name override")

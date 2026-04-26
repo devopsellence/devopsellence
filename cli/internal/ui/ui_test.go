@@ -4,50 +4,28 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestTaskModelHandlesCancelKey(t *testing.T) {
-	canceled := false
-	model := taskModel{
-		title:   "Deploy",
-		spinner: spinner.New(),
-		cancel: func() {
-			canceled = true
-		},
+func TestRunTaskExecutesFunctionDirectly(t *testing.T) {
+	called := false
+	err := RunTask(t.Context(), nil, "ignored", func(_ context.Context, update, log func(string)) error {
+		called = true
+		update("ignored")
+		log("ignored")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	got := updated.(taskModel)
-
-	if !canceled {
-		t.Fatal("expected cancel func to be called")
-	}
-	if !errors.Is(got.err, context.Canceled) {
-		t.Fatalf("expected cancel error, got %v", got.err)
-	}
-	if !got.done {
-		t.Fatal("expected model done on cancel")
-	}
-	if cmd == nil {
-		t.Fatal("expected quit command on cancel")
+	if !called {
+		t.Fatal("RunTask did not call function")
 	}
 }
 
-func TestTaskModelStoresRecentLogs(t *testing.T) {
-	model := taskModel{
-		title:   "Deploy",
-		spinner: spinner.New(),
-	}
-
-	for i := 0; i < maxTaskLogs+3; i++ {
-		updated, _ := model.Update(logMsg("line"))
-		model = updated.(taskModel)
-	}
-
-	if len(model.logs) != maxTaskLogs {
-		t.Fatalf("expected %d logs, got %d", maxTaskLogs, len(model.logs))
+func TestRunTaskReturnsError(t *testing.T) {
+	want := errors.New("boom")
+	err := RunTask(t.Context(), nil, "ignored", func(_ context.Context, _, _ func(string)) error { return want })
+	if !errors.Is(err, want) {
+		t.Fatalf("RunTask error = %v, want %v", err, want)
 	}
 }

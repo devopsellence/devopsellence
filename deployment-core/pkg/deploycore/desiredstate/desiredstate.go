@@ -241,6 +241,27 @@ func buildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	return data, nil
 }
 
+type NodePublicationInput struct {
+	NodeName     string
+	CurrentNode  config.SoloNode
+	Snapshots    []DeploySnapshot
+	ReleaseNodes map[string]string
+	NodePeers    []NodePeer
+}
+
+type NodePublication struct {
+	NodeName         string
+	DesiredStateJSON []byte
+}
+
+func PlanNodePublication(input NodePublicationInput) (NodePublication, error) {
+	data, err := BuildAggregatedDesiredState(input.NodeName, input.CurrentNode, input.Snapshots, input.ReleaseNodes, input.NodePeers)
+	if err != nil {
+		return NodePublication{}, err
+	}
+	return NodePublication{NodeName: strings.TrimSpace(input.NodeName), DesiredStateJSON: data}, nil
+}
+
 func BuildAggregatedDesiredState(nodeName string, currentNode config.SoloNode, snapshots []DeploySnapshot, releaseNodes map[string]string, nodePeers []NodePeer) ([]byte, error) {
 	ds := desiredStateJSON{
 		SchemaVersion: 2,

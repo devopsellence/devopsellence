@@ -44,7 +44,17 @@ func BuildDesiredStateForNodeWithScopedSecrets(cfg *config.ProjectConfig, imageT
 }
 
 func BuildAggregatedDesiredState(nodeName string, currentNode config.SoloNode, snapshots []DeploySnapshot, releaseNodes map[string]string, nodePeers []NodePeer) ([]byte, error) {
-	return core.BuildAggregatedDesiredState(nodeName, currentNode, snapshots, releaseNodes, nodePeers)
+	publication, err := core.PlanNodePublication(core.NodePublicationInput{
+		NodeName:     nodeName,
+		CurrentNode:  currentNode,
+		Snapshots:    snapshots,
+		ReleaseNodes: releaseNodes,
+		NodePeers:    nodePeers,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return publication.DesiredStateJSON, nil
 }
 
 func buildService(serviceName string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (serviceJSON, error) {

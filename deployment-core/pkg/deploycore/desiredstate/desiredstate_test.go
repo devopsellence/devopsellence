@@ -420,6 +420,47 @@ func TestBuildAggregatedDesiredStateMergesEnvironmentsIngressAndPeers(t *testing
 	}
 }
 
+func TestPlanNodePublicationWrapsAggregatedDesiredState(t *testing.T) {
+	t.Parallel()
+
+	currentNode := config.SoloNode{Labels: []string{config.DefaultWebRole}}
+	snapshots := []DeploySnapshot{
+		{
+			WorkspaceRoot:      "/workspace/demo",
+			WorkspaceKey:       "/workspace/demo",
+			Environment:        "production",
+			Revision:           "aaa1111",
+			Services:           []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:aaa1111"}},
+			ReleaseTask:        &taskJSON{Name: "release", Image: "demo:aaa1111"},
+			ReleaseServiceKind: config.ServiceKindWeb,
+		},
+	}
+
+	releaseNodes := map[string]string{"/workspace/demo\nproduction": "web-a"}
+	peers := []NodePeer{{Name: "web-b", Labels: []string{config.DefaultWebRole}, PublicAddress: "203.0.113.12"}}
+
+	want, err := BuildAggregatedDesiredState("web-a", currentNode, snapshots, releaseNodes, peers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := PlanNodePublication(NodePublicationInput{
+		NodeName:     "web-a",
+		CurrentNode:  currentNode,
+		Snapshots:    snapshots,
+		ReleaseNodes: releaseNodes,
+		NodePeers:    peers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NodeName != "web-a" {
+		t.Fatalf("node name = %q, want web-a", got.NodeName)
+	}
+	if string(got.DesiredStateJSON) != string(want) {
+		t.Fatalf("desired state JSON differs\ngot:  %s\nwant: %s", got.DesiredStateJSON, want)
+	}
+}
+
 func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 	t.Parallel()
 

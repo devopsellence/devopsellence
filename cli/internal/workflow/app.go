@@ -32,7 +32,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const outputSchemaVersion = 1
+const OutputSchemaVersion = 1
+
+const outputSchemaVersion = OutputSchemaVersion
 
 var digestRefPattern = regexp.MustCompile(`\A(.+)@(sha256:[0-9a-f]{64})\z`)
 

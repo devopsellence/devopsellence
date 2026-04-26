@@ -37,7 +37,7 @@ func main() {
 func writeError(operation string, exitCode int, err error) {
 	payload := map[string]any{
 		"ok":             false,
-		"schema_version": 1,
+		"schema_version": workflow.OutputSchemaVersion,
 		"operation":      operation,
 		"error": map[string]any{
 			"code":      "command_failed",

@@ -93,15 +93,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}, "\n"),
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Version:       version.String(),
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			app.Printer.JSON = true
 			app.Verbose = verboseMode
 		},
 	}
 	root.PersistentFlags().BoolVar(&verboseMode, "verbose", false, "Emit detailed progress logs")
-	root.SetVersionTemplate("{{.Version}}\n")
-
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI version",
@@ -798,7 +795,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Labels, "labels", "", "Comma-separated labels")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")
 	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.NoInstall, "no-install", false, "Create the provider machine without installing the agent")
-	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Deploy, "deploy", false, "Install the agent and deploy after create (solo mode only)")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Organization, "org", "", "Shared-mode organization name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Project, "project", "", "Shared-mode project name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Environment, "env", "", "Shared-mode environment name override")

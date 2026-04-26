@@ -97,7 +97,6 @@ type SoloNodeCreateOptions struct {
 	Labels       string
 	SSHPublicKey string
 	NoInstall    bool
-	Deploy       bool
 }
 
 type SoloNodeRemoveOptions struct {
@@ -1753,9 +1752,6 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if opts.Name == "" {
 		return fmt.Errorf("node name is required")
 	}
-	if opts.Deploy {
-		return fmt.Errorf("node create --deploy is not supported; run `devopsellence deploy` after node creation")
-	}
 	if _, ok := current.Nodes[opts.Name]; ok {
 		return fmt.Errorf("solo node %q already exists", opts.Name)
 	}
@@ -1772,7 +1768,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if !opts.NoInstall || opts.Deploy {
+	if !opts.NoInstall {
 		if !a.Printer.JSON {
 			a.Printer.Println("Waiting for SSH on " + opts.Name + "...")
 		}
@@ -1780,17 +1776,6 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 			return err
 		}
 		if err := a.installSoloAgent(ctx, opts.Name, created.Node, SoloAgentInstallOptions{}); err != nil {
-			return err
-		}
-	}
-	if opts.Deploy {
-		if _, _, err := a.attachSoloNode(&current, workspaceRoot, soloEnvironmentName(cfg, ""), opts.Name); err != nil {
-			return err
-		}
-		if err := a.writeSoloState(current); err != nil {
-			return err
-		}
-		if err := a.SoloDeploy(ctx, SoloDeployOptions{}); err != nil {
 			return err
 		}
 	}
@@ -1841,10 +1826,6 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 	if opts.Name == "" {
 		return fmt.Errorf("node name is required")
 	}
-	if opts.Deploy {
-		return fmt.Errorf("node create --deploy is only available in solo mode")
-	}
-
 	var bootstrap nodeBootstrapToken
 	if !opts.NoInstall {
 		tokens, err := a.ensureAuth(ctx, false)

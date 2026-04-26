@@ -1,17 +1,15 @@
-name: CLI CI
+name: Deployment Core CI
 
 on:
   push:
     branches: [master]
     paths:
-      - .github/workflows/cli-ci.yml
-      - cli/**
+      - .github/workflows/deployment-core-ci.yml
       - deployment-core/**
       - mise.toml
   pull_request:
     paths:
-      - .github/workflows/cli-ci.yml
-      - cli/**
+      - .github/workflows/deployment-core-ci.yml
       - deployment-core/**
       - mise.toml
 
@@ -20,7 +18,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: cli
+    working-directory: deployment-core
 
 jobs:
   test:
@@ -30,5 +28,5 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install: true
-          working_directory: cli
+          working_directory: deployment-core
       - run: mise run test

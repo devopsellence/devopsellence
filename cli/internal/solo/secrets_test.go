@@ -70,6 +70,17 @@ func TestStateSecretValidation(t *testing.T) {
 	}
 }
 
+func TestStateSecretPreservesPlaintextWhitespace(t *testing.T) {
+	current := newState()
+	record, err := current.SetSecret(t.TempDir(), "production", "web", "TOKEN", SecretMaterial{Value: "  keep me  \n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Value != "  keep me  \n" {
+		t.Fatalf("record value = %q", record.Value)
+	}
+}
+
 func TestStateSecretOnePasswordReference(t *testing.T) {
 	current := newState()
 	record, err := current.SetSecret(t.TempDir(), "production", "web", "DATABASE_URL", SecretMaterial{
@@ -88,5 +99,12 @@ func TestStateSecretOnePasswordReference(t *testing.T) {
 		Reference: "not-op-ref",
 	}); err == nil {
 		t.Fatal("SetSecret invalid 1Password reference error = nil")
+	}
+	if _, err := current.SetSecret(t.TempDir(), "production", "web", "BROKEN", SecretMaterial{
+		Store:     SecretStoreOnePassword,
+		Value:     "must-not-persist",
+		Reference: "op://app-prod/db/password",
+	}); err == nil {
+		t.Fatal("SetSecret 1Password value error = nil")
 	}
 }

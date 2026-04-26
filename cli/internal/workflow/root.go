@@ -694,7 +694,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Organization, "org", "", "Organization name override (shared mode)")
 	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Project, "project", "", "Project name override (shared mode)")
 	secretSetCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
-	secretSetCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name")
+	secretSetCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name (required)")
 	secretSetCommand.Flags().StringVar(&secretStore, "store", "", "Solo secret store: plaintext or 1password")
 	secretSetCommand.Flags().StringVar(&secretReference, "op-ref", "", "1Password secret reference for solo mode")
 	secretSetCommand.Flags().StringVar(&secretValue, "value", "", "Secret value")
@@ -743,7 +743,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Organization, "org", "", "Organization name override (shared mode)")
 	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Project, "project", "", "Project name override (shared mode)")
 	secretDeleteCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
-	secretDeleteCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name")
+	secretDeleteCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name (required)")
 	secretCommand.AddCommand(secretSetCommand, secretListCommand, secretDeleteCommand)
 	root.AddCommand(secretCommand)
 

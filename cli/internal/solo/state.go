@@ -424,8 +424,7 @@ func normalizeSecretRecord(key string, secret SecretRecord) (string, SecretRecor
 	if err != nil {
 		return "", SecretRecord{}, err
 	}
-	keyWorkspace, keyEnvironment, keyService, keyName := splitSecretStateKey(key)
-	_ = keyWorkspace
+	_, keyEnvironment, keyService, keyName := splitSecretStateKey(key)
 	secret.WorkspaceRoot = workspaceRoot
 	secret.WorkspaceKey = workspaceKey
 	secret.Environment = defaultEnvironmentName(firstNonEmpty(secret.Environment, keyEnvironment))

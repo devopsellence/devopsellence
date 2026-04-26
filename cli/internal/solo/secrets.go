@@ -165,14 +165,17 @@ func buildSecretRecord(workspaceRoot, environment, serviceName, name string, mat
 	if err != nil {
 		return "", SecretRecord{}, err
 	}
-	material.Value = strings.TrimSpace(material.Value)
+	trimmedValue := strings.TrimSpace(material.Value)
 	material.Reference = strings.TrimSpace(material.Reference)
 	switch store {
 	case SecretStorePlaintext:
-		if material.Value == "" {
+		if trimmedValue == "" {
 			return "", SecretRecord{}, errors.New("secret value is required")
 		}
 	case SecretStoreOnePassword:
+		if trimmedValue != "" {
+			return "", SecretRecord{}, errors.New("1Password secret value must not be stored locally")
+		}
 		if material.Reference == "" {
 			return "", SecretRecord{}, errors.New("1Password secret reference is required")
 		}
@@ -183,8 +186,10 @@ func buildSecretRecord(workspaceRoot, environment, serviceName, name string, mat
 		return "", SecretRecord{}, fmt.Errorf("unsupported secret store %q", store)
 	}
 	record.Store = store
-	record.Value = material.Value
 	record.Reference = material.Reference
+	if store == SecretStorePlaintext {
+		record.Value = material.Value
+	}
 	return key, record, nil
 }
 

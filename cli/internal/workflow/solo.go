@@ -1467,14 +1467,14 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 	if err != nil {
 		return err
 	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
 	configUpdated := removeServiceSecretRef(cfg, opts.ServiceName, opts.Key)
 	if configUpdated {
 		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
-			return err
+			return fmt.Errorf("secret deleted locally but update devopsellence.yml failed: %w", err)
 		}
-	}
-	if err := a.writeSoloState(current); err != nil {
-		return err
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "deleted"})

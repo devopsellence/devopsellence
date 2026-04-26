@@ -511,6 +511,7 @@ class E2E
         env: cli_env,
         input: stdin_secret_value
       )
+      commit_all!("Configure e2e secrets")
 
       deploy_output = run!(
         cli_binary.to_s, "deploy", "--non-interactive",

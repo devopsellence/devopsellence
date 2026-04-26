@@ -1807,7 +1807,13 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 	}
 	result["schema_version"] = outputSchemaVersion
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
+		if err := a.Printer.PrintJSON(result); err != nil {
+			return err
+		}
+		if configUpdateErr != "" {
+			return ExitError{Code: 1, Err: fmt.Errorf("secret saved, but devopsellence.yml was not updated: %s", configUpdateErr)}
+		}
+		return nil
 	}
 	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
 		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
@@ -1816,7 +1822,7 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 	a.Printer.Println("Ref:", stringFromMap(result, "secret_ref"))
 	if configUpdateErr != "" {
 		a.Printer.Errorln("Secret saved, but devopsellence.yml was not updated:", configUpdateErr)
-		return nil
+		return ExitError{Code: 1, Err: fmt.Errorf("secret saved, but devopsellence.yml was not updated: %s", configUpdateErr)}
 	}
 	if configUpdated {
 		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot))
@@ -1895,7 +1901,13 @@ func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error 
 	}
 	result["schema_version"] = outputSchemaVersion
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
+		if err := a.Printer.PrintJSON(result); err != nil {
+			return err
+		}
+		if configUpdateErr != "" {
+			return ExitError{Code: 1, Err: fmt.Errorf("secret deleted, but devopsellence.yml was not updated: %s", configUpdateErr)}
+		}
+		return nil
 	}
 	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
 		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
@@ -1903,7 +1915,7 @@ func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error 
 	a.Printer.Println("Deleted secret", stringFromMap(result, "name"), "for", stringFromMap(result, "service_name")+".")
 	if configUpdateErr != "" {
 		a.Printer.Errorln("Secret deleted, but devopsellence.yml was not updated:", configUpdateErr)
-		return nil
+		return ExitError{Code: 1, Err: fmt.Errorf("secret deleted, but devopsellence.yml was not updated: %s", configUpdateErr)}
 	}
 	if configUpdated {
 		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot))

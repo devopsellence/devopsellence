@@ -26,7 +26,14 @@ unless scenario
 end
 
 slug = scenario.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-|-+\z/, "")
-timestamp = Time.now.utc.strftime("%Y%m%dT%H%M%SZ")
+if slug.empty?
+  warn "SCENARIO_SLUG must contain at least one lowercase letter or digit after normalization"
+  warn parser
+  exit 64
+end
+
+now = Time.now.utc
+timestamp = now.strftime("%Y%m%dT%H%M%SZ")
 run_dir = File.expand_path("#{timestamp}-#{slug}", options[:out])
 
 def git_value(root, *args)
@@ -43,7 +50,7 @@ template_path = File.expand_path("../references/report-template.md", __dir__)
 template = File.read(template_path)
 report = template
   .sub("Scenario:", "Scenario: #{scenario}")
-  .sub("Date:", "Date: #{Time.now.utc.iso8601}")
+  .sub("Date:", "Date: #{now.iso8601}")
   .sub("Commit:", "Commit: #{commit} (#{branch})")
   .sub("Run path:", "Run path: #{run_dir}")
 

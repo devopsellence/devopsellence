@@ -44,5 +44,8 @@ func (p Printer) Printf(format string, args ...any) {
 }
 
 func (p Printer) Errorln(args ...any) {
+	if p.JSON {
+		return
+	}
 	fmt.Fprintln(p.Err, args...)
 }

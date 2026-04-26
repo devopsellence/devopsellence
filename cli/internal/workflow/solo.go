@@ -1760,6 +1760,9 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if _, ok := current.Nodes[opts.Name]; ok {
 		return fmt.Errorf("solo node %q already exists", opts.Name)
 	}
+	if err := a.ensureSoloNodeCreateSSHPublicKey(&opts, workspaceRoot); err != nil {
+		return err
+	}
 	created, err := a.createProviderNode(ctx, opts, cfg.Project)
 	if err != nil {
 		return err
@@ -1811,6 +1814,25 @@ func (a *App) runSoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions)
 		return a.soloNodeCreateFn(ctx, opts)
 	}
 	return a.SoloNodeCreate(ctx, opts)
+}
+
+func (a *App) ensureSoloNodeCreateSSHPublicKey(opts *SoloNodeCreateOptions, workspaceRoot string) error {
+	if strings.TrimSpace(opts.SSHPublicKey) != "" || defaultSoloSSHPublicKeyPath() != "" {
+		return nil
+	}
+	generatedKey, err := ensureGeneratedWorkspaceSSHKey(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	opts.SSHPublicKey = generatedKey.PublicKeyPath
+	if !a.Printer.JSON {
+		action := "Reusing"
+		if generatedKey.Generated {
+			action = "Generated"
+		}
+		a.Printer.Println(fmt.Sprintf("%s workspace SSH key %s (%s)", action, generatedKey.PrivateKeyPath, generatedKey.Fingerprint))
+	}
+	return nil
 }
 
 func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions) error {
@@ -1952,7 +1974,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 
 func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if !a.Printer.Interactive {
-		return fmt.Errorf("solo setup requires an interactive terminal; use `devopsellence node create`, or add a node to %s and run `devopsellence node attach`", solo.DefaultStatePath())
+		return fmt.Errorf("solo setup requires an interactive terminal; use `devopsellence node create <name> --provider hetzner` for provider-managed nodes, or run `devopsellence setup` in a terminal to add an existing SSH node")
 	}
 	mode, err := a.promptLine("Node source (existing/hetzner)", "hetzner")
 	if err != nil {

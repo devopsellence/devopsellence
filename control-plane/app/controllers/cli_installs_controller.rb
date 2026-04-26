@@ -27,6 +27,7 @@ class CliInstallsController < ActionController::Base
       fi
       CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
+      INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"
       TARGET_NAME="devopsellence"
 
       while [[ $# -gt 0 ]]; do
@@ -53,6 +54,10 @@ class CliInstallsController < ActionController::Base
             ;;
           --install-dir=*)
             INSTALL_DIR="${1#*=}"
+            shift
+            ;;
+          --install-agent-skill)
+            INSTALL_AGENT_SKILL=1
             shift
             ;;
           *)
@@ -103,11 +108,7 @@ class CliInstallsController < ActionController::Base
       esac
 
       if [[ -z "$INSTALL_DIR" ]]; then
-        if [[ "$OS" == "darwin" ]]; then
-          INSTALL_DIR="$HOME/.local/bin"
-        else
-          INSTALL_DIR="/usr/local/bin"
-        fi
+        INSTALL_DIR="$HOME/.local/bin"
       fi
 
       DOWNLOAD_URL="$BASE_URL/cli/download?os=$OS&arch=$ARCH&version=$CLI_VERSION"
@@ -200,6 +201,25 @@ class CliInstallsController < ActionController::Base
             echo "add $INSTALL_DIR to your PATH:"
             echo "  $PATH_EXPORT"
           fi
+          ;;
+      esac
+
+      case "$INSTALL_AGENT_SKILL" in
+        1|true|TRUE|yes|YES)
+          if command -v npx >/dev/null 2>&1; then
+            echo "installing devopsellence agent skill..."
+            npx skills add devopsellence/devopsellence --skill devopsellence -g
+          else
+            echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
+            echo "Install the skill later with:" >&2
+            echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g" >&2
+          fi
+          ;;
+        *)
+          echo "agent skill available:"
+          echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g"
+          echo "or install CLI + skill together with:"
+          echo "  curl -fsSL $BASE_URL/lfg.sh?version=$CLI_VERSION | bash -s -- --install-agent-skill"
           ;;
       esac
     SH

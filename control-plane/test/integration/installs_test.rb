@@ -57,12 +57,14 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
     assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
     assert_includes response.body, 'INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"'
-    assert_includes response.body, 'if [[ "$OS" == "darwin" ]]; then'
+    assert_includes response.body, 'INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"'
+    assert_includes response.body, "--install-agent-skill"
     assert_includes response.body, 'INSTALL_DIR="$HOME/.local/bin"'
-    assert_includes response.body, 'INSTALL_DIR="/usr/local/bin"'
+    refute_includes response.body, 'INSTALL_DIR="/usr/local/bin"'
     assert_includes response.body, "PATH_EXPORT='export PATH=\"'\"$INSTALL_DIR\"':$PATH\"'"
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
+    assert_includes response.body, "npx skills add devopsellence/devopsellence --skill devopsellence -g"
   end
 
   test "cli install script ignores configured public base url when choosing default download host" do
@@ -101,6 +103,39 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
     assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
     assert_includes stdout, "devopsellence CLI installed"
+    assert_equal "prerelease build\n", installed_cli
+  end
+
+  test "cli install script can install the agent skill when requested" do
+    get "/lfg.sh", params: { version: "master-0053792f6aec" }
+
+    assert_response :success
+
+    stdout, stderr, status, installed_cli, skill_args = run_cli_install_script(
+      response.body,
+      version: "master-0053792f6aec",
+      install_agent_skill: true
+    )
+
+    assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
+    assert_includes stdout, "installing devopsellence agent skill"
+    assert_equal "prerelease build\n", installed_cli
+    assert_equal [ "skills", "add", "devopsellence/devopsellence", "--skill", "devopsellence", "-g" ], skill_args
+  end
+
+  test "cli install script defaults to user local bin on linux" do
+    get "/lfg.sh", params: { version: "master-0053792f6aec" }
+
+    assert_response :success
+
+    stdout, stderr, status, installed_cli = run_cli_install_script(
+      response.body,
+      version: "master-0053792f6aec",
+      install_dir: nil
+    )
+
+    assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
+    assert_includes stdout, "/.local/bin/devopsellence"
     assert_equal "prerelease build\n", installed_cli
   end
 
@@ -203,18 +238,19 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
   private
 
-  def run_cli_install_script(script_body, version:)
+  def run_cli_install_script(script_body, version:, install_dir: :explicit, install_agent_skill: false)
     Dir.mktmpdir("devopsellence-cli-install-test") do |tmpdir|
       fixtures_dir = File.join(tmpdir, "fixtures")
       fakebin_dir = File.join(tmpdir, "fakebin")
-      install_dir = File.join(tmpdir, "install")
+      effective_install_dir = install_dir == :explicit ? File.join(tmpdir, "install") : install_dir
       script_path = File.join(tmpdir, "lfg.sh")
       artifact_path = File.join(fixtures_dir, "cli-linux-amd64")
       checksums_path = File.join(fixtures_dir, "cli-SHA256SUMS")
+      skill_args_path = File.join(tmpdir, "skill-args")
 
       FileUtils.mkdir_p(fixtures_dir)
       FileUtils.mkdir_p(fakebin_dir)
-      FileUtils.mkdir_p(install_dir)
+      FileUtils.mkdir_p(effective_install_dir) if effective_install_dir
 
       File.write(artifact_path, "prerelease build\n")
       digest = Digest::SHA256.file(artifact_path).hexdigest
@@ -279,18 +315,30 @@ class InstallsTest < ActionDispatch::IntegrationTest
       SH
       FileUtils.chmod("u+x", uname_path)
 
+      npx_path = File.join(fakebin_dir, "npx")
+      File.write(npx_path, <<~SH)
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        printf '%s\\n' "$@" > #{skill_args_path.inspect}
+      SH
+      FileUtils.chmod("u+x", npx_path)
+
       env = {
         "PATH" => "#{fakebin_dir}:#{ENV.fetch("PATH")}",
         "HOME" => tmpdir,
         "SHELL" => ENV.fetch("SHELL", "/bin/bash"),
         "DEVOPSELLENCE_CLI_VERSION" => version,
-        "DEVOPSELLENCE_CLI_INSTALL_DIR" => install_dir,
         "DEVOPSELLENCE_BASE_URL" => "https://downloads.devopsellence.test"
       }
+      env["DEVOPSELLENCE_CLI_INSTALL_DIR"] = effective_install_dir if effective_install_dir
+      env["DEVOPSELLENCE_INSTALL_AGENT_SKILL"] = "1" if install_agent_skill
 
       stdout, stderr, status = Open3.capture3(env, script_path)
-      installed_cli = File.exist?(File.join(install_dir, "devopsellence")) ? File.read(File.join(install_dir, "devopsellence")) : nil
-      [ stdout, stderr, status, installed_cli ]
+      expected_install_dir = effective_install_dir || File.join(tmpdir, ".local", "bin")
+      installed_cli = File.exist?(File.join(expected_install_dir, "devopsellence")) ? File.read(File.join(expected_install_dir, "devopsellence")) : nil
+      skill_args = File.exist?(skill_args_path) ? File.readlines(skill_args_path, chomp: true) : nil
+      [ stdout, stderr, status, installed_cli, skill_args ]
     end
   end
 end

@@ -164,7 +164,7 @@
         <div class="tl"><span class="tp">$</span> <%= @cli_install_command %></div>
       </div>
     </div>
-    <p>This installs the <code>devopsellence</code> binary. Run <code>devopsellence doctor</code> to verify your setup.</p>
+    <p>This installs the <code>devopsellence</code> binary to <code>~/.local/bin</code> by default and prints the shell command to add that directory to your <code>PATH</code> when needed. devopsellence is agent-first; the installer also prints the agent skill command, and accepts <code>--install-agent-skill</code> when you want the CLI and skill installed together. Run <code>devopsellence doctor</code> to verify your setup.</p>
 
     <h3>2. Choose a workspace mode</h3>
     <div class="terminal">
@@ -336,12 +336,11 @@
         <div class="tl"><span class="tp">$</span> devopsellence node create prod-1 \</div>
         <div class="tl">    --provider hetzner \</div>
         <div class="tl">    --region ash \</div>
-        <div class="tl">    --size cpx11 \</div>
-        <div class="tl">    --ssh-public-key ~/.ssh/id_ed25519.pub</div>
+        <div class="tl">    --size cpx11</div>
         <div class="tl"><span class="tp">$</span> devopsellence node attach prod-1</div>
       </div>
     </div>
-    <p>Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in local solo state at <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). The provider API token and SSH private key value are not written to app config.</p>
+    <p>If no default SSH public key exists, <code>node create</code> generates and reuses a workspace-scoped keypair under local state. Pass <code>--ssh-public-key</code> when you want to use a specific key. Provider-managed nodes record non-secret metadata like provider name, server ID, region, size, public host, SSH user, and labels in local solo state at <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). The provider API token and SSH private key value are not written to app config.</p>
 
     <h3>Solo config</h3>
     <p><code>devopsellence.yml</code> stays workload-only in solo mode. Solo nodes, workspace/environment attachments, and the latest desired environment snapshots live in <code>$XDG_STATE_HOME/devopsellence/solo/state.json</code> (default: <code>~/.local/state/devopsellence/solo/state.json</code> when <code>XDG_STATE_HOME</code> is unset). Generated solo SSH keys stay local under <code>$XDG_STATE_HOME/devopsellence/solo/keys/</code>; SSH private key material is still never written into app config.</p>
@@ -993,11 +992,11 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>devopsellence provider login hetzner</code></dt>
-        <dd>Save and validate a local Hetzner API token for node provisioning.</dd>
+        <dd>Save and validate a local Hetzner API token for node provisioning. Use <code>--token</code>, <code>--stdin</code>, <code>DEVOPSELLENCE_HETZNER_API_TOKEN</code>, or <code>HCLOUD_TOKEN</code> in noninteractive shells.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node create &lt;name&gt;</code></dt>
-        <dd>Create a provider-managed solo node. Hetzner is supported with <code>--provider hetzner</code>.</dd>
+        <dd>Create a provider-managed solo node. Hetzner is supported with <code>--provider hetzner</code>; a workspace SSH key is generated when no default public key is available.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node remove &lt;name&gt; --yes</code></dt>

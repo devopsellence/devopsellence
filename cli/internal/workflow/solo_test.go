@@ -1126,6 +1126,51 @@ func TestEnsureGeneratedWorkspaceSSHKeyRejectsMismatchedPublicKey(t *testing.T) 
 	}
 }
 
+func TestEnsureSoloNodeCreateSSHPublicKeyGeneratesWhenNoDefaultKey(t *testing.T) {
+	stateDir := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+	t.Setenv("HOME", homeDir)
+
+	workspaceRoot := t.TempDir()
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard, false)}
+	opts := SoloNodeCreateOptions{}
+
+	if err := app.ensureSoloNodeCreateSSHPublicKey(&opts, workspaceRoot); err != nil {
+		t.Fatal(err)
+	}
+	if opts.SSHPublicKey == "" {
+		t.Fatal("SSHPublicKey empty, want generated public key path")
+	}
+	if !strings.HasPrefix(opts.SSHPublicKey, filepath.Join(stateDir, "devopsellence", "solo", "keys")) {
+		t.Fatalf("SSHPublicKey = %q, want generated state key", opts.SSHPublicKey)
+	}
+	if _, err := os.Stat(opts.SSHPublicKey); err != nil {
+		t.Fatalf("expected generated public key: %v", err)
+	}
+	if _, err := os.Stat(strings.TrimSuffix(opts.SSHPublicKey, ".pub")); err != nil {
+		t.Fatalf("expected generated private key: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Generated workspace SSH key") {
+		t.Fatalf("output = %q, want generated key message", stdout.String())
+	}
+}
+
+func TestEnsureSoloNodeCreateSSHPublicKeyKeepsExplicitKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	customPublicKey := filepath.Join(t.TempDir(), "custom.pub")
+	opts := SoloNodeCreateOptions{SSHPublicKey: customPublicKey}
+	app := &App{Printer: output.New(io.Discard, io.Discard, false)}
+
+	if err := app.ensureSoloNodeCreateSSHPublicKey(&opts, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if opts.SSHPublicKey != customPublicKey {
+		t.Fatalf("SSHPublicKey = %q, want %q", opts.SSHPublicKey, customPublicKey)
+	}
+}
+
 func TestSoloSetupDefaultsToHetznerAndGeneratedWorkspaceKey(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)

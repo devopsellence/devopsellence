@@ -11,6 +11,7 @@ class CliInstallsController < ActionController::Base
     # For curl | bash installs, default the downloader to the exact host serving
     # the script so callers do not need to pass --base-url explicitly.
     default_base_url = ShellQuoting.single_quote(request.base_url)
+    script_install_url = ShellQuoting.single_quote("#{request.base_url}/lfg.sh")
     default_version = ShellQuoting.single_quote(params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.stable_version)
 
     <<~SH
@@ -21,6 +22,7 @@ class CliInstallsController < ActionController::Base
       if [[ -z "$BASE_URL" ]]; then
         BASE_URL=#{default_base_url}
       fi
+      INSTALL_SCRIPT_URL=#{script_install_url}
       CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-}"
       if [[ -z "$CLI_VERSION" ]]; then
         CLI_VERSION=#{default_version}
@@ -219,7 +221,7 @@ class CliInstallsController < ActionController::Base
           echo "agent skill available:"
           echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g"
           echo "or install CLI + skill together with:"
-          echo "  curl -fsSL \"$BASE_URL/lfg.sh?version=$CLI_VERSION\" | bash -s -- --install-agent-skill"
+          echo "  curl -fsSL \"$INSTALL_SCRIPT_URL?version=$CLI_VERSION\" | bash -s -- --install-agent-skill"
           ;;
       esac
     SH

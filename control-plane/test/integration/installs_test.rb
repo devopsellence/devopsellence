@@ -58,6 +58,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
     assert_includes response.body, 'INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"'
     assert_includes response.body, 'INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"'
+    assert_includes response.body, "INSTALL_SCRIPT_URL='https://dev.devopsellence.com/lfg.sh'"
     assert_includes response.body, "--install-agent-skill"
     assert_includes response.body, 'INSTALL_DIR="$HOME/.local/bin"'
     refute_includes response.body, 'INSTALL_DIR="/usr/local/bin"'
@@ -65,7 +66,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
     assert_includes response.body, "npx skills add devopsellence/devopsellence --skill devopsellence -g"
-    assert_includes response.body, 'curl -fsSL "$BASE_URL/lfg.sh?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
+    assert_includes response.body, 'curl -fsSL "$INSTALL_SCRIPT_URL?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
   end
 
   test "cli install script ignores configured public base url when choosing default download host" do
@@ -79,7 +80,20 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
     assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
+    assert_includes response.body, "INSTALL_SCRIPT_URL='https://dev.devopsellence.com/lfg.sh'"
     refute_includes response.body, "https://app.devopsellence.com"
+  end
+
+  test "cli install script skill rerun command keeps script host separate from download override" do
+    https!
+    host! "dev.devopsellence.com"
+    get "/lfg.sh"
+
+    assert_response :success
+    assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
+    assert_includes response.body, "INSTALL_SCRIPT_URL='https://dev.devopsellence.com/lfg.sh'"
+    assert_includes response.body, 'curl -fsSL "$INSTALL_SCRIPT_URL?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
+    refute_includes response.body, 'curl -fsSL "$BASE_URL/lfg.sh'
   end
 
   test "cli install script accepts version from the query string" do

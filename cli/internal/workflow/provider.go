@@ -151,8 +151,11 @@ func (a *App) ensureInteractiveProviderLogin(ctx context.Context, provider strin
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(token) != "" || !a.Printer.Interactive {
+	if strings.TrimSpace(token) != "" {
 		return nil
+	}
+	if !a.Printer.Interactive {
+		return ExitError{Code: 2, Err: fmt.Errorf("run `devopsellence provider login %s --token <token>` or configure DEVOPSELLENCE_HETZNER_API_TOKEN/HCLOUD_TOKEN", providerSlug)}
 	}
 	return runProviderLogin(a, ctx, ProviderLoginOptions{Provider: providerSlug})
 }

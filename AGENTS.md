@@ -89,6 +89,8 @@ cd control-plane && mise run test -- test/path/file_test.rb
 
 - Explicit user product direction overrides reviewer suggestions.
 - If user says no legacy / no backward compat / clean slate, do not add backfills, shims, compat code, or rejection guards just to preserve or explicitly refute removed behavior; remove the deleted surface cleanly and simplify the codepath instead.
+- Open PRs as ready for review, not draft, unless the user explicitly asks for a draft.
+- After addressing a PR review thread, resolve the thread in GitHub so only remaining actionable feedback stays open.
 - Right after each PR is opened or updated with pushed fixes, request a fresh Copilot review with `gh pr edit <pr-number> --add-reviewer copilot-pull-request-reviewer`.
 
 ## Public Boundary

@@ -27,10 +27,12 @@ Install the CLI:
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 ```
 
-Install the agent skill:
+The installer writes to `~/.local/bin` by default. If that directory is not already on your `PATH`, it prints the shell command to add it.
+
+devopsellence is agent-first. The installer prints the agent skill command; to install the CLI and skill together:
 
 ```bash
-npx skills add devopsellence/devopsellence --skill devopsellence -g
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
 ```
 
 Check local tooling:
@@ -52,7 +54,7 @@ devopsellence provider login hetzner
 devopsellence setup
 ```
 
-For provider-created solo nodes, `devopsellence setup` now defaults to generating a workspace-scoped SSH keypair under `$XDG_STATE_HOME/devopsellence/solo/keys/` (default: `~/.local/state/devopsellence/solo/keys/`) and reuses it for later node creation from the same workspace.
+For provider-created solo nodes, `devopsellence setup` and `devopsellence node create` can generate a workspace-scoped SSH keypair under `$XDG_STATE_HOME/devopsellence/solo/keys/` (default: `~/.local/state/devopsellence/solo/keys/`) and reuse it for later node creation from the same workspace.
 
 Or create a Hetzner-backed node from the provider:
 

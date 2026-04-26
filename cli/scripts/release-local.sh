@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLI_DIR="$ROOT_DIR/cli"
 TARGET_NAME="devopsellence"
 INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
+INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"
 
 OS_RAW="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH_RAW="$(uname -m)"
@@ -28,11 +29,7 @@ case "$ARCH_RAW" in
 esac
 
 if [[ -z "$INSTALL_DIR" ]]; then
-  if [[ "$OS" == "darwin" ]]; then
-    INSTALL_DIR="$HOME/.local/bin"
-  else
-    INSTALL_DIR="/usr/local/bin"
-  fi
+  INSTALL_DIR="$HOME/.local/bin"
 fi
 
 BUILD_DIR="$CLI_DIR/dist/local-head"
@@ -101,5 +98,24 @@ case ":$PATH:" in
       echo "add $INSTALL_DIR to your PATH:"
       echo "  $PATH_EXPORT"
     fi
+    ;;
+esac
+
+case "$INSTALL_AGENT_SKILL" in
+  1|true|TRUE|yes|YES)
+    if command -v npx >/dev/null 2>&1; then
+      echo "installing devopsellence agent skill..."
+      npx skills add devopsellence/devopsellence --skill devopsellence -g
+    else
+      echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
+      echo "Install the skill later with:" >&2
+      echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "agent skill available:"
+    echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g"
+    echo "or rerun installer with DEVOPSELLENCE_INSTALL_AGENT_SKILL=1"
     ;;
 esac

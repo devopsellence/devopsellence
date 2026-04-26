@@ -3,7 +3,7 @@ go = "1.26.2"
 ruby = "4.0.3"
 
 [tasks."test:agent"]
-description = "Run node agent tests"
+description = "Run agent tests"
 dir = "agent"
 run = "mise run test"
 
@@ -22,7 +22,7 @@ description = "Run the hermetic shared mode e2e workflow"
 run = "ruby test/e2e/e2e.rb"
 
 [tasks."e2e-solo"]
-description = "Run the solo mode e2e workflow (CLI + node agent, no control plane)"
+description = "Run the solo mode e2e workflow (CLI + Agent, no control plane)"
 run = "ruby test/e2e/solo_e2e.rb"
 
 [tasks."e2e-runner-image-build"]
@@ -34,12 +34,12 @@ description = "Run all tests"
 depends = ["test:agent", "test:cli", "test:cp"]
 
 [tasks."build:agent"]
-description = "Build node agent"
+description = "Build agent"
 dir = "agent"
 run = "mise run build"
 
 [tasks."release:build:agent"]
-description = "Build multi-platform node agent release artifacts"
+description = "Build multi-platform agent release artifacts"
 dir = "agent"
 run = '''
 set -eu
@@ -142,6 +142,6 @@ description = "Build the CLI from current HEAD and install it locally like the p
 run = "./cli/scripts/release-local.sh"
 
 [tasks."fmt:agent"]
-description = "Format node agent Go files"
+description = "Format agent Go files"
 dir = "agent"
 run = "mise run fmt"

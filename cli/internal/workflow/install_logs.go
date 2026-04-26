@@ -20,7 +20,7 @@ const (
 	maxSoloInstallViewportLines     = 12
 	defaultSoloInstallViewportWidth = 100
 	maxSoloInstallBufferedLines     = 256
-	defaultSoloInstallStatus        = "Installing Docker, node agent, and systemd service..."
+	defaultSoloInstallStatus        = "Installing Docker, agent, and systemd service..."
 )
 
 type soloInstallReporter struct {

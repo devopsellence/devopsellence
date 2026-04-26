@@ -516,7 +516,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Short: "Prepare the current workspace for its selected mode",
 		Long: strings.Join([]string{
 			"Mode-driven workspace setup.",
-			"  solo   - initialize config if needed, register or create a node, attach it, and install the node agent",
+			"  solo   - initialize config if needed, register or create a node, attach it, and install the agent",
 			"  shared - sign in, create/select org/project/env, and write workspace config",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -802,8 +802,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Image, "image", "", "Provider image")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Labels, "labels", "", "Comma-separated labels")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")
-	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.NoInstall, "no-install", false, "Create the provider machine without installing the node agent")
-	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Deploy, "deploy", false, "Install the node agent and deploy after create (solo mode only)")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.NoInstall, "no-install", false, "Create the provider machine without installing the agent")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Deploy, "deploy", false, "Install the agent and deploy after create (solo mode only)")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Organization, "org", "", "Shared-mode organization name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Project, "project", "", "Shared-mode project name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Environment, "env", "", "Shared-mode environment name override")
@@ -920,7 +920,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeDiagnoseCommand.Flags().DurationVar(&nodeDiagnoseOpts.Wait, "wait", defaultNodeDiagnoseWaitTimeout, "How long to wait for the node snapshot")
 	nodeLogsCommand := &cobra.Command{
 		Use:   "logs <name>",
-		Short: "Tail node-agent logs from a solo node over SSH",
+		Short: "Tail agent logs from a solo node over SSH",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeLogsOpts.Node = args[0]
@@ -936,11 +936,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var agentInstallOpts SoloAgentInstallOptions
 	agentCommand := &cobra.Command{
 		Use:   "agent",
-		Short: "Manage the solo node agent install",
+		Short: "Manage the solo agent install",
 	}
 	agentInstallCommand := &cobra.Command{
 		Use:   "install <name>",
-		Short: "Install the node agent on a solo node",
+		Short: "Install the agent on a solo node",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentInstallOpts.Node = args[0]
@@ -949,7 +949,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
-	agentInstallCommand.Flags().StringVar(&agentInstallOpts.AgentBinary, "agent-binary", "", "Local node-agent binary to upload instead of downloading")
+	agentInstallCommand.Flags().StringVar(&agentInstallOpts.AgentBinary, "agent-binary", "", "Local agent binary to upload instead of downloading")
 	agentInstallCommand.Flags().StringVar(&agentInstallOpts.BaseURL, "base-url", "", "Agent download base URL")
 	agentCommand.AddCommand(agentInstallCommand)
 	root.AddCommand(agentCommand)

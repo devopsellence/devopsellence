@@ -18,7 +18,7 @@ class AgentDownloadsController < ActionController::Base
       redirect_to artifact.url, allow_other_host: true
     end
   rescue AgentReleases::Fetcher::NotConfiguredError => error
-    render plain: "node agent binary unavailable: #{error.message}", status: :service_unavailable
+    render plain: "agent binary unavailable: #{error.message}", status: :service_unavailable
   rescue AgentReleases::Fetcher::UnsupportedTargetError => error
     render plain: error.message, status: :unprocessable_entity
   end

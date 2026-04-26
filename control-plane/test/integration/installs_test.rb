@@ -121,7 +121,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_equal "prerelease build\n", installed_cli
   end
 
-  test "cli install script can install the AI-agent skill when requested" do
+  test "cli install script can install the agent skill when requested" do
     get "/lfg.sh", params: { version: "master-0053792f6aec" }
 
     assert_response :success
@@ -133,12 +133,12 @@ class InstallsTest < ActionDispatch::IntegrationTest
     )
 
     assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
-    assert_includes stdout, "installing devopsellence AI-agent skill"
+    assert_includes stdout, "installing devopsellence agent skill"
     assert_equal "prerelease build\n", installed_cli
     assert_equal [ "skills", "add", "devopsellence/devopsellence", "--skill", "devopsellence", "-g" ], skill_args
   end
 
-  test "cli install script fails when requested AI-agent skill cannot install without npx" do
+  test "cli install script fails when requested agent skill cannot install without npx" do
     get "/lfg.sh", params: { version: "master-0053792f6aec" }
 
     assert_response :success
@@ -151,7 +151,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     )
 
     refute_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
-    assert_includes stderr, "AI-agent skill install requested, but npx was not found"
+    assert_includes stderr, "Agent skill install requested, but npx was not found"
     assert_equal "prerelease build\n", installed_cli
     assert_nil skill_args
   end
@@ -234,7 +234,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "Docker Engine is a prerequisite. Install and start Docker, then rerun this command."
   end
 
-  test "install script downloads to a temp file before replacing the node agent binary" do
+  test "install script downloads to a temp file before replacing the agent binary" do
     get "/install.sh"
 
     assert_response :success
@@ -245,7 +245,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "run_root install -m 0755 \"$TMP_BIN\" \"$AGENT_BIN\""
   end
 
-  test "uninstall script removes the node agent and preserves runtime by default" do
+  test "uninstall script removes the agent and preserves runtime by default" do
     get "/uninstall.sh"
 
     assert_response :success

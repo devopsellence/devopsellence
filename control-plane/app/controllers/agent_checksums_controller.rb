@@ -14,7 +14,7 @@ class AgentChecksumsController < ActionController::Base
       redirect_to artifact.url, allow_other_host: true
     end
   rescue AgentReleases::Fetcher::NotConfiguredError => error
-    render plain: "node agent checksums unavailable: #{error.message}", status: :service_unavailable
+    render plain: "agent checksums unavailable: #{error.message}", status: :service_unavailable
   end
 
   private

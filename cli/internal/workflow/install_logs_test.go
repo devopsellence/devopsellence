@@ -26,7 +26,7 @@ func TestInstallLogStateKeepsRecentLines(t *testing.T) {
 func TestInstallLogModelPinsStatusAndShowsLatestLines(t *testing.T) {
 	model := newInstallLogModel("[prod-2]", 2, 80)
 
-	next, _ := model.Update(installProgressMsg{text: "downloading node agent binary"})
+	next, _ := model.Update(installProgressMsg{text: "downloading agent binary"})
 	model = next.(installLogModel)
 	next, _ = model.Update(installLogLineMsg{text: "Get:1 packages"})
 	model = next.(installLogModel)
@@ -37,7 +37,7 @@ func TestInstallLogModelPinsStatusAndShowsLatestLines(t *testing.T) {
 
 	view := model.View()
 	for _, fragment := range []string{
-		"[+] [prod-2] downloading node agent binary",
+		"[+] [prod-2] downloading agent binary",
 		"-> Get:2 packages",
 		"-> Get:3 packages",
 	} {
@@ -54,16 +54,16 @@ func TestNewSoloInstallReporterNonInteractiveFallsBackToPrefixedLines(t *testing
 	var out bytes.Buffer
 	reporter := newSoloInstallReporter(t.Context(), output.Printer{Out: &out}, "prod-2")
 
-	reporter.Progress("Installing Docker, node agent, and systemd service...")
-	if _, err := reporter.Stream().Write([]byte("progress: downloading node agent binary\nplain log\npartial")); err != nil {
+	reporter.Progress("Installing Docker, agent, and systemd service...")
+	if _, err := reporter.Stream().Write([]byte("progress: downloading agent binary\nplain log\npartial")); err != nil {
 		t.Fatal(err)
 	}
 	reporter.Close()
 
 	text := out.String()
 	for _, fragment := range []string{
-		"[prod-2] Installing Docker, node agent, and systemd service...",
-		"[prod-2] downloading node agent binary",
+		"[prod-2] Installing Docker, agent, and systemd service...",
+		"[prod-2] downloading agent binary",
 		"[prod-2] plain log",
 		"[prod-2] partial",
 	} {

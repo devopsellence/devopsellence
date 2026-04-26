@@ -25,6 +25,8 @@ rescue OptionParser::ParseError => e
   exit 64
 end
 
+options[:out] = File.expand_path(options[:out])
+
 scenario = ARGV.shift
 unless scenario
   warn parser

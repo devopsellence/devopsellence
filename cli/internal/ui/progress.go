@@ -51,14 +51,3 @@ func (r Runner) Run(ctx context.Context, _ io.Writer, steps []Step) ([]StepResul
 	}
 	return results, nil
 }
-
-func detailSuffix(detail string, err error) string {
-	detail = strings.TrimSpace(detail)
-	if detail != "" {
-		return " - " + detail
-	}
-	if err == nil {
-		return ""
-	}
-	return " - " + err.Error()
-}

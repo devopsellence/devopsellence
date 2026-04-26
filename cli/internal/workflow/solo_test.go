@@ -430,7 +430,7 @@ func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &App{
-		Printer:     output.New(&stdout, io.Discard, false),
+		Printer:     output.New(&stdout, io.Discard),
 		SoloState:   soloState,
 		ConfigStore: config.NewStore(),
 		Cwd:         workspaceRoot,
@@ -448,8 +448,11 @@ func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 	if !errors.As(exitErr.Err, &renderedErr) {
 		t.Fatalf("exit error = %#v, want RenderedError", exitErr.Err)
 	}
-	if !strings.Contains(stdout.String(), "[node-a] error: ssh root@203.0.113.10:") {
-		t.Fatalf("stdout = %q, want node read error", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	if node["node"] != "node-a" || !strings.Contains(stringValueAny(node["error"]), "ssh root@203.0.113.10:") {
+		t.Fatalf("node payload = %#v, want node read error", node)
 	}
 }
 
@@ -483,7 +486,7 @@ func TestSoloStatusJSONReturnsFailureWithRenderedPayload(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &App{
-		Printer:     output.New(&stdout, io.Discard, true),
+		Printer:     output.New(&stdout, io.Discard),
 		SoloState:   soloState,
 		ConfigStore: config.NewStore(),
 		Cwd:         workspaceRoot,
@@ -597,7 +600,7 @@ func TestSoloNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &App{
-		Printer:   output.New(&stdout, io.Discard, false),
+		Printer:   output.New(&stdout, io.Discard),
 		SoloState: soloState,
 	}
 
@@ -612,8 +615,9 @@ func TestSoloNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 	if _, ok := loaded.Nodes["manual-a"]; ok {
 		t.Fatalf("manual node still present: %#v", loaded.Nodes)
 	}
-	if !strings.Contains(stdout.String(), "Removed solo node manual-a from local state") {
-		t.Fatalf("stdout = %q, want local removal message", stdout.String())
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["node"] != "manual-a" || payload["action"] != "forgotten" {
+		t.Fatalf("payload = %#v, want forgotten manual node", payload)
 	}
 }
 
@@ -632,7 +636,7 @@ func TestSoloNodeRemoveRejectsIncompleteProviderMetadata(t *testing.T) {
 	}
 
 	app := &App{
-		Printer:   output.New(io.Discard, io.Discard, false),
+		Printer:   output.New(io.Discard, io.Discard),
 		SoloState: soloState,
 	}
 

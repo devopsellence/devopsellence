@@ -70,7 +70,6 @@ type App struct {
 	Docker              DockerClient
 	Git                 git.Client
 	Cwd                 string
-	Verbose             bool
 	ExecutablePath      func() (string, error)
 	LookPath            func(string) (string, error)
 	Symlink             func(string, string) error

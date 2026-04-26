@@ -16,8 +16,6 @@ import (
 )
 
 func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command {
-	var verboseMode bool
-
 	app := NewApp(in, out, err, cwd)
 
 	withTimeout := func(run func(context.Context) error) func(*cobra.Command, []string) error {
@@ -95,10 +93,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		SilenceUsage:  true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			app.Printer.JSON = true
-			app.Verbose = verboseMode
 		},
 	}
-	root.PersistentFlags().BoolVar(&verboseMode, "verbose", false, "Emit detailed progress logs")
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI version",

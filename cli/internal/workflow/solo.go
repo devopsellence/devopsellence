@@ -1817,7 +1817,10 @@ func (a *App) runSoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions)
 }
 
 func (a *App) ensureSoloNodeCreateSSHPublicKey(opts *SoloNodeCreateOptions, workspaceRoot string) error {
-	if strings.TrimSpace(opts.SSHPublicKey) != "" || defaultSoloSSHPublicKeyPath() != "" {
+	if strings.TrimSpace(opts.SSHPublicKey) != "" {
+		return nil
+	}
+	if _, _, err := readSoloSSHPublicKey(""); err == nil {
 		return nil
 	}
 	generatedKey, err := ensureGeneratedWorkspaceSSHKey(workspaceRoot)

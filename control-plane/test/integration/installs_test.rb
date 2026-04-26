@@ -65,6 +65,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
     assert_includes response.body, "npx skills add devopsellence/devopsellence --skill devopsellence -g"
+    assert_includes response.body, 'curl -fsSL "$BASE_URL/lfg.sh?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
   end
 
   test "cli install script ignores configured public base url when choosing default download host" do

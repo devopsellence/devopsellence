@@ -219,7 +219,7 @@ class CliInstallsController < ActionController::Base
           echo "agent skill available:"
           echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g"
           echo "or install CLI + skill together with:"
-          echo "  curl -fsSL $BASE_URL/lfg.sh?version=$CLI_VERSION | bash -s -- --install-agent-skill"
+          echo "  curl -fsSL \"$BASE_URL/lfg.sh?version=$CLI_VERSION\" | bash -s -- --install-agent-skill"
           ;;
       esac
     SH

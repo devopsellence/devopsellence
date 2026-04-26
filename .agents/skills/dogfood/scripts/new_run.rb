@@ -5,14 +5,15 @@ require "fileutils"
 require "open3"
 require "optparse"
 require "time"
+require "tmpdir"
 
 options = {
   root: Dir.pwd,
-  out: "/tmp/devopsellence-dogfood"
+  out: File.join(Dir.tmpdir, "devopsellence-dogfood")
 }
 
 parser = OptionParser.new do |opts|
-  opts.banner = "Usage: new_run.rb SCENARIO_SLUG [--root PATH] [--out PATH]"
+  opts.banner = "Usage: new_run.rb SCENARIO [--root PATH] [--out PATH]"
   opts.on("--root PATH", "Repository root used for git metadata") { |value| options[:root] = value }
   opts.on("--out PATH", "Parent output directory") { |value| options[:out] = value }
 end
@@ -32,10 +33,21 @@ unless scenario
   warn parser
   exit 64
 end
+scenario = scenario.strip
+if scenario.empty?
+  warn "SCENARIO must not be empty"
+  warn parser
+  exit 64
+end
+if scenario.match?(/[[:cntrl:]]/)
+  warn "SCENARIO must not contain control characters"
+  warn parser
+  exit 64
+end
 
 slug = scenario.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-|-+\z/, "")
 if slug.empty?
-  warn "SCENARIO_SLUG must contain at least one lowercase letter or digit after normalization"
+  warn "SCENARIO must contain at least one letter or digit after normalization"
   warn parser
   exit 64
 end

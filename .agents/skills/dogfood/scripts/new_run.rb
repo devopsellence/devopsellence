@@ -30,8 +30,8 @@ end
 
 options[:out] = File.expand_path(options[:out])
 
-scenario = ARGV.shift
-unless scenario
+scenario = ARGV.join(" ")
+if scenario.empty?
   warn parser
   exit 64
 end

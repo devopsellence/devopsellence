@@ -32,7 +32,7 @@ Dogfood is not only e2e. It asks: can a target user complete the job, understand
    - Read `references/scenarios.md` only when scenario detail is needed.
 
 2. Create run artifact.
-   - Prefer `ruby .agents/skills/dogfood/scripts/new_run.rb <scenario>` from repo root.
+   - Prefer `ruby .agents/skills/dogfood/scripts/new_run.rb <scenario>` from repo root; multi-word scenarios may be quoted or passed as multiple words.
    - If the user names a devopsellence version, pass `--version <version>`.
    - If no version is named, omit `--version` and dogfood the default stable installer/control-plane version.
    - Use the temp run path printed by the helper unless the user asks for repo-tracked reports.

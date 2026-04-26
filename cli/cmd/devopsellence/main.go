@@ -14,7 +14,8 @@ import (
 func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	command := workflow.NewRootCommand(os.Stdin, os.Stdout, os.Stderr, mustGetwd())
-	if err := command.ExecuteContext(rootCtx); err != nil {
+	executedCommand, err := command.ExecuteContextC(rootCtx)
+	if err != nil {
 		var exitErr workflow.ExitError
 		var renderedErr workflow.RenderedError
 		code := 1
@@ -26,7 +27,11 @@ func main() {
 			code = 130
 		}
 		if !errors.Is(err, context.Canceled) && !errors.As(err, &renderedErr) {
-			writeError(command.CommandPath(), code, err)
+			operation := command.CommandPath()
+			if executedCommand != nil {
+				operation = executedCommand.CommandPath()
+			}
+			writeError(operation, code, err)
 		}
 		stop()
 		os.Exit(code)

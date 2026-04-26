@@ -639,7 +639,7 @@ PY
       timeout: 30,
       env: ssh_env
     )
-    secrets = JSON.parse(output).fetch("secrets")
+    secrets = parse_cli_json(output).fetch("secrets")
     raise "secret not listed" unless secrets.any? { |secret| secret["name"] == SECRET_VALUE_NAME }
     commit_all!("Configure solo e2e secrets")
     puts "[ok] Secret saved and listed"
@@ -653,7 +653,7 @@ PY
       env: ssh_env
     )
 
-    result = JSON.parse(output)
+    result = parse_cli_json(output)
     raise "agent install did not report node-1" unless result["node"] == "node-1"
     puts "[ok] Agent installed via CLI"
   end
@@ -669,7 +669,7 @@ PY
     status = result.fetch(:status)
 
     if status.success?
-      result = JSON.parse(output)
+      result = parse_cli_json(output)
       raise "deploy did not report revision" if result["workload_revision"].to_s.empty?
       raise "deploy did not report node-1" unless Array(result["nodes"]).include?("node-1")
       puts "[ok] Deploy completed"
@@ -689,7 +689,7 @@ PY
       timeout: 60,
       env: ssh_env
     )
-    cli_status = JSON.parse(cli_status_output)
+    cli_status = parse_cli_json(cli_status_output)
     node_status = (cli_status["nodes"] || []).find { |entry| entry["node"] == "node-1" }
     raise "CLI status missing node-1 before deploy" unless node_status
     raise "CLI status should not include runtime status before deploy" unless node_status["status"].nil?
@@ -761,7 +761,7 @@ PY
       timeout: 60,
       env: ssh_env
     )
-    cli_status = JSON.parse(cli_status_output)
+    cli_status = parse_cli_json(cli_status_output)
     node_status = (cli_status["nodes"] || []).find { |entry| entry["node"] == "node-1" }
     raise "CLI status missing node-1" unless node_status
     cli_revision = node_status.dig("status", "revision")
@@ -864,7 +864,7 @@ PY
       timeout: 30,
       env: ssh_env
     )
-    result = JSON.parse(output)
+    result = parse_cli_json(output)
     raise "mode use solo did not confirm solo mode" unless result["mode"] == "solo"
     puts "[ok] Workspace mode set to solo"
   end
@@ -876,13 +876,27 @@ PY
       timeout: 30,
       env: ssh_env
     )
-    result = JSON.parse(output)
+    result = parse_cli_json(output)
     unless result["node"] == "node-1" &&
            result["environment"] == "production" &&
            result["changed"]
       raise "node attach returned unexpected result: #{output}"
     end
     puts "[ok] Solo node attached"
+  end
+
+
+  def parse_cli_json(output)
+    starts = []
+    output.to_s.each_char.with_index { |char, index| starts << index if char == "{" }
+    starts.reverse_each do |index|
+      begin
+        return JSON.parse(output[index..].strip)
+      rescue JSON::ParserError
+        next
+      end
+    end
+    raise "CLI output did not contain a JSON object: #{excerpt(output, 20)}"
   end
 
   def cli_binary

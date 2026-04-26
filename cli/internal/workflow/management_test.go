@@ -283,7 +283,6 @@ func TestContextShowJSONIncludesWorkspaceContext(t *testing.T) {
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
 	app.Printer.JSON = true
-	app.Printer.Interactive = false
 
 	if err := app.ContextShow(); err != nil {
 		t.Fatalf("ContextShow() error = %v", err)
@@ -505,7 +504,6 @@ func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
 	app.Printer.JSON = true
-	app.Printer.Interactive = false
 
 	if err := app.ConfigResolve(ConfigResolveOptions{Environment: "staging"}); err != nil {
 		t.Fatalf("ConfigResolve() error = %v", err)
@@ -571,7 +569,6 @@ func TestStatusUsesSavedWorkspaceEnvironment(t *testing.T) {
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
 	app.Printer.JSON = true
-	app.Printer.Interactive = false
 
 	if err := app.Status(context.Background(), StatusOptions{}); err != nil {
 		t.Fatalf("Status() error = %v", err)
@@ -3103,7 +3100,7 @@ func TestAuthSessionRefreshesOnlyOnceForConcurrentCalls(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	session := newAuthSession(app, "token", true, nil)
+	session := newAuthSession(app, "token", nil)
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup

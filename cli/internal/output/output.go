@@ -9,18 +9,16 @@ import (
 // Printer writes command results. The CLI is agent-primary, so JSON is the
 // default and prompt-driven affordances are disabled.
 type Printer struct {
-	Out         io.Writer
-	Err         io.Writer
-	JSON        bool
-	Interactive bool
+	Out  io.Writer
+	Err  io.Writer
+	JSON bool
 }
 
 func New(out, err io.Writer) Printer {
 	return Printer{
-		Out:         out,
-		Err:         err,
-		JSON:        true,
-		Interactive: false,
+		Out:  out,
+		Err:  err,
+		JSON: true,
 	}
 }
 

@@ -29,7 +29,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runByMode := func(solo, shared func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode()
 				if modeErr != nil {
 					return modeErr
 				}
@@ -48,7 +48,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runSoloOnly := func(name string, run func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode()
 				if modeErr != nil {
 					return modeErr
 				}
@@ -63,7 +63,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	runSharedOnly := func(name string, run func(context.Context) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveMode(app.Printer.Interactive)
+				mode, modeErr := app.ResolveMode()
 				if modeErr != nil {
 					return modeErr
 				}
@@ -96,7 +96,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Version:       version.String(),
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			app.Printer.JSON = true
-			app.Printer.Interactive = false
 			app.Verbose = verboseMode
 		},
 	}
@@ -517,7 +516,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveSetupMode(setupMode, app.Printer.Interactive)
+				mode, modeErr := app.ResolveSetupMode(setupMode)
 				if modeErr != nil {
 					return modeErr
 				}

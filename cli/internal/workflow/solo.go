@@ -24,7 +24,6 @@ import (
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/solo/providers"
-	"github.com/devopsellence/cli/internal/ui"
 	cliversion "github.com/devopsellence/cli/internal/version"
 )
 
@@ -1848,7 +1847,7 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 
 	var bootstrap nodeBootstrapToken
 	if !opts.NoInstall {
-		tokens, err := a.ensureAuth(ctx, a.Printer.Interactive, false)
+		tokens, err := a.ensureAuth(ctx, false)
 		if err != nil {
 			return err
 		}
@@ -1857,14 +1856,8 @@ func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions
 			bootstrap, err = a.createNodeBootstrapToken(ctx, &tokens, opts.NodeBootstrapOptions, update)
 			return err
 		}
-		if !a.Printer.JSON && a.Printer.Interactive {
-			if err := ui.RunTask(ctx, a.Printer.Out, "Node Bootstrap", run); err != nil {
-				return err
-			}
-		} else {
-			if err := run(ctx, func(string) {}, func(string) {}); err != nil {
-				return err
-			}
+		if err := run(ctx, func(string) {}, func(string) {}); err != nil {
+			return err
 		}
 	}
 

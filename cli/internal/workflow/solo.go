@@ -564,10 +564,10 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 	if err != nil {
 		return nil, err
 	}
-	sortedNodeNames := sortedNodeNames(nodes)
-	prepared := make(map[string]preparedNodeState, len(sortedNodeNames))
+	sortedNames := sortedNodeNames(nodes)
+	prepared := make(map[string]preparedNodeState, len(sortedNames))
 	resolvedSnapshotCache := map[string]desiredstate.DeploySnapshot{}
-	for _, nodeName := range sortedNodeNames {
+	for _, nodeName := range sortedNames {
 		inputs, err := a.preparedNodeDesiredStateInputs(ctx, current, nodeName, nodes[nodeName], resolvedSnapshotCache)
 		if err != nil {
 			return nil, err
@@ -576,7 +576,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 	}
 	var localImageChecksMu sync.Mutex
 	localImageChecks := map[string]*localImageCheck{}
-	for _, nodeName := range sortedNodeNames {
+	for _, nodeName := range sortedNames {
 		node := nodes[nodeName]
 		inputs := prepared[nodeName]
 		wg.Add(1)
@@ -644,7 +644,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 			if !a.Printer.JSON {
 				a.Printer.Println(fmt.Sprintf("[%s] Writing desired state...", name))
 			}
-			overridePath := filepath.Join(node.AgentStateDir, "desired-state-override.json")
+			overridePath := desiredStateOverridePath(node)
 			cmd := remoteDesiredStateOverrideCommand(overridePath)
 			if _, err := solo.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
 				mu.Lock()
@@ -2926,6 +2926,10 @@ func remoteReadOptionalFileCommand(path, missingSentinel string) string {
 
 func remoteJournalctlCommand(args string) string {
 	return fmt.Sprintf("if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n journalctl %s; fi; exec journalctl %s", args, args)
+}
+
+func desiredStateOverridePath(node config.Node) string {
+	return path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "desired-state-override.json")
 }
 
 func remoteDesiredStateOverrideCommand(overridePath string) string {

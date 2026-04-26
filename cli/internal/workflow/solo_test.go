@@ -1069,6 +1069,26 @@ func TestRemoteDockerCommandsSupportPasswordlessSudo(t *testing.T) {
 	}
 }
 
+func TestDesiredStateOverridePathDefaultsAgentStateDir(t *testing.T) {
+	t.Parallel()
+
+	got := desiredStateOverridePath(config.Node{})
+	want := "/var/lib/devopsellence/desired-state-override.json"
+	if got != want {
+		t.Fatalf("desiredStateOverridePath() = %q, want %q", got, want)
+	}
+}
+
+func TestDesiredStateOverridePathUsesConfiguredAgentStateDir(t *testing.T) {
+	t.Parallel()
+
+	got := desiredStateOverridePath(config.Node{AgentStateDir: "/tmp/devopsellence state"})
+	want := "/tmp/devopsellence state/desired-state-override.json"
+	if got != want {
+		t.Fatalf("desiredStateOverridePath() = %q, want %q", got, want)
+	}
+}
+
 func TestRemoteDesiredStateOverrideCommandSupportsPasswordlessSudo(t *testing.T) {
 	command := remoteDesiredStateOverrideCommand("/var/lib/devopsellence/desired-state-override.json")
 	for _, want := range []string{

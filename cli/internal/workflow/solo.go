@@ -1773,8 +1773,10 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 		return err
 	}
 
-	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, io.Discard, io.Discard); err != nil {
-		return err
+	var sshStdout bytes.Buffer
+	var sshStderr bytes.Buffer
+	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, &sshStdout, &sshStderr); err != nil {
+		return sshInteractiveError("failed to run install command over SSH", err, sshStdout.String(), sshStderr.String())
 	}
 
 	result := map[string]any{
@@ -1798,6 +1800,22 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 	}
 	return a.Printer.PrintJSON(result)
 
+}
+
+func sshInteractiveError(prefix string, err error, stdout string, stderr string) error {
+	stdout = strings.TrimSpace(stdout)
+	stderr = strings.TrimSpace(stderr)
+
+	switch {
+	case stderr != "" && stdout != "":
+		return fmt.Errorf("%s: %w; stderr: %s; stdout: %s", prefix, err, stderr, stdout)
+	case stderr != "":
+		return fmt.Errorf("%s: %w; stderr: %s", prefix, err, stderr)
+	case stdout != "":
+		return fmt.Errorf("%s: %w; stdout: %s", prefix, err, stdout)
+	default:
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
 }
 
 func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {

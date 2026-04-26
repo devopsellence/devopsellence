@@ -17,7 +17,13 @@ parser = OptionParser.new do |opts|
   opts.on("--out PATH", "Parent output directory") { |value| options[:out] = value }
 end
 
-parser.parse!
+begin
+  parser.parse!
+rescue OptionParser::ParseError => e
+  warn e.message
+  warn parser
+  exit 64
+end
 
 scenario = ARGV.shift
 unless scenario
@@ -33,7 +39,7 @@ if slug.empty?
 end
 
 now = Time.now.utc
-timestamp = now.strftime("%Y%m%dT%H%M%SZ")
+timestamp = now.strftime("%Y%m%dT%H%M%S%6NZ")
 run_dir = File.expand_path("#{timestamp}-#{slug}", options[:out])
 
 def git_value(root, *args)
@@ -45,6 +51,7 @@ end
 
 commit = git_value(options[:root], "rev-parse", "--short", "HEAD")
 branch = git_value(options[:root], "branch", "--show-current")
+branch = "detached" if branch.empty?
 
 template_path = File.expand_path("../references/report-template.md", __dir__)
 template = File.read(template_path)
@@ -54,7 +61,13 @@ report = template
   .sub("Commit:", "Commit: #{commit} (#{branch})")
   .sub("Run path:", "Run path: #{run_dir}")
 
-FileUtils.mkdir_p(run_dir)
+FileUtils.mkdir_p(options[:out])
+begin
+  Dir.mkdir(run_dir)
+rescue Errno::EEXIST
+  warn "run directory already exists: #{run_dir}"
+  exit 73
+end
 File.write(File.join(run_dir, "report.md"), report)
 File.write(File.join(run_dir, "commands.log"), "# Commands for #{scenario}\n")
 

@@ -1053,7 +1053,14 @@ func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 	t.Parallel()
 
 	root := makeRailsRoot(t, "ShopApp")
-	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
+	project := config.DefaultProjectConfig("default", "ShopApp", "staging")
+	web := project.Services["web"]
+	web.SecretRefs = []config.SecretRef{
+		{Name: "SECRET_KEY_BASE", Secret: "gsm://projects/test/secrets/abc/versions/latest"},
+		{Name: "ONLY_IN_CONFIG", Secret: "gsm://projects/test/secrets/config-only/versions/latest"},
+	}
+	project.Services["web"] = web
+	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -1083,8 +1090,14 @@ func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 	if !strings.Contains(stdout.String(), "SECRET_KEY_BASE") {
 		t.Fatalf("SecretList() output = %q, want secret listing", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "RAILS_MASTER_KEY -> gsm://projects/test/secrets/rails/versions/latest") {
-		t.Fatalf("SecretList() output = %q, want Rails secret listing", stdout.String())
+	if !strings.Contains(stdout.String(), "web SECRET_KEY_BASE exposed=yes configured=yes stored=yes store=managed -> gsm://projects/test/secrets/abc/versions/latest") {
+		t.Fatalf("SecretList() output = %q, want exposed configured secret", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "web ONLY_IN_CONFIG exposed=yes configured=yes stored=no store=managed -> gsm://projects/test/secrets/config-only/versions/latest") {
+		t.Fatalf("SecretList() output = %q, want config-only secret", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "web RAILS_MASTER_KEY exposed=no configured=no stored=yes store=managed -> gsm://projects/test/secrets/rails/versions/latest") {
+		t.Fatalf("SecretList() output = %q, want store-only Rails secret listing", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "auto-managed") {
 		t.Fatalf("SecretList() output = %q, unexpected auto-managed note", stdout.String())

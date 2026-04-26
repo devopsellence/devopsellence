@@ -697,10 +697,11 @@ func (a *App) resolveSoloSecretValues(ctx context.Context, current solo.State, w
 		local[record.ServiceName+"\x00"+record.Name] = record
 	}
 	values := solo.ScopedSecrets{}
+	cache := map[string]string{}
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
 		for _, ref := range service.SecretRefs {
-			value, err := a.resolveSoloSecretRef(ctx, serviceName, ref, local)
+			value, err := a.resolveSoloSecretRef(ctx, serviceName, ref, local, cache)
 			if err != nil {
 				return nil, err
 			}
@@ -710,10 +711,13 @@ func (a *App) resolveSoloSecretValues(ctx context.Context, current solo.State, w
 	return values, nil
 }
 
-func (a *App) resolveSoloSecretRef(ctx context.Context, serviceName string, ref config.SecretRef, local map[string]solo.SecretRecord) (string, error) {
+func (a *App) resolveSoloSecretRef(ctx context.Context, serviceName string, ref config.SecretRef, local map[string]solo.SecretRecord, cache map[string]string) (string, error) {
 	source := strings.TrimSpace(ref.Secret)
+	if source == "" {
+		return "", fmt.Errorf("missing secret reference for %s.%s", serviceName, ref.Name)
+	}
 	if strings.HasPrefix(strings.ToLower(source), "op://") {
-		return a.resolveOnePasswordSecret(ctx, source)
+		return a.resolveOnePasswordSecretCached(ctx, source, cache)
 	}
 	store, name, ok := parseDevopsellenceSecretRef(source)
 	if !ok {
@@ -730,7 +734,38 @@ func (a *App) resolveSoloSecretRef(ctx context.Context, serviceName string, ref 
 	if recordStore != store {
 		return "", fmt.Errorf("local solo secret %s for service %s uses %s store, config references %s", name, serviceName, recordStore, store)
 	}
+	if recordStore == solo.SecretStoreOnePassword && strings.TrimSpace(record.Reference) != "" {
+		return a.resolveSoloSecretRecordCached(ctx, record, cache)
+	}
 	return a.resolveSoloSecretRecord(ctx, record)
+}
+
+func (a *App) resolveSoloSecretRecordCached(ctx context.Context, record solo.SecretRecord, cache map[string]string) (string, error) {
+	reference := strings.TrimSpace(record.Reference)
+	if reference == "" {
+		return a.resolveSoloSecretRecord(ctx, record)
+	}
+	if value, ok := cache[reference]; ok {
+		return value, nil
+	}
+	value, err := a.resolveSoloSecretRecord(ctx, record)
+	if err != nil {
+		return "", err
+	}
+	cache[reference] = value
+	return value, nil
+}
+
+func (a *App) resolveOnePasswordSecretCached(ctx context.Context, reference string, cache map[string]string) (string, error) {
+	if value, ok := cache[reference]; ok {
+		return value, nil
+	}
+	value, err := a.resolveOnePasswordSecret(ctx, reference)
+	if err != nil {
+		return "", err
+	}
+	cache[reference] = value
+	return value, nil
 }
 
 func parseDevopsellenceSecretRef(value string) (string, string, bool) {
@@ -1082,14 +1117,14 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if err != nil {
 		return err
 	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
 	configUpdated := ensureServiceSecretRef(cfg, opts.ServiceName, soloSecretConfigRef(record))
 	if configUpdated {
 		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
-			return err
+			return fmt.Errorf("secret saved locally but update devopsellence.yml failed: %w", err)
 		}
-	}
-	if err := a.writeSoloState(current); err != nil {
-		return err
 	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "store": record.Store, "reference": record.Reference, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "saved"})
@@ -1135,6 +1170,9 @@ func soloSecretMaterial(store string, opts SoloSecretsSetOptions) (solo.SecretMa
 		}
 		if reference == "" {
 			return solo.SecretMaterial{}, ExitError{Code: 2, Err: errors.New("missing required option: --op-ref")}
+		}
+		if !strings.HasPrefix(strings.ToLower(reference), "op://") {
+			return solo.SecretMaterial{}, ExitError{Code: 2, Err: errors.New("1Password secret reference must start with op://")}
 		}
 		return solo.SecretMaterial{Store: store, Reference: reference}, nil
 	default:
@@ -1212,21 +1250,61 @@ func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) er
 	if err != nil {
 		return err
 	}
+	items := soloSecretListItems(cfg, secrets, opts.ServiceName)
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"environment": environmentName, "secrets": secrets})
+		return a.Printer.PrintJSON(map[string]any{"environment": environmentName, "secrets": items})
 	}
-	if len(secrets) == 0 {
+	if len(items) == 0 {
 		a.Printer.Println("No secrets configured")
 		return nil
 	}
-	for _, secret := range secrets {
-		line := secret.ServiceName + " " + secret.Name + " [" + secret.Store + "]"
-		if secret.Reference != "" {
-			line += " -> " + secret.Reference
-		}
-		a.Printer.Println(line)
+	for _, item := range items {
+		a.Printer.Println(formatListedSecret(item))
 	}
 	return nil
+}
+
+func soloSecretListItems(cfg *config.ProjectConfig, secrets []solo.SecretRecord, serviceFilter string) []listedSecret {
+	items := map[string]listedSecret{}
+	filter := strings.TrimSpace(serviceFilter)
+	if cfg != nil {
+		for _, serviceName := range cfg.ServiceNames() {
+			if filter != "" && serviceName != filter {
+				continue
+			}
+			for _, ref := range cfg.Services[serviceName].SecretRefs {
+				key := secretListKey(serviceName, ref.Name)
+				secretRef := strings.TrimSpace(ref.Secret)
+				items[key] = listedSecret{
+					ServiceName: serviceName,
+					Name:        ref.Name,
+					SecretRef:   secretRef,
+					Store:       secretListStore(secretRef, "configured"),
+					Configured:  true,
+					Exposed:     true,
+				}
+			}
+		}
+	}
+	for _, secret := range secrets {
+		key := secretListKey(secret.ServiceName, secret.Name)
+		item := items[key]
+		if item.ServiceName == "" {
+			item = listedSecret{
+				ServiceName: secret.ServiceName,
+				Name:        secret.Name,
+				Store:       secret.Store,
+			}
+		}
+		if strings.TrimSpace(item.SecretRef) == "" {
+			item.SecretRef = soloSecretConfigRef(secret).Secret
+		}
+		item.Reference = strings.TrimSpace(secret.Reference)
+		item.Store = firstNonEmpty(item.Store, secret.Store)
+		item.Stored = true
+		items[key] = item
+	}
+	return sortListedSecrets(items)
 }
 
 func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {

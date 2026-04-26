@@ -927,9 +927,17 @@ func TestResolveSoloSecretValuesUsesStoreResolver(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := current.SetSecret(root, "production", "jobs", "DATABASE_URL", solo.SecretMaterial{
+		Store:     solo.SecretStoreOnePassword,
+		Reference: "op://app/db/password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opReads := 0
 	app := &App{
 		soloSecretResolveFn: func(_ context.Context, record solo.SecretRecord) (string, error) {
 			if record.Store == solo.SecretStoreOnePassword {
+				opReads++
 				return "postgres://op", nil
 			}
 			return record.Value, nil
@@ -942,6 +950,9 @@ func TestResolveSoloSecretValuesUsesStoreResolver(t *testing.T) {
 	cfg.Services["worker"] = config.ServiceConfig{
 		SecretRefs: []config.SecretRef{{Name: "DATABASE_URL", Secret: "devopsellence://1password/DATABASE_URL"}},
 	}
+	cfg.Services["jobs"] = config.ServiceConfig{
+		SecretRefs: []config.SecretRef{{Name: "DATABASE_URL", Secret: "devopsellence://1password/DATABASE_URL"}},
+	}
 
 	values, err := app.resolveSoloSecretValues(context.Background(), current, root, "production", &cfg)
 	if err != nil {
@@ -952,6 +963,12 @@ func TestResolveSoloSecretValuesUsesStoreResolver(t *testing.T) {
 	}
 	if got := values.Value("worker", "DATABASE_URL"); got != "postgres://op" {
 		t.Fatalf("worker DATABASE_URL = %q", got)
+	}
+	if got := values.Value("jobs", "DATABASE_URL"); got != "postgres://op" {
+		t.Fatalf("jobs DATABASE_URL = %q", got)
+	}
+	if opReads != 1 {
+		t.Fatalf("1Password reads = %d, want 1", opReads)
 	}
 }
 

@@ -151,6 +151,38 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 	if len(refs) != 1 || refs[0].Name != "DATABASE_URL" || refs[0].Secret != "devopsellence://plaintext/DATABASE_URL" {
 		t.Fatalf("secret refs = %#v", refs)
 	}
+
+	web := cfg.Services["web"]
+	web.SecretRefs = append(web.SecretRefs, config.SecretRef{Name: "ONLY_IN_CONFIG", Secret: "devopsellence://plaintext/ONLY_IN_CONFIG"})
+	cfg.Services["web"] = web
+	if _, err := config.Write(cwd, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SetSecret(cwd, "staging", "web", "ONLY_IN_STORE", solo.SecretMaterial{Value: "store-only"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	cmd = NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "list", "--env", "staging", "--service", "web"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("list Execute() error = %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"web DATABASE_URL exposed=yes configured=yes stored=yes store=plaintext -> devopsellence://plaintext/DATABASE_URL",
+		"web ONLY_IN_CONFIG exposed=yes configured=yes stored=no store=plaintext -> devopsellence://plaintext/ONLY_IN_CONFIG",
+		"web ONLY_IN_STORE exposed=no configured=no stored=yes store=plaintext -> devopsellence://plaintext/ONLY_IN_STORE",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("secret list output = %q, missing %q", output, want)
+		}
+	}
 }
 
 func TestRootSoloSecretSetAcceptsOnePasswordReference(t *testing.T) {

@@ -300,6 +300,17 @@ type SecretDeleteOptions struct {
 	Name         string
 }
 
+type listedSecret struct {
+	ServiceName string `json:"service_name"`
+	Name        string `json:"name"`
+	SecretRef   string `json:"secret_ref,omitempty"`
+	Store       string `json:"store,omitempty"`
+	Reference   string `json:"reference,omitempty"`
+	Configured  bool   `json:"configured"`
+	Stored      bool   `json:"stored"`
+	Exposed     bool   `json:"exposed"`
+}
+
 type TokenCreateOptions struct {
 	Name string
 }
@@ -1780,14 +1791,19 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 		return wrapError(err)
 	}
 	configUpdated := false
+	configUpdateErr := ""
 	if ref := stringFromMap(result, "secret_ref"); ref != "" {
 		updated, err := a.upsertWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, opts.ServiceName, config.SecretRef{Name: opts.Name, Secret: ref})
 		if err != nil {
-			return err
+			configUpdateErr = err.Error()
+		} else {
+			configUpdated = updated
 		}
-		configUpdated = updated
 		result["config_updated"] = updated
 		result["config_path"] = a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot)
+		if configUpdateErr != "" {
+			result["config_error"] = configUpdateErr
+		}
 	}
 	result["schema_version"] = outputSchemaVersion
 	if a.Printer.JSON {
@@ -1798,6 +1814,10 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 	}
 	a.Printer.Println("Saved secret", stringFromMap(result, "name"), "for", stringFromMap(result, "service_name")+".")
 	a.Printer.Println("Ref:", stringFromMap(result, "secret_ref"))
+	if configUpdateErr != "" {
+		a.Printer.Errorln("Secret saved, but devopsellence.yml was not updated:", configUpdateErr)
+		return nil
+	}
 	if configUpdated {
 		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot))
 	}
@@ -1817,22 +1837,25 @@ func (a *App) SecretList(ctx context.Context, opts SecretListOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
+	items, err := a.sharedSecretListItems(workspace.Discovery.WorkspaceRoot, secrets)
+	if err != nil {
+		return err
+	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"schema_version": outputSchemaVersion,
-			"secrets":        secrets,
+			"secrets":        items,
 		})
 	}
 	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
 		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
 	}
-	if len(secrets) == 0 {
+	if len(items) == 0 {
 		a.Printer.Println("No secrets configured.")
 		return nil
 	}
-	for _, secret := range secrets {
-		line := secret.ServiceName + " " + secret.Name + " -> " + secret.SecretRef
-		a.Printer.Println(line)
+	for _, item := range items {
+		a.Printer.Println(formatListedSecret(item))
 	}
 	return nil
 }
@@ -1860,11 +1883,16 @@ func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error 
 		return wrapError(err)
 	}
 	configUpdated, err := a.removeWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, opts.ServiceName, opts.Name)
+	configUpdateErr := ""
 	if err != nil {
-		return err
+		configUpdateErr = err.Error()
+		configUpdated = false
 	}
 	result["config_updated"] = configUpdated
 	result["config_path"] = a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot)
+	if configUpdateErr != "" {
+		result["config_error"] = configUpdateErr
+	}
 	result["schema_version"] = outputSchemaVersion
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(result)
@@ -1873,10 +1901,109 @@ func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error 
 		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
 	}
 	a.Printer.Println("Deleted secret", stringFromMap(result, "name"), "for", stringFromMap(result, "service_name")+".")
+	if configUpdateErr != "" {
+		a.Printer.Errorln("Secret deleted, but devopsellence.yml was not updated:", configUpdateErr)
+		return nil
+	}
 	if configUpdated {
 		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot))
 	}
 	return nil
+}
+
+func (a *App) sharedSecretListItems(workspaceRoot string, secrets []api.EnvironmentSecret) ([]listedSecret, error) {
+	cfg, err := a.ConfigStore.Read(workspaceRoot)
+	if err != nil {
+		return nil, wrapError(err)
+	}
+	items := map[string]listedSecret{}
+	if cfg != nil {
+		for _, serviceName := range cfg.ServiceNames() {
+			for _, ref := range cfg.Services[serviceName].SecretRefs {
+				key := secretListKey(serviceName, ref.Name)
+				items[key] = listedSecret{
+					ServiceName: serviceName,
+					Name:        ref.Name,
+					SecretRef:   strings.TrimSpace(ref.Secret),
+					Store:       secretListStore(strings.TrimSpace(ref.Secret), "managed"),
+					Configured:  true,
+					Exposed:     true,
+				}
+			}
+		}
+	}
+	for _, secret := range secrets {
+		key := secretListKey(secret.ServiceName, secret.Name)
+		item := items[key]
+		if item.ServiceName == "" {
+			item = listedSecret{
+				ServiceName: secret.ServiceName,
+				Name:        secret.Name,
+				Store:       "managed",
+			}
+		}
+		if strings.TrimSpace(item.SecretRef) == "" {
+			item.SecretRef = strings.TrimSpace(secret.SecretRef)
+		}
+		item.Reference = strings.TrimSpace(secret.SecretRef)
+		item.Stored = true
+		items[key] = item
+	}
+	return sortListedSecrets(items), nil
+}
+
+func secretListKey(serviceName, name string) string {
+	return strings.TrimSpace(serviceName) + "\x00" + strings.TrimSpace(name)
+}
+
+func secretListStore(secretRef, fallback string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(secretRef)), "op://") {
+		return solo.SecretStoreOnePassword
+	}
+	store, _, ok := parseDevopsellenceSecretRef(secretRef)
+	if ok {
+		return store
+	}
+	return fallback
+}
+
+func sortListedSecrets(items map[string]listedSecret) []listedSecret {
+	result := make([]listedSecret, 0, len(items))
+	for _, item := range items {
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ServiceName != result[j].ServiceName {
+			return result[i].ServiceName < result[j].ServiceName
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result
+}
+
+func formatListedSecret(item listedSecret) string {
+	parts := []string{
+		item.ServiceName,
+		item.Name,
+		"exposed=" + yesNo(item.Exposed),
+		"configured=" + yesNo(item.Configured),
+		"stored=" + yesNo(item.Stored),
+	}
+	if item.Store != "" {
+		parts = append(parts, "store="+item.Store)
+	}
+	line := strings.Join(parts, " ")
+	if item.SecretRef != "" {
+		line += " -> " + item.SecretRef
+	}
+	return line
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func (a *App) requireConfiguredService(workspaceRoot, serviceName string) error {

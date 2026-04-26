@@ -138,7 +138,7 @@ func (a *App) resolveSoloProvider(providerSlug string) (providers.Provider, erro
 	return providers.ResolveWithToken(providerSlug, token)
 }
 
-func (a *App) ensureInteractiveProviderLogin(ctx context.Context, provider string) error {
+func (a *App) ensureProviderTokenConfigured(ctx context.Context, provider string) error {
 	providerSlug, err := normalizeProvider(provider)
 	if err != nil {
 		return err

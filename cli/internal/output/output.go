@@ -30,10 +30,16 @@ func (p Printer) PrintJSON(value any) error {
 }
 
 func (p Printer) Println(args ...any) {
+	if p.JSON {
+		return
+	}
 	fmt.Fprintln(p.Out, args...)
 }
 
 func (p Printer) Printf(format string, args ...any) {
+	if p.JSON {
+		return
+	}
 	fmt.Fprintf(p.Out, format, args...)
 }
 

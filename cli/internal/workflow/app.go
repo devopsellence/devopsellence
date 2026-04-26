@@ -2934,7 +2934,7 @@ func randomRequestToken() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func (a *App) resolveOrganization(ctx context.Context, token, input string, _ bool) (api.Organization, bool, error) {
+func (a *App) resolveOrganization(ctx context.Context, token, input string) (api.Organization, bool, error) {
 	orgs, err := a.API.ListOrganizations(ctx, token)
 	if err != nil {
 		return api.Organization{}, false, ExitError{Code: 1, Err: err}
@@ -3082,7 +3082,7 @@ func (a *App) resolveWorkspace(ctx context.Context, token, organizationInput, pr
 
 	var organization api.Organization
 	if autoCreateDefault {
-		organization, _, err = a.resolveOrganization(ctx, token, orgInput, false)
+		organization, _, err = a.resolveOrganization(ctx, token, orgInput)
 	} else {
 		organization, err = a.resolveOrganizationReadOnly(ctx, token, orgInput)
 	}

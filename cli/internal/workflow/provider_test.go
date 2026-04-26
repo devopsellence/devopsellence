@@ -63,7 +63,7 @@ func TestEnsureProviderLoginRequiresExplicitTokenWhenMissing(t *testing.T) {
 		ProviderState: state.New(filepath.Join(t.TempDir(), "providers.json")),
 	}
 
-	err := app.ensureInteractiveProviderLogin(context.Background(), providerHetzner)
+	err := app.ensureProviderTokenConfigured(context.Background(), providerHetzner)
 	if err == nil {
 		t.Fatal("expected missing provider token error")
 	}
@@ -84,13 +84,13 @@ func TestEnsureProviderLoginUsesStoredOrEnvToken(t *testing.T) {
 	if err := saveProviderToken(app.ProviderState, providerHetzner, "stored-token"); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.ensureInteractiveProviderLogin(context.Background(), providerHetzner); err != nil {
+	if err := app.ensureProviderTokenConfigured(context.Background(), providerHetzner); err != nil {
 		t.Fatal(err)
 	}
 
 	app.ProviderState = state.New(filepath.Join(t.TempDir(), "providers.json"))
 	t.Setenv("DEVOPSELLENCE_HETZNER_API_TOKEN", "env-token")
-	if err := app.ensureInteractiveProviderLogin(context.Background(), providerHetzner); err != nil {
+	if err := app.ensureProviderTokenConfigured(context.Background(), providerHetzner); err != nil {
 		t.Fatal(err)
 	}
 }

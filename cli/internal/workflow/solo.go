@@ -1533,16 +1533,21 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 	}
 
 	if opts.Follow {
-		// Stream logs directly to stdout without buffering.
-		return solo.RunSSHInteractive(ctx, node, remoteJournalctlCommand("-u devopsellence-agent -f"), a.Printer.Out, a.Printer.Out)
+		return ExitError{Code: 2, Err: errors.New("--follow streams raw logs and is not supported by the JSON-only CLI")}
 	}
 
 	out, err := solo.RunSSH(ctx, node, remoteJournalctlCommand("-u devopsellence-agent --no-pager -n 100"), nil)
 	if err != nil {
 		return err
 	}
-	a.Printer.Printf("%s", out)
-	return nil
+	lines := []string{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines})
 }
 
 func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {

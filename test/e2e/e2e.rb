@@ -972,7 +972,7 @@ class E2E
       result = parse_json_output(output)
       rollout = result.fetch("rollout", {})
       rollout.dig("summary", "complete") == true || rollout.fetch("status", "") == "settled"
-    rescue JSON::ParserError, KeyError
+    rescue JSON::ParserError, KeyError, RuntimeError
       false
     end
 

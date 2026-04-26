@@ -373,7 +373,7 @@ func NewApp(in io.Reader, out, err io.Writer, cwd string) *App {
 }
 
 func (a *App) Login(ctx context.Context) error {
-	tokens, err := a.Auth.Login(ctx, func(string) {})
+	tokens, err := a.Auth.Login(ctx, a.authLoginEvent)
 	if err != nil {
 		return ExitError{Code: 1, Err: err}
 	}
@@ -381,6 +381,21 @@ func (a *App) Login(ctx context.Context) error {
 		"schema_version": outputSchemaVersion,
 		"signed_in":      true,
 		"api_base":       firstNonEmpty(tokens.APIBase, a.API.BaseURL),
+	})
+}
+
+func (a *App) authLoginEvent(message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	encoder := json.NewEncoder(a.Printer.Err)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"operation":      "auth.login",
+		"event":          "progress",
+		"message":        message,
 	})
 }
 

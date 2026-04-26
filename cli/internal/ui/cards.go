@@ -37,7 +37,7 @@ func (r Renderer) Card(card Card) string {
 
 	labelWidth := 0
 	for _, row := range card.Rows {
-		if width := len([]rune(strings.TrimSpace(row.Label))); width > labelWidth {
+		if width := len(strings.TrimSpace(row.Label)); width > labelWidth {
 			labelWidth = width
 		}
 	}

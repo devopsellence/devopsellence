@@ -660,7 +660,6 @@ class E2E
       set_workspace_mode!
       run!(
         cli_binary.to_s, "setup",
-        "--json",
         "--non-interactive",
         "--project", @project_name,
         "--env", @environment_name,
@@ -681,7 +680,8 @@ class E2E
         timeout: 30,
         env: cli_env
       )
-      raise "mode use shared did not confirm shared mode" unless output.include?("Mode: shared")
+      result = JSON.parse(output)
+      raise "mode use shared did not confirm shared mode" unless result["mode"] == "shared"
     end
 
     def write_app_files!
@@ -965,11 +965,15 @@ class E2E
     end
 
     def cli_json!(*args, timeout:)
-      JSON.parse(run!(cli_binary.to_s, "--json", *args, chdir: @app_dir.to_s, timeout: timeout, env: cli_env))
+      JSON.parse(run!(cli_binary.to_s, *args, chdir: @app_dir.to_s, timeout: timeout, env: cli_env))
     end
 
     def deploy_succeeded?(output)
-      output.include?("rollout settled") || output.include?("[ok] Deploy complete.")
+      result = JSON.parse(output)
+      rollout = result.fetch("rollout", {})
+      rollout.dig("summary", "complete") == true || rollout.fetch("status", "") == "settled"
+    rescue JSON::ParserError, KeyError
+      false
     end
 
     def go_binary

@@ -639,7 +639,8 @@ PY
       timeout: 30,
       env: ssh_env
     )
-    raise "secret not listed" unless output.include?(SECRET_VALUE_NAME)
+    secrets = JSON.parse(output).fetch("secrets")
+    raise "secret not listed" unless secrets.any? { |secret| secret["name"] == SECRET_VALUE_NAME }
     commit_all!("Configure solo e2e secrets")
     puts "[ok] Secret saved and listed"
   end
@@ -652,7 +653,8 @@ PY
       env: ssh_env
     )
 
-    raise "agent install did not report success" unless output.include?("Installed solo agent on node-1")
+    result = JSON.parse(output)
+    raise "agent install did not report node-1" unless result["node"] == "node-1"
     puts "[ok] Agent installed via CLI"
   end
 
@@ -667,7 +669,9 @@ PY
     status = result.fetch(:status)
 
     if status.success?
-      raise "deploy did not report success" unless output.include?("Deployed revision")
+      result = JSON.parse(output)
+      raise "deploy did not report revision" if result["workload_revision"].to_s.empty?
+      raise "deploy did not report node-1" unless Array(result["nodes"]).include?("node-1")
       puts "[ok] Deploy completed"
       return
     end
@@ -680,7 +684,7 @@ PY
 
   def assert_status_before_first_deploy!
     cli_status_output = run!(
-      cli_binary.to_s, "--json", "status",
+      cli_binary.to_s, "status",
       chdir: @app_dir.to_s,
       timeout: 60,
       env: ssh_env
@@ -752,7 +756,7 @@ PY
 
     # Verify via CLI status command.
     cli_status_output = run!(
-      cli_binary.to_s, "--json", "status",
+      cli_binary.to_s, "status",
       chdir: @app_dir.to_s,
       timeout: 60,
       env: ssh_env
@@ -860,13 +864,14 @@ PY
       timeout: 30,
       env: ssh_env
     )
-    raise "mode use solo did not confirm solo mode" unless output.include?("Mode: solo")
+    result = JSON.parse(output)
+    raise "mode use solo did not confirm solo mode" unless result["mode"] == "solo"
     puts "[ok] Workspace mode set to solo"
   end
 
   def attach_node!
     output = run!(
-      cli_binary.to_s, "node", "attach", "node-1", "--json",
+      cli_binary.to_s, "node", "attach", "node-1",
       chdir: @app_dir.to_s,
       timeout: 30,
       env: ssh_env

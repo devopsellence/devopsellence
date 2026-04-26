@@ -441,6 +441,11 @@ func normalizeSecretRecord(key string, secret SecretRecord) (string, SecretRecor
 	if secret.Name == "" {
 		return "", SecretRecord{}, errors.New("secret name is required")
 	}
+	reference, err := validateSecretMaterial(secret.Store, secret.Value, secret.Reference)
+	if err != nil {
+		return "", SecretRecord{}, err
+	}
+	secret.Reference = reference
 	return secretKey(secret.WorkspaceKey, secret.Environment, secret.ServiceName, secret.Name), secret, nil
 }
 

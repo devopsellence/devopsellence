@@ -221,6 +221,34 @@ func TestRootSoloSecretSetAcceptsOnePasswordReference(t *testing.T) {
 	}
 }
 
+func TestRootSoloSecretSetRejectsEnvConflict(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestSoloWorkspace(t)
+	cfg, err := config.LoadFromRoot(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := cfg.Services["web"]
+	web.Env = map[string]string{"DATABASE_URL": "postgres://static"}
+	cfg.Services["web"] = web
+	if _, err := config.Write(cwd, *cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "DATABASE_URL", "--service", "web", "--value", "postgres://secret"})
+
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want env conflict")
+	}
+	if !strings.Contains(err.Error(), "already defines DATABASE_URL in env") {
+		t.Fatalf("error = %v, want env conflict", err)
+	}
+}
+
 func TestRootHelpShowsModeFirstFlows(t *testing.T) {
 	t.Parallel()
 

@@ -1107,8 +1107,12 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
-	if _, ok := cfg.Services[serviceName]; !ok {
+	service, ok := cfg.Services[serviceName]
+	if !ok {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
+	}
+	if serviceSecretRefConflict(service, opts.Key) {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q already defines %s in env; remove it before adding a secret_ref with the same name", serviceName, opts.Key)}
 	}
 	current, err := a.readSoloState()
 	if err != nil {
@@ -1121,7 +1125,10 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	configUpdated := ensureServiceSecretRef(cfg, serviceName, soloSecretConfigRef(record))
+	configUpdated, err := ensureServiceSecretRef(cfg, serviceName, soloSecretConfigRef(record))
+	if err != nil {
+		return fmt.Errorf("secret saved locally but update devopsellence.yml failed: %w", err)
+	}
 	if configUpdated {
 		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 			return fmt.Errorf("secret saved locally but update devopsellence.yml failed: %w", err)
@@ -1189,28 +1196,44 @@ func soloSecretConfigRef(record solo.SecretRecord) config.SecretRef {
 	return config.SecretRef{Name: record.Name, Secret: secret}
 }
 
-func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref config.SecretRef) bool {
+func serviceSecretRefConflict(service config.ServiceConfig, name string) bool {
+	name = strings.TrimSpace(name)
+	if _, ok := service.Env[name]; !ok {
+		return false
+	}
+	for _, existing := range service.SecretRefs {
+		if existing.Name == name {
+			return false
+		}
+	}
+	return true
+}
+
+func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref config.SecretRef) (bool, error) {
 	serviceName = strings.TrimSpace(serviceName)
 	if cfg == nil {
-		return false
+		return false, nil
 	}
 	service, ok := cfg.Services[serviceName]
 	if !ok {
-		return false
+		return false, nil
 	}
 	for i, existing := range service.SecretRefs {
 		if existing.Name == ref.Name {
 			if existing.Secret == ref.Secret {
-				return false
+				return false, nil
 			}
 			service.SecretRefs[i] = ref
 			cfg.Services[serviceName] = service
-			return true
+			return true, nil
 		}
+	}
+	if serviceSecretRefConflict(service, ref.Name) {
+		return false, fmt.Errorf("service %q already defines %s in env; remove it before adding a secret_ref with the same name", serviceName, ref.Name)
 	}
 	service.SecretRefs = append(service.SecretRefs, ref)
 	cfg.Services[serviceName] = service
-	return true
+	return true, nil
 }
 
 func removeServiceSecretRef(cfg *config.ProjectConfig, serviceName, name string) bool {
@@ -1255,7 +1278,7 @@ func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) er
 	}
 	items := soloSecretListItems(cfg, secrets, opts.ServiceName)
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"environment": environmentName, "secrets": items})
+		return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "environment": environmentName, "secrets": items})
 	}
 	if len(items) == 0 {
 		a.Printer.Println("No secrets configured")

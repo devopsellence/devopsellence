@@ -1784,7 +1784,7 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := a.requireConfiguredService(workspace.Discovery.WorkspaceRoot, serviceName); err != nil {
+	if err := a.requireConfigurableSecretRef(workspace.Discovery.WorkspaceRoot, serviceName, opts.Name); err != nil {
 		return err
 	}
 	result, err := a.API.UpsertEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, serviceName, opts.Name, value)
@@ -2035,6 +2035,25 @@ func (a *App) requireConfiguredService(workspaceRoot, serviceName string) error 
 	return nil
 }
 
+func (a *App) requireConfigurableSecretRef(workspaceRoot, serviceName, name string) error {
+	serviceName = strings.TrimSpace(serviceName)
+	cfg, err := a.ConfigStore.Read(workspaceRoot)
+	if err != nil {
+		return wrapError(err)
+	}
+	if cfg == nil {
+		return ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+	}
+	service, ok := cfg.Services[serviceName]
+	if !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
+	}
+	if serviceSecretRefConflict(service, name) {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q already defines %s in env; remove it before adding a secret_ref with the same name", serviceName, name)}
+	}
+	return nil
+}
+
 func (a *App) upsertWorkspaceSecretRef(workspaceRoot, serviceName string, ref config.SecretRef) (bool, error) {
 	serviceName = strings.TrimSpace(serviceName)
 	cfg, err := a.ConfigStore.Read(workspaceRoot)
@@ -2047,7 +2066,11 @@ func (a *App) upsertWorkspaceSecretRef(workspaceRoot, serviceName string, ref co
 	if _, ok := cfg.Services[serviceName]; !ok {
 		return false, ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
-	if !ensureServiceSecretRef(cfg, serviceName, ref) {
+	changed, err := ensureServiceSecretRef(cfg, serviceName, ref)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
 		return false, nil
 	}
 	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {

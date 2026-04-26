@@ -165,32 +165,41 @@ func buildSecretRecord(workspaceRoot, environment, serviceName, name string, mat
 	if err != nil {
 		return "", SecretRecord{}, err
 	}
-	trimmedValue := strings.TrimSpace(material.Value)
-	material.Reference = strings.TrimSpace(material.Reference)
-	switch store {
-	case SecretStorePlaintext:
-		if trimmedValue == "" {
-			return "", SecretRecord{}, errors.New("secret value is required")
-		}
-	case SecretStoreOnePassword:
-		if trimmedValue != "" {
-			return "", SecretRecord{}, errors.New("1Password secret value must not be stored locally")
-		}
-		if material.Reference == "" {
-			return "", SecretRecord{}, errors.New("1Password secret reference is required")
-		}
-		if !strings.HasPrefix(strings.ToLower(material.Reference), "op://") {
-			return "", SecretRecord{}, errors.New("1Password secret reference must start with op://")
-		}
-	default:
-		return "", SecretRecord{}, fmt.Errorf("unsupported secret store %q", store)
+	reference, err := validateSecretMaterial(store, material.Value, material.Reference)
+	if err != nil {
+		return "", SecretRecord{}, err
 	}
+	material.Reference = reference
 	record.Store = store
 	record.Reference = material.Reference
 	if store == SecretStorePlaintext {
 		record.Value = material.Value
 	}
 	return key, record, nil
+}
+
+func validateSecretMaterial(store, value, reference string) (string, error) {
+	trimmedValue := strings.TrimSpace(value)
+	reference = strings.TrimSpace(reference)
+	switch store {
+	case SecretStorePlaintext:
+		if trimmedValue == "" {
+			return "", errors.New("secret value is required")
+		}
+	case SecretStoreOnePassword:
+		if trimmedValue != "" {
+			return "", errors.New("1Password secret value must not be stored locally")
+		}
+		if reference == "" {
+			return "", errors.New("1Password secret reference is required")
+		}
+		if !strings.HasPrefix(strings.ToLower(reference), "op://") {
+			return "", errors.New("1Password secret reference must start with op://")
+		}
+	default:
+		return "", fmt.Errorf("unsupported secret store %q", store)
+	}
+	return reference, nil
 }
 
 func buildSecretRecordScope(workspaceRoot, environment, serviceName, name string) (string, SecretRecord, error) {

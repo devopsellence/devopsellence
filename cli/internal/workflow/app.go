@@ -1765,7 +1765,8 @@ func (a *App) NodeDiagnose(ctx context.Context, opts NodeDiagnoseOptions) error 
 }
 
 func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
-	if strings.TrimSpace(opts.ServiceName) == "" {
+	serviceName := strings.TrimSpace(opts.ServiceName)
+	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
 	if strings.TrimSpace(opts.Name) == "" {
@@ -1783,17 +1784,17 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := a.requireConfiguredService(workspace.Discovery.WorkspaceRoot, opts.ServiceName); err != nil {
+	if err := a.requireConfiguredService(workspace.Discovery.WorkspaceRoot, serviceName); err != nil {
 		return err
 	}
-	result, err := a.API.UpsertEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, opts.ServiceName, opts.Name, value)
+	result, err := a.API.UpsertEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, serviceName, opts.Name, value)
 	if err != nil {
 		return wrapError(err)
 	}
 	configUpdated := false
 	configUpdateErr := ""
 	if ref := stringFromMap(result, "secret_ref"); ref != "" {
-		updated, err := a.upsertWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, opts.ServiceName, config.SecretRef{Name: opts.Name, Secret: ref})
+		updated, err := a.upsertWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, serviceName, config.SecretRef{Name: opts.Name, Secret: ref})
 		if err != nil {
 			configUpdateErr = err.Error()
 		} else {
@@ -1867,7 +1868,8 @@ func (a *App) SecretList(ctx context.Context, opts SecretListOptions) error {
 }
 
 func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error {
-	if strings.TrimSpace(opts.ServiceName) == "" {
+	serviceName := strings.TrimSpace(opts.ServiceName)
+	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
 	if strings.TrimSpace(opts.Name) == "" {
@@ -1881,14 +1883,14 @@ func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error 
 	if err != nil {
 		return err
 	}
-	if err := a.requireConfiguredService(workspace.Discovery.WorkspaceRoot, opts.ServiceName); err != nil {
+	if err := a.requireConfiguredService(workspace.Discovery.WorkspaceRoot, serviceName); err != nil {
 		return err
 	}
-	result, err := a.API.DeleteEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, opts.ServiceName, opts.Name)
+	result, err := a.API.DeleteEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, serviceName, opts.Name)
 	if err != nil {
 		return wrapError(err)
 	}
-	configUpdated, err := a.removeWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, opts.ServiceName, opts.Name)
+	configUpdated, err := a.removeWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, serviceName, opts.Name)
 	configUpdateErr := ""
 	if err != nil {
 		configUpdateErr = err.Error()
@@ -2019,6 +2021,7 @@ func yesNo(value bool) string {
 }
 
 func (a *App) requireConfiguredService(workspaceRoot, serviceName string) error {
+	serviceName = strings.TrimSpace(serviceName)
 	cfg, err := a.ConfigStore.Read(workspaceRoot)
 	if err != nil {
 		return wrapError(err)
@@ -2033,6 +2036,7 @@ func (a *App) requireConfiguredService(workspaceRoot, serviceName string) error 
 }
 
 func (a *App) upsertWorkspaceSecretRef(workspaceRoot, serviceName string, ref config.SecretRef) (bool, error) {
+	serviceName = strings.TrimSpace(serviceName)
 	cfg, err := a.ConfigStore.Read(workspaceRoot)
 	if err != nil {
 		return false, wrapError(err)
@@ -2053,6 +2057,7 @@ func (a *App) upsertWorkspaceSecretRef(workspaceRoot, serviceName string, ref co
 }
 
 func (a *App) removeWorkspaceSecretRef(workspaceRoot, serviceName, name string) (bool, error) {
+	serviceName = strings.TrimSpace(serviceName)
 	cfg, err := a.ConfigStore.Read(workspaceRoot)
 	if err != nil {
 		return false, wrapError(err)

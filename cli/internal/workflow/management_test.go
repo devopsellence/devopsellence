@@ -996,7 +996,7 @@ func TestSecretSetUsesWorkspaceEnvironment(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	if err := app.SecretSet(context.Background(), SecretSetOptions{ServiceName: "web", Name: "SECRET_KEY_BASE", Value: "super-secret", ValueProvided: true}); err != nil {
+	if err := app.SecretSet(context.Background(), SecretSetOptions{ServiceName: " web ", Name: "SECRET_KEY_BASE", Value: "super-secret", ValueProvided: true}); err != nil {
 		t.Fatalf("SecretSet() error = %v", err)
 	}
 	if serviceName := stringValueAny(captured["service_name"]); serviceName != "web" {
@@ -1133,7 +1133,7 @@ func TestSecretDeleteUsesWorkspaceEnvironment(t *testing.T) {
 		}
 	}))
 	app.Printer.Out = &stdout
-	if err := app.SecretDelete(context.Background(), SecretDeleteOptions{ServiceName: "web", Name: "SECRET_KEY_BASE"}); err != nil {
+	if err := app.SecretDelete(context.Background(), SecretDeleteOptions{ServiceName: " web ", Name: "SECRET_KEY_BASE"}); err != nil {
 		t.Fatalf("SecretDelete() error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Deleted secret SECRET_KEY_BASE for web.") {

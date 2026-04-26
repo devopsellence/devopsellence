@@ -1103,24 +1103,25 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 		return err
 	}
 	environmentName := soloEnvironmentName(cfg, opts.Environment)
-	if strings.TrimSpace(opts.ServiceName) == "" {
+	serviceName := strings.TrimSpace(opts.ServiceName)
+	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
-	if _, ok := cfg.Services[opts.ServiceName]; !ok {
-		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", opts.ServiceName)}
+	if _, ok := cfg.Services[serviceName]; !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
 	}
-	record, err := current.SetSecret(workspaceRoot, environmentName, opts.ServiceName, opts.Key, material)
+	record, err := current.SetSecret(workspaceRoot, environmentName, serviceName, opts.Key, material)
 	if err != nil {
 		return err
 	}
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	configUpdated := ensureServiceSecretRef(cfg, opts.ServiceName, soloSecretConfigRef(record))
+	configUpdated := ensureServiceSecretRef(cfg, serviceName, soloSecretConfigRef(record))
 	if configUpdated {
 		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 			return fmt.Errorf("secret saved locally but update devopsellence.yml failed: %w", err)
@@ -1189,6 +1190,7 @@ func soloSecretConfigRef(record solo.SecretRecord) config.SecretRef {
 }
 
 func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref config.SecretRef) bool {
+	serviceName = strings.TrimSpace(serviceName)
 	if cfg == nil {
 		return false
 	}
@@ -1212,6 +1214,7 @@ func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref c
 }
 
 func removeServiceSecretRef(cfg *config.ProjectConfig, serviceName, name string) bool {
+	serviceName = strings.TrimSpace(serviceName)
 	if cfg == nil {
 		return false
 	}
@@ -1453,24 +1456,25 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 		return err
 	}
 	environmentName := soloEnvironmentName(cfg, opts.Environment)
-	if strings.TrimSpace(opts.ServiceName) == "" {
+	serviceName := strings.TrimSpace(opts.ServiceName)
+	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
-	if _, ok := cfg.Services[opts.ServiceName]; !ok {
-		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", opts.ServiceName)}
+	if _, ok := cfg.Services[serviceName]; !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
 	}
-	record, err := current.DeleteSecret(workspaceRoot, environmentName, opts.ServiceName, opts.Key)
+	record, err := current.DeleteSecret(workspaceRoot, environmentName, serviceName, opts.Key)
 	if err != nil {
 		return err
 	}
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	configUpdated := removeServiceSecretRef(cfg, opts.ServiceName, opts.Key)
+	configUpdated := removeServiceSecretRef(cfg, serviceName, opts.Key)
 	if configUpdated {
 		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 			return fmt.Errorf("secret deleted locally but update devopsellence.yml failed: %w", err)

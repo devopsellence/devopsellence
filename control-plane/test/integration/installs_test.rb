@@ -359,8 +359,11 @@ class InstallsTest < ActionDispatch::IntegrationTest
         FileUtils.chmod("u+x", npx_path)
       end
 
+      path_entries = ENV.fetch("PATH").split(File::PATH_SEPARATOR)
+      path_entries = path_entries.reject { |entry| File.executable?(File.join(entry, "npx")) } unless include_npx
+
       env = {
-        "PATH" => "#{fakebin_dir}:#{ENV.fetch("PATH")}",
+        "PATH" => ([fakebin_dir] + path_entries).join(File::PATH_SEPARATOR),
         "HOME" => tmpdir,
         "SHELL" => ENV.fetch("SHELL", "/bin/bash"),
         "DEVOPSELLENCE_CLI_VERSION" => version,

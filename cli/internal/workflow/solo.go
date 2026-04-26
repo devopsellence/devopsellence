@@ -1974,7 +1974,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 
 func (a *App) SoloSetup(ctx context.Context, _ SoloSetupOptions) error {
 	if !a.Printer.Interactive {
-		return fmt.Errorf("solo setup requires an interactive terminal; use `devopsellence node create <name> --provider hetzner` for provider-managed nodes, or run `devopsellence setup` in a terminal to add an existing SSH node")
+		return ExitError{Code: 2, Err: fmt.Errorf("solo setup requires an interactive terminal; use `devopsellence node create <name> --provider hetzner` for provider-managed nodes, or run `devopsellence setup` in a terminal to add an existing SSH node")}
 	}
 	mode, err := a.promptLine("Node source (existing/hetzner)", "hetzner")
 	if err != nil {

@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +89,10 @@ func TestSetupModeFlagPersistsWorkspaceMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "solo setup requires an interactive terminal") {
 		t.Fatalf("error = %v, want solo setup path", err)
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
 	}
 
 	app := NewApp(bytes.NewBuffer(nil), &stdout, &stdout, false, cwd)

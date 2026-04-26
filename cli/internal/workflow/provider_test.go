@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"io"
 	"path/filepath"
 	"strings"
@@ -119,9 +120,14 @@ func TestEnsureInteractiveProviderLoginSkipsEnvAndNonInteractive(t *testing.T) {
 
 	app.Printer.Interactive = false
 	t.Setenv("DEVOPSELLENCE_HETZNER_API_TOKEN", "")
+	t.Setenv("HCLOUD_TOKEN", "")
 	err := app.ensureInteractiveProviderLogin(context.Background(), providerHetzner)
 	if err == nil {
 		t.Fatal("expected missing provider token error")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
 	}
 	if !strings.Contains(err.Error(), "devopsellence provider login hetzner --token <token>") {
 		t.Fatalf("error = %v", err)

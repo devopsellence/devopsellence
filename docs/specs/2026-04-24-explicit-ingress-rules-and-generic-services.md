@@ -29,7 +29,7 @@ That model is too narrow for where devopsellence is heading:
 1. The kinds do not carry enough distinct schema or lifecycle value to justify being first-class.
 2. Routing is artificially attached to one service instead of being an app-level concern.
 3. Path-based fan-out (`/api` -> one service, `/` -> another) does not fit naturally.
-4. The config shape is behind the desired-state model: the agent desired-state proto already has `ingress.routes[].match` and `ingress.routes[].target { environment, service, port }`.
+4. The config shape is behind the desired-state model: the node agent desired-state proto already has `ingress.routes[].match` and `ingress.routes[].target { environment, service, port }`.
 
 The result is a split model where repo config is more opinionated and less expressive than the runtime shape.
 
@@ -334,7 +334,7 @@ Update `cli/internal/solo/desiredstate.go` to:
 - populate desired-state target environment from the selected environment
 - keep target ports explicit instead of forcing `http`
 
-### Agent desired-state validation
+### Node agent desired-state validation
 
 Update `agent/internal/desiredstate/validate.go` to:
 
@@ -425,7 +425,7 @@ Prefer a clean schema-versioned break over compatibility shims that keep the old
 ## Suggested rollout
 
 1. Land schema and validation changes behind schema version 6.
-2. Update desired-state generation and agent validation.
+2. Update desired-state generation and node agent validation.
 3. Update setup/init templates and README examples.
 4. Add migration/docs notes for old `ingress.service` + `kind` configs.
 

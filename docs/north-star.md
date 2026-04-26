@@ -12,7 +12,7 @@ Its core job is narrow:
 - validate and plan a release;
 - decide what should run on which nodes;
 - publish desired state;
-- let the agent reconcile that state;
+- let the node agent reconcile that state;
 - report enough status and diagnostics to explain reality.
 
 The same deploy model should work in solo and shared mode. Solo and shared are different management topologies, not different deployment systems.
@@ -20,7 +20,7 @@ The same deploy model should work in solo and shared mode. Solo and shared are d
 ## Design priorities
 
 - one common deployment core;
-- the agent as the only mandatory runtime component;
+- the node agent as the only mandatory runtime component;
 - desired state as the stable control surface;
 - mode-independent runtime semantics;
 - placement as policy, not schema;
@@ -107,13 +107,13 @@ The intended shape is:
 
 ```text
 solo:
-  cli -> deployment core -> state adapter + infrastructure adapter -> agent
+  cli -> deployment core -> state adapter + infrastructure adapter -> node agent
 
 shared:
-  control plane -> core api/rpc -> deployment core -> state adapter + infrastructure adapter -> agent
+  control plane -> core api/rpc -> deployment core -> state adapter + infrastructure adapter -> node agent
 ```
 
-The agent should stay mode-agnostic. It should know how to fetch desired state, resolve secrets, pull images, reconcile containers and Envoy, and publish status through concrete adapters. It should not branch on solo or shared as product concepts.
+The node agent should stay mode-agnostic. It should know how to fetch desired state, resolve secrets, pull images, reconcile containers and Envoy, and publish status through concrete adapters. It should not branch on solo or shared as product concepts.
 
 ## Core runtime model
 
@@ -160,11 +160,11 @@ Publishing desired state should be durable, auditable, and mode-independent.
 
 - solo should be able to publish through local artifacts;
 - shared should be able to publish through object storage and service APIs;
-- the agent-facing document shape should remain stable.
+- the node agent facing document shape should remain stable.
 
 ### Reconciliation
 
-The agent should continuously reconcile the node toward desired state:
+The node agent should continuously reconcile the node toward desired state:
 
 - image pull and auth;
 - secret resolution;
@@ -233,7 +233,7 @@ When tradeoffs appear, bias toward this order:
 
 1. strengthen the shared deploy model;
 2. make solo and shared semantics converge;
-3. stabilize the desired-state contract and agent adapter seams;
+3. stabilize the desired-state contract and node agent adapter seams;
 4. keep product shells thin;
 5. add provider-specific capabilities through adapters;
 6. only then expand outward into richer workflow and product layers.
@@ -246,7 +246,7 @@ This north star is being met if the following become true:
 - moving from local to hosted changes adapters more than it changes concepts;
 - the release, publication, reconcile, and status path is understandable end to end;
 - provider-specific integrations do not leak into the core runtime model;
-- the agent remains small, explicit, and mode-agnostic;
+- the node agent remains small, explicit, and mode-agnostic;
 - operators can debug the system without learning a devopsellence-only universe.
 
 The shortest version is this: devopsellence should become a clear, durable deployment core for containerized applications on VMs, with thin control surfaces around it and no unnecessary new abstraction layer.

@@ -1022,10 +1022,12 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	}
 
 	var jsonResults []map[string]any
+	readErrors := 0
 
 	for name, node := range nodes {
 		result, err := readSoloNodeStatus(ctx, node)
 		if err != nil {
+			readErrors++
 			if a.Printer.JSON {
 				jsonResults = append(jsonResults, map[string]any{
 					"node":  name,
@@ -1071,7 +1073,16 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	}
 
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"nodes": jsonResults})
+		if err := a.Printer.PrintJSON(map[string]any{"nodes": jsonResults}); err != nil {
+			return err
+		}
+		if readErrors > 0 {
+			return ExitError{Code: 1, Err: fmt.Errorf("status failed for %d node(s)", readErrors)}
+		}
+		return nil
+	}
+	if readErrors > 0 {
+		return ExitError{Code: 1, Err: fmt.Errorf("status failed for %d node(s)", readErrors)}
 	}
 	return nil
 }
@@ -1955,7 +1966,15 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		return fmt.Errorf("node %q still has attached environments; detach it first", opts.Name)
 	}
 	if node.Provider == "" || node.ProviderServerID == "" {
-		return fmt.Errorf("node %q does not have provider metadata; refusing provider delete", opts.Name)
+		current.RemoveNode(opts.Name)
+		if err := a.writeSoloState(current); err != nil {
+			return err
+		}
+		if a.Printer.JSON {
+			return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "forgotten"})
+		}
+		a.Printer.Println("Removed solo node " + opts.Name + " from local state")
+		return nil
 	}
 	provider, err := a.resolveSoloProvider(node.Provider)
 	if err != nil {

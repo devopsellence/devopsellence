@@ -138,6 +138,24 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_equal [ "skills", "add", "devopsellence/devopsellence", "--skill", "devopsellence", "-g" ], skill_args
   end
 
+  test "cli install script fails when requested agent skill cannot install without npx" do
+    get "/lfg.sh", params: { version: "master-0053792f6aec" }
+
+    assert_response :success
+
+    stdout, stderr, status, installed_cli, skill_args = run_cli_install_script(
+      response.body,
+      version: "master-0053792f6aec",
+      install_agent_skill: true,
+      include_npx: false
+    )
+
+    refute_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
+    assert_includes stderr, "Agent skill install requested, but npx was not found"
+    assert_equal "prerelease build\n", installed_cli
+    assert_nil skill_args
+  end
+
   test "cli install script defaults to user local bin on linux" do
     get "/lfg.sh", params: { version: "master-0053792f6aec" }
 
@@ -253,7 +271,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
   private
 
-  def run_cli_install_script(script_body, version:, install_dir: :explicit, install_agent_skill: false)
+  def run_cli_install_script(script_body, version:, install_dir: :explicit, install_agent_skill: false, include_npx: true)
     Dir.mktmpdir("devopsellence-cli-install-test") do |tmpdir|
       fixtures_dir = File.join(tmpdir, "fixtures")
       fakebin_dir = File.join(tmpdir, "fakebin")
@@ -330,14 +348,16 @@ class InstallsTest < ActionDispatch::IntegrationTest
       SH
       FileUtils.chmod("u+x", uname_path)
 
-      npx_path = File.join(fakebin_dir, "npx")
-      File.write(npx_path, <<~SH)
-        #!/usr/bin/env bash
-        set -euo pipefail
+      if include_npx
+        npx_path = File.join(fakebin_dir, "npx")
+        File.write(npx_path, <<~SH)
+          #!/usr/bin/env bash
+          set -euo pipefail
 
-        printf '%s\\n' "$@" > #{skill_args_path.inspect}
-      SH
-      FileUtils.chmod("u+x", npx_path)
+          printf '%s\\n' "$@" > #{skill_args_path.inspect}
+        SH
+        FileUtils.chmod("u+x", npx_path)
+      end
 
       env = {
         "PATH" => "#{fakebin_dir}:#{ENV.fetch("PATH")}",

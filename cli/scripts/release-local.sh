@@ -110,6 +110,7 @@ case "$INSTALL_AGENT_SKILL" in
       echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
       echo "Install the skill later with:" >&2
       echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g" >&2
+      exit 1
     fi
     ;;
   *)

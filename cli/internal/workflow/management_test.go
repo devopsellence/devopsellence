@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devopsellence/cli/internal/agentsmd"
 	"github.com/devopsellence/cli/internal/api"
 	"github.com/devopsellence/cli/internal/auth"
 	"github.com/devopsellence/cli/internal/config"
@@ -26,7 +25,7 @@ import (
 	"github.com/devopsellence/cli/internal/state"
 )
 
-func TestInitWritesAgentsFile(t *testing.T) {
+func TestInitWritesConfigOnly(t *testing.T) {
 	t.Parallel()
 
 	root := makeRailsRoot(t, "ShopApp")
@@ -48,30 +47,19 @@ func TestInitWritesAgentsFile(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(root, agentsmd.FilePath))
-	if err != nil {
-		t.Fatalf("read AGENTS.md: %v", err)
+	if _, err := os.Stat(filepath.Join(root, config.FilePath)); err != nil {
+		t.Fatalf("stat config: %v", err)
 	}
-	text := string(data)
-	if !strings.Contains(text, "devopsellence mode use solo|shared") {
-		t.Fatalf("AGENTS.md = %q, want mode guidance", text)
-	}
-	if !strings.Contains(text, "devopsellence secret set NAME") {
-		t.Fatalf("AGENTS.md = %q, want secret guidance", text)
-	}
-	if !strings.Contains(text, "tasks.release") {
-		t.Fatalf("AGENTS.md = %q, want lifecycle hook guidance", text)
-	}
-	if !strings.Contains(text, "Environment: production") {
-		t.Fatalf("AGENTS.md = %q, want workspace defaults", text)
+	if _, err := os.Stat(filepath.Join(root, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("AGENTS.md stat error = %v, want not exist", err)
 	}
 }
 
-func TestInitUpdatesManagedAgentsBlockOnly(t *testing.T) {
+func TestInitLeavesExistingAgentsFileAlone(t *testing.T) {
 	t.Parallel()
 
 	root := makeRailsRoot(t, "ShopApp")
-	path := filepath.Join(root, agentsmd.FilePath)
+	path := filepath.Join(root, "AGENTS.md")
 	existing := strings.Join([]string{
 		"# Team Conventions",
 		"",
@@ -111,17 +99,8 @@ func TestInitUpdatesManagedAgentsBlockOnly(t *testing.T) {
 		t.Fatalf("read AGENTS.md: %v", err)
 	}
 	text := string(data)
-	if strings.Contains(text, "stale block") {
-		t.Fatalf("AGENTS.md = %q, stale managed block still present", text)
-	}
-	if !strings.Contains(text, "Preserve this note.") || !strings.Contains(text, "Footer note.") {
-		t.Fatalf("AGENTS.md = %q, custom content not preserved", text)
-	}
-	if !strings.Contains(text, "Environment: staging") {
-		t.Fatalf("AGENTS.md = %q, want refreshed environment", text)
-	}
-	if !strings.Contains(text, "devopsellence doctor") {
-		t.Fatalf("AGENTS.md = %q, want doctor guidance", text)
+	if text != existing {
+		t.Fatalf("AGENTS.md = %q, want unchanged", text)
 	}
 }
 
@@ -3160,7 +3139,7 @@ func TestAuthSessionRefreshesOnlyOnceForConcurrentCalls(t *testing.T) {
 	}
 }
 
-func TestDeployIgnoresAgentsMarkdownChanges(t *testing.T) {
+func TestDeployTreatsAgentsMarkdownAsUserChange(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
@@ -3170,60 +3149,24 @@ func TestDeployIgnoresAgentsMarkdownChanges(t *testing.T) {
 	}
 	runGit(t, root, "add", config.GenericFilePath)
 	runGit(t, root, "commit", "-m", "add config")
-	if err := os.WriteFile(filepath.Join(root, agentsmd.FilePath), []byte("# local notes\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# local notes\n"), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
 
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
-			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
-			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": filepath.Base(root)}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
-			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
-				"deployment_id":  77,
-				"assigned_nodes": 1,
-				"public_url":     "https://generic.example.test",
-			}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/deployments/77":
-			return jsonResponse(t, map[string]any{
-				"id":          77,
-				"sequence":    1,
-				"status":      "published",
-				"environment": map[string]any{"id": 44, "name": "production"},
-				"release":     map[string]any{"id": 22, "revision": "rel-1"},
-				"summary": map[string]any{
-					"assigned_nodes": 1,
-					"pending":        0,
-					"reconciling":    0,
-					"settled":        1,
-					"error":          0,
-					"active":         false,
-					"complete":       true,
-					"failed":         false,
-				},
-				"nodes": []map[string]any{
-					{"id": 1, "name": "node-a", "phase": "settled", "message": "revision healthy"},
-				},
-			}), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, nil
-		}
+		t.Fatalf("unexpected API request before dirty-worktree preflight: %s %s", r.Method, r.URL.Path)
+		return nil, nil
 	}))
-	app.DeployPollInterval = 5 * time.Millisecond
-	app.DeployTimeout = 500 * time.Millisecond
 
-	if err := app.Deploy(context.Background(), DeployOptions{
+	err := app.Deploy(context.Background(), DeployOptions{
 		Image:          "docker.io/mccutchen/go-httpbin@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		NonInteractive: true,
-	}); err != nil {
-		t.Fatalf("Deploy() error = %v", err)
+	})
+	if err == nil {
+		t.Fatal("Deploy() error = nil, want dirty-worktree failure")
+	}
+	if !strings.Contains(err.Error(), "AGENTS.md") {
+		t.Fatalf("Deploy() error = %v, want AGENTS.md", err)
 	}
 }
 

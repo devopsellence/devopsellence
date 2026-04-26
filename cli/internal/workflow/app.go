@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/devopsellence/cli/internal/agentsmd"
 	"github.com/devopsellence/cli/internal/api"
 	"github.com/devopsellence/cli/internal/auth"
 	"github.com/devopsellence/cli/internal/config"
@@ -331,7 +330,6 @@ type initializedWorkspace struct {
 	Discovered     discovery.Result
 	Config         config.ProjectConfig
 	ConfigPath     string
-	AgentsPath     string
 	CreatedConfig  bool
 	Organization   api.Organization
 	Project        api.Project
@@ -546,7 +544,6 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 			"environment_name":     initialized.Environment.Name,
 			"environment_created":  initialized.CreatedEnv,
 			"config_path":          initialized.ConfigPath,
-			"agents_path":          initialized.AgentsPath,
 			"project_slug":         initialized.Discovered.ProjectSlug,
 			"app_type":             initialized.Discovered.AppType,
 			"fallback_used":        initialized.Discovered.FallbackUsed,
@@ -579,7 +576,6 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 			{Label: "Project", Value: initialized.Project.Name},
 			{Label: "Environment", Value: initialized.Environment.Name},
 			{Label: "Config", Value: result["config_path"].(string)},
-			{Label: "AGENTS", Value: result["agents_path"].(string)},
 		},
 	}))
 	if initialized.CreatedOrg {
@@ -664,7 +660,7 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 			discovered = workspace.Discovered
 			cfg = workspace.Config
 			initialized = &workspace
-			autoInitSummary = "initialized workspace automatically (" + workspace.ConfigPath + ", " + workspace.AgentsPath + ")"
+			autoInitSummary = "initialized workspace automatically (" + workspace.ConfigPath + ")"
 		} else {
 			update("Loading config…")
 			cfg = *existing
@@ -1026,10 +1022,7 @@ func initGeneratedFilesCommitMessage(discovered discovery.Result, entries []stri
 		return ""
 	}
 
-	expected := map[string]struct{}{
-		agentsmd.FilePath:  {},
-		relativeConfigPath: {},
-	}
+	expected := map[string]struct{}{relativeConfigPath: {}}
 	seen := map[string]struct{}{}
 	for _, entry := range entries {
 		path := strings.TrimSpace(strings.TrimPrefix(entry, "??"))
@@ -1045,7 +1038,7 @@ func initGeneratedFilesCommitMessage(discovered discovery.Result, entries []stri
 	}
 
 	paths := make([]string, 0, len(seen))
-	for _, path := range []string{relativeConfigPath, agentsmd.FilePath} {
+	for _, path := range []string{relativeConfigPath} {
 		if _, ok := seen[path]; ok {
 			paths = append(paths, path)
 		}
@@ -1054,7 +1047,7 @@ func initGeneratedFilesCommitMessage(discovered discovery.Result, entries []stri
 }
 
 func deployDirtyIgnorePaths(store config.Store, discovered discovery.Result, existing *config.ProjectConfig) []string {
-	paths := []string{agentsmd.FilePath}
+	var paths []string
 	if existing != nil {
 		return paths
 	}
@@ -3443,17 +3436,10 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 		return initializedWorkspace{}, ExitError{Code: 1, Err: err}
 	}
 
-	update("Writing AGENTS.md…")
-	agentsPath, err := agentsmd.Write(discovered.WorkspaceRoot, written)
-	if err != nil {
-		return initializedWorkspace{}, ExitError{Code: 1, Err: err}
-	}
-
 	return initializedWorkspace{
 		Discovered:     discovered,
 		Config:         written,
 		ConfigPath:     a.ConfigStore.PathFor(discovered.WorkspaceRoot),
-		AgentsPath:     agentsPath,
 		CreatedConfig:  existing == nil,
 		Organization:   org,
 		Project:        project,

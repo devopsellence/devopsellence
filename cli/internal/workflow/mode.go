@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/ui"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
 type Mode string
@@ -112,7 +112,7 @@ func (a *App) SetEnvironment(name string) error {
 	})
 }
 
-func (a *App) effectiveEnvironment(explicit string, cfg *config.Project) string {
+func (a *App) effectiveEnvironment(explicit string, cfg *config.ProjectConfig) string {
 	if strings.TrimSpace(explicit) != "" {
 		return strings.TrimSpace(explicit)
 	}
@@ -247,9 +247,9 @@ func (a *App) ContextShow() error {
 	rows := []ui.Row{
 		{Label: "Workspace", Value: firstNonEmpty(discovered.WorkspaceRoot, a.modeWorkspaceKey())},
 		{Label: "Mode", Value: firstNonEmpty(string(mode), "not set")},
-		{Label: "Organization", Value: safeConfigValue(cfg, func(value *config.Project) string { return value.Organization })},
-		{Label: "Project", Value: safeConfigValue(cfg, func(value *config.Project) string { return value.Project })},
-		{Label: "Default Env", Value: safeConfigValue(cfg, func(value *config.Project) string { return value.DefaultEnvironment })},
+		{Label: "Organization", Value: safeConfigValue(cfg, func(value *config.ProjectConfig) string { return value.Organization })},
+		{Label: "Project", Value: safeConfigValue(cfg, func(value *config.ProjectConfig) string { return value.Project })},
+		{Label: "Default Env", Value: safeConfigValue(cfg, func(value *config.ProjectConfig) string { return value.DefaultEnvironment })},
 		{Label: "Selected Env", Value: selectedEnvironment},
 	}
 	a.Printer.Println(ui.RenderCard(ui.Card{Title: "Context", Rows: rows}))

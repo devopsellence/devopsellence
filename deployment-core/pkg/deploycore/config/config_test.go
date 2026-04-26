@@ -15,7 +15,7 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 
 	root := t.TempDir()
 	project := DefaultProjectConfig("acme", "ShopApp", "staging")
-	project.Services["jobs"] = Service{
+	project.Services["jobs"] = ServiceConfig{
 		Command:    []string{"./bin/jobs"},
 		Env:        map[string]string{"QUEUE": "default"},
 		SecretRefs: []SecretRef{{Name: "API_KEY", Secret: "gsm://projects/test/secrets/api-key"}},
@@ -186,7 +186,7 @@ func TestValidateAcceptsWorkerWithoutExtraPlacementFields(t *testing.T) {
 	t.Parallel()
 
 	project := DefaultProjectConfig("acme", "ShopApp", "production")
-	project.Services["jobs"] = Service{
+	project.Services["jobs"] = ServiceConfig{
 		Command: []string{"./bin/jobs"},
 	}
 
@@ -436,7 +436,7 @@ func TestWriteGenericConfigUsesRepoRootPath(t *testing.T) {
 func TestReadmeExampleConfigParses(t *testing.T) {
 	t.Parallel()
 
-	readmePath := filepath.Join("..", "..", "..", "README.md")
+	readmePath := filepath.Join("..", "..", "..", "..", "README.md")
 	content, err := os.ReadFile(readmePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", readmePath, err)
@@ -486,7 +486,7 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 		}},
 		TLS: IngressTLSConfig{Mode: "auto", Email: "ops@example.test"},
 	}
-	project.Services["web"] = Service{
+	project.Services["web"] = ServiceConfig{
 		Command:    []string{"bundle", "exec", "puma"},
 		Args:       []string{"-C", "config/puma.rb"},
 		Env:        map[string]string{"RAILS_ENV": "production", "BASE_ONLY": "1"},

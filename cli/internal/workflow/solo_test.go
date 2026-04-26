@@ -16,12 +16,13 @@ import (
 	"time"
 
 	"github.com/charmbracelet/keygen"
-	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/git"
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	cliversion "github.com/devopsellence/cli/internal/version"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
 )
 
 func TestSoloImageTagSlugifiesProjectName(t *testing.T) {
@@ -94,7 +95,7 @@ func TestSoloDefaultProjectConfigBootstrapsExplicitCatchAllIngress(t *testing.T)
 	}
 }
 
-func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
+func TestValidateNodeScheduleSelectsReleaseNode(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
@@ -115,12 +116,12 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 			},
 		},
 	}
-	nodes := map[string]config.SoloNode{
+	nodes := map[string]config.Node{
 		"worker-a": {Labels: []string{config.DefaultWorkerRole}},
 		"web-a":    {Labels: []string{config.DefaultWebRole}},
 		"web-b":    {Labels: []string{config.DefaultWebRole}},
 	}
-	got, err := validateSoloNodeSchedule(cfg, nodes)
+	got, err := validateNodeSchedule(cfg, nodes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestValidateSoloNodeScheduleSelectsReleaseNode(t *testing.T) {
 	}
 }
 
-func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
+func TestValidateNodeScheduleRejectsMissingWorker(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
@@ -144,7 +145,7 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 			},
 		},
 	}
-	_, err := validateSoloNodeSchedule(cfg, map[string]config.SoloNode{
+	_, err := validateNodeSchedule(cfg, map[string]config.Node{
 		"web-a": {Labels: []string{config.DefaultWebRole}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "worker") {
@@ -152,7 +153,7 @@ func TestValidateSoloNodeScheduleRejectsMissingWorker(t *testing.T) {
 	}
 }
 
-func TestValidateSoloNodeScheduleInfersKindsWithoutStoredConfigKind(t *testing.T) {
+func TestValidateNodeScheduleInfersKindsWithoutStoredConfigKind(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			config.DefaultWebServiceName: {
@@ -173,28 +174,28 @@ func TestValidateSoloNodeScheduleInfersKindsWithoutStoredConfigKind(t *testing.T
 			},
 		},
 	}
-	nodes := map[string]config.SoloNode{
+	nodes := map[string]config.Node{
 		"worker-a": {Labels: []string{config.DefaultWorkerRole}},
 		"web-a":    {Labels: []string{config.DefaultWebRole}},
 	}
 
-	got, err := validateSoloNodeSchedule(cfg, nodes)
+	got, err := validateNodeSchedule(cfg, nodes)
 	if err != nil {
-		t.Fatalf("validateSoloNodeSchedule() error = %v", err)
+		t.Fatalf("validateNodeSchedule() error = %v", err)
 	}
 	if got != "web-a" {
 		t.Fatalf("release node = %q, want web-a", got)
 	}
 }
 
-func TestSoloNodeCanRunUnlabeledNode(t *testing.T) {
-	node := config.SoloNode{}
+func TestNodeCanRunUnlabeledNode(t *testing.T) {
+	node := config.Node{}
 	if !soloNodeCanRunKind(node, config.ServiceKindWeb) || !soloNodeCanRunKind(node, config.ServiceKindWorker) {
 		t.Fatal("unlabeled node should run all labels")
 	}
 }
 
-func TestSoloNodeCanRunIngressRequiresAllIngressTargetServices(t *testing.T) {
+func TestNodeCanRunIngressRequiresAllIngressTargetServices(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Services: map[string]config.ServiceConfig{
 			"web": {
@@ -210,10 +211,10 @@ func TestSoloNodeCanRunIngressRequiresAllIngressTargetServices(t *testing.T) {
 		}},
 	}
 
-	if soloNodeCanRunIngress(config.SoloNode{Labels: []string{config.DefaultWebRole}}, cfg) {
+	if soloNodeCanRunIngress(config.Node{Labels: []string{config.DefaultWebRole}}, cfg) {
 		t.Fatal("web-only node should not run ingress for mixed web/worker targets")
 	}
-	if !soloNodeCanRunIngress(config.SoloNode{Labels: []string{config.DefaultWebRole, config.DefaultWorkerRole}}, cfg) {
+	if !soloNodeCanRunIngress(config.Node{Labels: []string{config.DefaultWebRole, config.DefaultWorkerRole}}, cfg) {
 		t.Fatal("web+worker node should run ingress when it hosts all targets")
 	}
 }
@@ -229,16 +230,16 @@ func TestParseSoloLabels(t *testing.T) {
 	}
 }
 
-func TestSoloNodeDesiredStateInputsUsesOtherAttachedNodesAsPeers(t *testing.T) {
+func TestNodeDesiredStateInputsUsesOtherAttachedNodesAsPeers(t *testing.T) {
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"web-a":    {Host: "203.0.113.10", Labels: []string{config.DefaultWebRole}},
 			"web-b":    {Host: "203.0.113.11", Labels: []string{config.DefaultWebRole}},
 			"worker-a": {Host: "203.0.113.12", Labels: []string{config.DefaultWorkerRole}},
 			"private":  {Host: "203.0.113.13", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
-		Snapshots:   map[string]solo.DeploySnapshot{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
 	}
 	attachment, changed, err := current.AttachNode("/workspace/demo", "production", "web-a")
 	if err != nil {
@@ -253,7 +254,7 @@ func TestSoloNodeDesiredStateInputsUsesOtherAttachedNodesAsPeers(t *testing.T) {
 		}
 	}
 	key := attachment.WorkspaceKey + "\nproduction"
-	current.Snapshots[key] = solo.DeploySnapshot{
+	current.Snapshots[key] = desiredstate.DeploySnapshot{
 		WorkspaceRoot: "/workspace/demo",
 		WorkspaceKey:  attachment.WorkspaceKey,
 		Environment:   "production",
@@ -265,7 +266,7 @@ func TestSoloNodeDesiredStateInputsUsesOtherAttachedNodesAsPeers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []solo.NodePeer{
+	want := []desiredstate.NodePeer{
 		{Name: "private", Labels: []string{config.DefaultWebRole}, PublicAddress: "203.0.113.13"},
 		{Name: "web-b", Labels: []string{config.DefaultWebRole}, PublicAddress: "203.0.113.11"},
 		{Name: "worker-a", Labels: []string{config.DefaultWorkerRole}, PublicAddress: "203.0.113.12"},
@@ -321,7 +322,7 @@ func TestReleaseNodeForSnapshotSelectsSortedEligibleNode(t *testing.T) {
 		Environment:  "production",
 		NodeNames:    []string{"worker-a", "web-b", "web-a"},
 	}
-	nodes := map[string]config.SoloNode{
+	nodes := map[string]config.Node{
 		"worker-a": {Labels: []string{config.DefaultWorkerRole}},
 		"web-b":    {Labels: []string{config.DefaultWebRole}},
 		"web-a":    {Labels: []string{config.DefaultWebRole}},
@@ -338,7 +339,7 @@ func TestReleaseNodeForSnapshotSelectsSortedEligibleNode(t *testing.T) {
 
 func TestSoloAffectedNodesForNodeIncludesCoHostedNodes(t *testing.T) {
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"node-a": {},
 			"node-b": {},
 			"node-c": {},
@@ -375,11 +376,11 @@ func TestSoloStatusNodesWithoutAttachmentsReturnsEmptySet(t *testing.T) {
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"node-a": {Host: "203.0.113.10", User: "root"},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
-		Snapshots:   map[string]solo.DeploySnapshot{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
 	}
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
@@ -412,7 +413,7 @@ func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{
@@ -468,7 +469,7 @@ func TestSoloStatusJSONReturnsFailureWithRenderedPayload(t *testing.T) {
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{
@@ -538,7 +539,7 @@ func TestEnsureLocalSoloSnapshotImageReturnsActionableError(t *testing.T) {
 	}
 }
 
-func TestRepublishSoloNodesReportsRemoteDockerCheck(t *testing.T) {
+func TestRepublishNodesReportsRemoteDockerCheck(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoot := t.TempDir()
@@ -553,7 +554,7 @@ func TestRepublishSoloNodesReportsRemoteDockerCheck(t *testing.T) {
 		ConfigStore: config.NewStore(),
 	}
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"web-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{
@@ -564,18 +565,18 @@ func TestRepublishSoloNodesReportsRemoteDockerCheck(t *testing.T) {
 				NodeNames:     []string{"web-a"},
 			},
 		},
-		Snapshots: map[string]solo.DeploySnapshot{
+		Snapshots: map[string]desiredstate.DeploySnapshot{
 			workspaceRoot + "\nproduction": {
 				WorkspaceRoot: workspaceRoot,
 				WorkspaceKey:  workspaceRoot,
 				Environment:   "production",
 				Image:         "demo:missing",
-				Metadata:      solo.SnapshotMetadata{ConfigPath: filepath.Join(workspaceRoot, "devopsellence.yml")},
+				Metadata:      desiredstate.SnapshotMetadata{ConfigPath: filepath.Join(workspaceRoot, "devopsellence.yml")},
 			},
 		},
 	}
 
-	_, err := app.republishSoloNodes(context.Background(), current, []string{"web-a"})
+	_, err := app.republishNodes(context.Background(), current, []string{"web-a"})
 	if err == nil {
 		t.Fatal("expected republish error")
 	}
@@ -584,12 +585,12 @@ func TestRepublishSoloNodesReportsRemoteDockerCheck(t *testing.T) {
 	}
 }
 
-func TestSoloNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
+func TestNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 	t.Parallel()
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"manual-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
@@ -621,12 +622,12 @@ func TestSoloNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 	}
 }
 
-func TestSoloNodeRemoveRejectsIncompleteProviderMetadata(t *testing.T) {
+func TestNodeRemoveRejectsIncompleteProviderMetadata(t *testing.T) {
 	t.Parallel()
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"managed-a": {Host: "203.0.113.10", User: "root", Provider: "hetzner"},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
@@ -700,7 +701,7 @@ func TestEnsureSoloProjectConfigWritesDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestSoloNodeAttachPersistsDesiredStateOnRepublishError(t *testing.T) {
+func TestNodeAttachPersistsDesiredStateOnRepublishError(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoot := t.TempDir()
@@ -711,18 +712,18 @@ func TestSoloNodeAttachPersistsDesiredStateOnRepublishError(t *testing.T) {
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
-		Snapshots: map[string]solo.DeploySnapshot{
+		Snapshots: map[string]desiredstate.DeploySnapshot{
 			workspaceRoot + "\nproduction": {
 				WorkspaceRoot: workspaceRoot,
 				WorkspaceKey:  workspaceRoot,
 				Environment:   "production",
 				Revision:      "abc1234",
 				Image:         "demo:missing",
-				Metadata:      solo.SnapshotMetadata{ConfigPath: filepath.Join(workspaceRoot, "devopsellence.yml")},
+				Metadata:      desiredstate.SnapshotMetadata{ConfigPath: filepath.Join(workspaceRoot, "devopsellence.yml")},
 			},
 		},
 	}
@@ -765,11 +766,11 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
-		Snapshots:   map[string]solo.DeploySnapshot{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
 	}
 	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
 		t.Fatal(err)
@@ -826,7 +827,7 @@ func TestWaitForSoloRolloutIgnoresMissingAndStaleStatusUntilExpectedRevisionSett
 		DeployTimeout:      time.Second,
 	}
 
-	err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
+	err := app.waitForSoloRollout(context.Background(), map[string]config.Node{
 		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
 	}, map[string]string{
 		"node-a": "expected-revision",
@@ -850,7 +851,7 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 		DeployTimeout:      100 * time.Millisecond,
 	}
 
-	err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
+	err := app.waitForSoloRollout(context.Background(), map[string]config.Node{
 		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
 	}, map[string]string{
 		"node-a": "expected-revision",
@@ -883,7 +884,7 @@ func TestWaitForSoloRolloutTimesOutWhenExpectedRevisionNeverSettles(t *testing.T
 		DeployTimeout:      20 * time.Millisecond,
 	}
 
-	err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
+	err := app.waitForSoloRollout(context.Background(), map[string]config.Node{
 		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
 	}, map[string]string{
 		"node-a": "expected-revision",
@@ -932,7 +933,7 @@ func TestWaitForSoloRolloutFailsClearlyOnStatusReadAndParseErrors(t *testing.T) 
 				DeployTimeout:      100 * time.Millisecond,
 			}
 
-			err := app.waitForSoloRollout(context.Background(), map[string]config.SoloNode{
+			err := app.waitForSoloRollout(context.Background(), map[string]config.Node{
 				"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
 			}, map[string]string{
 				"node-a": "expected-revision",
@@ -947,10 +948,10 @@ func TestWaitForSoloRolloutFailsClearlyOnStatusReadAndParseErrors(t *testing.T) 
 	}
 }
 
-func TestParseSoloNodeStatusPayload(t *testing.T) {
+func TestParseNodeStatusPayload(t *testing.T) {
 	payload := []byte(`{"phase":"settled","revision":"abc123","environments":[{"name":"production","services":[{"name":"web","state":"running"}]}]}`)
 
-	status, raw, err := parseSoloNodeStatusPayload(payload)
+	status, raw, err := parseNodeStatusPayload(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1065,6 +1066,26 @@ func TestRemoteDockerCommandsSupportPasswordlessSudo(t *testing.T) {
 	}
 	if !strings.Contains(remoteDockerLoadCommand(), "sudo -n docker load") {
 		t.Fatalf("load command missing sudo docker load: %s", remoteDockerLoadCommand())
+	}
+}
+
+func TestDesiredStateOverridePathDefaultsAgentStateDir(t *testing.T) {
+	t.Parallel()
+
+	got := desiredStateOverridePath(config.Node{})
+	want := "/var/lib/devopsellence/desired-state-override.json"
+	if got != want {
+		t.Fatalf("desiredStateOverridePath() = %q, want %q", got, want)
+	}
+}
+
+func TestDesiredStateOverridePathUsesConfiguredAgentStateDir(t *testing.T) {
+	t.Parallel()
+
+	got := desiredStateOverridePath(config.Node{AgentStateDir: "/tmp/devopsellence state"})
+	want := "/tmp/devopsellence state/desired-state-override.json"
+	if got != want {
+		t.Fatalf("desiredStateOverridePath() = %q, want %q", got, want)
 	}
 }
 
@@ -1326,7 +1347,7 @@ func TestEnsureGeneratedWorkspaceSSHKeyRejectsMismatchedPublicKey(t *testing.T) 
 	}
 }
 
-func TestEnsureSoloNodeCreateSSHPublicKeyGeneratesWhenNoDefaultKey(t *testing.T) {
+func TestEnsureNodeCreateSSHPublicKeyGeneratesWhenNoDefaultKey(t *testing.T) {
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)
@@ -1354,7 +1375,7 @@ func TestEnsureSoloNodeCreateSSHPublicKeyGeneratesWhenNoDefaultKey(t *testing.T)
 	}
 }
 
-func TestEnsureSoloNodeCreateSSHPublicKeyGeneratesWhenDefaultKeyIsEmpty(t *testing.T) {
+func TestEnsureNodeCreateSSHPublicKeyGeneratesWhenDefaultKeyIsEmpty(t *testing.T) {
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)
@@ -1386,7 +1407,7 @@ func TestEnsureSoloNodeCreateSSHPublicKeyGeneratesWhenDefaultKeyIsEmpty(t *testi
 	}
 }
 
-func TestEnsureSoloNodeCreateSSHPublicKeyKeepsExplicitKey(t *testing.T) {
+func TestEnsureNodeCreateSSHPublicKeyKeepsExplicitKey(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	customPublicKey := filepath.Join(t.TempDir(), "custom.pub")
 	opts := SoloNodeCreateOptions{SSHPublicKey: customPublicKey}
@@ -1413,7 +1434,7 @@ func TestSoloSetupRequiresExplicitInputs(t *testing.T) {
 }
 
 func TestWaitForSoloSSHWithProbeReturnsLastError(t *testing.T) {
-	node := config.SoloNode{User: "root", Host: "203.0.113.10"}
+	node := config.Node{User: "root", Host: "203.0.113.10"}
 	wantErr := errors.New("ssh: connect to host 203.0.113.10 port 22: Connection timed out")
 
 	err := waitForSoloSSHWithProbe(context.Background(), node, 30*time.Millisecond, 5*time.Millisecond, 1*time.Millisecond, func(context.Context) error {
@@ -1428,7 +1449,7 @@ func TestWaitForSoloSSHWithProbeReturnsLastError(t *testing.T) {
 }
 
 func TestWaitForSoloSSHWithProbeBoundsSingleAttempt(t *testing.T) {
-	node := config.SoloNode{User: "root", Host: "203.0.113.10"}
+	node := config.Node{User: "root", Host: "203.0.113.10"}
 
 	start := time.Now()
 	err := waitForSoloSSHWithProbe(context.Background(), node, 20*time.Millisecond, 5*time.Millisecond, 1*time.Millisecond, func(ctx context.Context) error {

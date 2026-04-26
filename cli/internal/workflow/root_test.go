@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/solo"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
 func TestRootVersionCommand(t *testing.T) {

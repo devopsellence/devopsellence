@@ -5,11 +5,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/devopsellence/cli/internal/config"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
 func TestSSHArgsIncludeConnectTimeoutAndKey(t *testing.T) {
-	node := config.SoloNode{
+	node := config.Node{
 		User:   "root",
 		Host:   "203.0.113.10",
 		Port:   22,
@@ -34,7 +34,7 @@ func TestSSHArgsIncludeConnectTimeoutAndKey(t *testing.T) {
 func TestSSHArgsUseManagedKnownHostsForProviderNodes(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)
-	node := config.SoloNode{
+	node := config.Node{
 		User:             "root",
 		Host:             "203.0.113.10",
 		Port:             22,
@@ -62,7 +62,7 @@ func TestSSHArgsUseManagedKnownHostsForProviderNodes(t *testing.T) {
 func TestManagedKnownHostsPathHashesUntrustedServerID(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)
-	node := config.SoloNode{
+	node := config.Node{
 		Provider:         "hetzner",
 		ProviderServerID: "../../escape",
 	}

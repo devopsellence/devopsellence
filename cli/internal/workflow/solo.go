@@ -19,12 +19,13 @@ import (
 	"time"
 
 	"github.com/devopsellence/cli/internal/api"
-	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/solo/providers"
 	cliversion "github.com/devopsellence/cli/internal/version"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
 )
 
 type SoloDeployOptions struct {
@@ -104,13 +105,13 @@ type SoloNodeRemoveOptions struct {
 	Yes  bool
 }
 
-type SharedNodeCreateOptions struct {
+type SharedSoloNodeCreateOptions struct {
 	SoloNodeCreateOptions
 	NodeBootstrapOptions
 }
 
 type providerNodeCreateResult struct {
-	Node         config.SoloNode
+	Node         config.Node
 	Server       providers.Server
 	Labels       []string
 	ProviderSlug string
@@ -159,7 +160,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if opts.Name == "" {
 		return providerNodeCreateResult{}, fmt.Errorf("node name is required")
 	}
-	labels, err := parseSoloLabels(firstNonEmpty(opts.Labels, strings.Join(config.SoloDefaultLabels, ",")))
+	labels, err := parseSoloLabels(firstNonEmpty(opts.Labels, strings.Join(config.DefaultNodeLabels, ",")))
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
@@ -212,7 +213,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if server.PublicIP == "" {
 		return providerNodeCreateResult{}, fmt.Errorf("created server %s but provider did not return a public IPv4 address", server.ID)
 	}
-	node := config.SoloNode{
+	node := config.Node{
 		Host:             server.PublicIP,
 		User:             "root",
 		Port:             22,
@@ -255,11 +256,11 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if len(attachedNodeNames) == 0 {
 		return fmt.Errorf("no nodes attached to %s; run `devopsellence node attach <name>`", environmentName)
 	}
-	nodes, err := a.resolveSoloNodes(current, attachedNodeNames)
+	nodes, err := a.resolveNodes(current, attachedNodeNames)
 	if err != nil {
 		return err
 	}
-	if _, err := validateSoloNodeSchedule(cfg, nodes); err != nil {
+	if _, err := validateNodeSchedule(cfg, nodes); err != nil {
 		return err
 	}
 	if err := a.checkIngressBeforeDeploy(ctx, cfg, nodes, opts.SkipDNSCheck); err != nil {
@@ -301,7 +302,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	desiredStateRevisions, err := a.republishSoloNodes(ctx, current, attachedNodeNames)
+	desiredStateRevisions, err := a.republishNodes(ctx, current, attachedNodeNames)
 	if err != nil {
 		return err
 	}
@@ -316,19 +317,19 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 			"desired_state_revisions": desiredStateRevisions,
 			"image":                   imageTag,
 			"environment":             environmentName,
-			"nodes":                   sortedSoloNodeNames(nodes),
+			"nodes":                   sortedNodeNames(nodes),
 		})
 	}
 	a.Printer.Println(fmt.Sprintf("Deployed revision %s to %d node(s)", shortSHA, len(nodes)))
 	return nil
 }
 
-func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.SoloNode) (string, error) {
+func validateNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.Node) (string, error) {
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
 		serviceKind := config.InferredServiceKind(serviceName, service)
 		scheduled := false
-		for _, nodeName := range sortedSoloNodeNames(nodes) {
+		for _, nodeName := range sortedNodeNames(nodes) {
 			if soloNodeCanRunKind(nodes[nodeName], serviceKind) {
 				scheduled = true
 				break
@@ -342,7 +343,7 @@ func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config
 	if release == nil {
 		return "", nil
 	}
-	for _, nodeName := range sortedSoloNodeNames(nodes) {
+	for _, nodeName := range sortedNodeNames(nodes) {
 		if soloNodeCanRunKind(nodes[nodeName], config.InferredServiceKind(release.Service, cfg.Services[release.Service])) {
 			return nodeName, nil
 		}
@@ -350,7 +351,7 @@ func validateSoloNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config
 	return "", fmt.Errorf("solo deploy requires at least one selected node labeled for release task service %q", release.Service)
 }
 
-func soloNodeCanRunKind(node config.SoloNode, kind string) bool {
+func soloNodeCanRunKind(node config.Node, kind string) bool {
 	if node.Labels == nil {
 		return true
 	}
@@ -362,7 +363,7 @@ func soloNodeCanRunKind(node config.SoloNode, kind string) bool {
 	return false
 }
 
-func soloNodeCanRunIngress(node config.SoloNode, cfg *config.ProjectConfig) bool {
+func soloNodeCanRunIngress(node config.Node, cfg *config.ProjectConfig) bool {
 	if cfg == nil || cfg.Ingress == nil {
 		return false
 	}
@@ -385,7 +386,7 @@ func soloNodeCanRunIngress(node config.SoloNode, cfg *config.ProjectConfig) bool
 	return len(serviceNames) > 0
 }
 
-func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
+func sortedNodeNames(nodes map[string]config.Node) []string {
 	names := make([]string, 0, len(nodes))
 	for name := range nodes {
 		names = append(names, name)
@@ -394,7 +395,7 @@ func sortedSoloNodeNames(nodes map[string]config.SoloNode) []string {
 	return names
 }
 
-func parseSoloNodeStatusPayload(data []byte) (soloNodeStatus, json.RawMessage, error) {
+func parseNodeStatusPayload(data []byte) (soloNodeStatus, json.RawMessage, error) {
 	var status soloNodeStatus
 	if err := json.Unmarshal(data, &status); err != nil {
 		return soloNodeStatus{}, nil, err
@@ -402,7 +403,7 @@ func parseSoloNodeStatusPayload(data []byte) (soloNodeStatus, json.RawMessage, e
 	return status, json.RawMessage(data), nil
 }
 
-func readSoloNodeStatus(ctx context.Context, node config.SoloNode) (soloNodeStatusResult, error) {
+func readNodeStatus(ctx context.Context, node config.Node) (soloNodeStatusResult, error) {
 	statusPath := path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "status.json")
 	out, err := solo.RunSSH(ctx, node, remoteReadOptionalFileCommand(statusPath, soloStatusMissingSentinel), nil)
 	if err != nil {
@@ -411,7 +412,7 @@ func readSoloNodeStatus(ctx context.Context, node config.SoloNode) (soloNodeStat
 	if strings.TrimSpace(out) == soloStatusMissingSentinel {
 		return soloNodeStatusResult{Missing: true}, nil
 	}
-	status, raw, err := parseSoloNodeStatusPayload([]byte(out))
+	status, raw, err := parseNodeStatusPayload([]byte(out))
 	if err != nil {
 		return soloNodeStatusResult{}, fmt.Errorf("invalid status JSON: %w", err)
 	}
@@ -421,7 +422,7 @@ func readSoloNodeStatus(ctx context.Context, node config.SoloNode) (soloNodeStat
 	}, nil
 }
 
-func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.SoloNode, expectedRevisions map[string]string) error {
+func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string) error {
 	timeout := a.DeployTimeout
 	if timeout <= 0 {
 		timeout = defaultDeployProgressTimeout
@@ -436,7 +437,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.So
 
 	lastSummary := ""
 	latestSummary := "rollout pending"
-	nodeNames := sortedSoloNodeNames(nodes)
+	nodeNames := sortedNodeNames(nodes)
 	for {
 		pendingCount := 0
 		reconcilingCount := 0
@@ -449,7 +450,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.So
 				return fmt.Errorf("missing desired state revision for node %s", name)
 			}
 
-			result, err := readSoloNodeStatus(rolloutCtx, nodes[name])
+			result, err := readNodeStatus(rolloutCtx, nodes[name])
 			if err != nil {
 				if errors.Is(rolloutCtx.Err(), context.DeadlineExceeded) {
 					return ExitError{Code: 1, Err: fmt.Errorf("timed out waiting for solo rollout: %s", latestSummary)}
@@ -517,15 +518,15 @@ func (a *App) writeSoloState(current solo.State) error {
 	return a.SoloState.Write(current)
 }
 
-func (a *App) resolveSoloNodes(current solo.State, names []string) (map[string]config.SoloNode, error) {
+func (a *App) resolveNodes(current solo.State, names []string) (map[string]config.Node, error) {
 	if len(names) == 0 {
-		result := make(map[string]config.SoloNode, len(current.Nodes))
+		result := make(map[string]config.Node, len(current.Nodes))
 		for name, node := range current.Nodes {
 			result[name] = node
 		}
 		return result, nil
 	}
-	result := make(map[string]config.SoloNode, len(names))
+	result := make(map[string]config.Node, len(names))
 	unknown := []string{}
 	for _, name := range names {
 		if node, ok := current.Nodes[name]; ok {
@@ -540,14 +541,14 @@ func (a *App) resolveSoloNodes(current solo.State, names []string) (map[string]c
 	return result, nil
 }
 
-func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNames []string) (map[string]string, error) {
+func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames []string) (map[string]string, error) {
 	if len(nodeNames) == 0 {
 		return map[string]string{}, nil
 	}
-	type preparedSoloNodeState struct {
-		snapshots    []solo.DeploySnapshot
+	type preparedNodeState struct {
+		snapshots    []desiredstate.DeploySnapshot
 		releaseNodes map[string]string
-		peers        []solo.NodePeer
+		peers        []desiredstate.NodePeer
 		images       []string
 	}
 	type localImageCheck struct {
@@ -559,15 +560,15 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	revisions := map[string]string{}
 	var wg sync.WaitGroup
 
-	nodes, err := a.resolveSoloNodes(current, nodeNames)
+	nodes, err := a.resolveNodes(current, nodeNames)
 	if err != nil {
 		return nil, err
 	}
-	sortedNodeNames := sortedSoloNodeNames(nodes)
-	prepared := make(map[string]preparedSoloNodeState, len(sortedNodeNames))
-	resolvedSnapshotCache := map[string]solo.DeploySnapshot{}
-	for _, nodeName := range sortedNodeNames {
-		inputs, err := a.preparedSoloNodeDesiredStateInputs(ctx, current, nodeName, nodes[nodeName], resolvedSnapshotCache)
+	sortedNames := sortedNodeNames(nodes)
+	prepared := make(map[string]preparedNodeState, len(sortedNames))
+	resolvedSnapshotCache := map[string]desiredstate.DeploySnapshot{}
+	for _, nodeName := range sortedNames {
+		inputs, err := a.preparedNodeDesiredStateInputs(ctx, current, nodeName, nodes[nodeName], resolvedSnapshotCache)
 		if err != nil {
 			return nil, err
 		}
@@ -575,11 +576,11 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	}
 	var localImageChecksMu sync.Mutex
 	localImageChecks := map[string]*localImageCheck{}
-	for _, nodeName := range sortedNodeNames {
+	for _, nodeName := range sortedNames {
 		node := nodes[nodeName]
 		inputs := prepared[nodeName]
 		wg.Add(1)
-		go func(name string, node config.SoloNode, inputs preparedSoloNodeState) {
+		go func(name string, node config.Node, inputs preparedNodeState) {
 			defer wg.Done()
 			if len(inputs.images) > 0 {
 				if _, err := solo.RunSSH(ctx, node, remoteDockerCheckCommand(), nil); err != nil {
@@ -626,17 +627,24 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 					return
 				}
 			}
-			desiredStateJSON, err := solo.BuildAggregatedDesiredState(name, node, inputs.snapshots, inputs.releaseNodes, inputs.peers)
+			publication, err := desiredstate.PlanNodePublication(desiredstate.NodePublicationInput{
+				NodeName:     name,
+				CurrentNode:  node,
+				Snapshots:    inputs.snapshots,
+				ReleaseNodes: inputs.releaseNodes,
+				NodePeers:    inputs.peers,
+			})
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
 				mu.Unlock()
 				return
 			}
+			desiredStateJSON := publication.DesiredStateJSON
 			if !a.Printer.JSON {
 				a.Printer.Println(fmt.Sprintf("[%s] Writing desired state...", name))
 			}
-			overridePath := filepath.Join(node.AgentStateDir, "desired-state-override.json")
+			overridePath := desiredStateOverridePath(node)
 			cmd := remoteDesiredStateOverrideCommand(overridePath)
 			if _, err := solo.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
 				mu.Lock()
@@ -663,17 +671,17 @@ func (a *App) republishSoloNodes(ctx context.Context, current solo.State, nodeNa
 	return revisions, nil
 }
 
-func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.State, snapshot solo.DeploySnapshot) (solo.DeploySnapshot, error) {
+func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.State, snapshot desiredstate.DeploySnapshot) (desiredstate.DeploySnapshot, error) {
 	cfg, err := a.ConfigStore.Read(snapshot.WorkspaceRoot)
 	if err != nil {
-		return solo.DeploySnapshot{}, err
+		return desiredstate.DeploySnapshot{}, err
 	}
 	if cfg == nil {
-		return solo.DeploySnapshot{}, fmt.Errorf("missing devopsellence.yml for %s", snapshot.WorkspaceRoot)
+		return desiredstate.DeploySnapshot{}, fmt.Errorf("missing devopsellence.yml for %s", snapshot.WorkspaceRoot)
 	}
 	secrets, err := a.resolveSoloSecretValues(ctx, current, snapshot.WorkspaceRoot, snapshot.Environment, cfg)
 	if err != nil {
-		return solo.DeploySnapshot{}, fmt.Errorf("load secrets for %s: %w", snapshot.WorkspaceRoot, err)
+		return desiredstate.DeploySnapshot{}, fmt.Errorf("load secrets for %s: %w", snapshot.WorkspaceRoot, err)
 	}
 	configPath := strings.TrimSpace(snapshot.Metadata.ConfigPath)
 	if configPath == "" {
@@ -835,22 +843,22 @@ func (a *App) resolveOnePasswordSecret(ctx context.Context, reference string) (s
 	return value, nil
 }
 
-func (a *App) preparedSoloNodeDesiredStateInputs(ctx context.Context, current solo.State, nodeName string, node config.SoloNode, resolvedSnapshotCache map[string]solo.DeploySnapshot) (struct {
-	snapshots    []solo.DeploySnapshot
+func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.State, nodeName string, node config.Node, resolvedSnapshotCache map[string]desiredstate.DeploySnapshot) (struct {
+	snapshots    []desiredstate.DeploySnapshot
 	releaseNodes map[string]string
-	peers        []solo.NodePeer
+	peers        []desiredstate.NodePeer
 	images       []string
 }, error) {
 	storedSnapshots, releaseNodes, peers, _, err := soloNodeDesiredStateInputs(current, nodeName)
 	if err != nil {
 		return struct {
-			snapshots    []solo.DeploySnapshot
+			snapshots    []desiredstate.DeploySnapshot
 			releaseNodes map[string]string
-			peers        []solo.NodePeer
+			peers        []desiredstate.NodePeer
 			images       []string
 		}{}, fmt.Errorf("build desired state inputs: %w", err)
 	}
-	resolvedSnapshots := make([]solo.DeploySnapshot, 0, len(storedSnapshots))
+	resolvedSnapshots := make([]desiredstate.DeploySnapshot, 0, len(storedSnapshots))
 	imageSet := map[string]bool{}
 	for _, snapshot := range storedSnapshots {
 		key := strings.TrimSpace(snapshot.WorkspaceKey) + "\n" + strings.TrimSpace(snapshot.Environment)
@@ -859,9 +867,9 @@ func (a *App) preparedSoloNodeDesiredStateInputs(ctx context.Context, current so
 			resolvedSnapshot, err = a.resolveStoredDeploySnapshot(ctx, current, snapshot)
 			if err != nil {
 				return struct {
-					snapshots    []solo.DeploySnapshot
+					snapshots    []desiredstate.DeploySnapshot
 					releaseNodes map[string]string
-					peers        []solo.NodePeer
+					peers        []desiredstate.NodePeer
 					images       []string
 				}{}, fmt.Errorf("hydrate snapshot: %w", err)
 			}
@@ -880,9 +888,9 @@ func (a *App) preparedSoloNodeDesiredStateInputs(ctx context.Context, current so
 	}
 	sort.Strings(images)
 	return struct {
-		snapshots    []solo.DeploySnapshot
+		snapshots    []desiredstate.DeploySnapshot
 		releaseNodes map[string]string
-		peers        []solo.NodePeer
+		peers        []desiredstate.NodePeer
 		images       []string
 	}{
 		snapshots:    resolvedSnapshots,
@@ -892,7 +900,7 @@ func (a *App) preparedSoloNodeDesiredStateInputs(ctx context.Context, current so
 	}, nil
 }
 
-func snapshotNeedsImageOnNode(snapshot solo.DeploySnapshot, node config.SoloNode, runReleaseTask bool) bool {
+func snapshotNeedsImageOnNode(snapshot desiredstate.DeploySnapshot, node config.Node, runReleaseTask bool) bool {
 	for _, service := range snapshot.Services {
 		if soloNodeCanRunKind(node, service.Kind) {
 			return true
@@ -914,7 +922,7 @@ func desiredStateRevision(data []byte) (string, error) {
 	return payload.Revision, nil
 }
 
-func remoteNodeHasImage(ctx context.Context, node config.SoloNode, imageTag string) (bool, error) {
+func remoteNodeHasImage(ctx context.Context, node config.Node, imageTag string) (bool, error) {
 	out, err := solo.RunSSH(ctx, node, remoteDockerImageInspectCommand(imageTag), nil)
 	if err != nil {
 		return false, err
@@ -935,10 +943,10 @@ func (a *App) ensureLocalSoloSnapshotImage(ctx context.Context, imageTag string)
 	return nil
 }
 
-func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]solo.DeploySnapshot, map[string]string, []solo.NodePeer, []string, error) {
-	snapshots := []solo.DeploySnapshot{}
+func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]desiredstate.DeploySnapshot, map[string]string, []desiredstate.NodePeer, []string, error) {
+	snapshots := []desiredstate.DeploySnapshot{}
 	releaseNodes := map[string]string{}
-	peerMap := map[string]solo.NodePeer{}
+	peerMap := map[string]desiredstate.NodePeer{}
 	imageSet := map[string]bool{}
 
 	for _, key := range current.AttachmentKeysForNode(nodeName) {
@@ -966,7 +974,7 @@ func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]solo.Dep
 			if !ok || strings.TrimSpace(peerNode.Host) == "" {
 				continue
 			}
-			peerMap[peerName] = solo.NodePeer{
+			peerMap[peerName] = desiredstate.NodePeer{
 				Name:          peerName,
 				Labels:        append([]string(nil), peerNode.Labels...),
 				PublicAddress: peerNode.Host,
@@ -974,7 +982,7 @@ func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]solo.Dep
 		}
 	}
 
-	peers := make([]solo.NodePeer, 0, len(peerMap))
+	peers := make([]desiredstate.NodePeer, 0, len(peerMap))
 	for _, name := range sortedSoloPeerNames(peerMap) {
 		peers = append(peers, peerMap[name])
 	}
@@ -986,7 +994,7 @@ func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]solo.Dep
 	return snapshots, releaseNodes, peers, images, nil
 }
 
-func releaseNodeForSnapshot(snapshot solo.DeploySnapshot, attachment solo.AttachmentRecord, nodes map[string]config.SoloNode) (string, error) {
+func releaseNodeForSnapshot(snapshot desiredstate.DeploySnapshot, attachment solo.AttachmentRecord, nodes map[string]config.Node) (string, error) {
 	if snapshot.ReleaseTask == nil {
 		return "", nil
 	}
@@ -1001,7 +1009,7 @@ func releaseNodeForSnapshot(snapshot solo.DeploySnapshot, attachment solo.Attach
 	return "", fmt.Errorf("environment %s in %s requires at least one attached node labeled %q for release task service %q", snapshot.Environment, snapshot.WorkspaceKey, snapshot.ReleaseServiceKind, snapshot.ReleaseService)
 }
 
-func sortedSoloPeerNames(peers map[string]solo.NodePeer) []string {
+func sortedSoloPeerNames(peers map[string]desiredstate.NodePeer) []string {
 	names := make([]string, 0, len(peers))
 	for name := range peers {
 		names = append(names, name)
@@ -1023,7 +1031,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	readErrors := 0
 
 	for name, node := range nodes {
-		result, err := readSoloNodeStatus(ctx, node)
+		result, err := readNodeStatus(ctx, node)
 		if err != nil {
 			readErrors++
 			if a.Printer.JSON {
@@ -1355,7 +1363,7 @@ func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {
 	}
 	type nodeListItem struct {
 		Name                    string                  `json:"name"`
-		Node                    config.SoloNode         `json:"node"`
+		Node                    config.Node             `json:"node"`
 		Attachments             []solo.AttachmentRecord `json:"attachments,omitempty"`
 		CurrentEnvironmentBound bool                    `json:"current_environment_bound,omitempty"`
 	}
@@ -1407,7 +1415,7 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 		return err
 	}
 	environmentName := soloEnvironmentName(cfg, opts.Environment)
-	attachment, changed, err := a.attachSoloNode(&current, workspaceRoot, environmentName, opts.Node)
+	attachment, changed, err := a.attachNode(&current, workspaceRoot, environmentName, opts.Node)
 	if err != nil {
 		return err
 	}
@@ -1415,7 +1423,7 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 		return err
 	}
 	if _, ok := current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment]; ok {
-		if _, err := a.republishSoloNodes(ctx, current, attachment.NodeNames); err != nil {
+		if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
 			return err
 		}
 	}
@@ -1468,7 +1476,7 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, err := a.republishSoloNodes(ctx, current, affectedNodeNames); err != nil {
+	if _, err := a.republishNodes(ctx, current, affectedNodeNames); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -1565,7 +1573,7 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, err := a.republishSoloNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
@@ -1605,13 +1613,13 @@ func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) err
 	if err != nil {
 		return err
 	}
-	nodes, err := a.resolveSoloNodes(current, opts.Nodes)
+	nodes, err := a.resolveNodes(current, opts.Nodes)
 	if err != nil {
 		return err
 	}
 	results := make([]map[string]any, 0, len(nodes))
 	failed := false
-	for _, name := range sortedSoloNodeNames(nodes) {
+	for _, name := range sortedNodeNames(nodes) {
 		node := nodes[name]
 		checks := []struct {
 			name string
@@ -1835,7 +1843,7 @@ func (a *App) ensureSoloNodeCreateSSHPublicKey(opts *SoloNodeCreateOptions, work
 	return nil
 }
 
-func (a *App) SharedNodeCreate(ctx context.Context, opts SharedNodeCreateOptions) error {
+func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreateOptions) error {
 	if opts.Name == "" {
 		return fmt.Errorf("node name is required")
 	}
@@ -2089,7 +2097,7 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 	if len(nodeNames) == 0 {
 		return fmt.Errorf("no nodes are attached to the current environment")
 	}
-	nodes, err := a.resolveSoloNodes(current, nodeNames)
+	nodes, err := a.resolveNodes(current, nodeNames)
 	if err != nil {
 		return err
 	}
@@ -2129,7 +2137,7 @@ func (a *App) soloProgress(nodeName string) func(string) {
 	}
 }
 
-func (a *App) installSoloAgent(ctx context.Context, nodeName string, node config.SoloNode, opts SoloAgentInstallOptions) error {
+func (a *App) installSoloAgent(ctx context.Context, nodeName string, node config.Node, opts SoloAgentInstallOptions) error {
 	reporter := newSoloInstallReporter(ctx, a.Printer, nodeName)
 	defer reporter.Close()
 	return installSoloAgent(ctx, node, opts, reporter)
@@ -2176,13 +2184,13 @@ func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 	return strings.TrimSpace(cfg.DefaultEnvironment)
 }
 
-func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.SoloNode, error) {
+func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.Node, error) {
 	current, err := a.readSoloState()
 	if err != nil {
 		return nil, err
 	}
 	if len(opts.Nodes) > 0 {
-		return a.resolveSoloNodes(current, opts.Nodes)
+		return a.resolveNodes(current, opts.Nodes)
 	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
@@ -2193,12 +2201,12 @@ func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.SoloNod
 		return nil, err
 	}
 	if len(nodeNames) == 0 {
-		return map[string]config.SoloNode{}, nil
+		return map[string]config.Node{}, nil
 	}
-	return a.resolveSoloNodes(current, nodeNames)
+	return a.resolveNodes(current, nodeNames)
 }
 
-func (a *App) attachSoloNode(current *solo.State, workspaceRoot, environmentName, nodeName string) (solo.AttachmentRecord, bool, error) {
+func (a *App) attachNode(current *solo.State, workspaceRoot, environmentName, nodeName string) (solo.AttachmentRecord, bool, error) {
 	if current == nil {
 		return solo.AttachmentRecord{}, false, fmt.Errorf("solo state is required")
 	}
@@ -2255,7 +2263,7 @@ type ingressDNSHostResult struct {
 
 const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
 
-func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.SoloNode, skip bool) error {
+func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.Node, skip bool) error {
 	if skip || cfg == nil || cfg.Ingress == nil || cfg.Ingress.TLS.Mode != "auto" {
 		return nil
 	}
@@ -2272,7 +2280,7 @@ func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectC
 	return fmt.Errorf("ingress DNS is not ready; update DNS or pass --skip-dns-check")
 }
 
-func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.SoloNode) (ingressDNSReportResult, error) {
+func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.Node) (ingressDNSReportResult, error) {
 	hosts := []string{}
 	if cfg != nil && cfg.Ingress != nil {
 		hosts = normalizeIngressHosts(cfg.Ingress.Hosts)
@@ -2328,13 +2336,13 @@ func printIngressDNSReport(printer output.Printer, report ingressDNSReportResult
 	}
 }
 
-func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.SoloNode) []string {
+func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Node) []string {
 	if cfg == nil {
 		return nil
 	}
 	seen := map[string]bool{}
 	ips := []string{}
-	for _, name := range sortedSoloNodeNames(selected) {
+	for _, name := range sortedNodeNames(selected) {
 		node := selected[name]
 		if !soloNodeCanRunIngress(node, cfg) {
 			continue
@@ -2437,7 +2445,7 @@ func parseSoloLabels(value string) ([]string, error) {
 	return labels, nil
 }
 
-func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentInstallOptions, reporter soloInstallReporter) error {
+func installSoloAgent(ctx context.Context, node config.Node, opts SoloAgentInstallOptions, reporter soloInstallReporter) error {
 	if strings.TrimSpace(opts.AgentBinary) != "" {
 		remotePath := fmt.Sprintf("/tmp/devopsellence-agent-%d", time.Now().UnixNano())
 		reporter.Progress("Uploading agent binary...")
@@ -2466,7 +2474,7 @@ func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentI
 	}), reporter)
 }
 
-func runSoloAgentInstallScript(ctx context.Context, node config.SoloNode, script string, reporter soloInstallReporter) error {
+func runSoloAgentInstallScript(ctx context.Context, node config.Node, script string, reporter soloInstallReporter) error {
 	writer := reporter.Stream()
 	return solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), writer, writer)
 }
@@ -2665,14 +2673,14 @@ func waitForSoloProviderServer(ctx context.Context, provider providers.Provider,
 	}
 }
 
-func waitForSoloSSH(ctx context.Context, node config.SoloNode, timeout time.Duration) error {
+func waitForSoloSSH(ctx context.Context, node config.Node, timeout time.Duration) error {
 	return waitForSoloSSHWithProbe(ctx, node, timeout, 10*time.Second, 2*time.Second, func(ctx context.Context) error {
 		_, err := solo.RunSSH(ctx, node, "true", nil)
 		return err
 	})
 }
 
-func waitForSoloSSHWithProbe(ctx context.Context, node config.SoloNode, timeout, probeTimeout, retryInterval time.Duration, probe func(context.Context) error) error {
+func waitForSoloSSHWithProbe(ctx context.Context, node config.Node, timeout, probeTimeout, retryInterval time.Duration, probe func(context.Context) error) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
@@ -2821,7 +2829,7 @@ func soloImageTag(project, revision string) string {
 }
 
 // transferImage pipes `docker save | gzip` through ssh to `gunzip | docker load`.
-func transferImage(ctx context.Context, node config.SoloNode, imageTag string, progress func(string)) error {
+func transferImage(ctx context.Context, node config.Node, imageTag string, progress func(string)) error {
 	if progress == nil {
 		progress = func(string) {}
 	}
@@ -2918,6 +2926,10 @@ func remoteReadOptionalFileCommand(path, missingSentinel string) string {
 
 func remoteJournalctlCommand(args string) string {
 	return fmt.Sprintf("if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n journalctl %s; fi; exec journalctl %s", args, args)
+}
+
+func desiredStateOverridePath(node config.Node) string {
+	return path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "desired-state-override.json")
 }
 
 func remoteDesiredStateOverrideCommand(overridePath string) string {

@@ -1,4 +1,4 @@
-package solo
+package desiredstate
 
 import (
 	"crypto/sha256"
@@ -8,45 +8,45 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/devopsellence/cli/internal/config"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
 // Desired-state JSON types matching the agent protobuf schema (camelCase keys).
 // We use plain encoding/json rather than importing protobuf.
 
-type desiredStateJSON struct {
+type DesiredStateJSON struct {
 	SchemaVersion int               `json:"schemaVersion,omitempty"`
 	Revision      string            `json:"revision,omitempty"`
-	Environments  []environmentJSON `json:"environments,omitempty"`
-	Ingress       *ingressJSON      `json:"ingress,omitempty"`
-	NodePeers     []nodePeerJSON    `json:"nodePeers,omitempty"`
+	Environments  []EnvironmentJSON `json:"environments,omitempty"`
+	Ingress       *IngressJSON      `json:"ingress,omitempty"`
+	NodePeers     []NodePeerJSON    `json:"nodePeers,omitempty"`
 }
 
-type environmentJSON struct {
+type EnvironmentJSON struct {
 	Name     string        `json:"name"`
 	Revision string        `json:"revision,omitempty"`
-	Services []serviceJSON `json:"services,omitempty"`
-	Tasks    []taskJSON    `json:"tasks,omitempty"`
+	Services []ServiceJSON `json:"services,omitempty"`
+	Tasks    []TaskJSON    `json:"tasks,omitempty"`
 }
 
-type serviceJSON struct {
+type ServiceJSON struct {
 	Name         string            `json:"name"`
 	Kind         string            `json:"kind,omitempty"`
 	Image        string            `json:"image"`
 	Entrypoint   []string          `json:"entrypoint,omitempty"`
 	Command      []string          `json:"command,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
-	Healthcheck  *healthcheckJSON  `json:"healthcheck,omitempty"`
-	Ports        []servicePortJSON `json:"ports,omitempty"`
-	VolumeMounts []volumeMountJSON `json:"volumeMounts,omitempty"`
+	Healthcheck  *HealthcheckJSON  `json:"healthcheck,omitempty"`
+	Ports        []ServicePortJSON `json:"ports,omitempty"`
+	VolumeMounts []VolumeMountJSON `json:"volumeMounts,omitempty"`
 }
 
-type servicePortJSON struct {
+type ServicePortJSON struct {
 	Name string `json:"name,omitempty"`
 	Port int    `json:"port,omitempty"`
 }
 
-type healthcheckJSON struct {
+type HealthcheckJSON struct {
 	Path               string `json:"path,omitempty"`
 	Port               int    `json:"port,omitempty"`
 	IntervalSeconds    int64  `json:"intervalSeconds,omitempty"`
@@ -55,45 +55,45 @@ type healthcheckJSON struct {
 	StartPeriodSeconds int64  `json:"startPeriodSeconds,omitempty"`
 }
 
-type volumeMountJSON struct {
+type VolumeMountJSON struct {
 	Source string `json:"source"`
 	Target string `json:"target"`
 }
 
-type taskJSON struct {
+type TaskJSON struct {
 	Name         string            `json:"name"`
 	Image        string            `json:"image"`
 	Entrypoint   []string          `json:"entrypoint,omitempty"`
 	Command      []string          `json:"command,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
-	VolumeMounts []volumeMountJSON `json:"volumeMounts,omitempty"`
+	VolumeMounts []VolumeMountJSON `json:"volumeMounts,omitempty"`
 }
 
-type ingressJSON struct {
+type IngressJSON struct {
 	Hosts        []string           `json:"hosts,omitempty"`
 	Mode         string             `json:"mode,omitempty"`
-	TLS          ingressTLSJSON     `json:"tls,omitempty"`
+	TLS          IngressTLSJSON     `json:"tls,omitempty"`
 	RedirectHTTP bool               `json:"redirectHttp,omitempty"`
-	Routes       []ingressRouteJSON `json:"routes,omitempty"`
+	Routes       []IngressRouteJSON `json:"routes,omitempty"`
 }
 
-type ingressTLSJSON struct {
+type IngressTLSJSON struct {
 	Mode           string `json:"mode,omitempty"`
 	Email          string `json:"email,omitempty"`
 	CADirectoryURL string `json:"caDirectoryUrl,omitempty"`
 }
 
-type ingressRouteJSON struct {
-	Match  ingressMatchJSON  `json:"match"`
-	Target ingressTargetJSON `json:"target"`
+type IngressRouteJSON struct {
+	Match  IngressMatchJSON  `json:"match"`
+	Target IngressTargetJSON `json:"target"`
 }
 
-type ingressMatchJSON struct {
+type IngressMatchJSON struct {
 	Hostname   string `json:"hostname"`
 	PathPrefix string `json:"pathPrefix,omitempty"`
 }
 
-type ingressTargetJSON struct {
+type IngressTargetJSON struct {
 	Environment string `json:"environment"`
 	Service     string `json:"service"`
 	Port        string `json:"port,omitempty"`
@@ -105,10 +105,46 @@ type NodePeer struct {
 	PublicAddress string
 }
 
-type nodePeerJSON struct {
+type NodePeerJSON struct {
 	Name          string   `json:"name,omitempty"`
 	Labels        []string `json:"labels,omitempty"`
 	PublicAddress string   `json:"publicAddress,omitempty"`
+}
+
+type ScopedSecrets map[string]map[string]string
+
+func (s ScopedSecrets) ValuesForService(serviceName string) map[string]string {
+	merged := map[string]string{}
+	for key, value := range s[""] {
+		merged[key] = value
+	}
+	for key, value := range s[serviceName] {
+		merged[key] = value
+	}
+	return merged
+}
+
+type SnapshotMetadata struct {
+	AppType    string `json:"app_type,omitempty"`
+	ConfigPath string `json:"config_path,omitempty"`
+	Project    string `json:"project,omitempty"`
+	UpdatedAt  string `json:"updated_at,omitempty"`
+}
+
+type DeploySnapshot struct {
+	WorkspaceRoot      string           `json:"workspace_root"`
+	WorkspaceKey       string           `json:"workspace_key"`
+	Environment        string           `json:"environment"`
+	Revision           string           `json:"revision"`
+	Image              string           `json:"image"`
+	Services           []ServiceJSON    `json:"services,omitempty"`
+	ReleaseTask        *TaskJSON        `json:"release_task,omitempty"`
+	ReleaseService     string           `json:"release_service,omitempty"`
+	ReleaseServiceKind string           `json:"release_service_kind,omitempty"`
+	Ingress            *IngressJSON     `json:"ingress,omitempty"`
+	IngressService     string           `json:"ingress_service,omitempty"`
+	IngressServiceKind string           `json:"ingress_service_kind,omitempty"`
+	Metadata           SnapshotMetadata `json:"metadata,omitempty"`
 }
 
 // BuildDesiredState produces desired-state JSON from a ProjectConfig, image tag,
@@ -140,7 +176,7 @@ func BuildDesiredStateForNodeWithScopedSecrets(cfg *config.ProjectConfig, imageT
 }
 
 func buildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision string, secretsForService func(string) map[string]string, labels []string, ingressNode bool, includeReleaseTask bool, nodePeers ...[]NodePeer) ([]byte, error) {
-	ds := desiredStateJSON{
+	ds := DesiredStateJSON{
 		SchemaVersion: 2,
 		Revision:      revision,
 	}
@@ -148,7 +184,7 @@ func buildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 		ds.NodePeers = buildNodePeers(nodePeers[0])
 	}
 
-	environment := environmentJSON{
+	environment := EnvironmentJSON{
 		Name:     strings.TrimSpace(cfg.DefaultEnvironment),
 		Revision: revision,
 	}
@@ -189,8 +225,29 @@ func buildDesiredStateForNode(cfg *config.ProjectConfig, imageTag, revision stri
 	return data, nil
 }
 
-func BuildAggregatedDesiredState(nodeName string, currentNode config.SoloNode, snapshots []DeploySnapshot, releaseNodes map[string]string, nodePeers []NodePeer) ([]byte, error) {
-	ds := desiredStateJSON{
+type NodePublicationInput struct {
+	NodeName     string
+	CurrentNode  config.Node
+	Snapshots    []DeploySnapshot
+	ReleaseNodes map[string]string
+	NodePeers    []NodePeer
+}
+
+type NodePublication struct {
+	NodeName         string
+	DesiredStateJSON []byte
+}
+
+func PlanNodePublication(input NodePublicationInput) (NodePublication, error) {
+	data, err := buildAggregatedDesiredState(input.NodeName, input.CurrentNode, input.Snapshots, input.ReleaseNodes, input.NodePeers)
+	if err != nil {
+		return NodePublication{}, err
+	}
+	return NodePublication{NodeName: strings.TrimSpace(input.NodeName), DesiredStateJSON: data}, nil
+}
+
+func buildAggregatedDesiredState(nodeName string, currentNode config.Node, snapshots []DeploySnapshot, releaseNodes map[string]string, nodePeers []NodePeer) ([]byte, error) {
+	ds := DesiredStateJSON{
 		SchemaVersion: 2,
 	}
 	if len(nodePeers) > 0 {
@@ -214,7 +271,7 @@ func BuildAggregatedDesiredState(nodeName string, currentNode config.SoloNode, s
 
 	for _, snapshot := range attached {
 		environmentName := environmentNames[snapshotKey(snapshot)]
-		environment := environmentJSON{
+		environment := EnvironmentJSON{
 			Name:     environmentName,
 			Revision: strings.TrimSpace(snapshot.Revision),
 		}
@@ -296,7 +353,7 @@ func normalizeEnvironmentNameToken(value string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func buildIngress(ingress *config.IngressConfig, environmentName string) *ingressJSON {
+func buildIngress(ingress *config.IngressConfig, environmentName string) *IngressJSON {
 	if ingress == nil || len(ingress.Hosts) == 0 || len(ingress.Rules) == 0 {
 		return nil
 	}
@@ -304,18 +361,18 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 	if mode == "" {
 		mode = "auto"
 	}
-	routes := make([]ingressRouteJSON, 0, len(ingress.Rules))
+	routes := make([]IngressRouteJSON, 0, len(ingress.Rules))
 	for _, rule := range ingress.Rules {
 		pathPrefix := strings.TrimSpace(rule.Match.PathPrefix)
 		if pathPrefix == "" {
 			pathPrefix = "/"
 		}
-		routes = append(routes, ingressRouteJSON{
-			Match: ingressMatchJSON{
+		routes = append(routes, IngressRouteJSON{
+			Match: IngressMatchJSON{
 				Hostname:   strings.TrimSpace(rule.Match.Host),
 				PathPrefix: pathPrefix,
 			},
-			Target: ingressTargetJSON{
+			Target: IngressTargetJSON{
 				Environment: environmentName,
 				Service:     strings.TrimSpace(rule.Target.Service),
 				Port:        strings.TrimSpace(rule.Target.Port),
@@ -326,10 +383,10 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 	if ingress.RedirectHTTP != nil {
 		redirectHTTP = *ingress.RedirectHTTP
 	}
-	return &ingressJSON{
+	return &IngressJSON{
 		Hosts: append([]string(nil), ingress.Hosts...),
 		Mode:  "public",
-		TLS: ingressTLSJSON{
+		TLS: IngressTLSJSON{
 			Mode:           mode,
 			Email:          strings.TrimSpace(ingress.TLS.Email),
 			CADirectoryURL: strings.TrimSpace(ingress.TLS.CADirectoryURL),
@@ -339,8 +396,8 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *ingres
 	}
 }
 
-func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmentNames map[string]string) (*ingressJSON, error) {
-	var merged *ingressJSON
+func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmentNames map[string]string) (*IngressJSON, error) {
+	var merged *IngressJSON
 	hostSet := map[string]bool{}
 	routeSet := map[string]bool{}
 
@@ -349,7 +406,7 @@ func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmen
 			continue
 		}
 		if merged == nil {
-			merged = &ingressJSON{
+			merged = &IngressJSON{
 				Mode:         snapshot.Ingress.Mode,
 				TLS:          snapshot.Ingress.TLS,
 				RedirectHTTP: snapshot.Ingress.RedirectHTTP,
@@ -455,7 +512,7 @@ func ingressTargetServiceNames(ingress *config.IngressConfig) []string {
 	return serviceNames
 }
 
-func ingressTargetServiceNamesFromRoutes(ingress *ingressJSON) []string {
+func ingressTargetServiceNamesFromRoutes(ingress *IngressJSON) []string {
 	serviceSet := map[string]bool{}
 	serviceNames := []string{}
 	if ingress == nil {
@@ -473,7 +530,7 @@ func ingressTargetServiceNamesFromRoutes(ingress *ingressJSON) []string {
 	return serviceNames
 }
 
-func syntheticRevision(ds desiredStateJSON) (string, error) {
+func syntheticRevision(ds DesiredStateJSON) (string, error) {
 	copyValue := ds
 	copyValue.Revision = ""
 	data, err := json.Marshal(copyValue)
@@ -488,8 +545,8 @@ func snapshotKey(snapshot DeploySnapshot) string {
 	return strings.TrimSpace(snapshot.WorkspaceKey) + "\n" + defaultEnvironmentName(snapshot.Environment)
 }
 
-func buildNodePeers(peers []NodePeer) []nodePeerJSON {
-	out := make([]nodePeerJSON, 0, len(peers))
+func buildNodePeers(peers []NodePeer) []NodePeerJSON {
+	out := make([]NodePeerJSON, 0, len(peers))
 	for _, peer := range peers {
 		name := strings.TrimSpace(peer.Name)
 		address := strings.TrimSpace(peer.PublicAddress)
@@ -497,7 +554,7 @@ func buildNodePeers(peers []NodePeer) []nodePeerJSON {
 		if name == "" && address == "" && len(labels) == 0 {
 			continue
 		}
-		out = append(out, nodePeerJSON{
+		out = append(out, NodePeerJSON{
 			Name:          name,
 			Labels:        labels,
 			PublicAddress: address,
@@ -573,16 +630,16 @@ func effectiveServiceKind(name string, svc config.ServiceConfig) string {
 	return config.InferredServiceKind(name, svc)
 }
 
-func buildService(serviceName string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (serviceJSON, error) {
+func buildService(serviceName string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (ServiceJSON, error) {
 	env, err := mergeEnv(svc.Env, svc.SecretRefs, secrets)
 	if err != nil {
-		return serviceJSON{}, err
+		return ServiceJSON{}, err
 	}
 	image := strings.TrimSpace(svc.Image)
 	if image == "" {
 		image = imageTag
 	}
-	c := serviceJSON{
+	c := ServiceJSON{
 		Name:  serviceName,
 		Kind:  effectiveServiceKind(serviceName, svc),
 		Image: image,
@@ -597,7 +654,7 @@ func buildService(serviceName string, svc config.ServiceConfig, imageTag string,
 	}
 
 	if svc.Healthcheck != nil {
-		c.Healthcheck = &healthcheckJSON{
+		c.Healthcheck = &HealthcheckJSON{
 			Path:               svc.Healthcheck.Path,
 			Port:               svc.Healthcheck.Port,
 			IntervalSeconds:    5,
@@ -608,11 +665,11 @@ func buildService(serviceName string, svc config.ServiceConfig, imageTag string,
 	}
 
 	for _, port := range svc.Ports {
-		c.Ports = append(c.Ports, servicePortJSON{Name: port.Name, Port: port.Port})
+		c.Ports = append(c.Ports, ServicePortJSON{Name: port.Name, Port: port.Port})
 	}
 
 	for _, v := range svc.Volumes {
-		c.VolumeMounts = append(c.VolumeMounts, volumeMountJSON{
+		c.VolumeMounts = append(c.VolumeMounts, VolumeMountJSON{
 			Source: v.Source,
 			Target: v.Target,
 		})
@@ -621,25 +678,25 @@ func buildService(serviceName string, svc config.ServiceConfig, imageTag string,
 	return c, nil
 }
 
-func buildReleaseTask(cfg *config.ProjectConfig, imageTag string, secrets map[string]string) (taskJSON, error) {
+func buildReleaseTask(cfg *config.ProjectConfig, imageTag string, secrets map[string]string) (TaskJSON, error) {
 	release := cfg.ReleaseTask()
 	if release == nil {
-		return taskJSON{}, fmt.Errorf("release task not configured")
+		return TaskJSON{}, fmt.Errorf("release task not configured")
 	}
 	service, ok := cfg.Services[release.Service]
 	if !ok {
-		return taskJSON{}, fmt.Errorf("service %q not found", release.Service)
+		return TaskJSON{}, fmt.Errorf("service %q not found", release.Service)
 	}
 	baseEnv := mergeStringMaps(service.Env, release.Env)
 	env, err := mergeEnv(baseEnv, service.SecretRefs, secrets)
 	if err != nil {
-		return taskJSON{}, err
+		return TaskJSON{}, err
 	}
 	image := strings.TrimSpace(service.Image)
 	if image == "" {
 		image = imageTag
 	}
-	task := taskJSON{
+	task := TaskJSON{
 		Name:  "release",
 		Image: image,
 		Env:   env,
@@ -655,7 +712,7 @@ func buildReleaseTask(cfg *config.ProjectConfig, imageTag string, secrets map[st
 		task.Command = append([]string(nil), service.Args...)
 	}
 	for _, v := range service.Volumes {
-		task.VolumeMounts = append(task.VolumeMounts, volumeMountJSON{Source: v.Source, Target: v.Target})
+		task.VolumeMounts = append(task.VolumeMounts, VolumeMountJSON{Source: v.Source, Target: v.Target})
 	}
 	return task, nil
 }
@@ -690,4 +747,32 @@ func mergeStringMaps(parts ...map[string]string) map[string]string {
 		}
 	}
 	return merged
+}
+
+func BuildService(serviceName string, svc config.ServiceConfig, imageTag string, secrets map[string]string) (ServiceJSON, error) {
+	return buildService(serviceName, svc, imageTag, secrets)
+}
+
+func BuildReleaseTask(cfg *config.ProjectConfig, imageTag string, secrets map[string]string) (TaskJSON, error) {
+	return buildReleaseTask(cfg, imageTag, secrets)
+}
+
+func BuildIngress(ingress *config.IngressConfig, environmentName string) *IngressJSON {
+	return buildIngress(ingress, environmentName)
+}
+
+func MergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmentNames map[string]string) (*IngressJSON, error) {
+	return mergeIngressForNode(labels, snapshots, environmentNames)
+}
+
+func AggregatedEnvironmentNames(snapshots []DeploySnapshot) map[string]string {
+	return aggregatedEnvironmentNames(snapshots)
+}
+
+func defaultEnvironmentName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return config.DefaultEnvironment
+	}
+	return name
 }

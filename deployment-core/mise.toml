@@ -1,0 +1,6 @@
+[tools]
+go = "1.26.2"
+
+[tasks.test]
+description = "Run deployment core unit tests"
+run = "GOCACHE=$(pwd)/.gocache go test ./..."

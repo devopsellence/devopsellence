@@ -35,16 +35,16 @@ devopsellence is agent-first. The installer prints the agent skill command; to i
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
 ```
 
-Check local tooling:
-
-```bash
-devopsellence doctor
-```
-
 Choose the workspace mode once:
 
 ```bash
 devopsellence mode use solo
+```
+
+Check local tooling:
+
+```bash
+devopsellence doctor
 ```
 
 Prepare the app, connect a node, and install the agent:

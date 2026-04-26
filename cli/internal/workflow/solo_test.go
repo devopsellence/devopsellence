@@ -50,6 +50,47 @@ func TestDockerBuildArgsRejectsMultiplePlatforms(t *testing.T) {
 	}
 }
 
+func TestTailBufferKeepsOnlyBoundedTail(t *testing.T) {
+	buf := newTailBuffer(10)
+
+	n, err := buf.Write([]byte("abcdef"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 6 {
+		t.Fatalf("Write() n = %d, want 6", n)
+	}
+	if got := buf.String(); got != "abcdef" {
+		t.Fatalf("String() = %q, want %q", got, "abcdef")
+	}
+
+	n, err = buf.Write([]byte("ghijklmnop"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 10 {
+		t.Fatalf("Write() n = %d, want 10", n)
+	}
+	if got := buf.String(); got != "[truncated]\nghijklmnop" {
+		t.Fatalf("String() = %q, want bounded tail", got)
+	}
+}
+
+func TestTailBufferLargeWriteKeepsOnlyBoundedTail(t *testing.T) {
+	buf := newTailBuffer(5)
+
+	n, err := buf.Write([]byte("abcdefghijklmnopqrstuvwxyz"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 26 {
+		t.Fatalf("Write() n = %d, want 26", n)
+	}
+	if got := buf.String(); got != "[truncated]\nvwxyz" {
+		t.Fatalf("String() = %q, want bounded tail", got)
+	}
+}
+
 func TestSSHInteractiveErrorIncludesCapturedOutput(t *testing.T) {
 	err := errors.New("exit status 1")
 

@@ -1773,9 +1773,9 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 		return err
 	}
 
-	var sshStdout bytes.Buffer
-	var sshStderr bytes.Buffer
-	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, &sshStdout, &sshStderr); err != nil {
+	sshStdout := newTailBuffer(sshOutputTailLimit)
+	sshStderr := newTailBuffer(sshOutputTailLimit)
+	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, sshStdout, sshStderr); err != nil {
 		return sshInteractiveError("failed to run install command over SSH", err, sshStdout.String(), sshStderr.String())
 	}
 
@@ -1800,6 +1800,47 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 	}
 	return a.Printer.PrintJSON(result)
 
+}
+
+const sshOutputTailLimit = 64 * 1024
+
+type tailBuffer struct {
+	limit     int
+	buf       []byte
+	truncated bool
+}
+
+func newTailBuffer(limit int) *tailBuffer {
+	return &tailBuffer{limit: limit}
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.limit <= 0 {
+		if n > 0 {
+			b.truncated = true
+		}
+		return n, nil
+	}
+	if len(p) >= b.limit {
+		b.buf = append(b.buf[:0], p[len(p)-b.limit:]...)
+		b.truncated = true
+		return n, nil
+	}
+	if overflow := len(b.buf) + len(p) - b.limit; overflow > 0 {
+		copy(b.buf, b.buf[overflow:])
+		b.buf = b.buf[:len(b.buf)-overflow]
+		b.truncated = true
+	}
+	b.buf = append(b.buf, p...)
+	return n, nil
+}
+
+func (b *tailBuffer) String() string {
+	if !b.truncated {
+		return string(b.buf)
+	}
+	return "[truncated]\n" + string(b.buf)
 }
 
 func sshInteractiveError(prefix string, err error, stdout string, stderr string) error {

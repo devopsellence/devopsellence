@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -21,7 +20,6 @@ import (
 	"github.com/devopsellence/cli/internal/api"
 	"github.com/devopsellence/cli/internal/auth"
 	"github.com/devopsellence/cli/internal/config"
-	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/docker"
 	"github.com/devopsellence/cli/internal/git"
 	"github.com/devopsellence/cli/internal/output"
@@ -1007,6 +1005,14 @@ func TestSecretSetUsesWorkspaceEnvironment(t *testing.T) {
 	if value := stringValueAny(captured["value"]); value != "super-secret" {
 		t.Fatalf("value = %v, want super-secret", captured["value"])
 	}
+	cfg, err := config.LoadFromRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := cfg.Services["web"].SecretRefs
+	if len(refs) != 1 || refs[0].Name != "SECRET_KEY_BASE" || refs[0].Secret != "gsm://projects/test/secrets/abc/versions/latest" {
+		t.Fatalf("secret refs = %#v", refs)
+	}
 }
 
 func TestSecretSetReadsValueFromStdin(t *testing.T) {
@@ -1077,8 +1083,11 @@ func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 	if !strings.Contains(stdout.String(), "SECRET_KEY_BASE") {
 		t.Fatalf("SecretList() output = %q, want secret listing", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "RAILS_MASTER_KEY -> gsm://projects/test/secrets/rails/versions/latest (auto-managed from config/master.key)") {
-		t.Fatalf("SecretList() output = %q, want Rails auto-managed note", stdout.String())
+	if !strings.Contains(stdout.String(), "RAILS_MASTER_KEY -> gsm://projects/test/secrets/rails/versions/latest") {
+		t.Fatalf("SecretList() output = %q, want Rails secret listing", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "auto-managed") {
+		t.Fatalf("SecretList() output = %q, unexpected auto-managed note", stdout.String())
 	}
 }
 
@@ -1086,7 +1095,11 @@ func TestSecretDeleteUsesWorkspaceEnvironment(t *testing.T) {
 	t.Parallel()
 
 	root := makeRailsRoot(t, "ShopApp")
-	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
+	project := config.DefaultProjectConfig("default", "ShopApp", "staging")
+	web := project.Services["web"]
+	web.SecretRefs = []config.SecretRef{{Name: "SECRET_KEY_BASE", Secret: "gsm://projects/test/secrets/abc/versions/latest"}}
+	project.Services["web"] = web
+	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -1112,6 +1125,13 @@ func TestSecretDeleteUsesWorkspaceEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Deleted secret SECRET_KEY_BASE for web.") {
 		t.Fatalf("SecretDelete() output = %q", stdout.String())
+	}
+	cfg, err := config.LoadFromRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refs := cfg.Services["web"].SecretRefs; len(refs) != 0 {
+		t.Fatalf("secret refs = %#v, want none", refs)
 	}
 }
 
@@ -1536,7 +1556,7 @@ func TestDeployUsesResolveDeployTargetWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
+func TestDeployAppliesGitHubActionEnvVarOverrides(t *testing.T) {
 	root := makeGitGenericRoot(t)
 	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
 	web := project.Services[config.DefaultWebServiceName]
@@ -1552,10 +1572,8 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 	commitAll(t, root, "add config")
 
 	t.Setenv(deployEnvVarsOverrideEnv, `{"all":{"RAILS_ENV":"production"},"web":{"WEB_ONLY":"true"},"worker":{"QUEUE":"critical"}}`)
-	t.Setenv(deploySecretsOverrideEnv, `{"all":{"DATABASE_URL":"postgres://db"},"worker":{"REDIS_URL":"redis://cache"}}`)
 
 	var releaseCaptured api.ReleaseCreateRequest
-	var secretPayloads []map[string]any
 	app := newTestAppWithDeployTarget(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/deploy_target":
@@ -1566,17 +1584,6 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 				"project_created":      false,
 				"environment":          map[string]any{"id": 44, "name": "production", "project_id": 11},
 				"environment_created":  false,
-			}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			var payload map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatalf("decode secret payload: %v", err)
-			}
-			secretPayloads = append(secretPayloads, payload)
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
-				"name":         payload["name"],
-				"service_name": payload["service_name"],
-				"secret_ref":   "gsm://projects/test/secrets/" + payload["name"].(string) + "/versions/latest",
 			}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
 			if err := json.NewDecoder(r.Body).Decode(&releaseCaptured); err != nil {
@@ -1638,15 +1645,6 @@ func TestDeployAppliesGitHubActionRuntimeOverrides(t *testing.T) {
 	}
 	if got, want := workerPayload["env"], map[string]any{"WORKER_FROM_CONFIG": "1", "RAILS_ENV": "production", "QUEUE": "critical"}; !equalJSONMap(got, want) {
 		t.Fatalf("worker env = %#v, want %#v", got, want)
-	}
-
-	wantSecrets := []map[string]any{
-		{"service_name": "web", "name": "DATABASE_URL", "value": "postgres://db"},
-		{"service_name": "worker", "name": "DATABASE_URL", "value": "postgres://db"},
-		{"service_name": "worker", "name": "REDIS_URL", "value": "redis://cache"},
-	}
-	if !equalSecretPayloads(secretPayloads, wantSecrets) {
-		t.Fatalf("secret payloads = %#v, want %#v", secretPayloads, wantSecrets)
 	}
 }
 
@@ -2159,362 +2157,6 @@ func TestDeleteUsesWorkspaceEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Customer nodes unassigned: 2 Managed servers scheduled for delete: 1") {
 		t.Fatalf("Delete() output = %q", stdout.String())
-	}
-}
-
-func TestDeployRailsSyncsMasterKeySecret(t *testing.T) {
-	t.Parallel()
-
-	root := makeGitRailsRoot(t, "ShopApp")
-	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{Command: []string{"bin/jobs"}}
-	if _, err := config.Write(root, project); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "config", "master.key"), []byte("master-key-value\n"), 0o600); err != nil {
-		t.Fatalf("write master.key: %v", err)
-	}
-	commitAll(t, root, "configure deploy state")
-
-	secretValues := map[string]string{}
-	var secretValuesMu sync.Mutex
-	var stdout bytes.Buffer
-	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
-			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
-			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
-			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			var payload map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatalf("decode secret payload: %v", err)
-			}
-			secretValuesMu.Lock()
-			secretValues[stringValueAny(payload["service_name"])] = stringValueAny(payload["value"])
-			secretValuesMu.Unlock()
-			return jsonResponse(t, map[string]any{"name": stringValueAny(payload["name"]), "service_name": stringValueAny(payload["service_name"]), "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
-				"deployment_id":  77,
-				"assigned_nodes": 1,
-				"public_url":     "https://shop.example.test",
-			}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/deployments/77":
-			return jsonResponse(t, map[string]any{
-				"id":          77,
-				"sequence":    1,
-				"status":      "published",
-				"environment": map[string]any{"id": 44, "name": "production"},
-				"release":     map[string]any{"id": 22, "revision": "rel-1"},
-				"summary": map[string]any{
-					"assigned_nodes": 1,
-					"pending":        0,
-					"reconciling":    0,
-					"settled":        1,
-					"error":          0,
-					"active":         false,
-					"complete":       true,
-					"failed":         false,
-				},
-				"nodes": []map[string]any{
-					{"id": 1, "name": "node-a", "phase": "settled", "message": "revision healthy"},
-				},
-			}), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, nil
-		}
-	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
-	app.DeployPollInterval = 5 * time.Millisecond
-	app.DeployTimeout = 500 * time.Millisecond
-
-	if err := app.Deploy(context.Background(), DeployOptions{Image: "example.com/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}); err != nil {
-		t.Fatalf("Deploy() error = %v", err)
-	}
-	secretValuesMu.Lock()
-	if got := secretValues["web"]; got != "master-key-value" {
-		secretValuesMu.Unlock()
-		t.Fatalf("web secret value = %q, want master-key-value", got)
-	}
-	if got := secretValues["worker"]; got != "master-key-value" {
-		secretValuesMu.Unlock()
-		t.Fatalf("worker secret value = %q, want master-key-value", got)
-	}
-	secretValuesMu.Unlock()
-	if !strings.Contains(stdout.String(), "Rails: syncing RAILS_MASTER_KEY from config/master.key for web, worker.") {
-		t.Fatalf("Deploy() output = %q, want explicit Rails sync notice", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "synced RAILS_MASTER_KEY for web, worker.") {
-		t.Fatalf("Deploy() output = %q, want Rails secret sync summary", stdout.String())
-	}
-}
-
-func TestDeployRailsCanSkipMasterKeySync(t *testing.T) {
-	t.Parallel()
-
-	root := makeGitRailsRoot(t, "ShopApp")
-	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	if _, err := config.Write(root, project); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "config", "master.key"), []byte("master-key-value\n"), 0o600); err != nil {
-		t.Fatalf("write master.key: %v", err)
-	}
-	commitAll(t, root, "configure deploy state")
-
-	var stdout bytes.Buffer
-	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
-			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
-			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
-			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			t.Fatalf("unexpected Rails secret sync request")
-			return nil, nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
-				"deployment_id":  77,
-				"assigned_nodes": 1,
-				"public_url":     "https://shop.example.test",
-			}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/deployments/77":
-			return jsonResponse(t, map[string]any{
-				"id":          77,
-				"sequence":    1,
-				"status":      "published",
-				"environment": map[string]any{"id": 44, "name": "production"},
-				"release":     map[string]any{"id": 22, "revision": "rel-1"},
-				"summary": map[string]any{
-					"assigned_nodes": 1,
-					"pending":        0,
-					"reconciling":    0,
-					"settled":        1,
-					"error":          0,
-					"active":         false,
-					"complete":       true,
-					"failed":         false,
-				},
-				"nodes": []map[string]any{
-					{"id": 1, "name": "node-a", "phase": "settled", "message": "revision healthy"},
-				},
-			}), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, nil
-		}
-	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
-	app.DeployPollInterval = 5 * time.Millisecond
-	app.DeployTimeout = 500 * time.Millisecond
-
-	if err := app.Deploy(context.Background(), DeployOptions{
-		Image:                  "example.com/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		SkipRailsMasterKeySync: true,
-	}); err != nil {
-		t.Fatalf("Deploy() error = %v", err)
-	}
-	if !strings.Contains(stdout.String(), "Rails: skipping RAILS_MASTER_KEY sync (--no-rails-master-key-sync).") {
-		t.Fatalf("Deploy() output = %q, want skip notice", stdout.String())
-	}
-	if strings.Contains(stdout.String(), "synced RAILS_MASTER_KEY") {
-		t.Fatalf("Deploy() output = %q, unexpected sync summary", stdout.String())
-	}
-}
-
-func TestDeployRailsDoesNotSyncMasterKeyToHelperServices(t *testing.T) {
-	t.Parallel()
-
-	root := makeGitRailsRoot(t, "ShopApp")
-	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{}
-	web := project.Services["web"]
-	web.Image = "ghcr.io/acme/shop:latest"
-	project.Services["web"] = web
-	project.Services["cloudflared"] = config.ServiceConfig{
-		Image:   "docker.io/cloudflare/cloudflared:latest",
-		Command: []string{"cloudflared"},
-		Args:    []string{"tunnel", "run"},
-	}
-	if _, err := config.Write(root, project); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "config", "master.key"), []byte("master-key-value\n"), 0o600); err != nil {
-		t.Fatalf("write master.key: %v", err)
-	}
-	commitAll(t, root, "configure deploy state")
-
-	var stdout bytes.Buffer
-	secretValues := map[string]string{}
-	var secretValuesMu sync.Mutex
-	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
-			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
-			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
-			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			var payload map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatalf("decode secret request: %v", err)
-			}
-			secretValuesMu.Lock()
-			secretValues[stringValueAny(payload["service_name"])] = stringValueAny(payload["value"])
-			secretValuesMu.Unlock()
-			return jsonResponse(t, map[string]any{"name": stringValueAny(payload["name"]), "service_name": stringValueAny(payload["service_name"]), "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
-				"deployment_id":  77,
-				"assigned_nodes": 1,
-				"public_url":     "https://shop.example.test",
-			}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/deployments/77":
-			return jsonResponse(t, map[string]any{
-				"id":          77,
-				"sequence":    1,
-				"status":      "published",
-				"environment": map[string]any{"id": 44, "name": "production"},
-				"release":     map[string]any{"id": 22, "revision": "rel-1"},
-				"summary": map[string]any{
-					"assigned_nodes": 1,
-					"pending":        0,
-					"reconciling":    0,
-					"settled":        1,
-					"error":          0,
-					"active":         false,
-					"complete":       true,
-					"failed":         false,
-				},
-				"nodes": []map[string]any{{"id": 1, "name": "node-a", "phase": "settled", "message": "revision healthy"}},
-			}), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, nil
-		}
-	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
-	app.DeployPollInterval = 5 * time.Millisecond
-	app.DeployTimeout = 500 * time.Millisecond
-
-	if err := app.Deploy(context.Background(), DeployOptions{Image: "example.com/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}); err != nil {
-		t.Fatalf("Deploy() error = %v", err)
-	}
-	secretValuesMu.Lock()
-	defer secretValuesMu.Unlock()
-	if got := secretValues["web"]; got != "master-key-value" {
-		t.Fatalf("web secret value = %q, want master-key-value", got)
-	}
-	if got := secretValues["worker"]; got != "master-key-value" {
-		t.Fatalf("worker secret value = %q, want master-key-value", got)
-	}
-	if _, ok := secretValues["cloudflared"]; ok {
-		t.Fatalf("cloudflared unexpectedly received Rails master key: %#v", secretValues)
-	}
-	if !strings.Contains(stdout.String(), "Rails: syncing RAILS_MASTER_KEY from config/master.key for web, worker.") {
-		t.Fatalf("Deploy() output = %q, want Rails sync notice limited to app services", stdout.String())
-	}
-}
-
-func TestDeployRailsSkipsNoOpMasterKeyUpsertWhenDigestMatches(t *testing.T) {
-	t.Parallel()
-
-	root := makeGitRailsRoot(t, "ShopApp")
-	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	if _, err := config.Write(root, project); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "config", "master.key"), []byte("master-key-value\n"), 0o600); err != nil {
-		t.Fatalf("write master.key: %v", err)
-	}
-	commitAll(t, root, "configure deploy state")
-
-	var stdout bytes.Buffer
-	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
-			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
-			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
-			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{
-				"secrets": []map[string]any{{
-					"service_name": "web",
-					"name":         "RAILS_MASTER_KEY",
-					"secret_ref":   "gsm://projects/test/secrets/abc/versions/latest",
-					"value_sha256": "b244ce38fa8ece00bd70b7528e38e96c958c7afec2d06d30c9a532c307a3221c",
-				}},
-			}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			t.Fatalf("unexpected Rails secret sync request")
-			return nil, nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
-				"deployment_id":  77,
-				"assigned_nodes": 1,
-				"public_url":     "https://shop.example.test",
-			}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/deployments/77":
-			return jsonResponse(t, map[string]any{
-				"id":          77,
-				"sequence":    1,
-				"status":      "published",
-				"environment": map[string]any{"id": 44, "name": "production"},
-				"release":     map[string]any{"id": 22, "revision": "rel-1"},
-				"summary": map[string]any{
-					"assigned_nodes": 1,
-					"pending":        0,
-					"reconciling":    0,
-					"settled":        1,
-					"error":          0,
-					"active":         false,
-					"complete":       true,
-					"failed":         false,
-				},
-				"nodes": []map[string]any{
-					{"id": 1, "name": "node-a", "phase": "settled", "message": "revision healthy"},
-				},
-			}), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, nil
-		}
-	}))
-	app.Printer = output.New(&stdout, io.Discard, false)
-	app.DeployPollInterval = 5 * time.Millisecond
-	app.DeployTimeout = 500 * time.Millisecond
-
-	if err := app.Deploy(context.Background(), DeployOptions{Image: "example.com/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}); err != nil {
-		t.Fatalf("Deploy() error = %v", err)
-	}
-	if !strings.Contains(stdout.String(), "Rails: RAILS_MASTER_KEY already current for web.") {
-		t.Fatalf("Deploy() output = %q, want current-secret notice", stdout.String())
-	}
-	if strings.Contains(stdout.String(), "synced RAILS_MASTER_KEY") {
-		t.Fatalf("Deploy() output = %q, unexpected sync summary", stdout.String())
 	}
 }
 
@@ -3439,7 +3081,7 @@ func TestWarnAboutPrebuiltImageConfigForRails(t *testing.T) {
 	cfg := config.DefaultProjectConfig("default", "ShopApp", "production")
 	app.warnAboutPrebuiltImageConfig(DeployOptions{
 		Image: "docker.io/mccutchen/go-httpbin@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	}, discovery.Result{WorkspaceRoot: root}, cfg)
+	}, cfg)
 
 	text := stderr.String()
 	if !strings.Contains(text, "Using --image skips the local build.") {
@@ -3447,107 +3089,6 @@ func TestWarnAboutPrebuiltImageConfigForRails(t *testing.T) {
 	}
 	if !strings.Contains(text, "If this image is not a Rails image, update devopsellence.yml before deploy.") {
 		t.Fatalf("warning output = %q", text)
-	}
-}
-
-func TestDeployRailsSecretSyncRunsConcurrently(t *testing.T) {
-	t.Parallel()
-
-	root := makeGitRailsRoot(t, "ShopApp")
-	project := config.DefaultProjectConfig("default", "ShopApp", "production")
-	project.Services["worker"] = config.ServiceConfig{Command: []string{"bin/jobs"}}
-	if _, err := config.Write(root, project); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "config", "master.key"), []byte("master-key-value\n"), 0o600); err != nil {
-		t.Fatalf("write master.key: %v", err)
-	}
-	commitAll(t, root, "configure deploy state")
-
-	bothStarted := make(chan struct{})
-	releaseSecrets := make(chan struct{})
-	var once sync.Once
-	var mu sync.Mutex
-	seen := map[string]bool{}
-
-	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
-			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
-			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
-			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			var payload map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatalf("decode secret payload: %v", err)
-			}
-			service := stringValueAny(payload["service_name"])
-			mu.Lock()
-			seen[service] = true
-			if len(seen) == 2 {
-				once.Do(func() { close(bothStarted) })
-			}
-			mu.Unlock()
-			<-releaseSecrets
-			return jsonResponse(t, map[string]any{"name": stringValueAny(payload["name"]), "service_name": service, "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
-			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{
-				"deployment_id":  77,
-				"assigned_nodes": 1,
-				"public_url":     "https://shop.example.test",
-			}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/deployments/77":
-			return jsonResponse(t, map[string]any{
-				"id":          77,
-				"sequence":    1,
-				"status":      "published",
-				"environment": map[string]any{"id": 44, "name": "production"},
-				"release":     map[string]any{"id": 22, "revision": "rel-1"},
-				"summary": map[string]any{
-					"assigned_nodes": 1,
-					"pending":        0,
-					"reconciling":    0,
-					"settled":        1,
-					"error":          0,
-					"active":         false,
-					"complete":       true,
-					"failed":         false,
-				},
-				"nodes": []map[string]any{
-					{"id": 1, "name": "node-a", "phase": "settled", "message": "revision healthy"},
-				},
-			}), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, nil
-		}
-	}))
-	app.DeployPollInterval = 5 * time.Millisecond
-	app.DeployTimeout = 500 * time.Millisecond
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- app.Deploy(context.Background(), DeployOptions{
-			Image:          "example.com/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			NonInteractive: true,
-		})
-	}()
-
-	select {
-	case <-bothStarted:
-	case <-time.After(250 * time.Millisecond):
-		t.Fatal("secret sync did not start both requests concurrently")
-	}
-	close(releaseSecrets)
-
-	if err := <-errCh; err != nil {
-		t.Fatalf("Deploy() error = %v", err)
 	}
 }
 
@@ -3854,28 +3395,6 @@ func equalJSONMap(got any, want map[string]any) bool {
 	}
 	for key, value := range want {
 		if typed[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
-func equalSecretPayloads(got []map[string]any, want []map[string]any) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	sort.Slice(got, func(i, j int) bool {
-		left := stringValueAny(got[i]["service_name"]) + "\x00" + stringValueAny(got[i]["name"])
-		right := stringValueAny(got[j]["service_name"]) + "\x00" + stringValueAny(got[j]["name"])
-		return left < right
-	})
-	sort.Slice(want, func(i, j int) bool {
-		left := stringValueAny(want[i]["service_name"]) + "\x00" + stringValueAny(want[i]["name"])
-		right := stringValueAny(want[j]["service_name"]) + "\x00" + stringValueAny(want[j]["name"])
-		return left < right
-	})
-	for idx := range want {
-		if !equalJSONMap(got[idx], want[idx]) {
 			return false
 		}
 	}

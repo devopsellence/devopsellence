@@ -286,14 +286,9 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return fmt.Errorf("docker build: %w", err)
 	}
 
-	secrets, err := a.resolveSoloSecretValues(ctx, current, workspaceRoot, environmentName)
+	secrets, err := a.resolveSoloSecretValues(ctx, current, workspaceRoot, environmentName, cfg)
 	if err != nil {
 		return fmt.Errorf("load secrets: %w", err)
-	}
-	if notice, err := applySoloRailsMasterKey(workspaceRoot, cfg, secrets); err != nil {
-		return err
-	} else if notice != "" && !a.Printer.JSON {
-		a.Printer.Println("Rails: " + notice)
 	}
 
 	snapshot, err := solo.BuildDeploySnapshotWithScopedSecrets(cfg, workspaceRoot, a.ConfigStore.PathFor(workspaceRoot), imageTag, shortSHA, secrets)
@@ -678,12 +673,9 @@ func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.Stat
 	if cfg == nil {
 		return solo.DeploySnapshot{}, fmt.Errorf("missing devopsellence.yml for %s", snapshot.WorkspaceRoot)
 	}
-	secrets, err := a.resolveSoloSecretValues(ctx, current, snapshot.WorkspaceRoot, snapshot.Environment)
+	secrets, err := a.resolveSoloSecretValues(ctx, current, snapshot.WorkspaceRoot, snapshot.Environment, cfg)
 	if err != nil {
 		return solo.DeploySnapshot{}, fmt.Errorf("load secrets for %s: %w", snapshot.WorkspaceRoot, err)
-	}
-	if _, err := applySoloRailsMasterKey(snapshot.WorkspaceRoot, cfg, secrets); err != nil {
-		return solo.DeploySnapshot{}, err
 	}
 	configPath := strings.TrimSpace(snapshot.Metadata.ConfigPath)
 	if configPath == "" {
@@ -692,20 +684,74 @@ func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.Stat
 	return solo.BuildDeploySnapshotWithScopedSecrets(cfg, snapshot.WorkspaceRoot, configPath, snapshot.Image, snapshot.Revision, secrets)
 }
 
-func (a *App) resolveSoloSecretValues(ctx context.Context, current solo.State, workspaceRoot, environment string) (solo.ScopedSecrets, error) {
+func (a *App) resolveSoloSecretValues(ctx context.Context, current solo.State, workspaceRoot, environment string, cfg *config.ProjectConfig) (solo.ScopedSecrets, error) {
+	if cfg == nil {
+		return solo.ScopedSecrets{}, nil
+	}
 	records, err := current.SecretRecords(workspaceRoot, environment)
 	if err != nil {
 		return nil, err
 	}
-	values := solo.ScopedSecrets{}
+	local := map[string]solo.SecretRecord{}
 	for _, record := range records {
-		value, err := a.resolveSoloSecretRecord(ctx, record)
-		if err != nil {
-			return nil, err
+		local[record.ServiceName+"\x00"+record.Name] = record
+	}
+	values := solo.ScopedSecrets{}
+	for _, serviceName := range cfg.ServiceNames() {
+		service := cfg.Services[serviceName]
+		for _, ref := range service.SecretRefs {
+			value, err := a.resolveSoloSecretRef(ctx, serviceName, ref, local)
+			if err != nil {
+				return nil, err
+			}
+			values.Set(serviceName, ref.Name, value)
 		}
-		values.Set(record.ServiceName, record.Name, value)
 	}
 	return values, nil
+}
+
+func (a *App) resolveSoloSecretRef(ctx context.Context, serviceName string, ref config.SecretRef, local map[string]solo.SecretRecord) (string, error) {
+	source := strings.TrimSpace(ref.Secret)
+	if strings.HasPrefix(strings.ToLower(source), "op://") {
+		return a.resolveOnePasswordSecret(ctx, source)
+	}
+	store, name, ok := parseDevopsellenceSecretRef(source)
+	if !ok {
+		return "", fmt.Errorf("unsupported solo secret reference %q for %s.%s", source, serviceName, ref.Name)
+	}
+	record, ok := local[serviceName+"\x00"+name]
+	if !ok {
+		return "", fmt.Errorf("missing local solo secret %s for service %s in %s store", name, serviceName, store)
+	}
+	recordStore, err := solo.NormalizeSecretStore(record.Store)
+	if err != nil {
+		return "", err
+	}
+	if recordStore != store {
+		return "", fmt.Errorf("local solo secret %s for service %s uses %s store, config references %s", name, serviceName, recordStore, store)
+	}
+	return a.resolveSoloSecretRecord(ctx, record)
+}
+
+func parseDevopsellenceSecretRef(value string) (string, string, bool) {
+	const prefix = "devopsellence://"
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(strings.ToLower(value), prefix) {
+		return "", "", false
+	}
+	parts := strings.SplitN(value[len(prefix):], "/", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	store, err := solo.NormalizeSecretStore(parts[0])
+	if err != nil {
+		return "", "", false
+	}
+	name := strings.TrimSpace(parts[1])
+	if name == "" {
+		return "", "", false
+	}
+	return store, name, true
 }
 
 func (a *App) resolveSoloSecretRecord(ctx context.Context, record solo.SecretRecord) (string, error) {
@@ -1025,6 +1071,9 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if strings.TrimSpace(opts.ServiceName) == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
+	if _, ok := cfg.Services[opts.ServiceName]; !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", opts.ServiceName)}
+	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -1033,17 +1082,26 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if err != nil {
 		return err
 	}
+	configUpdated := ensureServiceSecretRef(cfg, opts.ServiceName, soloSecretConfigRef(record))
+	if configUpdated {
+		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
+			return err
+		}
+	}
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "store": record.Store, "reference": record.Reference, "action": "saved"})
+		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "store": record.Store, "reference": record.Reference, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "saved"})
 	}
 	if record.Store == solo.SecretStoreOnePassword {
 		a.Printer.Println(fmt.Sprintf("Secret %q saved for %s in %s from 1Password", record.Name, record.ServiceName, record.Environment))
-		return nil
+	} else {
+		a.Printer.Println(fmt.Sprintf("Secret %q saved for %s in %s", record.Name, record.ServiceName, record.Environment))
 	}
-	a.Printer.Println(fmt.Sprintf("Secret %q saved for %s in %s", record.Name, record.ServiceName, record.Environment))
+	if configUpdated {
+		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspaceRoot))
+	}
 	return nil
 }
 
@@ -1082,6 +1140,62 @@ func soloSecretMaterial(store string, opts SoloSecretsSetOptions) (solo.SecretMa
 	default:
 		return solo.SecretMaterial{}, ExitError{Code: 2, Err: fmt.Errorf("unsupported secret store %q", store)}
 	}
+}
+
+func soloSecretConfigRef(record solo.SecretRecord) config.SecretRef {
+	secret := "devopsellence://" + record.Store + "/" + record.Name
+	if strings.TrimSpace(record.Reference) != "" {
+		secret = strings.TrimSpace(record.Reference)
+	}
+	return config.SecretRef{Name: record.Name, Secret: secret}
+}
+
+func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref config.SecretRef) bool {
+	if cfg == nil {
+		return false
+	}
+	service, ok := cfg.Services[serviceName]
+	if !ok {
+		return false
+	}
+	for i, existing := range service.SecretRefs {
+		if existing.Name == ref.Name {
+			if existing.Secret == ref.Secret {
+				return false
+			}
+			service.SecretRefs[i] = ref
+			cfg.Services[serviceName] = service
+			return true
+		}
+	}
+	service.SecretRefs = append(service.SecretRefs, ref)
+	cfg.Services[serviceName] = service
+	return true
+}
+
+func removeServiceSecretRef(cfg *config.ProjectConfig, serviceName, name string) bool {
+	if cfg == nil {
+		return false
+	}
+	service, ok := cfg.Services[serviceName]
+	if !ok {
+		return false
+	}
+	filtered := make([]config.SecretRef, 0, len(service.SecretRefs))
+	changed := false
+	for _, existing := range service.SecretRefs {
+		if existing.Name == name {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	if !changed {
+		return false
+	}
+	service.SecretRefs = filtered
+	cfg.Services[serviceName] = service
+	return true
 }
 
 func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) error {
@@ -1264,6 +1378,9 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 	if strings.TrimSpace(opts.ServiceName) == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
+	if _, ok := cfg.Services[opts.ServiceName]; !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", opts.ServiceName)}
+	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -1272,13 +1389,22 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 	if err != nil {
 		return err
 	}
+	configUpdated := removeServiceSecretRef(cfg, opts.ServiceName, opts.Key)
+	if configUpdated {
+		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
+			return err
+		}
+	}
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "action": "deleted"})
+		return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "deleted"})
 	}
 	a.Printer.Println(fmt.Sprintf("Secret %q deleted for %s in %s", record.Name, record.ServiceName, record.Environment))
+	if configUpdated {
+		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspaceRoot))
+	}
 	return nil
 }
 
@@ -2290,81 +2416,6 @@ func parseSoloLabels(value string) ([]string, error) {
 		return nil, fmt.Errorf("at least one solo node label is required")
 	}
 	return labels, nil
-}
-
-func applySoloRailsMasterKey(workspaceRoot string, cfg *config.ProjectConfig, secrets solo.ScopedSecrets) (string, error) {
-	if cfg == nil || cfg.App.Type != config.AppTypeRails {
-		return "", nil
-	}
-	if secrets == nil {
-		secrets = solo.ScopedSecrets{}
-	}
-
-	serviceNames := cfg.ServiceNames()
-	missingServices := []string{}
-	for _, serviceName := range serviceNames {
-		if strings.TrimSpace(secrets.Value(serviceName, railsMasterKeySecretName)) == "" {
-			missingServices = append(missingServices, serviceName)
-		}
-	}
-
-	source := "managed secret store"
-	if len(missingServices) > 0 {
-		keyPath := filepath.Join(workspaceRoot, railsMasterKeyRelativePath)
-		data, err := os.ReadFile(keyPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				if len(missingServices) == len(serviceNames) {
-					return "", nil
-				}
-				missingServices = nil
-			} else {
-				return "", fmt.Errorf("read Rails master key: %w", err)
-			}
-		}
-		if len(missingServices) > 0 {
-			value := strings.TrimSpace(string(data))
-			if value == "" {
-				return "", fmt.Errorf("Rails app detected, but %s is empty", keyPath)
-			}
-			for _, serviceName := range missingServices {
-				secrets.Set(serviceName, railsMasterKeySecretName, value)
-			}
-			source = railsMasterKeyRelativePath
-		}
-	}
-
-	services := []string{}
-	for _, serviceName := range serviceNames {
-		if strings.TrimSpace(secrets.Value(serviceName, railsMasterKeySecretName)) == "" {
-			continue
-		}
-		service := cfg.Services[serviceName]
-		if addServiceSecretRef(&service, railsMasterKeySecretName) {
-			cfg.Services[serviceName] = service
-			services = append(services, serviceName)
-		}
-	}
-	if len(services) == 0 {
-		return "", nil
-	}
-	return fmt.Sprintf("using RAILS_MASTER_KEY from %s for %s.", source, strings.Join(services, ", ")), nil
-}
-
-func addServiceSecretRef(svc *config.ServiceConfig, name string) bool {
-	if svc == nil {
-		return false
-	}
-	if _, ok := svc.Env[name]; ok {
-		return false
-	}
-	for _, ref := range svc.SecretRefs {
-		if ref.Name == name {
-			return false
-		}
-	}
-	svc.SecretRefs = append(svc.SecretRefs, config.SecretRef{Name: name})
-	return true
 }
 
 func installSoloAgent(ctx context.Context, node config.SoloNode, opts SoloAgentInstallOptions, reporter soloInstallReporter) error {

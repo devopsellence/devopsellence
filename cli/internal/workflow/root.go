@@ -565,7 +565,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	deployCommand.Flags().StringVar(&deploySharedOpts.Image, "image", "", "Deploy an existing digest ref instead of building locally (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (shared mode)")
 	deployCommand.Flags().BoolVar(&deploySharedOpts.NonInteractive, "non-interactive", false, "Disable interactive prompts if re-initialization is needed (shared mode)")
-	deployCommand.Flags().BoolVar(&deploySharedOpts.SkipRailsMasterKeySync, "no-rails-master-key-sync", false, "Do not auto-sync config/master.key to the shared secret RAILS_MASTER_KEY")
 	root.AddCommand(deployCommand)
 
 	var ingressSetOpts IngressSetOptions

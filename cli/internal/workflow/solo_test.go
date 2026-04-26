@@ -915,50 +915,6 @@ func TestRemoteReadOptionalFileCommandSupportsPasswordlessSudo(t *testing.T) {
 	}
 }
 
-func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "config", "master.key"), []byte("from-master-key\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := &config.ProjectConfig{
-		App: config.AppConfig{Type: config.AppTypeRails},
-		Services: map[string]config.ServiceConfig{
-			config.DefaultWebServiceName: {
-				Env:         map[string]string{},
-				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
-				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
-			},
-			"worker": {
-				Env: map[string]string{},
-			},
-		},
-	}
-	secrets := solo.ScopedSecrets{}
-	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := secrets.Value(config.DefaultWebServiceName, railsMasterKeySecretName); got != "from-master-key" {
-		t.Fatalf("web RAILS_MASTER_KEY = %q", got)
-	}
-	if got := secrets.Value("worker", railsMasterKeySecretName); got != "from-master-key" {
-		t.Fatalf("worker RAILS_MASTER_KEY = %q", got)
-	}
-	if !strings.Contains(notice, "config/master.key") {
-		t.Fatalf("notice = %q, want config/master.key", notice)
-	}
-	for _, serviceName := range []string{config.DefaultWebServiceName, "worker"} {
-		refs := cfg.Services[serviceName].SecretRefs
-		if len(refs) != 1 || refs[0].Name != railsMasterKeySecretName {
-			t.Fatalf("secret refs = %#v, want RAILS_MASTER_KEY", refs)
-		}
-	}
-}
-
 func TestResolveSoloSecretValuesUsesStoreResolver(t *testing.T) {
 	root := t.TempDir()
 	var current solo.State
@@ -979,8 +935,15 @@ func TestResolveSoloSecretValuesUsesStoreResolver(t *testing.T) {
 			return record.Value, nil
 		},
 	}
+	cfg := config.DefaultProjectConfig("default", "demo", "production")
+	web := cfg.Services["web"]
+	web.SecretRefs = []config.SecretRef{{Name: "DATABASE_URL", Secret: "devopsellence://plaintext/DATABASE_URL"}}
+	cfg.Services["web"] = web
+	cfg.Services["worker"] = config.ServiceConfig{
+		SecretRefs: []config.SecretRef{{Name: "DATABASE_URL", Secret: "devopsellence://1password/DATABASE_URL"}},
+	}
 
-	values, err := app.resolveSoloSecretValues(context.Background(), current, root, "production")
+	values, err := app.resolveSoloSecretValues(context.Background(), current, root, "production", &cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -989,40 +952,6 @@ func TestResolveSoloSecretValuesUsesStoreResolver(t *testing.T) {
 	}
 	if got := values.Value("worker", "DATABASE_URL"); got != "postgres://op" {
 		t.Fatalf("worker DATABASE_URL = %q", got)
-	}
-}
-
-func TestApplySoloRailsMasterKeyLetsManagedSecretOverrideMasterKey(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "config", "master.key"), []byte("from-master-key\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := &config.ProjectConfig{
-		App: config.AppConfig{Type: config.AppTypeRails},
-		Services: map[string]config.ServiceConfig{
-			config.DefaultWebServiceName: {
-				Env:         map[string]string{},
-				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
-				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
-			},
-		},
-	}
-	secrets := solo.ScopedSecrets{
-		config.DefaultWebServiceName: {railsMasterKeySecretName: "from-store"},
-	}
-	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := secrets.Value(config.DefaultWebServiceName, railsMasterKeySecretName); got != "from-store" {
-		t.Fatalf("RAILS_MASTER_KEY = %q, want from-store", got)
-	}
-	if !strings.Contains(notice, "managed secret store") {
-		t.Fatalf("notice = %q, want managed secret store", notice)
 	}
 }
 

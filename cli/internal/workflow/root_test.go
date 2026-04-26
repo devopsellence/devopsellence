@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/solo"
 )
 
@@ -142,6 +143,14 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 	if got := values.Value("worker", "DATABASE_URL"); got != "" {
 		t.Fatalf("worker DATABASE_URL = %q", got)
 	}
+	cfg, err := config.LoadFromRoot(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := cfg.Services["web"].SecretRefs
+	if len(refs) != 1 || refs[0].Name != "DATABASE_URL" || refs[0].Secret != "devopsellence://plaintext/DATABASE_URL" {
+		t.Fatalf("secret refs = %#v", refs)
+	}
 }
 
 func TestRootSoloSecretSetAcceptsOnePasswordReference(t *testing.T) {
@@ -169,6 +178,14 @@ func TestRootSoloSecretSetAcceptsOnePasswordReference(t *testing.T) {
 	}
 	if secrets[0].Store != solo.SecretStoreOnePassword || secrets[0].Reference != "op://app/db/password" {
 		t.Fatalf("secret = %#v", secrets[0])
+	}
+	cfg, err := config.LoadFromRoot(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := cfg.Services["web"].SecretRefs
+	if len(refs) != 1 || refs[0].Name != "DATABASE_URL" || refs[0].Secret != "op://app/db/password" {
+		t.Fatalf("secret refs = %#v", refs)
 	}
 }
 

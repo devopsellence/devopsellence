@@ -1773,11 +1773,7 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 		return err
 	}
 
-	stdout, stderr := a.Printer.Out, a.Printer.Err
-
-	stdout, stderr = io.Discard, io.Discard
-
-	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, stdout, stderr); err != nil {
+	if err := solo.RunSSHInteractive(ctx, created.Node, installCommand, io.Discard, io.Discard); err != nil {
 		return err
 	}
 

@@ -1321,6 +1321,44 @@ func TestNodeDiagnose(t *testing.T) {
 	}
 }
 
+func TestNodeDiagnoseFailedStatusReturnsExitErrorAfterPrintingJSON(t *testing.T) {
+	t.Parallel()
+
+	root := makeRailsRoot(t, "ShopApp")
+	var stdout bytes.Buffer
+	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/nodes/8/diagnose_requests":
+			return jsonResponseWithStatus(t, http.StatusAccepted, map[string]any{
+				"id":            42,
+				"status":        "failed",
+				"requested_at":  "2026-03-29T20:00:00Z",
+				"completed_at":  "2026-03-29T20:00:02Z",
+				"error_message": "docker unavailable",
+				"node":          map[string]any{"id": 8, "name": "node-a", "organization_id": 7},
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	}))
+	app.Printer.Out = &stdout
+
+	err := app.NodeDiagnose(context.Background(), NodeDiagnoseOptions{NodeID: 8, Wait: 2 * time.Second})
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("NodeDiagnose() error = %#v, want ExitError code 1", err)
+	}
+	if !strings.Contains(err.Error(), "docker unavailable") {
+		t.Fatalf("NodeDiagnose() error = %v, want request error message", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	request := jsonMapFromAny(t, payload["request"])
+	if intValueAny(request["id"]) != 42 || request["status"] != "failed" {
+		t.Fatalf("request = %#v, want failed request #42", request)
+	}
+}
+
 func TestDeployWaitsForRolloutProgress(t *testing.T) {
 	t.Parallel()
 

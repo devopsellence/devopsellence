@@ -13,7 +13,7 @@ type soloInstallReporter struct {
 	close    func()
 }
 
-func newSoloInstallReporter(_ context.Context, printer output.Printer, nodeName string) soloInstallReporter {
+func newSoloInstallReporter(_ context.Context, _ output.Printer, _ string) soloInstallReporter {
 	return soloInstallReporter{
 		progress: func(string) {},
 		stream:   io.Discard,

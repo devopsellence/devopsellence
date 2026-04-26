@@ -1283,9 +1283,7 @@ func (a *App) NodeAssign(ctx context.Context, opts NodeAssignOptions) error {
 	if err != nil {
 		return err
 	}
-	var onProgress func(string)
-
-	result, err := a.API.CreateEnvironmentAssignment(ctx, tokens.AccessToken, workspace.Environment.ID, opts.NodeID, onProgress)
+	result, err := a.API.CreateEnvironmentAssignment(ctx, tokens.AccessToken, workspace.Environment.ID, opts.NodeID, nil)
 	if err != nil {
 		return wrapError(err)
 	}
@@ -1391,10 +1389,17 @@ func (a *App) NodeDiagnose(ctx context.Context, opts NodeDiagnoseOptions) error 
 		}
 	}
 
-	return a.Printer.PrintJSON(map[string]any{
+	if err := a.Printer.PrintJSON(map[string]any{
 		"schema_version": outputSchemaVersion,
 		"request":        request,
-	})
+	}); err != nil {
+		return err
+	}
+	if strings.TrimSpace(request.Status) == "failed" {
+		message := firstNonEmpty(strings.TrimSpace(request.ErrorMessage), fmt.Sprintf("diagnose request %d failed", request.ID))
+		return ExitError{Code: 1, Err: fmt.Errorf("node diagnose failed: %s", message)}
+	}
+	return nil
 
 }
 

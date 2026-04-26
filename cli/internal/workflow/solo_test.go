@@ -50,6 +50,39 @@ func TestDockerBuildArgsRejectsMultiplePlatforms(t *testing.T) {
 	}
 }
 
+func TestTailBufferExactLimitWriteIsNotTruncated(t *testing.T) {
+	buf := newTailBuffer(5)
+
+	n, err := buf.Write([]byte("abcde"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("Write() n = %d, want 5", n)
+	}
+	if got := buf.String(); got != "abcde" {
+		t.Fatalf("String() = %q, want %q", got, "abcde")
+	}
+}
+
+func TestTailBufferExactLimitWriteAfterExistingDataIsTruncated(t *testing.T) {
+	buf := newTailBuffer(5)
+	if _, err := buf.Write([]byte("ab")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	n, err := buf.Write([]byte("cdefg"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("Write() n = %d, want 5", n)
+	}
+	if got := buf.String(); got != "[truncated]\ncdefg" {
+		t.Fatalf("String() = %q, want bounded tail", got)
+	}
+}
+
 func TestTailBufferKeepsOnlyBoundedTail(t *testing.T) {
 	buf := newTailBuffer(10)
 

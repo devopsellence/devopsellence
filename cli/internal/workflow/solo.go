@@ -1823,8 +1823,10 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 		return n, nil
 	}
 	if len(p) >= b.limit {
+		if len(p) > b.limit || len(b.buf) > 0 {
+			b.truncated = true
+		}
 		b.buf = append(b.buf[:0], p[len(p)-b.limit:]...)
-		b.truncated = true
 		return n, nil
 	}
 	if overflow := len(b.buf) + len(p) - b.limit; overflow > 0 {

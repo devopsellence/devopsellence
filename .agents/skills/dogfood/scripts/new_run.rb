@@ -49,26 +49,54 @@ rescue SystemCallError
   "unknown"
 end
 
+def exit_filesystem_error(action, path, error)
+  warn "#{action} #{path}: #{error.message}"
+  exit 73
+end
+
 commit = git_value(options[:root], "rev-parse", "--short", "HEAD")
 branch = git_value(options[:root], "branch", "--show-current")
 branch = "detached" if branch.empty?
 
 template_path = File.expand_path("../references/report-template.md", __dir__)
-template = File.read(template_path)
+begin
+  template = File.read(template_path)
+rescue SystemCallError => e
+  exit_filesystem_error("failed to read", template_path, e)
+end
 report = template
   .sub("Scenario:", "Scenario: #{scenario}")
   .sub("Date:", "Date: #{now.iso8601}")
   .sub("Commit:", "Commit: #{commit} (#{branch})")
   .sub("Run path:", "Run path: #{run_dir}")
 
-FileUtils.mkdir_p(options[:out])
+begin
+  FileUtils.mkdir_p(options[:out])
+rescue SystemCallError => e
+  exit_filesystem_error("failed to create output directory", options[:out], e)
+end
 begin
   Dir.mkdir(run_dir)
 rescue Errno::EEXIST
   warn "run directory already exists: #{run_dir}"
   exit 73
+rescue SystemCallError => e
+  exit_filesystem_error("failed to create run directory", run_dir, e)
 end
-File.write(File.join(run_dir, "report.md"), report)
-File.write(File.join(run_dir, "commands.log"), "# Commands for #{scenario}\n")
+
+report_path = File.join(run_dir, "report.md")
+commands_path = File.join(run_dir, "commands.log")
+
+begin
+  File.write(report_path, report)
+rescue SystemCallError => e
+  exit_filesystem_error("failed to write", report_path, e)
+end
+
+begin
+  File.write(commands_path, "# Commands for #{scenario}\n")
+rescue SystemCallError => e
+  exit_filesystem_error("failed to write", commands_path, e)
+end
 
 puts run_dir

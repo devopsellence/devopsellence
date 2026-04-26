@@ -9,11 +9,13 @@ require "tmpdir"
 
 options = {
   root: Dir.pwd,
-  out: File.join(Dir.tmpdir, "devopsellence-dogfood")
+  out: File.join(Dir.tmpdir, "devopsellence-dogfood"),
+  version: nil
 }
 
 parser = OptionParser.new do |opts|
-  opts.banner = "Usage: new_run.rb SCENARIO [--root PATH] [--out PATH]"
+  opts.banner = "Usage: new_run.rb SCENARIO [--version VERSION] [--root PATH] [--out PATH]"
+  opts.on("--version VERSION", "devopsellence version to dogfood; omit for default stable") { |value| options[:version] = value }
   opts.on("--root PATH", "Repository root used for git metadata") { |value| options[:root] = value }
   opts.on("--out PATH", "Parent output directory") { |value| options[:out] = value }
 end
@@ -52,6 +54,30 @@ if slug.empty?
   exit 64
 end
 
+version = options[:version]&.strip
+if version&.empty?
+  warn "VERSION must not be empty"
+  warn parser
+  exit 64
+end
+if version&.match?(/[[:cntrl:]]/)
+  warn "VERSION must not contain control characters"
+  warn parser
+  exit 64
+end
+if version && !version.match?(/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/)
+  warn "VERSION may contain only letters, digits, dots, underscores, and dashes"
+  warn parser
+  exit 64
+end
+
+target_version = version || "default stable"
+install_command = if version
+  "curl -fsSL https://www.devopsellence.com/lfg.sh?version=#{version} | bash"
+else
+  "curl -fsSL https://www.devopsellence.com/lfg.sh | bash"
+end
+
 now = Time.now.utc
 timestamp = now.strftime("%Y%m%dT%H%M%S%6NZ")
 run_dir = File.expand_path("#{timestamp}-#{slug}", options[:out])
@@ -80,6 +106,8 @@ rescue SystemCallError => e
 end
 report = template
   .sub("Scenario:", "Scenario: #{scenario}")
+  .sub("Target version:", "Target version: #{target_version}")
+  .sub("Install command:", "Install command: #{install_command}")
   .sub("Date:", "Date: #{now.iso8601}")
   .sub("Commit:", "Commit: #{commit} (#{branch})")
   .sub("Run path:", "Run path: #{run_dir}")
@@ -108,7 +136,7 @@ rescue SystemCallError => e
 end
 
 begin
-  File.write(commands_path, "# Commands for #{scenario}\n")
+  File.write(commands_path, "# Commands for #{scenario}\n# Target version: #{target_version}\n# Install command:\n#{install_command}\n")
 rescue SystemCallError => e
   exit_filesystem_error("failed to write", commands_path, e)
 end

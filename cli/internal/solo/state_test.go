@@ -156,6 +156,63 @@ func TestStateStoreReadNormalizesLegacySnapshots(t *testing.T) {
 	}
 }
 
+func TestStateStoreReadRejectsInvalidSecretRecords(t *testing.T) {
+	t.Parallel()
+
+	for name, payload := range map[string]string{
+		"empty plaintext": `{
+  "schema_version": 1,
+  "secrets": {
+    "/workspace/demo\nproduction\nweb\nDATABASE_URL": {
+      "workspace_root": "/workspace/demo",
+      "environment": "production",
+      "service_name": "web",
+      "name": "DATABASE_URL",
+      "store": "plaintext",
+      "value": ""
+    }
+  }
+}`,
+		"1password value": `{
+  "schema_version": 1,
+  "secrets": {
+    "/workspace/demo\nproduction\nweb\nDATABASE_URL": {
+      "workspace_root": "/workspace/demo",
+      "environment": "production",
+      "service_name": "web",
+      "name": "DATABASE_URL",
+      "store": "1password",
+      "value": "do-not-store",
+      "reference": "op://app/db/password"
+    }
+  }
+}`,
+		"1password reference": `{
+  "schema_version": 1,
+  "secrets": {
+    "/workspace/demo\nproduction\nweb\nDATABASE_URL": {
+      "workspace_root": "/workspace/demo",
+      "environment": "production",
+      "service_name": "web",
+      "name": "DATABASE_URL",
+      "store": "1password",
+      "reference": "not-op"
+    }
+  }
+}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "solo-state.json")
+			if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewStateStore(path).Read(); err == nil {
+				t.Fatal("Read() error = nil")
+			}
+		})
+	}
+}
+
 func TestAttachmentKeysForNodeDoesNotMutateState(t *testing.T) {
 	t.Parallel()
 
@@ -317,7 +374,7 @@ func TestRedactDeploySnapshotSecretsRemovesSecretValues(t *testing.T) {
 
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Services["web"] = config.ServiceConfig{
-		Env:  map[string]string{"PLAIN": "value"},
+		Env: map[string]string{"PLAIN": "value"},
 		SecretRefs: []config.SecretRef{
 			{Name: "DATABASE_URL"},
 		},

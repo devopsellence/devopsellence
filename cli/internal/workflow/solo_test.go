@@ -915,76 +915,60 @@ func TestRemoteReadOptionalFileCommandSupportsPasswordlessSudo(t *testing.T) {
 	}
 }
 
-func TestApplySoloRailsMasterKeyUsesConfigMasterKey(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+func TestResolveSoloSecretValuesUsesStoreResolver(t *testing.T) {
+	root := t.TempDir()
+	var current solo.State
+	if _, err := current.SetSecret(root, "production", "web", "DATABASE_URL", solo.SecretMaterial{Value: "postgres://plain"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config", "master.key"), []byte("from-master-key\n"), 0o600); err != nil {
+	if _, err := current.SetSecret(root, "production", "worker", "DATABASE_URL", solo.SecretMaterial{
+		Store:     solo.SecretStoreOnePassword,
+		Reference: "op://app/db/password",
+	}); err != nil {
 		t.Fatal(err)
 	}
-
-	cfg := &config.ProjectConfig{
-		App: config.AppConfig{Type: config.AppTypeRails},
-		Services: map[string]config.ServiceConfig{
-			config.DefaultWebServiceName: {
-				Env:         map[string]string{},
-				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
-				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
-			},
-			"worker": {
-				Env: map[string]string{},
-			},
+	if _, err := current.SetSecret(root, "production", "jobs", "DATABASE_URL", solo.SecretMaterial{
+		Store:     solo.SecretStoreOnePassword,
+		Reference: "op://app/db/password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opReads := 0
+	app := &App{
+		soloSecretResolveFn: func(_ context.Context, record solo.SecretRecord) (string, error) {
+			if record.Store == solo.SecretStoreOnePassword {
+				opReads++
+				return "postgres://op", nil
+			}
+			return record.Value, nil
 		},
 	}
-	secrets := map[string]string{}
-	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
+	cfg := config.DefaultProjectConfig("default", "demo", "production")
+	web := cfg.Services["web"]
+	web.SecretRefs = []config.SecretRef{{Name: "DATABASE_URL", Secret: "devopsellence://plaintext/DATABASE_URL"}}
+	cfg.Services["web"] = web
+	cfg.Services["worker"] = config.ServiceConfig{
+		SecretRefs: []config.SecretRef{{Name: "DATABASE_URL", Secret: "devopsellence://1password/DATABASE_URL"}},
+	}
+	cfg.Services["jobs"] = config.ServiceConfig{
+		SecretRefs: []config.SecretRef{{Name: "DATABASE_URL", Secret: "devopsellence://1password/DATABASE_URL"}},
+	}
+
+	values, err := app.resolveSoloSecretValues(context.Background(), current, root, "production", &cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secrets[railsMasterKeySecretName] != "from-master-key" {
-		t.Fatalf("RAILS_MASTER_KEY = %q", secrets[railsMasterKeySecretName])
+	if got := values.Value("web", "DATABASE_URL"); got != "postgres://plain" {
+		t.Fatalf("web DATABASE_URL = %q", got)
 	}
-	if !strings.Contains(notice, "config/master.key") {
-		t.Fatalf("notice = %q, want config/master.key", notice)
+	if got := values.Value("worker", "DATABASE_URL"); got != "postgres://op" {
+		t.Fatalf("worker DATABASE_URL = %q", got)
 	}
-	for _, serviceName := range []string{config.DefaultWebServiceName, "worker"} {
-		refs := cfg.Services[serviceName].SecretRefs
-		if len(refs) != 1 || refs[0].Name != railsMasterKeySecretName {
-			t.Fatalf("secret refs = %#v, want RAILS_MASTER_KEY", refs)
-		}
+	if got := values.Value("jobs", "DATABASE_URL"); got != "postgres://op" {
+		t.Fatalf("jobs DATABASE_URL = %q", got)
 	}
-}
-
-func TestApplySoloRailsMasterKeyLetsEnvOverrideMasterKey(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "config", "master.key"), []byte("from-master-key\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := &config.ProjectConfig{
-		App: config.AppConfig{Type: config.AppTypeRails},
-		Services: map[string]config.ServiceConfig{
-			config.DefaultWebServiceName: {
-				Env:         map[string]string{},
-				Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
-				Healthcheck: &config.HTTPHealthcheck{Path: "/up", Port: 3000},
-			},
-		},
-	}
-	secrets := map[string]string{railsMasterKeySecretName: "from-env"}
-	notice, err := applySoloRailsMasterKey(dir, cfg, secrets)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if secrets[railsMasterKeySecretName] != "from-env" {
-		t.Fatalf("RAILS_MASTER_KEY = %q, want from-env", secrets[railsMasterKeySecretName])
-	}
-	if !strings.Contains(notice, ".env") {
-		t.Fatalf("notice = %q, want .env", notice)
+	if opReads != 1 {
+		t.Fatalf("1Password reads = %d, want 1", opReads)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -48,10 +47,7 @@ const (
 	defaultDeployProgressTimeout      = 10 * time.Minute
 	defaultNodeDiagnosePollInterval   = 500 * time.Millisecond
 	defaultNodeDiagnoseWaitTimeout    = 20 * time.Second
-	railsMasterKeySecretName          = "RAILS_MASTER_KEY"
-	railsMasterKeyRelativePath        = "config/master.key"
 	deployEnvVarsOverrideEnv          = "DEVOPSELLENCE_ENV_VARS"
-	deploySecretsOverrideEnv          = "DEVOPSELLENCE_SECRETS"
 )
 
 type ExitError struct {
@@ -85,6 +81,7 @@ type App struct {
 	soloNodeCreateFn    func(context.Context, SoloNodeCreateOptions) error
 	soloNodeAttachFn    func(context.Context, SoloNodeAttachOptions) error
 	soloRuntimeDoctorFn func(context.Context, SoloDoctorOptions) error
+	soloSecretResolveFn func(context.Context, solo.SecretRecord) (string, error)
 	promptReaderSource  io.Reader
 	promptReader        *bufio.Reader
 }
@@ -139,12 +136,11 @@ type ConfigResolveOptions struct {
 }
 
 type DeployOptions struct {
-	Organization           string
-	Project                string
-	Image                  string
-	Environment            string
-	NonInteractive         bool
-	SkipRailsMasterKeySync bool
+	Organization   string
+	Project        string
+	Image          string
+	Environment    string
+	NonInteractive bool
 }
 
 type DeleteOptions struct {
@@ -302,6 +298,17 @@ type SecretDeleteOptions struct {
 	Environment  string
 	ServiceName  string
 	Name         string
+}
+
+type listedSecret struct {
+	ServiceName string `json:"service_name"`
+	Name        string `json:"name"`
+	SecretRef   string `json:"secret_ref,omitempty"`
+	Store       string `json:"store,omitempty"`
+	Reference   string `json:"reference,omitempty"`
+	Configured  bool   `json:"configured"`
+	Stored      bool   `json:"stored"`
+	Exposed     bool   `json:"exposed"`
 }
 
 type TokenCreateOptions struct {
@@ -596,8 +603,6 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 	var result map[string]any
 	var accessToken string
 	var deployTokens auth.Tokens
-	var syncedRailsSecretServices []string
-	var railsSecretSyncNotice string
 	var buildPushDuration time.Duration
 	var autoInitSummary string
 	run := func(runCtx context.Context, update, log func(string)) error {
@@ -670,21 +675,14 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 			return ExitError{Code: 1, Err: err}
 		}
 		cfg = resolvedCfg
-		a.warnAboutPrebuiltImageConfig(opts, discovered, cfg)
+		a.warnAboutPrebuiltImageConfig(opts, cfg)
 		a.API.BaseURL = firstNonEmpty(preflight.Tokens.APIBase, a.API.BaseURL)
 
 		envVarOverrides, err := parseRuntimeValueOverrides(os.Getenv(deployEnvVarsOverrideEnv), deployEnvVarsOverrideEnv)
 		if err != nil {
 			return err
 		}
-		secretOverrides, err := parseRuntimeValueOverrides(os.Getenv(deploySecretsOverrideEnv), deploySecretsOverrideEnv)
-		if err != nil {
-			return err
-		}
 		if err := validateRuntimeOverrides(cfg, envVarOverrides, deployEnvVarsOverrideEnv); err != nil {
-			return err
-		}
-		if err := validateRuntimeOverrides(cfg, secretOverrides, deploySecretsOverrideEnv); err != nil {
 			return err
 		}
 		cfg = applyEnvVarOverrides(cfg, envVarOverrides)
@@ -714,16 +712,6 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 			project = target.Project
 			env = target.Environment
 		}
-
-		if err := a.syncDeploySecretOverrides(ctx, withAuth, update, env, cfg, secretOverrides); err != nil {
-			return err
-		}
-		syncedServices, syncNotice, err := a.ensureRailsDeploySecrets(ctx, withAuth, update, discovered.WorkspaceRoot, cfg, env, opts)
-		if err != nil {
-			return err
-		}
-		syncedRailsSecretServices = syncedServices
-		railsSecretSyncNotice = syncNotice
 
 		repository, digest, resolvedBuildPushDuration, inferredImagePort, err := a.resolveImage(
 			ctx,
@@ -836,17 +824,11 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 		}
 		return wrapError(err)
 	}
-	if !a.Printer.JSON && railsSecretSyncNotice != "" {
-		a.Printer.Println("Rails:", railsSecretSyncNotice)
-	}
 	if !a.Printer.JSON && autoInitSummary != "" {
 		a.Printer.Println("Deploy:", autoInitSummary)
 	}
 	if !a.Printer.JSON && stringFromMap(result, "public_url") != "" {
 		a.Printer.Println("Ingress URL:", stringFromMap(result, "public_url"))
-	}
-	if !a.Printer.JSON && len(syncedRailsSecretServices) > 0 {
-		a.Printer.Println("Rails:", "synced RAILS_MASTER_KEY for", strings.Join(syncedRailsSecretServices, ", ")+".")
 	}
 
 	progress, err := a.waitForDeployment(ctx, accessToken, result)
@@ -1783,7 +1765,8 @@ func (a *App) NodeDiagnose(ctx context.Context, opts NodeDiagnoseOptions) error 
 }
 
 func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
-	if strings.TrimSpace(opts.ServiceName) == "" {
+	serviceName := strings.TrimSpace(opts.ServiceName)
+	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
 	if strings.TrimSpace(opts.Name) == "" {
@@ -1801,19 +1784,50 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 	if err != nil {
 		return err
 	}
-	result, err := a.API.UpsertEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, opts.ServiceName, opts.Name, value)
+	if err := a.requireConfigurableSecretRef(workspace.Discovery.WorkspaceRoot, serviceName, opts.Name); err != nil {
+		return err
+	}
+	result, err := a.API.UpsertEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, serviceName, opts.Name, value)
 	if err != nil {
 		return wrapError(err)
 	}
+	configUpdated := false
+	configUpdateErr := ""
+	if ref := stringFromMap(result, "secret_ref"); ref != "" {
+		updated, err := a.upsertWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, serviceName, config.SecretRef{Name: opts.Name, Secret: ref})
+		if err != nil {
+			configUpdateErr = err.Error()
+		} else {
+			configUpdated = updated
+		}
+		result["config_updated"] = updated
+		result["config_path"] = a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot)
+		if configUpdateErr != "" {
+			result["config_error"] = configUpdateErr
+		}
+	}
 	result["schema_version"] = outputSchemaVersion
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
+		if err := a.Printer.PrintJSON(result); err != nil {
+			return err
+		}
+		if configUpdateErr != "" {
+			return ExitError{Code: 1, Err: fmt.Errorf("secret saved, but devopsellence.yml was not updated: %s", configUpdateErr)}
+		}
+		return nil
 	}
 	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
 		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
 	}
 	a.Printer.Println("Saved secret", stringFromMap(result, "name"), "for", stringFromMap(result, "service_name")+".")
 	a.Printer.Println("Ref:", stringFromMap(result, "secret_ref"))
+	if configUpdateErr != "" {
+		a.Printer.Errorln("Secret saved, but devopsellence.yml was not updated:", configUpdateErr)
+		return ExitError{Code: 1, Err: fmt.Errorf("secret saved, but devopsellence.yml was not updated: %s", configUpdateErr)}
+	}
+	if configUpdated {
+		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot))
+	}
 	return nil
 }
 
@@ -1830,31 +1844,32 @@ func (a *App) SecretList(ctx context.Context, opts SecretListOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
+	items, err := a.sharedSecretListItems(workspace.Discovery.WorkspaceRoot, secrets)
+	if err != nil {
+		return err
+	}
 	if a.Printer.JSON {
 		return a.Printer.PrintJSON(map[string]any{
 			"schema_version": outputSchemaVersion,
-			"secrets":        secrets,
+			"secrets":        items,
 		})
 	}
 	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
 		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
 	}
-	if len(secrets) == 0 {
+	if len(items) == 0 {
 		a.Printer.Println("No secrets configured.")
 		return nil
 	}
-	for _, secret := range secrets {
-		line := secret.ServiceName + " " + secret.Name + " -> " + secret.SecretRef
-		if secret.Name == railsMasterKeySecretName {
-			line += " (auto-managed from config/master.key)"
-		}
-		a.Printer.Println(line)
+	for _, item := range items {
+		a.Printer.Println(formatListedSecret(item))
 	}
 	return nil
 }
 
 func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error {
-	if strings.TrimSpace(opts.ServiceName) == "" {
+	serviceName := strings.TrimSpace(opts.ServiceName)
+	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
 	if strings.TrimSpace(opts.Name) == "" {
@@ -1868,19 +1883,221 @@ func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error 
 	if err != nil {
 		return err
 	}
-	result, err := a.API.DeleteEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, opts.ServiceName, opts.Name)
+	if err := a.requireConfiguredService(workspace.Discovery.WorkspaceRoot, serviceName); err != nil {
+		return err
+	}
+	result, err := a.API.DeleteEnvironmentSecret(ctx, tokens.AccessToken, workspace.Environment.ID, serviceName, opts.Name)
 	if err != nil {
 		return wrapError(err)
 	}
+	configUpdated, err := a.removeWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, serviceName, opts.Name)
+	configUpdateErr := ""
+	if err != nil {
+		configUpdateErr = err.Error()
+		configUpdated = false
+	}
+	result["config_updated"] = configUpdated
+	result["config_path"] = a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot)
+	if configUpdateErr != "" {
+		result["config_error"] = configUpdateErr
+	}
 	result["schema_version"] = outputSchemaVersion
 	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
+		if err := a.Printer.PrintJSON(result); err != nil {
+			return err
+		}
+		if configUpdateErr != "" {
+			return ExitError{Code: 1, Err: fmt.Errorf("secret deleted, but devopsellence.yml was not updated: %s", configUpdateErr)}
+		}
+		return nil
 	}
 	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
 		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
 	}
 	a.Printer.Println("Deleted secret", stringFromMap(result, "name"), "for", stringFromMap(result, "service_name")+".")
+	if configUpdateErr != "" {
+		a.Printer.Errorln("Secret deleted, but devopsellence.yml was not updated:", configUpdateErr)
+		return ExitError{Code: 1, Err: fmt.Errorf("secret deleted, but devopsellence.yml was not updated: %s", configUpdateErr)}
+	}
+	if configUpdated {
+		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot))
+	}
 	return nil
+}
+
+func (a *App) sharedSecretListItems(workspaceRoot string, secrets []api.EnvironmentSecret) ([]listedSecret, error) {
+	cfg, err := a.ConfigStore.Read(workspaceRoot)
+	if err != nil {
+		return nil, wrapError(err)
+	}
+	items := map[string]listedSecret{}
+	if cfg != nil {
+		for _, serviceName := range cfg.ServiceNames() {
+			for _, ref := range cfg.Services[serviceName].SecretRefs {
+				key := secretListKey(serviceName, ref.Name)
+				items[key] = listedSecret{
+					ServiceName: serviceName,
+					Name:        ref.Name,
+					SecretRef:   strings.TrimSpace(ref.Secret),
+					Store:       secretListStore(strings.TrimSpace(ref.Secret), "managed"),
+					Configured:  true,
+					Exposed:     true,
+				}
+			}
+		}
+	}
+	for _, secret := range secrets {
+		key := secretListKey(secret.ServiceName, secret.Name)
+		item := items[key]
+		if item.ServiceName == "" {
+			item = listedSecret{
+				ServiceName: secret.ServiceName,
+				Name:        secret.Name,
+				Store:       "managed",
+			}
+		}
+		if strings.TrimSpace(item.SecretRef) == "" {
+			item.SecretRef = strings.TrimSpace(secret.SecretRef)
+		}
+		item.Reference = strings.TrimSpace(secret.SecretRef)
+		item.Stored = true
+		items[key] = item
+	}
+	return sortListedSecrets(items), nil
+}
+
+func secretListKey(serviceName, name string) string {
+	return strings.TrimSpace(serviceName) + "\x00" + strings.TrimSpace(name)
+}
+
+func secretListStore(secretRef, fallback string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(secretRef)), "op://") {
+		return solo.SecretStoreOnePassword
+	}
+	store, _, ok := parseDevopsellenceSecretRef(secretRef)
+	if ok {
+		return store
+	}
+	return fallback
+}
+
+func sortListedSecrets(items map[string]listedSecret) []listedSecret {
+	result := make([]listedSecret, 0, len(items))
+	for _, item := range items {
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ServiceName != result[j].ServiceName {
+			return result[i].ServiceName < result[j].ServiceName
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result
+}
+
+func formatListedSecret(item listedSecret) string {
+	parts := []string{
+		item.ServiceName,
+		item.Name,
+		"exposed=" + yesNo(item.Exposed),
+		"configured=" + yesNo(item.Configured),
+		"stored=" + yesNo(item.Stored),
+	}
+	if item.Store != "" {
+		parts = append(parts, "store="+item.Store)
+	}
+	line := strings.Join(parts, " ")
+	if item.SecretRef != "" {
+		line += " -> " + item.SecretRef
+	}
+	return line
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func (a *App) requireConfiguredService(workspaceRoot, serviceName string) error {
+	serviceName = strings.TrimSpace(serviceName)
+	cfg, err := a.ConfigStore.Read(workspaceRoot)
+	if err != nil {
+		return wrapError(err)
+	}
+	if cfg == nil {
+		return ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+	}
+	if _, ok := cfg.Services[serviceName]; !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
+	}
+	return nil
+}
+
+func (a *App) requireConfigurableSecretRef(workspaceRoot, serviceName, name string) error {
+	serviceName = strings.TrimSpace(serviceName)
+	cfg, err := a.ConfigStore.Read(workspaceRoot)
+	if err != nil {
+		return wrapError(err)
+	}
+	if cfg == nil {
+		return ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+	}
+	service, ok := cfg.Services[serviceName]
+	if !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
+	}
+	if serviceSecretRefConflict(service, name) {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q already defines %s in env; remove it before adding a secret_ref with the same name", serviceName, name)}
+	}
+	return nil
+}
+
+func (a *App) upsertWorkspaceSecretRef(workspaceRoot, serviceName string, ref config.SecretRef) (bool, error) {
+	serviceName = strings.TrimSpace(serviceName)
+	cfg, err := a.ConfigStore.Read(workspaceRoot)
+	if err != nil {
+		return false, wrapError(err)
+	}
+	if cfg == nil {
+		return false, ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+	}
+	if _, ok := cfg.Services[serviceName]; !ok {
+		return false, ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
+	}
+	changed, err := ensureServiceSecretRef(cfg, serviceName, ref)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
+	}
+	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *App) removeWorkspaceSecretRef(workspaceRoot, serviceName, name string) (bool, error) {
+	serviceName = strings.TrimSpace(serviceName)
+	cfg, err := a.ConfigStore.Read(workspaceRoot)
+	if err != nil {
+		return false, wrapError(err)
+	}
+	if cfg == nil {
+		return false, ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+	}
+	if _, ok := cfg.Services[serviceName]; !ok {
+		return false, ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
+	}
+	if !removeServiceSecretRef(cfg, serviceName, name) {
+		return false, nil
+	}
+	if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (a *App) Claim(ctx context.Context, opts ClaimOptions) error {
@@ -2552,127 +2769,6 @@ func (a *App) chooseOrganizationInput(ctx context.Context, callAuth authCall) (s
 	return choice, nil
 }
 
-func (a *App) ensureRailsDeploySecrets(ctx context.Context, callAuth authCall, notify func(string), workspaceRoot string, cfg config.ProjectConfig, env api.Environment, opts DeployOptions) ([]string, string, error) {
-	if cfg.App.Type != config.AppTypeRails {
-		return nil, "", nil
-	}
-	if opts.SkipRailsMasterKeySync {
-		return nil, "skipping RAILS_MASTER_KEY sync (--no-rails-master-key-sync).", nil
-	}
-
-	keyPath := filepath.Join(workspaceRoot, railsMasterKeyRelativePath)
-	data, err := os.ReadFile(keyPath)
-	if err == nil {
-		value := strings.TrimSpace(string(data))
-		if value == "" {
-			return nil, "", ExitError{Code: 1, Err: fmt.Errorf("Rails app detected, but %s is empty", keyPath)}
-		}
-		services := railsRuntimeServices(cfg)
-		existing, err := a.currentEnvironmentSecrets(ctx, callAuth, env.ID)
-		if err != nil {
-			return nil, "", err
-		}
-		valueSHA256 := secretValueSHA256(value)
-		servicesToSync := make([]string, 0, len(services))
-		servicesAlreadyCurrent := make([]string, 0, len(services))
-		for _, serviceName := range services {
-			existingSecret, ok := environmentSecretByServiceAndName(existing, serviceName, railsMasterKeySecretName)
-			if ok && existingSecret.ValueSHA256 == valueSHA256 {
-				servicesAlreadyCurrent = append(servicesAlreadyCurrent, serviceName)
-			} else {
-				servicesToSync = append(servicesToSync, serviceName)
-			}
-		}
-		if len(servicesToSync) == 0 {
-			return nil, "RAILS_MASTER_KEY already current for " + strings.Join(servicesAlreadyCurrent, ", ") + ".", nil
-		}
-		notice := "syncing RAILS_MASTER_KEY from config/master.key for " + strings.Join(services, ", ") + "."
-		if notify != nil {
-			notify("Syncing Rails master key from config/master.key to managed secret RAILS_MASTER_KEY for " + strings.Join(servicesToSync, ", ") + "…")
-		}
-		errCh := make(chan error, len(servicesToSync))
-		sem := make(chan struct{}, 2)
-		var wg sync.WaitGroup
-		for _, serviceName := range servicesToSync {
-			serviceName := serviceName
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-				case <-ctx.Done():
-					errCh <- ctx.Err()
-					return
-				}
-				defer func() { <-sem }()
-				if notify != nil {
-					notify("Creating/updating Rails master key secret for " + serviceName + "…")
-				}
-				errCh <- callAuth(func(accessToken string) error {
-					_, callErr := a.API.UpsertEnvironmentSecret(ctx, accessToken, env.ID, serviceName, railsMasterKeySecretName, value)
-					return callErr
-				})
-			}()
-		}
-		wg.Wait()
-		close(errCh)
-		for err := range errCh {
-			if err != nil {
-				return nil, "", err
-			}
-		}
-		return servicesToSync, notice, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, "", err
-	}
-	return nil, "", nil
-}
-
-func (a *App) currentEnvironmentSecrets(ctx context.Context, callAuth authCall, environmentID int) ([]api.EnvironmentSecret, error) {
-	var secrets []api.EnvironmentSecret
-	if err := callAuth(func(accessToken string) error {
-		var callErr error
-		secrets, callErr = a.API.ListEnvironmentSecrets(ctx, accessToken, environmentID)
-		return callErr
-	}); err != nil {
-		return nil, err
-	}
-
-	return secrets, nil
-}
-
-func railsRuntimeServices(cfg config.ProjectConfig) []string {
-	services := []string{}
-	for _, name := range cfg.ServiceNames() {
-		if looksLikeCloudflaredService(name, cfg.Services[name]) {
-			continue
-		}
-		services = append(services, name)
-	}
-	return services
-}
-
-func looksLikeCloudflaredService(name string, service config.ServiceConfig) bool {
-	if strings.EqualFold(strings.TrimSpace(name), "cloudflared") {
-		return true
-	}
-	image := strings.ToLower(strings.TrimSpace(service.Image))
-	if strings.Contains(image, "cloudflare/cloudflared") {
-		return true
-	}
-	for _, value := range append(append([]string{}, service.Command...), service.Args...) {
-		if strings.EqualFold(strings.TrimSpace(value), "cloudflared") {
-			return true
-		}
-	}
-	return false
-}
-
-func runtimeServices(cfg config.ProjectConfig) []string {
-	return cfg.ServiceNames()
-}
-
 func parseRuntimeValueOverrides(raw string, fieldName string) (runtimeValueOverrides, error) {
 	text := strings.TrimSpace(raw)
 	if text == "" {
@@ -2763,53 +2859,6 @@ func mergeStringMaps(parts ...map[string]string) map[string]string {
 		}
 	}
 	return merged
-}
-
-func (a *App) syncDeploySecretOverrides(ctx context.Context, callAuth authCall, notify func(string), env api.Environment, cfg config.ProjectConfig, overrides runtimeValueOverrides) error {
-	serviceNames := runtimeServices(cfg)
-	for _, serviceName := range serviceNames {
-		secrets := mergeStringMaps(overrides.All, scopedRuntimeOverrides(overrides, serviceName))
-		for name, value := range secrets {
-			if notify != nil {
-				notify("Syncing managed secret " + name + " for " + serviceName + "…")
-			}
-			if err := callAuth(func(accessToken string) error {
-				_, callErr := a.API.UpsertEnvironmentSecret(ctx, accessToken, env.ID, serviceName, name, value)
-				return callErr
-			}); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func scopedRuntimeOverrides(overrides runtimeValueOverrides, serviceName string) map[string]string {
-	return overrides.Services[serviceName]
-}
-
-func hasEnvironmentSecret(secrets []api.EnvironmentSecret, serviceName, name string) bool {
-	for _, secret := range secrets {
-		if secret.ServiceName == serviceName && secret.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func environmentSecretByServiceAndName(secrets []api.EnvironmentSecret, serviceName, name string) (api.EnvironmentSecret, bool) {
-	for _, secret := range secrets {
-		if secret.ServiceName == serviceName && secret.Name == name {
-			return secret, true
-		}
-	}
-
-	return api.EnvironmentSecret{}, false
-}
-
-func secretValueSHA256(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
 }
 
 func (a *App) callWithAuthRetry(ctx context.Context, token *string, interactive bool, notify func(string), fn func(string) error) error {
@@ -4378,7 +4427,7 @@ func (a *App) printNodeDiagnose(request api.NodeDiagnoseRequest) {
 	}
 }
 
-func (a *App) warnAboutPrebuiltImageConfig(opts DeployOptions, discovered discovery.Result, cfg config.ProjectConfig) {
+func (a *App) warnAboutPrebuiltImageConfig(opts DeployOptions, cfg config.ProjectConfig) {
 	if strings.TrimSpace(opts.Image) == "" || a.Printer.JSON {
 		return
 	}
@@ -4388,8 +4437,5 @@ func (a *App) warnAboutPrebuiltImageConfig(opts DeployOptions, discovered discov
 
 	a.Printer.Errorln("Using --image skips the local build.")
 	a.Printer.Errorln("Deploy will still use devopsellence.yml for port and healthcheck settings.")
-	if _, err := os.Stat(filepath.Join(discovered.WorkspaceRoot, railsMasterKeyRelativePath)); err == nil {
-		a.Printer.Errorln("Deploy will also sync RAILS_MASTER_KEY from config/master.key.")
-	}
 	a.Printer.Errorln("If this image is not a Rails image, update devopsellence.yml before deploy.")
 }

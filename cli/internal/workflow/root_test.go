@@ -3,8 +3,13 @@ package workflow
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/devopsellence/cli/internal/config"
+	"github.com/devopsellence/cli/internal/solo"
 )
 
 func TestRootVersionCommand(t *testing.T) {
@@ -112,6 +117,138 @@ func TestRootSecretSetRejectsExplicitEmptyValue(t *testing.T) {
 	}
 }
 
+func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestSoloWorkspace(t)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "DATABASE_URL", "--env", "staging", "--service", " web ", "--value", "postgres://staging"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	current, err := solo.NewStateStore(solo.DefaultStatePath()).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := current.ScopedSecretValues(cwd, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := values.Value("web", "DATABASE_URL"); got != "postgres://staging" {
+		t.Fatalf("web DATABASE_URL = %q", got)
+	}
+	if got := values.Value("worker", "DATABASE_URL"); got != "" {
+		t.Fatalf("worker DATABASE_URL = %q", got)
+	}
+	cfg, err := config.LoadFromRoot(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := cfg.Services["web"].SecretRefs
+	if len(refs) != 1 || refs[0].Name != "DATABASE_URL" || refs[0].Secret != "devopsellence://plaintext/DATABASE_URL" {
+		t.Fatalf("secret refs = %#v", refs)
+	}
+
+	web := cfg.Services["web"]
+	web.SecretRefs = append(web.SecretRefs, config.SecretRef{Name: "ONLY_IN_CONFIG", Secret: "devopsellence://plaintext/ONLY_IN_CONFIG"})
+	cfg.Services["web"] = web
+	if _, err := config.Write(cwd, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SetSecret(cwd, "staging", "web", "ONLY_IN_STORE", solo.SecretMaterial{Value: "store-only"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	cmd = NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "list", "--env", "staging", "--service", "web"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("list Execute() error = %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"web DATABASE_URL exposed=yes configured=yes stored=yes store=plaintext -> devopsellence://plaintext/DATABASE_URL",
+		"web ONLY_IN_CONFIG exposed=yes configured=yes stored=no store=plaintext -> devopsellence://plaintext/ONLY_IN_CONFIG",
+		"web ONLY_IN_STORE exposed=no configured=no stored=yes store=plaintext -> devopsellence://plaintext/ONLY_IN_STORE",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("secret list output = %q, missing %q", output, want)
+		}
+	}
+}
+
+func TestRootSoloSecretSetAcceptsOnePasswordReference(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestSoloWorkspace(t)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "DATABASE_URL", "--env", "staging", "--service", "web", "--store", "1password", "--op-ref", "op://app/db/password"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	current, err := solo.NewStateStore(solo.DefaultStatePath()).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := current.ListSecrets(cwd, "staging", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 1 {
+		t.Fatalf("secrets = %#v", secrets)
+	}
+	if secrets[0].Store != solo.SecretStoreOnePassword || secrets[0].Reference != "op://app/db/password" {
+		t.Fatalf("secret = %#v", secrets[0])
+	}
+	cfg, err := config.LoadFromRoot(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := cfg.Services["web"].SecretRefs
+	if len(refs) != 1 || refs[0].Name != "DATABASE_URL" || refs[0].Secret != "op://app/db/password" {
+		t.Fatalf("secret refs = %#v", refs)
+	}
+}
+
+func TestRootSoloSecretSetRejectsEnvConflict(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestSoloWorkspace(t)
+	cfg, err := config.LoadFromRoot(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := cfg.Services["web"]
+	web.Env = map[string]string{"DATABASE_URL": "postgres://static"}
+	cfg.Services["web"] = web
+	if _, err := config.Write(cwd, *cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "DATABASE_URL", "--service", "web", "--value", "postgres://secret"})
+
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want env conflict")
+	}
+	if !strings.Contains(err.Error(), "already defines DATABASE_URL in env") {
+		t.Fatalf("error = %v, want env conflict", err)
+	}
+}
+
 func TestRootHelpShowsModeFirstFlows(t *testing.T) {
 	t.Parallel()
 
@@ -207,6 +344,31 @@ func rootTestWorkspaceWithMode(t *testing.T, mode Mode) string {
 	cmd.SetArgs([]string{"mode", "use", string(mode)})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("mode use error = %v", err)
+	}
+	return cwd
+}
+
+func rootTestSoloWorkspace(t *testing.T) string {
+	t.Helper()
+	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
+	if err := os.WriteFile(filepath.Join(cwd, "devopsellence.yml"), []byte(strings.Join([]string{
+		"schema_version: 6",
+		"organization: solo",
+		"project: demo",
+		"default_environment: production",
+		"build:",
+		"  context: .",
+		"  dockerfile: Dockerfile",
+		"services:",
+		"  web:",
+		"    ports:",
+		"      - name: http",
+		"        port: 3000",
+		"    healthcheck:",
+		"      path: /up",
+		"      port: 3000",
+	}, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	return cwd
 }

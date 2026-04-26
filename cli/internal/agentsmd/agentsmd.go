@@ -72,19 +72,20 @@ Common commands:
 - `+"`devopsellence deploy`"+`
 - `+"`devopsellence status`"+`
 
-Shared mode secrets:
+Secrets:
 - `+"`devopsellence secret list`"+`
 - `+"`printf '%%s' \"$VALUE\" | devopsellence secret set NAME --service web --stdin`"+`
+- `+"`devopsellence secret set NAME --service web --store 1password --op-ref op://vault/item/field`"+`
 - `+"`devopsellence secret delete NAME --service web`"+`
 
-	Solo mode:
-	- `+"`devopsellence mode use solo`"+`
-	- `+"`devopsellence provider login hetzner`"+`
-	- `+"`devopsellence secret set NAME --value ...`"+`
-	- `+"`devopsellence node list`"+`
-	- `+"`devopsellence node logs NODE --follow`"+`
-	- `+"`devopsellence node create prod-1`"+`
-	- `+"`devopsellence node attach prod-1`"+`
+Solo mode:
+- `+"`devopsellence mode use solo`"+`
+- `+"`devopsellence provider login hetzner`"+`
+- `+"`devopsellence secret set NAME --service web --value ...`"+`
+- `+"`devopsellence node list`"+`
+- `+"`devopsellence node logs NODE --follow`"+`
+- `+"`devopsellence node create prod-1`"+`
+- `+"`devopsellence node attach prod-1`"+`
 
 Shared mode:
 - `+"`devopsellence mode use shared`"+`

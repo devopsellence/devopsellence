@@ -624,9 +624,9 @@ PY
   end
 
   def set_secrets!
-    # Use CLI to set secrets (writes to .env in app dir).
+    # Use CLI to set secrets and update devopsellence.yml secret_refs.
     run!(
-      cli_binary.to_s, "secret", "set", SECRET_VALUE_NAME, "--value", "secret-solo-123",
+      cli_binary.to_s, "secret", "set", SECRET_VALUE_NAME, "--service", "web", "--value", "secret-solo-123",
       chdir: @app_dir.to_s,
       timeout: 30,
       env: ssh_env
@@ -640,6 +640,7 @@ PY
       env: ssh_env
     )
     raise "secret not listed" unless output.include?(SECRET_VALUE_NAME)
+    commit_all!("Configure solo e2e secrets")
     puts "[ok] Secret saved and listed"
   end
 

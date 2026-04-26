@@ -20,7 +20,6 @@ import (
 
 	"github.com/devopsellence/cli/internal/api"
 	"github.com/devopsellence/cli/internal/auth"
-	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/docker"
 	"github.com/devopsellence/cli/internal/git"
@@ -28,6 +27,7 @@ import (
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/cli/internal/ui"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 
 	"gopkg.in/yaml.v3"
 )
@@ -1209,7 +1209,7 @@ func (a *App) Doctor(ctx context.Context) error {
 		return "docker daemon reachable", nil
 	})
 
-	var cfg config.Project
+	var cfg config.ProjectConfig
 	var selectedEnvironment string
 	addCheck("config", func() (string, error) {
 		if discoveryErr != nil {
@@ -2179,7 +2179,7 @@ func (a *App) OrganizationRegistryShow(ctx context.Context, opts OrganizationReg
 		return err
 	}
 	existing, _ := a.workspaceConfigOrNil()
-	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization })))
+	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Organization })))
 	if err != nil {
 		return err
 	}
@@ -2228,7 +2228,7 @@ func (a *App) OrganizationRegistrySet(ctx context.Context, opts OrganizationRegi
 		return err
 	}
 	existing, _ := a.workspaceConfigOrNil()
-	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization })))
+	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Organization })))
 	if err != nil {
 		return err
 	}
@@ -2264,7 +2264,7 @@ func (a *App) ProjectList(ctx context.Context, opts ProjectListOptions) error {
 		return err
 	}
 	existing, _ := a.workspaceConfigOrNil()
-	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization })))
+	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Organization })))
 	if err != nil {
 		return err
 	}
@@ -2299,7 +2299,7 @@ func (a *App) ProjectCreate(ctx context.Context, opts ProjectCreateOptions) erro
 		return err
 	}
 	existing, _ := a.workspaceConfigOrNil()
-	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization })))
+	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Organization })))
 	if err != nil {
 		return err
 	}
@@ -2328,7 +2328,7 @@ func (a *App) ProjectDelete(ctx context.Context, opts ProjectDeleteOptions) erro
 		return err
 	}
 	existing, _ := a.workspaceConfigOrNil()
-	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization })))
+	organization, err := a.resolveOrganizationReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Organization })))
 	if err != nil {
 		return err
 	}
@@ -2394,7 +2394,7 @@ func (a *App) EnvironmentList(ctx context.Context, opts EnvironmentListOptions) 
 		return err
 	}
 	existing, _ := a.workspaceConfigOrNil()
-	organization, project, err := a.resolveProjectReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization })), firstNonEmpty(opts.Project, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Project })))
+	organization, project, err := a.resolveProjectReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Organization })), firstNonEmpty(opts.Project, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Project })))
 	if err != nil {
 		return err
 	}
@@ -2434,7 +2434,7 @@ func (a *App) EnvironmentCreate(ctx context.Context, opts EnvironmentCreateOptio
 		return err
 	}
 	existing, _ := a.workspaceConfigOrNil()
-	organization, project, err := a.resolveProjectReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization })), firstNonEmpty(opts.Project, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Project })))
+	organization, project, err := a.resolveProjectReadOnly(ctx, tokens.AccessToken, firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Organization })), firstNonEmpty(opts.Project, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Project })))
 	if err != nil {
 		return err
 	}
@@ -3072,7 +3072,7 @@ func (a *App) resolveWorkspace(ctx context.Context, token, organizationInput, pr
 		existing = nil
 	}
 
-	projectName := firstNonEmpty(projectInput, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Project }), discovered.ProjectName)
+	projectName := firstNonEmpty(projectInput, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Project }), discovered.ProjectName)
 	orgInput := strings.TrimSpace(organizationInput)
 	if orgInput == "" && existing != nil {
 		orgInput = existing.Organization
@@ -3171,9 +3171,9 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 		existing = nil
 	}
 
-	projectName := firstNonEmpty(opts.ProjectName, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Project }), discovered.ProjectName)
+	projectName := firstNonEmpty(opts.ProjectName, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Project }), discovered.ProjectName)
 	environmentName := a.effectiveEnvironment(opts.Environment, existing)
-	orgInput := firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.Project) string { return cfg.Organization }))
+	orgInput := firstNonEmpty(opts.Organization, safeConfigValue(existing, func(cfg *config.ProjectConfig) string { return cfg.Organization }))
 
 	update("Resolving deploy target…")
 	target, err := a.resolveDeployTarget(ctx, callAuth, resolveDeployTargetInput{
@@ -3298,7 +3298,7 @@ func (a *App) resolveProjectReadOnly(ctx context.Context, token, organizationInp
 	}
 }
 
-func (a *App) resolveImage(ctx context.Context, callAuth authCall, workspaceRoot string, projectID int, cfg config.Project, sha, explicitImage string, update, log func(string)) (string, string, time.Duration, int, error) {
+func (a *App) resolveImage(ctx context.Context, callAuth authCall, workspaceRoot string, projectID int, cfg config.ProjectConfig, sha, explicitImage string, update, log func(string)) (string, string, time.Duration, int, error) {
 	if strings.TrimSpace(explicitImage) != "" {
 		match := digestRefPattern.FindStringSubmatch(strings.TrimSpace(explicitImage))
 		if len(match) != 3 {
@@ -3402,7 +3402,7 @@ func (h *deployBuildHeartbeat) setStage(stage string) {
 	}
 }
 
-func (a *App) optionalWorkspaceConfig() (discovery.Result, *config.Project, error) {
+func (a *App) optionalWorkspaceConfig() (discovery.Result, *config.ProjectConfig, error) {
 	discovered, err := discovery.Discover(a.Cwd)
 	if err != nil {
 		return discovery.Result{}, nil, err
@@ -3417,34 +3417,34 @@ func (a *App) optionalWorkspaceConfig() (discovery.Result, *config.Project, erro
 	return discovered, loaded, nil
 }
 
-func (a *App) workspaceConfigOrNil() (*config.Project, error) {
+func (a *App) workspaceConfigOrNil() (*config.ProjectConfig, error) {
 	_, cfg, err := a.optionalWorkspaceConfig()
 	return cfg, err
 }
 
-func (a *App) requiredWorkspaceConfig() (discovery.Result, config.Project, error) {
+func (a *App) requiredWorkspaceConfig() (discovery.Result, config.ProjectConfig, error) {
 	discovered, loaded, err := a.optionalWorkspaceConfig()
 	if err != nil {
-		return discovery.Result{}, config.Project{}, err
+		return discovery.Result{}, config.ProjectConfig{}, err
 	}
 	if loaded == nil {
-		return discovery.Result{}, config.Project{}, errors.New("project not initialized. run `devopsellence setup` first")
+		return discovery.Result{}, config.ProjectConfig{}, errors.New("project not initialized. run `devopsellence setup` first")
 	}
 	return discovered, *loaded, nil
 }
 
-func (a *App) resolvedWorkspaceConfig(explicitEnvironment string) (discovery.Result, config.Project, string, error) {
+func (a *App) resolvedWorkspaceConfig(explicitEnvironment string) (discovery.Result, config.ProjectConfig, string, error) {
 	discovered, loaded, err := a.optionalWorkspaceConfig()
 	if err != nil {
-		return discovery.Result{}, config.Project{}, "", err
+		return discovery.Result{}, config.ProjectConfig{}, "", err
 	}
 	if loaded == nil {
-		return discovery.Result{}, config.Project{}, "", errors.New("project not initialized. run `devopsellence setup` first")
+		return discovery.Result{}, config.ProjectConfig{}, "", errors.New("project not initialized. run `devopsellence setup` first")
 	}
 	selectedEnvironment := a.effectiveEnvironment(explicitEnvironment, loaded)
 	resolved, err := config.ResolveEnvironmentConfig(*loaded, selectedEnvironment)
 	if err != nil {
-		return discovery.Result{}, config.Project{}, "", err
+		return discovery.Result{}, config.ProjectConfig{}, "", err
 	}
 	return discovered, resolved, selectedEnvironment, nil
 }
@@ -3778,7 +3778,7 @@ func normalizeIngressStrategy(value string) (string, error) {
 	}
 }
 
-func safeConfigValue(cfg *config.Project, fn func(*config.Project) string) string {
+func safeConfigValue(cfg *config.ProjectConfig, fn func(*config.ProjectConfig) string) string {
 	if cfg == nil {
 		return ""
 	}
@@ -3839,7 +3839,7 @@ func findEnvironment(environments []api.Environment, name string) (api.Environme
 	return api.Environment{}, false
 }
 
-func servicePayload(_ string, service *config.Service) map[string]any {
+func servicePayload(_ string, service *config.ServiceConfig) map[string]any {
 	if service == nil {
 		return nil
 	}

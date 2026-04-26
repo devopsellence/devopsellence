@@ -18,11 +18,11 @@ import (
 
 	"github.com/devopsellence/cli/internal/api"
 	"github.com/devopsellence/cli/internal/auth"
-	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/docker"
 	"github.com/devopsellence/cli/internal/git"
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/state"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
 func TestInitWritesConfigOnly(t *testing.T) {
@@ -1543,7 +1543,7 @@ func TestDeployAppliesGitHubActionEnvVarOverrides(t *testing.T) {
 	web := project.Services[config.DefaultWebServiceName]
 	web.Env = map[string]string{"FROM_CONFIG": "1"}
 	project.Services[config.DefaultWebServiceName] = web
-	project.Services["worker"] = config.Service{
+	project.Services["worker"] = config.ServiceConfig{
 		Command: []string{"./bin/jobs"},
 		Env:     map[string]string{"WORKER_FROM_CONFIG": "1"},
 	}

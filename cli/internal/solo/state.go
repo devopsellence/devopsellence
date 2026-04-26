@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/state"
-	corestate "github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
 )
 
 const soloStateSchemaVersion = 1
@@ -22,11 +22,11 @@ type StateStore struct {
 }
 
 type State struct {
-	SchemaVersion int                         `json:"schema_version"`
-	Nodes         map[string]config.SoloNode  `json:"nodes,omitempty"`
-	Attachments   map[string]AttachmentRecord `json:"attachments,omitempty"`
-	Snapshots     map[string]DeploySnapshot   `json:"snapshots,omitempty"`
-	Secrets       map[string]SecretRecord     `json:"secrets,omitempty"`
+	SchemaVersion int                                    `json:"schema_version"`
+	Nodes         map[string]config.Node                 `json:"nodes,omitempty"`
+	Attachments   map[string]AttachmentRecord            `json:"attachments,omitempty"`
+	Snapshots     map[string]desiredstate.DeploySnapshot `json:"snapshots,omitempty"`
+	Secrets       map[string]SecretRecord                `json:"secrets,omitempty"`
 }
 
 type AttachmentRecord struct {
@@ -35,10 +35,6 @@ type AttachmentRecord struct {
 	Environment   string   `json:"environment"`
 	NodeNames     []string `json:"node_names,omitempty"`
 }
-
-type SnapshotMetadata = corestate.SnapshotMetadata
-
-type DeploySnapshot = corestate.DeploySnapshot
 
 type SecretRecord struct {
 	WorkspaceRoot string `json:"workspace_root"`
@@ -157,33 +153,33 @@ func EnvironmentStateKey(workspaceRoot, environment string) (string, error) {
 	return workspaceKey + "\n" + environment, nil
 }
 
-func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secrets map[string]string) (DeploySnapshot, error) {
+func BuildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secrets map[string]string) (desiredstate.DeploySnapshot, error) {
 	return buildDeploySnapshot(cfg, workspaceRoot, configPath, imageTag, revision, func(string) map[string]string { return secrets })
 }
 
-func BuildDeploySnapshotWithScopedSecrets(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secrets ScopedSecrets) (DeploySnapshot, error) {
+func BuildDeploySnapshotWithScopedSecrets(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secrets ScopedSecrets) (desiredstate.DeploySnapshot, error) {
 	return buildDeploySnapshot(cfg, workspaceRoot, configPath, imageTag, revision, secrets.ValuesForService)
 }
 
-func buildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secretsForService func(string) map[string]string) (DeploySnapshot, error) {
+func buildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, imageTag, revision string, secretsForService func(string) map[string]string) (desiredstate.DeploySnapshot, error) {
 	if cfg == nil {
-		return DeploySnapshot{}, fmt.Errorf("config is required")
+		return desiredstate.DeploySnapshot{}, fmt.Errorf("config is required")
 	}
 	workspaceKey, err := CanonicalWorkspaceKey(workspaceRoot)
 	if err != nil {
-		return DeploySnapshot{}, err
+		return desiredstate.DeploySnapshot{}, err
 	}
 	environmentName := strings.TrimSpace(cfg.DefaultEnvironment)
 	if environmentName == "" {
 		environmentName = config.DefaultEnvironment
 	}
-	snapshot := DeploySnapshot{
+	snapshot := desiredstate.DeploySnapshot{
 		WorkspaceRoot: workspaceRoot,
 		WorkspaceKey:  workspaceKey,
 		Environment:   environmentName,
 		Revision:      strings.TrimSpace(revision),
 		Image:         strings.TrimSpace(imageTag),
-		Metadata: SnapshotMetadata{
+		Metadata: desiredstate.SnapshotMetadata{
 			AppType:    strings.TrimSpace(cfg.App.Type),
 			ConfigPath: strings.TrimSpace(configPath),
 			Project:    strings.TrimSpace(cfg.Project),
@@ -192,16 +188,16 @@ func buildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 	}
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
-		rendered, err := buildService(serviceName, service, imageTag, secretsForService(serviceName))
+		rendered, err := desiredstate.BuildService(serviceName, service, imageTag, secretsForService(serviceName))
 		if err != nil {
-			return DeploySnapshot{}, fmt.Errorf("build service %s: %w", serviceName, err)
+			return desiredstate.DeploySnapshot{}, fmt.Errorf("build service %s: %w", serviceName, err)
 		}
 		snapshot.Services = append(snapshot.Services, rendered)
 	}
 	if cfg.ReleaseTask() != nil {
-		releaseTask, err := buildReleaseTask(cfg, imageTag, secretsForService(cfg.ReleaseTask().Service))
+		releaseTask, err := desiredstate.BuildReleaseTask(cfg, imageTag, secretsForService(cfg.ReleaseTask().Service))
 		if err != nil {
-			return DeploySnapshot{}, fmt.Errorf("build release task: %w", err)
+			return desiredstate.DeploySnapshot{}, fmt.Errorf("build release task: %w", err)
 		}
 		snapshot.ReleaseTask = &releaseTask
 		snapshot.ReleaseService = cfg.ReleaseTask().Service
@@ -210,7 +206,7 @@ func buildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 		}
 	}
 	if cfg.Ingress != nil {
-		snapshot.Ingress = buildIngress(cfg.Ingress, environmentName)
+		snapshot.Ingress = desiredstate.BuildIngress(cfg.Ingress, environmentName)
 		if serviceName, ok := ingressSnapshotService(cfg); ok {
 			snapshot.IngressService = serviceName
 			if service, ok := cfg.Services[serviceName]; ok {
@@ -242,7 +238,7 @@ func ingressSnapshotService(cfg *config.ProjectConfig) (string, bool) {
 	return "", false
 }
 
-func RedactDeploySnapshotSecrets(snapshot DeploySnapshot, cfg *config.ProjectConfig) DeploySnapshot {
+func RedactDeploySnapshotSecrets(snapshot desiredstate.DeploySnapshot, cfg *config.ProjectConfig) desiredstate.DeploySnapshot {
 	if cfg == nil {
 		return snapshot
 	}
@@ -279,9 +275,9 @@ func redactedEnv(env map[string]string, secretNames []string) map[string]string 
 func newState() State {
 	return State{
 		SchemaVersion: soloStateSchemaVersion,
-		Nodes:         map[string]config.SoloNode{},
+		Nodes:         map[string]config.Node{},
 		Attachments:   map[string]AttachmentRecord{},
-		Snapshots:     map[string]DeploySnapshot{},
+		Snapshots:     map[string]desiredstate.DeploySnapshot{},
 		Secrets:       map[string]SecretRecord{},
 	}
 }
@@ -291,13 +287,13 @@ func (s *State) ensureDefaults() {
 		s.SchemaVersion = soloStateSchemaVersion
 	}
 	if s.Nodes == nil {
-		s.Nodes = map[string]config.SoloNode{}
+		s.Nodes = map[string]config.Node{}
 	}
 	if s.Attachments == nil {
 		s.Attachments = map[string]AttachmentRecord{}
 	}
 	if s.Snapshots == nil {
-		s.Snapshots = map[string]DeploySnapshot{}
+		s.Snapshots = map[string]desiredstate.DeploySnapshot{}
 	}
 	if s.Secrets == nil {
 		s.Secrets = map[string]SecretRecord{}
@@ -310,7 +306,7 @@ func normalizeState(current State) (State, error) {
 		nodeNames = append(nodeNames, name)
 	}
 	sort.Strings(nodeNames)
-	normalizedNodes := make(map[string]config.SoloNode, len(current.Nodes))
+	normalizedNodes := make(map[string]config.Node, len(current.Nodes))
 	for _, name := range nodeNames {
 		node := current.Nodes[name]
 		normalized, err := normalizeAndValidateNode(name, node)
@@ -347,7 +343,7 @@ func normalizeState(current State) (State, error) {
 		snapshotKeys = append(snapshotKeys, key)
 	}
 	sort.Strings(snapshotKeys)
-	normalizedSnapshots := make(map[string]DeploySnapshot, len(current.Snapshots))
+	normalizedSnapshots := make(map[string]desiredstate.DeploySnapshot, len(current.Snapshots))
 	for _, key := range snapshotKeys {
 		normalizedKey, snapshot, err := normalizeSnapshotRecord(key, current.Snapshots[key])
 		if err != nil {
@@ -389,10 +385,10 @@ func normalizeAttachmentRecord(key string, attachment AttachmentRecord) (string,
 	return workspaceKey + "\n" + environment, attachment, nil
 }
 
-func normalizeSnapshotRecord(key string, snapshot DeploySnapshot) (string, DeploySnapshot, error) {
+func normalizeSnapshotRecord(key string, snapshot desiredstate.DeploySnapshot) (string, desiredstate.DeploySnapshot, error) {
 	workspaceRoot, workspaceKey, err := normalizeWorkspaceIdentity(key, snapshot.WorkspaceRoot, snapshot.WorkspaceKey)
 	if err != nil {
-		return "", DeploySnapshot{}, err
+		return "", desiredstate.DeploySnapshot{}, err
 	}
 	_, keyEnvironment := splitEnvironmentStateKey(key)
 	snapshot.WorkspaceRoot = workspaceRoot
@@ -479,7 +475,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func NormalizeNode(node config.SoloNode) config.SoloNode {
+func NormalizeNode(node config.Node) config.Node {
 	if node.Port == 0 {
 		node.Port = 22
 	}
@@ -488,7 +484,7 @@ func NormalizeNode(node config.SoloNode) config.SoloNode {
 	}
 	labels := normalizeNodeLabels(node.Labels)
 	if len(labels) == 0 {
-		labels = append([]string(nil), config.SoloDefaultLabels...)
+		labels = append([]string(nil), config.DefaultNodeLabels...)
 	}
 	node.Labels = labels
 	return node
@@ -518,7 +514,7 @@ func (s *State) NodeNames() []string {
 	return names
 }
 
-func (s *State) SetNode(name string, node config.SoloNode) error {
+func (s *State) SetNode(name string, node config.Node) error {
 	s.ensureDefaults()
 	name = strings.TrimSpace(name)
 	normalized, err := normalizeAndValidateNode(name, node)
@@ -544,17 +540,17 @@ func (s *State) Attachment(workspaceRoot, environment string) (string, Attachmen
 	return key, record, ok, nil
 }
 
-func (s *State) Snapshot(workspaceRoot, environment string) (string, DeploySnapshot, bool, error) {
+func (s *State) Snapshot(workspaceRoot, environment string) (string, desiredstate.DeploySnapshot, bool, error) {
 	s.ensureDefaults()
 	key, err := EnvironmentStateKey(workspaceRoot, environment)
 	if err != nil {
-		return "", DeploySnapshot{}, false, err
+		return "", desiredstate.DeploySnapshot{}, false, err
 	}
 	snapshot, ok := s.Snapshots[key]
 	return key, snapshot, ok, nil
 }
 
-func (s *State) SaveSnapshot(snapshot DeploySnapshot) (string, error) {
+func (s *State) SaveSnapshot(snapshot desiredstate.DeploySnapshot) (string, error) {
 	s.ensureDefaults()
 	key, err := EnvironmentStateKey(snapshot.WorkspaceRoot, snapshot.Environment)
 	if err != nil {
@@ -680,20 +676,20 @@ func defaultEnvironmentName(name string) string {
 	return name
 }
 
-func normalizeAndValidateNode(name string, node config.SoloNode) (config.SoloNode, error) {
+func normalizeAndValidateNode(name string, node config.Node) (config.Node, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return config.SoloNode{}, fmt.Errorf("node name is required")
+		return config.Node{}, fmt.Errorf("node name is required")
 	}
 	node = NormalizeNode(node)
 	if strings.TrimSpace(node.Host) == "" {
-		return config.SoloNode{}, fmt.Errorf("node %q host is required", name)
+		return config.Node{}, fmt.Errorf("node %q host is required", name)
 	}
 	if strings.TrimSpace(node.User) == "" {
-		return config.SoloNode{}, fmt.Errorf("node %q user is required", name)
+		return config.Node{}, fmt.Errorf("node %q user is required", name)
 	}
 	if node.Port <= 0 || node.Port > 65535 {
-		return config.SoloNode{}, fmt.Errorf("node %q port must be between 1 and 65535", name)
+		return config.Node{}, fmt.Errorf("node %q port must be between 1 and 65535", name)
 	}
 	return node, nil
 }

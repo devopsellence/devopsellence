@@ -777,7 +777,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return runByMode(func(ctx context.Context) error {
 				return app.SoloNodeCreate(ctx, nodeCreateOpts)
 			}, func(ctx context.Context) error {
-				return app.SharedNodeCreate(ctx, SharedNodeCreateOptions{
+				return app.SharedSoloNodeCreate(ctx, SharedSoloNodeCreateOptions{
 					SoloNodeCreateOptions: nodeCreateOpts,
 					NodeBootstrapOptions:  nodeCreateBootstrapOpts,
 				})

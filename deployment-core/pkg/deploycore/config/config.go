@@ -32,7 +32,7 @@ const (
 )
 
 var DefaultBuildPlatforms = []string{"linux/amd64"}
-var SoloDefaultLabels = []string{DefaultWebRole}
+var DefaultNodeLabels = []string{DefaultWebRole}
 
 type Volume struct {
 	Source string `yaml:"source" json:"source"`
@@ -64,8 +64,6 @@ type ServiceConfig struct {
 	Healthcheck *HTTPHealthcheck  `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 	Volumes     []Volume          `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 }
-
-type Service = ServiceConfig
 
 type TaskConfig struct {
 	Service string            `yaml:"service" json:"service"`
@@ -162,7 +160,7 @@ type EnvironmentOverlay struct {
 	Tasks    *TasksConfigOverlay             `yaml:"tasks,omitempty" json:"tasks,omitempty"`
 }
 
-type SoloNode struct {
+type Node struct {
 	Host             string   `yaml:"host" json:"host"`
 	User             string   `yaml:"user" json:"user"`
 	Port             int      `yaml:"port,omitempty" json:"port,omitempty"`
@@ -188,8 +186,6 @@ type ProjectConfig struct {
 	Ingress            *IngressConfig                `yaml:"ingress,omitempty" json:"ingress,omitempty"`
 	Environments       map[string]EnvironmentOverlay `yaml:"environments,omitempty" json:"environments,omitempty"`
 }
-
-type Project = ProjectConfig
 
 type Store struct{}
 

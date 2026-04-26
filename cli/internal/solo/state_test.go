@@ -7,7 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devopsellence/cli/internal/config"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
 )
 
 func TestCanonicalWorkspaceKeyResolvesSymlinks(t *testing.T) {
@@ -37,7 +38,7 @@ func TestStateStoreRoundTrip(t *testing.T) {
 
 	store := NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := newState()
-	if err := current.SetNode("web-a", config.SoloNode{
+	if err := current.SetNode("web-a", config.Node{
 		Host:   "203.0.113.10",
 		User:   "root",
 		Labels: []string{config.DefaultWebRole},
@@ -52,13 +53,13 @@ func TestStateStoreRoundTrip(t *testing.T) {
 		t.Fatal("AttachNode() changed = false, want true")
 	}
 	current.Attachments[attachment.WorkspaceKey+"\n"+attachment.Environment] = attachment
-	current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment] = DeploySnapshot{
+	current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment] = desiredstate.DeploySnapshot{
 		WorkspaceRoot: "/workspace/demo",
 		WorkspaceKey:  attachment.WorkspaceKey,
 		Environment:   "production",
 		Revision:      "abc1234",
 		Image:         "demo:abc1234",
-		Metadata:      SnapshotMetadata{Project: "demo"},
+		Metadata:      desiredstate.SnapshotMetadata{Project: "demo"},
 	}
 	if err := store.Write(current); err != nil {
 		t.Fatal(err)
@@ -218,7 +219,7 @@ func TestAttachmentKeysForNodeDoesNotMutateState(t *testing.T) {
 
 	current := State{
 		SchemaVersion: soloStateSchemaVersion,
-		Nodes: map[string]config.SoloNode{
+		Nodes: map[string]config.Node{
 			"web-a": {Host: "203.0.113.10", User: "root"},
 		},
 		Attachments: map[string]AttachmentRecord{
@@ -227,7 +228,7 @@ func TestAttachmentKeysForNodeDoesNotMutateState(t *testing.T) {
 				NodeNames:     []string{"web-a", "web-a"},
 			},
 		},
-		Snapshots: map[string]DeploySnapshot{},
+		Snapshots: map[string]desiredstate.DeploySnapshot{},
 	}
 
 	keys := current.AttachmentKeysForNode("web-a")
@@ -262,10 +263,10 @@ func TestSetNodeRejectsMissingConnectionFields(t *testing.T) {
 	t.Parallel()
 
 	current := newState()
-	if err := current.SetNode("web-a", config.SoloNode{User: "root"}); err == nil || !strings.Contains(err.Error(), "host is required") {
+	if err := current.SetNode("web-a", config.Node{User: "root"}); err == nil || !strings.Contains(err.Error(), "host is required") {
 		t.Fatalf("expected host validation error, got %v", err)
 	}
-	if err := current.SetNode("web-a", config.SoloNode{Host: "203.0.113.10"}); err == nil || !strings.Contains(err.Error(), "user is required") {
+	if err := current.SetNode("web-a", config.Node{Host: "203.0.113.10"}); err == nil || !strings.Contains(err.Error(), "user is required") {
 		t.Fatalf("expected user validation error, got %v", err)
 	}
 }
@@ -288,10 +289,10 @@ func TestAttachmentCRUD(t *testing.T) {
 	t.Parallel()
 
 	current := newState()
-	if err := current.SetNode("web-a", config.SoloNode{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+	if err := current.SetNode("web-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := current.SetNode("worker-a", config.SoloNode{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWorkerRole}}); err != nil {
+	if err := current.SetNode("worker-a", config.Node{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWorkerRole}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -469,10 +470,10 @@ func TestDetachNodeDoesNotMutatePreviouslyReturnedAttachments(t *testing.T) {
 	t.Parallel()
 
 	current := newState()
-	if err := current.SetNode("web-a", config.SoloNode{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+	if err := current.SetNode("web-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := current.SetNode("worker-a", config.SoloNode{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWorkerRole}}); err != nil {
+	if err := current.SetNode("worker-a", config.Node{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWorkerRole}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := current.AttachNode("/workspace/demo", "production", "web-a"); err != nil {
@@ -499,10 +500,10 @@ func TestAttachNodeDoesNotMutatePreviouslyReturnedAttachments(t *testing.T) {
 	t.Parallel()
 
 	current := newState()
-	if err := current.SetNode("web-a", config.SoloNode{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+	if err := current.SetNode("web-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := current.SetNode("worker-a", config.SoloNode{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWorkerRole}}); err != nil {
+	if err := current.SetNode("worker-a", config.Node{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWorkerRole}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := current.AttachNode("/workspace/demo", "production", "web-a"); err != nil {

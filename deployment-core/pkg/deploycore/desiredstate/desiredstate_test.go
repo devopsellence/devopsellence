@@ -16,7 +16,7 @@ func boolPtr(value bool) *bool {
 
 func baseProject() *config.ProjectConfig {
 	cfg := config.DefaultProjectConfig("solo", "myapp", config.DefaultEnvironment)
-	cfg.Services["web"] = config.Service{
+	cfg.Services["web"] = config.ServiceConfig{
 		Command: []string{"rails", "server"},
 		Env:     map[string]string{"RAILS_ENV": "production"},
 		SecretRefs: []config.SecretRef{
@@ -37,7 +37,7 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 
 func TestBuildDesiredStateWithScopedSecretsUsesServiceScope(t *testing.T) {
 	cfg := baseProject()
-	cfg.Services["worker"] = config.Service{
+	cfg.Services["worker"] = config.ServiceConfig{
 		Command:    []string{"bundle", "exec", "sidekiq"},
 		SecretRefs: []config.SecretRef{{Name: "DATABASE_URL", Secret: "local"}},
 	}
@@ -87,7 +87,7 @@ func TestBuildDesiredStateWithScopedSecretsUsesServiceScope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestBuildDesiredStateWithScopedSecretsUsesServiceScope(t *testing.T) {
 
 func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 	cfg := baseProject()
-	cfg.Services["jobs"] = config.Service{
+	cfg.Services["jobs"] = config.ServiceConfig{
 		Command: []string{"sidekiq"},
 		Env:     map[string]string{"QUEUE": "default"},
 	}
@@ -116,7 +116,7 @@ func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 
 func TestBuildDesiredState_MapsArgsToContainerCommand(t *testing.T) {
 	cfg := baseProject()
-	cfg.Services["web"] = config.Service{
+	cfg.Services["web"] = config.ServiceConfig{
 		Command:     []string{"/app"},
 		Args:        []string{"web", "--port", "3000"},
 		Ports:       []config.ServicePort{{Name: "http", Port: 3000}},
@@ -151,7 +151,7 @@ func TestBuildDesiredState_MapsArgsToContainerCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestBuildDesiredState_MapsArgsToContainerCommand(t *testing.T) {
 
 func TestBuildDesiredStateForLabelsFiltersServicesByKindLabel(t *testing.T) {
 	cfg := baseProject()
-	cfg.Services["jobs"] = config.Service{
+	cfg.Services["jobs"] = config.ServiceConfig{
 		Command: []string{"sidekiq"},
 	}
 	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"rails", "db:migrate"}}
@@ -182,7 +182,7 @@ func TestBuildDesiredStateForLabelsFiltersServicesByKindLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestBuildDesiredStateForNodeIncludesIngressForIngressNode(t *testing.T) {
 
 func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
 	cfg := baseProject()
-	cfg.Services["jobs"] = config.Service{
+	cfg.Services["jobs"] = config.ServiceConfig{
 		Command: []string{"sidekiq"},
 	}
 	cfg.Ingress = &config.IngressConfig{
@@ -281,7 +281,7 @@ func TestBuildDesiredStateForNodeOmitsIngressForNonIngressNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestBuildDesiredStateForNodeDefaultsIngressRedirectHTTPToTrue(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -327,8 +327,8 @@ func TestBuildDesiredState_MissingSecretErrors(t *testing.T) {
 	}
 }
 
-func TestBuildAggregatedDesiredStateMergesEnvironmentsIngressAndPeers(t *testing.T) {
-	webNode := config.SoloNode{Labels: []string{config.DefaultWebRole}}
+func TestPlanNodePublicationMergesEnvironmentsIngressAndPeers(t *testing.T) {
+	webNode := config.Node{Labels: []string{config.DefaultWebRole}}
 	snapshots := []DeploySnapshot{
 		{
 			WorkspaceRoot:      "/workspace/a",
@@ -336,18 +336,18 @@ func TestBuildAggregatedDesiredStateMergesEnvironmentsIngressAndPeers(t *testing
 			Environment:        "production",
 			Revision:           "aaa1111",
 			Image:              "demo-a:aaa1111",
-			Services:           []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo-a:aaa1111"}},
-			ReleaseTask:        &taskJSON{Name: "release", Image: "demo-a:aaa1111"},
+			Services:           []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo-a:aaa1111"}},
+			ReleaseTask:        &TaskJSON{Name: "release", Image: "demo-a:aaa1111"},
 			ReleaseService:     "web",
 			ReleaseServiceKind: config.ServiceKindWeb,
-			Ingress: &ingressJSON{
+			Ingress: &IngressJSON{
 				Mode:         "public",
 				Hosts:        []string{"a.example.com"},
-				TLS:          ingressTLSJSON{Mode: "auto"},
+				TLS:          IngressTLSJSON{Mode: "auto"},
 				RedirectHTTP: true,
-				Routes: []ingressRouteJSON{{
-					Match:  ingressMatchJSON{Hostname: "a.example.com"},
-					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				Routes: []IngressRouteJSON{{
+					Match:  IngressMatchJSON{Hostname: "a.example.com"},
+					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
 				}},
 			},
 			IngressService:     "web",
@@ -359,17 +359,17 @@ func TestBuildAggregatedDesiredStateMergesEnvironmentsIngressAndPeers(t *testing
 			Environment:        "production",
 			Revision:           "bbb2222",
 			Image:              "demo-b:bbb2222",
-			Services:           []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo-b:bbb2222"}},
+			Services:           []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo-b:bbb2222"}},
 			ReleaseService:     "web",
 			ReleaseServiceKind: config.ServiceKindWeb,
-			Ingress: &ingressJSON{
+			Ingress: &IngressJSON{
 				Mode:         "public",
 				Hosts:        []string{"b.example.com"},
-				TLS:          ingressTLSJSON{Mode: "auto"},
+				TLS:          IngressTLSJSON{Mode: "auto"},
 				RedirectHTTP: true,
-				Routes: []ingressRouteJSON{{
-					Match:  ingressMatchJSON{Hostname: "b.example.com"},
-					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				Routes: []IngressRouteJSON{{
+					Match:  IngressMatchJSON{Hostname: "b.example.com"},
+					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
 				}},
 			},
 			IngressService:     "web",
@@ -384,16 +384,18 @@ func TestBuildAggregatedDesiredStateMergesEnvironmentsIngressAndPeers(t *testing
 		{Name: "shared-3", Labels: []string{config.DefaultWorkerRole}, PublicAddress: "203.0.113.13"},
 	}
 
-	first, err := BuildAggregatedDesiredState("shared-1", webNode, snapshots, releaseNodes, peers)
+	firstPublication, err := PlanNodePublication(NodePublicationInput{NodeName: "shared-1", CurrentNode: webNode, Snapshots: snapshots, ReleaseNodes: releaseNodes, NodePeers: peers})
+	first := firstPublication.DesiredStateJSON
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := BuildAggregatedDesiredState("shared-1", webNode, snapshots, releaseNodes, peers)
+	secondPublication, err := PlanNodePublication(NodePublicationInput{NodeName: "shared-1", CurrentNode: webNode, Snapshots: snapshots, ReleaseNodes: releaseNodes, NodePeers: peers})
+	second := secondPublication.DesiredStateJSON
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(first, &ds); err != nil {
 		t.Fatal(err)
 	}
@@ -423,15 +425,15 @@ func TestBuildAggregatedDesiredStateMergesEnvironmentsIngressAndPeers(t *testing
 func TestPlanNodePublicationWrapsAggregatedDesiredState(t *testing.T) {
 	t.Parallel()
 
-	currentNode := config.SoloNode{Labels: []string{config.DefaultWebRole}}
+	currentNode := config.Node{Labels: []string{config.DefaultWebRole}}
 	snapshots := []DeploySnapshot{
 		{
 			WorkspaceRoot:      "/workspace/demo",
 			WorkspaceKey:       "/workspace/demo",
 			Environment:        "production",
 			Revision:           "aaa1111",
-			Services:           []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:aaa1111"}},
-			ReleaseTask:        &taskJSON{Name: "release", Image: "demo:aaa1111"},
+			Services:           []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:aaa1111"}},
+			ReleaseTask:        &TaskJSON{Name: "release", Image: "demo:aaa1111"},
 			ReleaseServiceKind: config.ServiceKindWeb,
 		},
 	}
@@ -439,7 +441,8 @@ func TestPlanNodePublicationWrapsAggregatedDesiredState(t *testing.T) {
 	releaseNodes := map[string]string{"/workspace/demo\nproduction": "web-a"}
 	peers := []NodePeer{{Name: "web-b", Labels: []string{config.DefaultWebRole}, PublicAddress: "203.0.113.12"}}
 
-	want, err := BuildAggregatedDesiredState("web-a", currentNode, snapshots, releaseNodes, peers)
+	wantPublication, err := PlanNodePublication(NodePublicationInput{NodeName: "web-a", CurrentNode: currentNode, Snapshots: snapshots, ReleaseNodes: releaseNodes, NodePeers: peers})
+	want := wantPublication.DesiredStateJSON
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,28 +469,28 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 
 	snapshots := []DeploySnapshot{
 		{
-			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
-			Ingress: &ingressJSON{
+			Services: []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
+			Ingress: &IngressJSON{
 				Mode:  "public",
-				TLS:   ingressTLSJSON{Mode: "auto"},
+				TLS:   IngressTLSJSON{Mode: "auto"},
 				Hosts: []string{"app.example.com"},
-				Routes: []ingressRouteJSON{{
-					Match:  ingressMatchJSON{Hostname: "app.example.com"},
-					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "metrics"},
+				Routes: []IngressRouteJSON{{
+					Match:  IngressMatchJSON{Hostname: "app.example.com"},
+					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "metrics"},
 				}},
 			},
 			IngressService:     "web",
 			IngressServiceKind: config.ServiceKindWeb,
 		},
 		{
-			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
-			Ingress: &ingressJSON{
+			Services: []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
+			Ingress: &IngressJSON{
 				Mode:  "public",
-				TLS:   ingressTLSJSON{Mode: "auto"},
+				TLS:   IngressTLSJSON{Mode: "auto"},
 				Hosts: []string{"app.example.com"},
-				Routes: []ingressRouteJSON{{
-					Match:  ingressMatchJSON{Hostname: "app.example.com"},
-					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				Routes: []IngressRouteJSON{{
+					Match:  IngressMatchJSON{Hostname: "app.example.com"},
+					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
 				}},
 			},
 			IngressService:     "web",
@@ -512,27 +515,27 @@ func TestMergeIngressForNodeTreatsBlankAndPublicModeAsEquivalent(t *testing.T) {
 
 	snapshots := []DeploySnapshot{
 		{
-			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
-			Ingress: &ingressJSON{
-				TLS:   ingressTLSJSON{Mode: "auto"},
+			Services: []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
+			Ingress: &IngressJSON{
+				TLS:   IngressTLSJSON{Mode: "auto"},
 				Hosts: []string{"a.example.com"},
-				Routes: []ingressRouteJSON{{
-					Match:  ingressMatchJSON{Hostname: "a.example.com"},
-					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				Routes: []IngressRouteJSON{{
+					Match:  IngressMatchJSON{Hostname: "a.example.com"},
+					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
 				}},
 			},
 			IngressService:     "web",
 			IngressServiceKind: config.ServiceKindWeb,
 		},
 		{
-			Services: []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
-			Ingress: &ingressJSON{
+			Services: []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb}},
+			Ingress: &IngressJSON{
 				Mode:  "public",
-				TLS:   ingressTLSJSON{Mode: "auto"},
+				TLS:   IngressTLSJSON{Mode: "auto"},
 				Hosts: []string{"b.example.com"},
-				Routes: []ingressRouteJSON{{
-					Match:  ingressMatchJSON{Hostname: "b.example.com"},
-					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				Routes: []IngressRouteJSON{{
+					Match:  IngressMatchJSON{Hostname: "b.example.com"},
+					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
 				}},
 			},
 			IngressService:     "web",
@@ -555,10 +558,10 @@ func TestMergeIngressForNodeTreatsBlankAndPublicModeAsEquivalent(t *testing.T) {
 	}
 }
 
-func TestBuildAggregatedDesiredStateNamespacesDuplicateEnvironmentNames(t *testing.T) {
+func TestPlanNodePublicationNamespacesDuplicateEnvironmentNames(t *testing.T) {
 	t.Parallel()
 
-	currentNode := config.SoloNode{Labels: []string{config.DefaultWebRole}}
+	currentNode := config.Node{Labels: []string{config.DefaultWebRole}}
 	snapshots := []DeploySnapshot{
 		{
 			WorkspaceRoot: "/workspace/a",
@@ -566,14 +569,14 @@ func TestBuildAggregatedDesiredStateNamespacesDuplicateEnvironmentNames(t *testi
 			Environment:   "production",
 			Revision:      "aaa1111",
 			Metadata:      SnapshotMetadata{Project: "alpha"},
-			Services:      []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "alpha:aaa1111"}},
-			Ingress: &ingressJSON{
+			Services:      []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "alpha:aaa1111"}},
+			Ingress: &IngressJSON{
 				Mode:  "public",
-				TLS:   ingressTLSJSON{Mode: "auto"},
+				TLS:   IngressTLSJSON{Mode: "auto"},
 				Hosts: []string{"a.example.com"},
-				Routes: []ingressRouteJSON{{
-					Match:  ingressMatchJSON{Hostname: "a.example.com"},
-					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				Routes: []IngressRouteJSON{{
+					Match:  IngressMatchJSON{Hostname: "a.example.com"},
+					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
 				}},
 			},
 			IngressService:     "web",
@@ -585,14 +588,14 @@ func TestBuildAggregatedDesiredStateNamespacesDuplicateEnvironmentNames(t *testi
 			Environment:   "production",
 			Revision:      "bbb2222",
 			Metadata:      SnapshotMetadata{Project: "bravo"},
-			Services:      []serviceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "bravo:bbb2222"}},
-			Ingress: &ingressJSON{
+			Services:      []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "bravo:bbb2222"}},
+			Ingress: &IngressJSON{
 				Mode:  "public",
-				TLS:   ingressTLSJSON{Mode: "auto"},
+				TLS:   IngressTLSJSON{Mode: "auto"},
 				Hosts: []string{"b.example.com"},
-				Routes: []ingressRouteJSON{{
-					Match:  ingressMatchJSON{Hostname: "b.example.com"},
-					Target: ingressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+				Routes: []IngressRouteJSON{{
+					Match:  IngressMatchJSON{Hostname: "b.example.com"},
+					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
 				}},
 			},
 			IngressService:     "web",
@@ -600,11 +603,12 @@ func TestBuildAggregatedDesiredStateNamespacesDuplicateEnvironmentNames(t *testi
 		},
 	}
 
-	data, err := BuildAggregatedDesiredState("web-a", currentNode, snapshots, map[string]string{}, nil)
+	publication, err := PlanNodePublication(NodePublicationInput{NodeName: "web-a", CurrentNode: currentNode, Snapshots: snapshots, ReleaseNodes: map[string]string{}, NodePeers: nil})
+	data := publication.DesiredStateJSON
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ds desiredStateJSON
+	var ds DesiredStateJSON
 	if err := json.Unmarshal(data, &ds); err != nil {
 		t.Fatal(err)
 	}

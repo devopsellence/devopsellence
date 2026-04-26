@@ -4,8 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/devopsellence/cli/internal/config"
 	"github.com/devopsellence/cli/internal/solo"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
+	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
 )
 
 func TestSuggestedModeUsesSoloStateForWorkspace(t *testing.T) {
@@ -20,11 +21,11 @@ func TestSuggestedModeUsesSoloStateForWorkspace(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "solo-state.json")
 	store := solo.NewStateStore(statePath)
 	current := solo.State{
-		Nodes:       map[string]config.SoloNode{},
+		Nodes:       map[string]config.Node{},
 		Attachments: map[string]solo.AttachmentRecord{},
-		Snapshots:   map[string]solo.DeploySnapshot{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
 	}
-	if err := current.SetNode("node-1", config.SoloNode{Host: "203.0.113.10", User: "root"}); err != nil {
+	if err := current.SetNode("node-1", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-1"); err != nil {

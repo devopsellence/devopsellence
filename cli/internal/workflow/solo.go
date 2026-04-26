@@ -1540,12 +1540,9 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 	if err != nil {
 		return err
 	}
-	lines := []string{}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			lines = append(lines, line)
-		}
+	lines := strings.Split(out, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
 	}
 	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines})
 }

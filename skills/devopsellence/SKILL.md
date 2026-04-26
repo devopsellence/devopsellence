@@ -1,8 +1,7 @@
 ---
 name: devopsellence
-description: Install the devopsellence CLI, choose solo or shared workspace mode, deploy the current app, inspect status, and manage secrets or nodes from OpenClaw.
-homepage: https://www.devopsellence.com/docs
-metadata: {"openclaw":{"homepage":"https://www.devopsellence.com/docs","skillKey":"devopsellence"}}
+description: Use the devopsellence CLI to choose solo or shared workspace mode, deploy the current app, inspect status, and manage secrets or nodes.
+homepage: https://www.devopsellence.com
 ---
 
 # devopsellence
@@ -12,58 +11,54 @@ Use this skill when the user wants to deploy an app with devopsellence, check de
 ## Default flow
 
 1. Work in the app directory the user wants to deploy.
-2. Check whether the CLI is already installed:
+2. Check whether the CLI is already available:
 
-```bash
+```sh
 command -v devopsellence
 ```
 
-If the command is missing, install the latest compatible CLI:
-
-```bash
-curl -fsSL https://www.devopsellence.com/lfg.sh | bash
-```
+If the command is missing, tell the user the devopsellence CLI is required and point them to the official docs. Do not run setup scripts from this skill.
 
 3. Validate local state before changing anything:
 
-```bash
+```sh
 devopsellence doctor
 ```
 
 4. Choose the workspace mode before the first setup:
 
-```bash
+```sh
 devopsellence mode use shared
 ```
 
 Then prepare the project:
 
-```bash
+```sh
 devopsellence setup
 ```
 
 If the user already knows the target workspace values, prefer explicit flags:
 
-```bash
+```sh
 devopsellence mode use shared
 devopsellence setup --org acme --project shop --env staging
 ```
 
 5. Deploy the app:
 
-```bash
+```sh
 devopsellence deploy
 ```
 
 If the user wants to deploy an existing image digest instead of building locally:
 
-```bash
+```sh
 devopsellence deploy --image docker.io/example/app@sha256:...
 ```
 
 6. Verify the result:
 
-```bash
+```sh
 devopsellence status --json
 ```
 
@@ -71,7 +66,7 @@ devopsellence status --json
 
 Prefer stdin over literal secret values in prompts or shell history:
 
-```bash
+```sh
 printf '%s' "$VALUE" | devopsellence secret set NAME --service web --stdin
 devopsellence secret set NAME --service web --store 1password --op-ref op://vault/item/field
 devopsellence secret list --env production
@@ -82,7 +77,7 @@ devopsellence secret delete NAME --service web
 
 Use these in shared mode when the user wants to run on their own machine or VM:
 
-```bash
+```sh
 devopsellence mode use shared
 devopsellence provider login hetzner
 devopsellence node create prod-1
@@ -95,7 +90,7 @@ devopsellence node remove <id>
 
 Use these in solo mode when the user wants SSH-first workflows without the control plane:
 
-```bash
+```sh
 devopsellence mode use solo
 devopsellence provider login hetzner
 devopsellence node create prod-1
@@ -117,4 +112,3 @@ When the user is editing `devopsellence.yml`, recognize these deploy-time hooks:
 - If Docker is missing or not running, surface the problem clearly, or switch to `devopsellence deploy --image ...` when the user already has a pushed image digest.
 - If the workspace is not a git checkout and the CLI needs git metadata, stop and ask before creating a repo or commit.
 - Keep secrets out of logs and chat output. Use environment variables plus `--stdin`.
-- After installing this skill from ClawHub, start a new OpenClaw session if the current session does not pick it up.

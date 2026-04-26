@@ -1,9 +1,6 @@
 package ui
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 type Row struct {
 	Label string
@@ -29,16 +26,9 @@ func (r Renderer) Card(card Card) string {
 
 	if title != "" {
 		if status != "" {
-			lines = append(lines, fmt.Sprintf("%s  %s", r.Title(title), r.Accent(status)))
+			lines = append(lines, r.Title(title)+"  "+r.Accent(status))
 		} else {
 			lines = append(lines, r.Title(title))
-		}
-	}
-
-	labelWidth := 0
-	for _, row := range card.Rows {
-		if width := len(strings.TrimSpace(row.Label)); width > labelWidth {
-			labelWidth = width
 		}
 	}
 
@@ -48,7 +38,7 @@ func (r Renderer) Card(card Card) string {
 		if label == "" && value == "" {
 			continue
 		}
-		lines = append(lines, r.renderRow(labelWidth, label, value))
+		lines = append(lines, r.renderRow(label, value))
 	}
 
 	if footer := strings.TrimSpace(card.Footer); footer != "" {
@@ -61,8 +51,14 @@ func (r Renderer) Card(card Card) string {
 	return strings.Join(lines, "\n")
 }
 
-func (r Renderer) renderRow(labelWidth int, label, value string) string {
-	return fmt.Sprintf("%-*s  %s", labelWidth, r.Label(label), r.Value(value))
+func (r Renderer) renderRow(label, value string) string {
+	if label == "" {
+		return r.Value(value)
+	}
+	if value == "" {
+		return r.Label(label)
+	}
+	return r.Label(label) + ": " + r.Value(value)
 }
 
 func RenderCommandBlock(title, command string) string {

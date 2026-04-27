@@ -54,7 +54,7 @@ Actual behavior:
 Reproduction evidence:
 Suggested fix:
 
-## Product Completeness Gaps
+## AI-Agent-Mediated Product Completeness Gaps
 
 ### Finding: <title>
 

@@ -619,7 +619,7 @@ func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 func TestSoloStatusPublicURLsUseHTTPSForManualTLS(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
-		Hosts: []string{"app.example.com"},
+		Hosts: []string{"app.example.com,api.example.com", "app.example.com"},
 		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
 		TLS:   config.IngressTLSConfig{Mode: "manual"},
 	}
@@ -627,8 +627,9 @@ func TestSoloStatusPublicURLsUseHTTPSForManualTLS(t *testing.T) {
 	urls := soloStatusPublicURLs(&cfg, map[string]config.Node{
 		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
 	})
-	if len(urls) != 1 || urls[0] != "https://app.example.com/" {
-		t.Fatalf("public_urls = %#v, want https URL", urls)
+	want := []string{"https://api.example.com/", "https://app.example.com/"}
+	if !reflect.DeepEqual(urls, want) {
+		t.Fatalf("public_urls = %#v, want %#v", urls, want)
 	}
 }
 
@@ -803,6 +804,31 @@ func TestSoloAgentUninstallRequiresConfirmation(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("error = %q, want --yes hint", err.Error())
+	}
+}
+
+func TestSoloAgentUninstallRejectsUnsafeStateDir(t *testing.T) {
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", AgentStateDir: "/"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{SoloState: soloState}
+	err := app.SoloAgentUninstall(context.Background(), SoloAgentUninstallOptions{Node: "node-a", Yes: true})
+	if err == nil {
+		t.Fatal("SoloAgentUninstall() error = nil, want unsafe state dir error")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "unsafe devopsellence agent state dir") {
+		t.Fatalf("error = %q, want unsafe state dir", err.Error())
 	}
 }
 

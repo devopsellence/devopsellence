@@ -1142,9 +1142,8 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 	}
 	hosts := []string{}
 	if cfg.Ingress != nil {
-		for _, host := range cfg.Ingress.Hosts {
-			host = strings.TrimSpace(host)
-			if host == "" || host == "*" {
+		for _, host := range normalizeIngressHosts(cfg.Ingress.Hosts) {
+			if host == "*" {
 				continue
 			}
 			hosts = append(hosts, host)
@@ -1666,10 +1665,14 @@ func (a *App) SoloAgentUninstall(ctx context.Context, opts SoloAgentUninstallOpt
 	if !ok {
 		return fmt.Errorf("node %q not found", opts.Node)
 	}
+	stateDir, err := safeSoloAgentStateDir(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"))
+	if err != nil {
+		return ExitError{Code: 2, Err: err}
+	}
 	stdout := newTailBuffer(sshOutputTailLimit)
 	stderr := newTailBuffer(sshOutputTailLimit)
 	script := soloAgentUninstallScript(soloAgentUninstallScriptOptions{
-		StateDir:      firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
+		StateDir:      stateDir,
 		KeepWorkloads: opts.KeepWorkloads,
 	})
 	if err := solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), stdout, stderr); err != nil {
@@ -2819,9 +2822,22 @@ type soloAgentUninstallScriptOptions struct {
 	KeepWorkloads bool
 }
 
+func safeSoloAgentStateDir(value string) (string, error) {
+	stateDir := filepath.Clean(strings.TrimSpace(value))
+	if stateDir == "." || stateDir == string(filepath.Separator) || !filepath.IsAbs(stateDir) {
+		return "", fmt.Errorf("unsafe devopsellence agent state dir %q", value)
+	}
+	if !strings.Contains(stateDir, "devopsellence") {
+		return "", fmt.Errorf("unsafe devopsellence agent state dir %q: path must contain devopsellence", value)
+	}
+	return stateDir, nil
+}
+
 func soloAgentUninstallScript(opts soloAgentUninstallScriptOptions) string {
-	stateDir := strings.TrimSpace(opts.StateDir)
-	if stateDir == "" {
+	stateDir, err := safeSoloAgentStateDir(firstNonEmpty(opts.StateDir, "/var/lib/devopsellence"))
+	if err != nil {
+		// Keep this function side-effect-free for tests/callers; the runtime script
+		// also refuses unsafe values before any rm -rf operation.
 		stateDir = "/var/lib/devopsellence"
 	}
 	keepWorkloads := "0"
@@ -2834,6 +2850,14 @@ STATE_DIR=%s
 KEEP_WORKLOADS=%s
 AGENT_BIN=/usr/local/bin/devopsellence-agent
 SERVICE_FILE=/etc/systemd/system/devopsellence-agent.service
+
+case "$STATE_DIR" in
+  ""|"/"|"/."|"/..") echo "refusing unsafe devopsellence state dir: $STATE_DIR" >&2; exit 1 ;;
+esac
+case "$STATE_DIR" in
+  *devopsellence*) ;;
+  *) echo "refusing unsafe devopsellence state dir without devopsellence in path: $STATE_DIR" >&2; exit 1 ;;
+esac
 
 if [ "$(id -u)" -ne 0 ]; then
   SUDO=sudo

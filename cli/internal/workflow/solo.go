@@ -2380,7 +2380,14 @@ func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Nod
 	}
 	if len(opts.Nodes) > 0 {
 		nodes, err := a.resolveNodes(current, opts.Nodes)
-		return nodes, nil, err
+		if err != nil {
+			return nil, nil, err
+		}
+		cfg, _, cfgErr := a.loadSoloProjectConfig()
+		if cfgErr != nil {
+			cfg = nil
+		}
+		return nodes, cfg, nil
 	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {

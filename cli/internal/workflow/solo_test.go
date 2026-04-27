@@ -606,7 +606,7 @@ func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 		ConfigStore: config.NewStore(),
 		Cwd:         workspaceRoot,
 	}
-	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a", "node-b"}}); err != nil {
 		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)

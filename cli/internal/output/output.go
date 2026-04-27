@@ -38,6 +38,9 @@ func (p Printer) PrintEvent(event string, fields map[string]any) error {
 	}
 	payload := map[string]any{}
 	for key, value := range fields {
+		if key == "schema_version" || key == "event" {
+			continue
+		}
 		payload[key] = value
 	}
 	payload["schema_version"] = SchemaVersion

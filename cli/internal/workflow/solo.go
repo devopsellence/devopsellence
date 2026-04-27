@@ -2680,16 +2680,18 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	if err := resolvedProvider.DeleteServer(ctx, providerServerID); err != nil {
 		return err
 	}
-	knownHostsRemoved, err := solo.RemoveKnownHosts(node)
-	if err != nil {
-		return err
-	}
+	knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 	current.RemoveNode(opts.Name)
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "deleted", "known_hosts_removed": knownHostsRemoved})
+	payload := map[string]any{"node": opts.Name, "action": "deleted", "known_hosts_removed": knownHostsRemoved}
+	if knownHostsErr != nil {
+		payload["known_hosts_error"] = knownHostsErr.Error()
+		payload["warnings"] = []string{"provider node deleted and local state removed, but SSH known_hosts cleanup failed"}
+	}
+	return a.Printer.PrintJSON(payload)
 
 }
 
@@ -3751,7 +3753,8 @@ func remoteDockerNetworksJSONCommand() string {
 
 func withRemoteLineLimit(command string, limit int) string {
 	pipeline := fmt.Sprintf("( %s ) | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'", command, shellQuote(soloDiagnoseTruncatedMarker), limit, limit+1)
-	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(pipeline) + "; fi; echo 'bash is required for bounded diagnostic output' >&2; exit 1"
+	script := pipeline + `; status=$?; if [ "$status" -eq 0 ] || [ "$status" -eq 141 ]; then exit 0; fi; exit "$status"`
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for bounded diagnostic output' >&2; exit 1"
 }
 
 func remoteListeningPortsCommand() string {

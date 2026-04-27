@@ -2,7 +2,7 @@
 
 Scenario:
 Delegating user:
-Operator agent role:
+AI coding/operator agent role:
 Target version:
 Install command:
 Date:
@@ -17,8 +17,8 @@ Cleanup plan:
 
 ## Outcome
 
-Result from agent-mediated perspective:
-Time to first useful agent confidence:
+Result from AI-agent-mediated perspective:
+Time to first useful AI agent confidence:
 Time to first verified success:
 Blocking issue:
 Cleanup result:
@@ -32,12 +32,12 @@ Trustworthy user summary possible:
 
 ## Scores
 
-Agent-mediated product completeness:
-Agent DevX:
-Agent observability:
-Docs and machine contracts:
+AI-agent-mediated product completeness:
+AI agent DevX:
+AI agent observability:
+Docs and Machine Contracts:
 Delegation trust:
-Agent-primary operability:
+AI-agent-primary operability:
 
 ## Commands
 
@@ -49,7 +49,7 @@ See `commands.log`.
 
 Severity:
 Surface:
-Expected agent-mediated behavior:
+Expected AI-agent-mediated behavior:
 Actual behavior:
 Reproduction evidence:
 Suggested fix:
@@ -60,29 +60,29 @@ Suggested fix:
 
 Severity:
 Surface:
-Expected agent-mediated behavior:
+Expected AI-agent-mediated behavior:
 Actual behavior:
 Reproduction evidence:
 Suggested fix:
 
-## Agent DevX Gaps
+## AI Agent DevX Gaps
 
 ### Finding: <title>
 
 Severity:
 Surface:
-Expected agent-mediated behavior:
+Expected AI-agent-mediated behavior:
 Actual behavior:
 Reproduction evidence:
 Suggested fix:
 
-## Agent-Primary Gaps
+## AI-Agent-Primary Gaps
 
 ### Finding: <title>
 
 Severity:
 Surface:
-Expected agent-mediated behavior:
+Expected AI-agent-mediated behavior:
 Actual behavior:
 Reproduction evidence:
 Suggested fix:
@@ -93,7 +93,7 @@ Suggested fix:
 
 Severity:
 Surface:
-Expected agent-mediated behavior:
+Expected AI-agent-mediated behavior:
 Actual behavior:
 Reproduction evidence:
 Suggested fix:
@@ -104,12 +104,12 @@ Suggested fix:
 
 Severity:
 Surface:
-Expected agent-mediated behavior:
+Expected AI-agent-mediated behavior:
 Actual behavior:
 Reproduction evidence:
 Suggested fix:
 
-## Confusing or Ambiguous Agent Inputs
+## Confusing or Ambiguous AI Agent Inputs
 
 - 
 

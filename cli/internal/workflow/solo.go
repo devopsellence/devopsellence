@@ -2649,16 +2649,13 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	provider := strings.TrimSpace(node.Provider)
 	providerServerID := strings.TrimSpace(node.ProviderServerID)
 	if provider == "" && providerServerID == "" {
-		knownHostsRemoved, err := solo.RemoveKnownHosts(node)
-		if err != nil {
-			return err
-		}
+		knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 		current.RemoveNode(opts.Name)
 		if err := a.writeSoloState(current); err != nil {
 			return err
 		}
 
-		return a.Printer.PrintJSON(map[string]any{
+		payload := map[string]any{
 			"node":                opts.Name,
 			"action":              "forgotten",
 			"known_hosts_removed": knownHostsRemoved,
@@ -2667,7 +2664,12 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 				"performed": false,
 				"if_needed": fmt.Sprintf("devopsellence agent uninstall %s --yes", shellQuote(opts.Name)),
 			},
-		})
+		}
+		if knownHostsErr != nil {
+			payload["known_hosts_error"] = knownHostsErr.Error()
+			payload["warnings"] = []string{"manual SSH node forgotten locally, but SSH known_hosts cleanup failed"}
+		}
+		return a.Printer.PrintJSON(payload)
 
 	}
 	if provider == "" || providerServerID == "" {

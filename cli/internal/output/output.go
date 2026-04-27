@@ -1,6 +1,7 @@
 package output
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 )
@@ -38,11 +39,12 @@ func (p Printer) PrintEvent(event string, fields map[string]any) error {
 	}
 	payload["schema_version"] = SchemaVersion
 	payload["event"] = event
-	data, err := json.Marshal(payload)
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(payload); err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	_, err = p.Err.Write(data)
+	_, err := p.Err.Write(buf.Bytes())
 	return err
 }

@@ -1853,7 +1853,7 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 		"images":     collectRemoteJSONLines(ctx, node, remoteDockerImagesJSONCommand(), soloDiagnoseDockerItemLimit),
 		"networks":   collectRemoteJSONLines(ctx, node, remoteDockerNetworksJSONCommand(), soloDiagnoseDockerItemLimit),
 	}
-	payload["ports"] = collectRemoteLines(ctx, node, remoteListeningPortsCommand())
+	payload["ports"] = collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
 	statusResult, statusErr := readNodeStatus(ctx, node)
 	if statusErr != nil {
 		payload["status_error"] = statusErr.Error()
@@ -2001,6 +2001,23 @@ func collectRemoteLines(ctx context.Context, node config.Node, command string) m
 	if stderr := strings.TrimSpace(diag.Stderr); stderr != "" && diag.ExitCode == 0 {
 		result["stderr"] = stderr
 	}
+	return result
+}
+
+func collectRemoteLimitedLines(ctx context.Context, node config.Node, command string, limit int) map[string]any {
+	result := collectRemoteLines(ctx, node, command)
+	result["limit"] = limit
+	result["truncated"] = false
+	lines, _ := result["lines"].([]string)
+	filtered := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) == soloDiagnoseTruncatedMarker {
+			result["truncated"] = true
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	result["lines"] = filtered
 	return result
 }
 
@@ -2496,6 +2513,7 @@ const (
 	soloLogsDefaultLines                 = 100
 	soloLogsMaxLines                     = 1000
 	soloDiagnoseDockerItemLimit          = 100
+	soloDiagnosePortsLineLimit           = 200
 	soloDiagnoseTruncatedMarker          = "__DEVOPSELLENCE_TRUNCATED__"
 	soloRemoteAgentBinaryNotFoundMessage = "devopsellence agent binary not found"
 )
@@ -3672,7 +3690,7 @@ func withRemoteLineLimit(command string, limit int) string {
 }
 
 func remoteListeningPortsCommand() string {
-	return "if command -v ss >/dev/null 2>&1; then ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi"
+	return withRemoteLineLimit("if command -v ss >/dev/null 2>&1; then ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi", soloDiagnosePortsLineLimit)
 }
 
 func desiredStateOverridePath(node config.Node) string {

@@ -69,9 +69,8 @@ type SoloNodeDetachOptions struct {
 }
 
 type SoloLogsOptions struct {
-	Node   string
-	Follow bool
-	Lines  int
+	Node  string
+	Lines int
 }
 
 type SoloNodeLabelSetOptions struct {
@@ -377,14 +376,22 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return err
 	}
 
-	return a.Printer.PrintJSON(map[string]any{
+	payload := map[string]any{
 		"schema_version":          outputSchemaVersion,
 		"workload_revision":       shortSHA,
 		"desired_state_revisions": desiredStateRevisions,
 		"image":                   imageTag,
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
-	})
+		"phase":                   "settled",
+	}
+	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+		payload["public_urls"] = urls
+		payload["next_steps"] = []string{"devopsellence status", "curl " + urls[0]}
+	} else {
+		payload["next_steps"] = []string{"devopsellence status"}
+	}
+	return a.Printer.PrintJSON(payload)
 
 }
 
@@ -601,6 +608,49 @@ func (a *App) resolveNodes(current solo.State, names []string) (map[string]confi
 	return result, nil
 }
 
+type soloRepublishErrorEntry struct {
+	node      string
+	operation string
+	err       error
+}
+
+func (e soloRepublishErrorEntry) Error() string {
+	return fmt.Sprintf("[%s] %s: %v", e.node, e.operation, e.err)
+}
+
+func (e soloRepublishErrorEntry) Unwrap() error {
+	return e.err
+}
+
+type soloRepublishError struct {
+	entries []soloRepublishErrorEntry
+}
+
+func (e *soloRepublishError) Error() string {
+	parts := make([]string, 0, len(e.entries))
+	for _, entry := range e.entries {
+		parts = append(parts, entry.Error())
+	}
+	return fmt.Sprintf("republish errors:\n  %s", strings.Join(parts, "\n  "))
+}
+
+func (e *soloRepublishError) Unwrap() []error {
+	wrapped := make([]error, 0, len(e.entries))
+	for _, entry := range e.entries {
+		wrapped = append(wrapped, entry)
+	}
+	return wrapped
+}
+
+func appendSoloRepublishError(mu *sync.Mutex, errs *[]soloRepublishErrorEntry, node, operation string, err error) {
+	if err == nil {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	*errs = append(*errs, soloRepublishErrorEntry{node: node, operation: operation, err: err})
+}
+
 func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames []string) (map[string]string, error) {
 	if len(nodeNames) == 0 {
 		return map[string]string{}, nil
@@ -616,7 +666,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 		err  error
 	}
 	var mu sync.Mutex
-	var errs []string
+	var errs []soloRepublishErrorEntry
 	revisions := map[string]string{}
 	var wg sync.WaitGroup
 
@@ -644,18 +694,14 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 			defer wg.Done()
 			if len(inputs.images) > 0 {
 				if _, err := solo.RunSSH(ctx, node, remoteDockerCheckCommand(), nil); err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] remote docker check: %s", name, err))
-					mu.Unlock()
+					appendSoloRepublishError(&mu, &errs, name, "remote docker check", err)
 					return
 				}
 			}
 			for _, image := range inputs.images {
 				present, err := remoteNodeHasImage(ctx, node, image)
 				if err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] remote image check: %s", name, err))
-					mu.Unlock()
+					appendSoloRepublishError(&mu, &errs, name, "remote image check", err)
 					return
 				}
 				if present {
@@ -672,15 +718,11 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 					check.err = a.ensureLocalSoloSnapshotImage(ctx, image)
 				})
 				if check.err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] local image precheck: %s", name, check.err))
-					mu.Unlock()
+					appendSoloRepublishError(&mu, &errs, name, "local image precheck", check.err)
 					return
 				}
 				if err := transferImage(ctx, node, image, func(string) {}); err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] image transfer: %s", name, err))
-					mu.Unlock()
+					appendSoloRepublishError(&mu, &errs, name, "image transfer", err)
 					return
 				}
 			}
@@ -692,25 +734,19 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 				NodePeers:    inputs.peers,
 			})
 			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
-				mu.Unlock()
+				appendSoloRepublishError(&mu, &errs, name, "build desired state", err)
 				return
 			}
 			desiredStateJSON := publication.DesiredStateJSON
 			overridePath := desiredStateOverridePath(node)
 			cmd := remoteDesiredStateOverrideCommand(overridePath)
 			if _, err := solo.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] write desired state: %s", name, err))
-				mu.Unlock()
+				appendSoloRepublishError(&mu, &errs, name, "write desired state", err)
 				return
 			}
 			revision, err := desiredStateRevision(desiredStateJSON)
 			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] parse desired state revision: %s", name, err))
-				mu.Unlock()
+				appendSoloRepublishError(&mu, &errs, name, "parse desired state revision", err)
 				return
 			}
 			mu.Lock()
@@ -720,7 +756,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 	}
 	wg.Wait()
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("republish errors:\n  %s", strings.Join(errs, "\n  "))
+		return nil, &soloRepublishError{entries: errs}
 	}
 	return revisions, nil
 }
@@ -1521,21 +1557,49 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	} else if !changed {
 		return fmt.Errorf("node %q is not attached to %s", opts.Node, environmentName)
 	}
-	affectedNodeNames := append([]string{opts.Node}, nodeNamesBefore...)
-	affectedNodeNames = normalizeSoloNames(affectedNodeNames)
+	remainingNodeNames := make([]string, 0, len(nodeNamesBefore))
+	for _, name := range nodeNamesBefore {
+		if name != opts.Node {
+			remainingNodeNames = append(remainingNodeNames, name)
+		}
+	}
+	remainingNodeNames = normalizeSoloNames(remainingNodeNames)
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, err := a.republishNodes(ctx, current, affectedNodeNames); err != nil {
+	if _, err := a.republishNodes(ctx, current, remainingNodeNames); err != nil {
 		return err
 	}
+	warnings := []string{}
+	if _, err := a.republishNodes(ctx, current, []string{opts.Node}); err != nil {
+		if current.NodeHasAttachments(opts.Node) || !soloRepublishMissingAgentError(err) {
+			return err
+		}
+		warnings = append(warnings, "remote desired state was not cleared because the agent is already uninstalled on the node")
+	}
 
-	return a.Printer.PrintJSON(map[string]any{
+	payload := map[string]any{
 		"node":        opts.Node,
 		"environment": environmentName,
 		"changed":     true,
-	})
+	}
+	if len(warnings) > 0 {
+		payload["warnings"] = warnings
+	}
+	return a.Printer.PrintJSON(payload)
 
+}
+
+func soloRepublishMissingAgentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var sshErr *solo.SSHError
+	if !errors.As(err, &sshErr) {
+		return false
+	}
+	exitCode, ok := sshErr.ExitCode()
+	return ok && exitCode == 127 && strings.Contains(sshErr.Stderr, soloRemoteAgentBinaryNotFoundMessage)
 }
 
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
@@ -1583,9 +1647,6 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 		return fmt.Errorf("node %q not found", opts.Node)
 	}
 
-	if opts.Follow {
-		return ExitError{Code: 2, Err: errors.New("--follow streams raw logs and is not supported by the JSON-only CLI")}
-	}
 	linesLimit := opts.Lines
 	if linesLimit < 1 || linesLimit > soloLogsMaxLines {
 		return ExitError{Code: 2, Err: fmt.Errorf("--lines must be between 1 and %d", soloLogsMaxLines)}
@@ -2051,8 +2112,9 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 const sshOutputTailLimit = 64 * 1024
 
 const (
-	soloLogsDefaultLines = 100
-	soloLogsMaxLines     = 1000
+	soloLogsDefaultLines                 = 100
+	soloLogsMaxLines                     = 1000
+	soloRemoteAgentBinaryNotFoundMessage = "devopsellence agent binary not found"
 )
 
 type tailBuffer struct {
@@ -2138,7 +2200,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		return a.Printer.PrintJSON(map[string]any{
 			"node":   opts.Name,
 			"action": "forgotten",
-			"note":   "existing SSH node removed from local state only; run `devopsellence agent uninstall <name> --yes` before removal to clean the remote VM",
+			"note":   "existing SSH node removed from local state only; remote VM resources were not changed",
 		})
 
 	}
@@ -3204,7 +3266,7 @@ func desiredStateOverridePath(node config.Node) string {
 
 func remoteDesiredStateOverrideCommand(overridePath string) string {
 	quotedPath := shellQuote(overridePath)
-	return fmt.Sprintf("agent_bin=$(command -v devopsellence-agent || command -v devopsellence || true); if [ -z \"$agent_bin\" ]; then echo 'devopsellence agent binary not found' >&2; exit 127; fi; override_dir=$(dirname -- %[1]s); if [ \"$(id -u)\" = 0 ] || [ -w \"$override_dir\" ]; then exec \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; echo 'Cannot write desired state override. Make the SSH user able to write the agent state directory or enable passwordless sudo.' >&2; exit 1", quotedPath)
+	return fmt.Sprintf("agent_bin=$(command -v devopsellence-agent || command -v devopsellence || true); if [ -z \"$agent_bin\" ]; then echo %[2]s >&2; exit 127; fi; override_dir=$(dirname -- %[1]s); if [ \"$(id -u)\" = 0 ] || [ -w \"$override_dir\" ]; then exec \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; echo 'Cannot write desired state override. Make the SSH user able to write the agent state directory or enable passwordless sudo.' >&2; exit 1", quotedPath, shellQuote(soloRemoteAgentBinaryNotFoundMessage))
 }
 
 type progressReader struct {

@@ -858,7 +858,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Short: "Remove a node",
 		Long: strings.Join([]string{
 			"Remove a node from devopsellence state.",
-			"For solo existing-SSH nodes this only forgets the node locally; run `devopsellence agent uninstall <name> --yes` first to clean the remote VM.",
+			"For solo existing-SSH nodes this only forgets the node locally; detach the node, then run `devopsellence agent uninstall <name> --yes` before removal to clean the remote VM.",
 			"For provider-managed solo nodes and shared nodes, removal deletes the provider/control-plane node where supported.",
 		}, "\n"),
 		Args: cobra.ExactArgs(1),
@@ -918,8 +918,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeDiagnoseCommand.Flags().DurationVar(&nodeDiagnoseOpts.Wait, "wait", defaultNodeDiagnoseWaitTimeout, "How long to wait for the node snapshot")
 	nodeLogsCommand := &cobra.Command{
 		Use:   "logs <name>",
-		Short: "Tail agent logs from a solo node over SSH",
-		Args:  cobra.ExactArgs(1),
+		Short: "Show recent agent logs from a solo node over SSH",
+		Long: strings.Join([]string{
+			"Show recent devopsellence agent journal lines from a solo node over SSH.",
+			"The CLI returns a bounded JSON snapshot; use SSH and journalctl directly when you need an interactive follow stream.",
+		}, "\n"),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeLogsOpts.Node = args[0]
 			return runSoloOnly("node logs", func(ctx context.Context) error {
@@ -927,7 +931,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
-	nodeLogsCommand.Flags().BoolVarP(&nodeLogsOpts.Follow, "follow", "f", false, "Follow log output")
 	nodeLogsCommand.Flags().IntVar(&nodeLogsOpts.Lines, "lines", soloLogsDefaultLines, fmt.Sprintf("Number of recent log lines to return, 1-%d", soloLogsMaxLines))
 	nodeCommand.AddCommand(nodeRegisterCommand, nodeCreateCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand)
 	root.AddCommand(nodeCommand)

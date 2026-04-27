@@ -391,6 +391,29 @@ func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 	}
 }
 
+func TestNodeLogsHelpDocumentsBoundedJSONSnapshot(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"node", "logs", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	for _, snippet := range []string{"bounded JSON snapshot", "--lines"} {
+		if !strings.Contains(output, snippet) {
+			t.Fatalf("help output = %q, want %q", output, snippet)
+		}
+	}
+	if strings.Contains(output, "--follow") {
+		t.Fatalf("help output = %q, did not expect --follow", output)
+	}
+}
+
 func TestNodeCreateHelpUsesCurrentHetznerDefaults(t *testing.T) {
 	t.Parallel()
 

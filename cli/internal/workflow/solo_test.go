@@ -1007,6 +1007,66 @@ func TestRepublishNodesReportsRemoteDockerCheck(t *testing.T) {
 	}
 }
 
+func TestSoloNodeDetachSucceedsWhenAgentAlreadyUninstalled(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"prod-1": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "prod-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
+set -euo pipefail
+command="${!#}"
+if [[ "$command" == *"desired-state set-override"* ]]; then
+  echo 'devopsellence agent binary not found' >&2
+  exit 127
+fi
+echo "unexpected ssh command: $command" >&2
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: "prod-1"}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	if len(warnings) != 1 || !strings.Contains(warnings[0].(string), "agent is already uninstalled") {
+		t.Fatalf("warnings = %#v, want already-uninstalled warning", warnings)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.NodeHasAttachments("prod-1") {
+		t.Fatalf("prod-1 still attached after detach: %#v", loaded.Attachments)
+	}
+}
+
 func TestNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 	t.Parallel()
 
@@ -1150,6 +1210,14 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	}
 
 	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "*", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -1195,12 +1263,20 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		t.Fatalf("status poll count = %d, want 3", got)
 	}
 	payload := decodeJSONOutput(t, &stdout)
-	if payload["environment"] != "production" || payload["workload_revision"] == "" {
-		t.Fatalf("payload = %#v, want deploy JSON", payload)
+	if payload["environment"] != "production" || payload["workload_revision"] == "" || payload["phase"] != "settled" {
+		t.Fatalf("payload = %#v, want settled deploy JSON", payload)
 	}
 	revisions := jsonMapFromAny(t, payload["desired_state_revisions"])
 	if revisions["node-a"] == "" {
 		t.Fatalf("desired_state_revisions = %#v, want node revision", revisions)
+	}
+	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
+		t.Fatalf("public_urls = %#v, want node URL", urls)
+	}
+	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
+	if len(nextSteps) != 2 || nextSteps[0] != "devopsellence status" || nextSteps[1] != "curl http://203.0.113.10/" {
+		t.Fatalf("next_steps = %#v, want status and curl commands", nextSteps)
 	}
 }
 

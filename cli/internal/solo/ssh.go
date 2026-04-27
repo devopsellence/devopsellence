@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,6 +43,44 @@ func managedKnownHostsPath(node config.Node) string {
 	return filepath.Join(state.DefaultPath(filepath.Join("devopsellence", "ssh_known_hosts")), filename)
 }
 
+// SSHError preserves the underlying ssh process error and captured stderr.
+// Callers that need to branch on remote command failures can inspect ExitCode
+// without parsing the rendered error string.
+type SSHError struct {
+	User   string
+	Host   string
+	Err    error
+	Stderr string
+}
+
+func (e *SSHError) Error() string {
+	if e == nil {
+		return "ssh error"
+	}
+	if e.Stderr != "" {
+		return fmt.Sprintf("ssh %s@%s: %v: %s", e.User, e.Host, e.Err, e.Stderr)
+	}
+	return fmt.Sprintf("ssh %s@%s: %v", e.User, e.Host, e.Err)
+}
+
+func (e *SSHError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *SSHError) ExitCode() (int, bool) {
+	if e == nil {
+		return 0, false
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(e.Err, &exitErr) {
+		return 0, false
+	}
+	return exitErr.ExitCode(), true
+}
+
 func prepareSSH(node config.Node) error {
 	knownHostsPath := managedKnownHostsPath(node)
 	if knownHostsPath == "" {
@@ -71,7 +110,7 @@ func RunSSH(ctx context.Context, node config.Node, command string, stdin io.Read
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ssh %s@%s: %w: %s", node.User, node.Host, err, stderr.String())
+		return "", &SSHError{User: node.User, Host: node.Host, Err: err, Stderr: stderr.String()}
 	}
 	return stdout.String(), nil
 }
@@ -88,7 +127,7 @@ func RunSSHInteractive(ctx context.Context, node config.Node, command string, st
 	cmd.Stderr = stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ssh %s@%s: %w", node.User, node.Host, err)
+		return &SSHError{User: node.User, Host: node.Host, Err: err}
 	}
 	return nil
 }
@@ -103,7 +142,7 @@ func RunSSHInteractiveWithStdin(ctx context.Context, node config.Node, command s
 	cmd.Stderr = stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ssh %s@%s: %w", node.User, node.Host, err)
+		return &SSHError{User: node.User, Host: node.Host, Err: err}
 	}
 	return nil
 }
@@ -122,7 +161,7 @@ func RunSSHStream(ctx context.Context, node config.Node, command string, stdin i
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ssh %s@%s: %w: %s", node.User, node.Host, err, stderr.String())
+		return &SSHError{User: node.User, Host: node.Host, Err: err, Stderr: stderr.String()}
 	}
 	return nil
 }

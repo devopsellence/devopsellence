@@ -959,10 +959,10 @@ func (a *App) waitForDeployment(ctx context.Context, token string, result map[st
 	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return a.waitForDeploymentPlain(rolloutCtx, token, deploymentID, pollInterval)
+	return a.pollDeploymentProgress(rolloutCtx, token, deploymentID, pollInterval)
 }
 
-func (a *App) waitForDeploymentPlain(ctx context.Context, token string, deploymentID int, pollInterval time.Duration) (api.DeploymentProgress, error) {
+func (a *App) pollDeploymentProgress(ctx context.Context, token string, deploymentID int, pollInterval time.Duration) (api.DeploymentProgress, error) {
 	var latest api.DeploymentProgress
 
 	for {

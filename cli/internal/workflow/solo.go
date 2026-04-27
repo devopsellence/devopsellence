@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1913,37 +1914,109 @@ func splitNonFinalEmptyLines(out string) []string {
 	return lines
 }
 
-func collectRemoteText(ctx context.Context, node config.Node, command string) map[string]any {
-	out, err := solo.RunSSH(ctx, node, command, nil)
-	result := map[string]any{"ok": err == nil}
+type remoteDiagnosticResult struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
+	Err      error
+}
+
+func runRemoteDiagnostic(ctx context.Context, node config.Node, command string) remoteDiagnosticResult {
+	wrapped := fmt.Sprintf(`stdout_file="$(mktemp)" || exit 1
+stderr_file="$(mktemp)" || { rm -f "$stdout_file"; exit 1; }
+(
+%s
+) >"$stdout_file" 2>"$stderr_file"
+rc=$?
+printf '__DEVOPSELLENCE_EXIT_CODE__%%s\n' "$rc"
+printf '__DEVOPSELLENCE_STDOUT__\n'
+cat "$stdout_file"
+printf '\n__DEVOPSELLENCE_STDERR__\n'
+cat "$stderr_file"
+rm -f "$stdout_file" "$stderr_file"
+exit 0`, command)
+	out, err := solo.RunSSH(ctx, node, wrapped, nil)
 	if err != nil {
-		result["error"] = err.Error()
-	} else {
-		result["value"] = strings.TrimSpace(out)
+		return remoteDiagnosticResult{Err: err}
+	}
+	return parseRemoteDiagnostic(out)
+}
+
+func parseRemoteDiagnostic(out string) remoteDiagnosticResult {
+	const exitPrefix = "__DEVOPSELLENCE_EXIT_CODE__"
+	const stdoutMarker = "\n__DEVOPSELLENCE_STDOUT__\n"
+	const stderrMarker = "\n__DEVOPSELLENCE_STDERR__\n"
+	lineEnd := strings.IndexByte(out, '\n')
+	if lineEnd < 0 || !strings.HasPrefix(out[:lineEnd], exitPrefix) {
+		return remoteDiagnosticResult{ExitCode: 1, Stdout: out, Err: fmt.Errorf("remote diagnostic wrapper returned unexpected output")}
+	}
+	exitCode, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(out[:lineEnd], exitPrefix)))
+	if err != nil {
+		return remoteDiagnosticResult{ExitCode: 1, Stdout: out, Err: fmt.Errorf("parse remote diagnostic exit code: %w", err)}
+	}
+	rest := out[lineEnd:]
+	if !strings.HasPrefix(rest, stdoutMarker) {
+		return remoteDiagnosticResult{ExitCode: exitCode, Stdout: rest, Err: fmt.Errorf("remote diagnostic wrapper missing stdout marker")}
+	}
+	rest = strings.TrimPrefix(rest, stdoutMarker)
+	stderrIndex := strings.LastIndex(rest, stderrMarker)
+	if stderrIndex < 0 {
+		return remoteDiagnosticResult{ExitCode: exitCode, Stdout: rest, Err: fmt.Errorf("remote diagnostic wrapper missing stderr marker")}
+	}
+	return remoteDiagnosticResult{
+		ExitCode: exitCode,
+		Stdout:   strings.TrimSuffix(rest[:stderrIndex], "\n"),
+		Stderr:   rest[stderrIndex+len(stderrMarker):],
+	}
+}
+
+func collectRemoteText(ctx context.Context, node config.Node, command string) map[string]any {
+	diag := runRemoteDiagnostic(ctx, node, command)
+	result := map[string]any{"ok": diag.Err == nil && diag.ExitCode == 0}
+	if diag.Err != nil {
+		result["error"] = diag.Err.Error()
+	} else if diag.ExitCode != 0 {
+		result["exit_code"] = diag.ExitCode
+		result["error"] = strings.TrimSpace(diag.Stderr)
+	}
+	if value := strings.TrimSpace(diag.Stdout); value != "" {
+		result["value"] = value
+	}
+	if stderr := strings.TrimSpace(diag.Stderr); stderr != "" && diag.ExitCode == 0 {
+		result["stderr"] = stderr
 	}
 	return result
 }
 
 func collectRemoteLines(ctx context.Context, node config.Node, command string) map[string]any {
-	out, err := solo.RunSSH(ctx, node, command, nil)
-	result := map[string]any{"ok": err == nil}
-	if err != nil {
-		result["error"] = err.Error()
-	} else {
-		result["lines"] = splitNonFinalEmptyLines(out)
+	diag := runRemoteDiagnostic(ctx, node, command)
+	result := map[string]any{"ok": diag.Err == nil && diag.ExitCode == 0}
+	if diag.Err != nil {
+		result["error"] = diag.Err.Error()
+	} else if diag.ExitCode != 0 {
+		result["exit_code"] = diag.ExitCode
+		result["error"] = strings.TrimSpace(diag.Stderr)
+	}
+	result["lines"] = splitNonFinalEmptyLines(diag.Stdout)
+	if stderr := strings.TrimSpace(diag.Stderr); stderr != "" && diag.ExitCode == 0 {
+		result["stderr"] = stderr
 	}
 	return result
 }
 
 func collectRemoteJSONLines(ctx context.Context, node config.Node, command string, limit int) map[string]any {
-	out, err := solo.RunSSH(ctx, node, command, nil)
-	result := map[string]any{"ok": err == nil, "limit": limit, "truncated": false}
-	if err != nil {
-		result["error"] = err.Error()
+	diag := runRemoteDiagnostic(ctx, node, command)
+	result := map[string]any{"ok": diag.Err == nil && diag.ExitCode == 0, "limit": limit, "truncated": false}
+	if diag.Err != nil {
+		result["error"] = diag.Err.Error()
 		return result
 	}
+	if diag.ExitCode != 0 {
+		result["exit_code"] = diag.ExitCode
+		result["error"] = strings.TrimSpace(diag.Stderr)
+	}
 	items := []any{}
-	for _, line := range splitNonFinalEmptyLines(out) {
+	for _, line := range splitNonFinalEmptyLines(diag.Stdout) {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -3594,7 +3667,8 @@ func remoteDockerNetworksJSONCommand() string {
 }
 
 func withRemoteLineLimit(command string, limit int) string {
-	return fmt.Sprintf("( %s ) | awk 'NR <= %d { print } NR == %d { print %s; exit }'", command, limit, limit+1, shellQuote(soloDiagnoseTruncatedMarker))
+	pipeline := fmt.Sprintf("( %s ) | awk 'NR <= %d { print } NR == %d { print %s; exit }'", command, limit, limit+1, shellQuote(soloDiagnoseTruncatedMarker))
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(pipeline) + "; fi; echo 'bash is required for bounded diagnostic output' >&2; exit 1"
 }
 
 func remoteListeningPortsCommand() string {

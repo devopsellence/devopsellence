@@ -39,7 +39,11 @@ func (p Printer) PrintEvent(event string, fields map[string]any) error {
 	for key, value := range fields {
 		payload[key] = value
 	}
-	encoder := json.NewEncoder(p.Err)
-	encoder.SetEscapeHTML(false)
-	return encoder.Encode(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	_, err = p.Err.Write(data)
+	return err
 }

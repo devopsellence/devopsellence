@@ -2245,6 +2245,21 @@ if [[ "$command" == *"docker image inspect"* ]]; then
   exit 0
 fi
 
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ps -a"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker images"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n{"Repository":"demo","Tag":"abc","ID":"sha256:abc","Size":"1MB"}\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker network ls"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n{"Name":"devopsellence","Driver":"bridge"}\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
 if [[ "$command" == *"docker ps -a"* ]]; then
   printf '{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n'
   exit 0

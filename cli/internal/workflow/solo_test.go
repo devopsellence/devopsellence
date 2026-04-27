@@ -2352,6 +2352,9 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 
 func TestSoloInitReportsConfigPortContract(t *testing.T) {
 	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM nginx:1.27-alpine\nEXPOSE 8080\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
 	web := cfg.Services["web"]
 	web.Ports = []config.ServicePort{{Name: "http", Port: 8080}}

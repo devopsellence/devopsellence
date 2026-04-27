@@ -1,6 +1,7 @@
 package solo
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -59,6 +60,35 @@ func TestSSHArgsUseManagedKnownHostsForProviderNodes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sshArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestRemoveKnownHostsDeletesManagedFile(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+	node := config.Node{User: "root", Host: "203.0.113.10", Port: 22}
+	path := managedKnownHostsPath(node)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("host key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := RemoveKnownHosts(node)
+	if err != nil {
+		t.Fatalf("RemoveKnownHosts() error = %v", err)
+	}
+	if !removed {
+		t.Fatal("RemoveKnownHosts() removed = false, want true")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("known_hosts file still exists or unexpected stat error: %v", err)
+	}
+
+	removed, err = RemoveKnownHosts(node)
+	if err != nil || removed {
+		t.Fatalf("RemoveKnownHosts() second call = %v, %v; want false, nil", removed, err)
 	}
 }
 

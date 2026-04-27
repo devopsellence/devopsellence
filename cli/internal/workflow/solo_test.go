@@ -888,6 +888,48 @@ func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
 	}
 }
 
+func TestSoloNodeDiagnoseReturnsFailureWhenSSHCheckFails(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
+echo "permission denied" >&2
+exit 255
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloNodeDiagnose() error = nil, want failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	var renderedErr RenderedError
+	if !errors.As(exitErr.Err, &renderedErr) {
+		t.Fatalf("exit error = %#v, want RenderedError", exitErr.Err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %#v, want false", payload["ok"])
+	}
+	steps := jsonArrayFromMap(t, payload, "next_steps")
+	if len(steps) != 1 || steps[0] != "ssh -p 22 'root@203.0.113.10' true" {
+		t.Fatalf("next_steps = %#v, want SSH recovery command", steps)
+	}
+}
+
 func TestSoloAgentUninstallRequiresConfirmation(t *testing.T) {
 	app := &App{SoloState: solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))}
 	err := app.SoloAgentUninstall(context.Background(), SoloAgentUninstallOptions{Node: "node-a"})

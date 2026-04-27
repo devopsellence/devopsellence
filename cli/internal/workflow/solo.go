@@ -1840,9 +1840,11 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	}
 	checks := a.soloDiagnoseChecks(ctx, node)
 	payload["checks"] = checks
+	diagnoseOK := soloChecksOK(checks)
+	payload["ok"] = diagnoseOK
 	if soloCheckFailed(checks, "ssh") {
 		payload["next_steps"] = []string{fmt.Sprintf("ssh -p %d %s true", node.Port, shellQuote(node.User+"@"+node.Host))}
-		return a.Printer.PrintJSON(payload)
+		return a.printSoloDiagnoseResult(payload, diagnoseOK)
 	}
 	payload["agent"] = map[string]any{
 		"active": collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent"),
@@ -1857,6 +1859,8 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	statusResult, statusErr := readNodeStatus(ctx, node)
 	if statusErr != nil {
 		payload["status_error"] = statusErr.Error()
+		diagnoseOK = false
+		payload["ok"] = false
 	} else if statusResult.Missing {
 		payload["status_missing"] = true
 	} else {
@@ -1871,7 +1875,21 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 		"devopsellence status",
 		"devopsellence node logs " + shellQuote(opts.Node) + " --lines 100",
 	}
-	return a.Printer.PrintJSON(payload)
+	return a.printSoloDiagnoseResult(payload, diagnoseOK)
+}
+
+func (a *App) printSoloDiagnoseResult(payload map[string]any, ok bool) error {
+	if err := a.Printer.PrintJSON(payload); err != nil {
+		return err
+	}
+	if !ok {
+		nodeName, _ := payload["node"].(string)
+		if strings.TrimSpace(nodeName) == "" {
+			nodeName = "node"
+		}
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("solo node diagnose failed for %s", nodeName)}}
+	}
+	return nil
 }
 
 func (a *App) soloDiagnoseChecks(ctx context.Context, node config.Node) []map[string]any {
@@ -1895,6 +1913,15 @@ func (a *App) soloDiagnoseChecks(ctx context.Context, node config.Node) []map[st
 		results = append(results, result)
 	}
 	return results
+}
+
+func soloChecksOK(checks []map[string]any) bool {
+	for _, check := range checks {
+		if check["ok"] == false {
+			return false
+		}
+	}
+	return true
 }
 
 func soloCheckFailed(checks []map[string]any, name string) bool {
@@ -2593,15 +2620,20 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	provider := strings.TrimSpace(node.Provider)
 	providerServerID := strings.TrimSpace(node.ProviderServerID)
 	if provider == "" && providerServerID == "" {
+		knownHostsRemoved, err := solo.RemoveKnownHosts(node)
+		if err != nil {
+			return err
+		}
 		current.RemoveNode(opts.Name)
 		if err := a.writeSoloState(current); err != nil {
 			return err
 		}
 
 		return a.Printer.PrintJSON(map[string]any{
-			"node":   opts.Name,
-			"action": "forgotten",
-			"note":   "manual SSH node forgotten locally; this command did not contact the VM",
+			"node":                opts.Name,
+			"action":              "forgotten",
+			"known_hosts_removed": knownHostsRemoved,
+			"note":                "manual SSH node forgotten locally; this command did not contact the VM",
 			"remote_cleanup": map[string]any{
 				"performed": false,
 				"if_needed": fmt.Sprintf("devopsellence agent uninstall %s --yes", shellQuote(opts.Name)),
@@ -2619,12 +2651,16 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	if err := resolvedProvider.DeleteServer(ctx, providerServerID); err != nil {
 		return err
 	}
+	knownHostsRemoved, err := solo.RemoveKnownHosts(node)
+	if err != nil {
+		return err
+	}
 	current.RemoveNode(opts.Name)
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "deleted"})
+	return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "deleted", "known_hosts_removed": knownHostsRemoved})
 
 }
 

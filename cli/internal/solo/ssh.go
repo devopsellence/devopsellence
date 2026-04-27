@@ -46,6 +46,19 @@ func managedKnownHostsPath(node config.Node) string {
 	return filepath.Join(state.DefaultPath(filepath.Join("devopsellence", "ssh_known_hosts")), filename)
 }
 
+func RemoveKnownHosts(node config.Node) (bool, error) {
+	path := managedKnownHostsPath(node)
+	if path == "" {
+		return false, nil
+	}
+	if err := os.Remove(path); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("remove ssh known_hosts for %s@%s: %w", node.User, node.Host, err)
+	}
+	return true, nil
+}
+
 // SSHError preserves the underlying ssh process error and captured stderr.
 // Callers that need to branch on remote command failures can inspect ExitCode
 // without parsing the rendered error string.

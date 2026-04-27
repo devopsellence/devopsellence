@@ -2341,6 +2341,9 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 	if runtimeContract["service"] != "web" || runtimeContract["port"] != float64(3000) || runtimeContract["port_source"] != "default" {
 		t.Fatalf("runtime_contract = %#v, want default web port contract", runtimeContract)
 	}
+	if runtimeContract["web_service"] != true {
+		t.Fatalf("runtime_contract.web_service = %#v, want true", runtimeContract["web_service"])
+	}
 	if runtimeContract["healthcheck_path"] != "/" || runtimeContract["healthcheck_port"] != float64(3000) {
 		t.Fatalf("runtime_contract healthcheck = %#v, want / on port 3000", runtimeContract)
 	}
@@ -2381,6 +2384,42 @@ func TestSoloInitReportsConfigPortContract(t *testing.T) {
 	}
 	if runtimeContract["healthcheck_path"] != "/health" || runtimeContract["healthcheck_port"] != float64(8080) {
 		t.Fatalf("runtime_contract healthcheck = %#v, want /health on port 8080", runtimeContract)
+	}
+}
+
+func TestSoloInitReportsNoWebServicePortContract(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	cfg.Services = map[string]config.ServiceConfig{
+		"worker": {
+			Command: []string{"bin/worker"},
+		},
+	}
+	cfg.Ingress = nil
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["web_service"] != false || runtimeContract["port_source"] != "none" {
+		t.Fatalf("runtime_contract = %#v, want explicit no-web-service contract", runtimeContract)
+	}
+	if runtimeContract["reason"] != "no primary web service detected" {
+		t.Fatalf("runtime_contract.reason = %#v, want no primary web service detected", runtimeContract["reason"])
+	}
+	if _, ok := runtimeContract["port"]; ok {
+		t.Fatalf("runtime_contract port = %#v, want omitted", runtimeContract["port"])
 	}
 }
 

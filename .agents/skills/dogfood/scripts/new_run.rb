@@ -135,30 +135,19 @@ rescue SystemCallError => e
   exit_filesystem_error("failed to write", report_path, e)
 end
 
-commands_template = <<~LOG
-  # Commands for #{scenario}
-  # Target version: #{target_version}
-  # Install command:
-  #{install_command}
-
-  # Record each meaningful step in this format:
-  #
-  # ## <ISO-8601 timestamp> <short step name>
-  # cwd: <working directory>
-  # AI agent intent: <why the AI agent is doing this>
-  # user approval: <not needed | requested | granted | denied>
-  # command: <command with secrets redacted>
-  # exit: <exit code>
-  # output excerpt:
-  # <minimal stdout/stderr or JSON proving the result>
-  # AI agent interpretation:
-  # <what the AI agent concluded and next action>
-  #
-  # Use placeholders such as \$TOKEN, <redacted>, or <private-host> instead of secret values or private identifiers.
-LOG
+commands_template_path = File.expand_path("../references/commands-log-template.md", __dir__)
+begin
+  commands_template = File.read(commands_template_path)
+rescue SystemCallError => e
+  exit_filesystem_error("failed to read", commands_template_path, e)
+end
+commands_log = commands_template
+  .gsub("{{scenario}}", scenario)
+  .gsub("{{target_version}}", target_version)
+  .gsub("{{install_command}}", install_command)
 
 begin
-  File.write(commands_path, commands_template)
+  File.write(commands_path, commands_log)
 rescue SystemCallError => e
   exit_filesystem_error("failed to write", commands_path, e)
 end

@@ -63,22 +63,9 @@ Evaluate whether the AI coding/operator agent can:
 
 ## Command Logging
 
-Keep `commands.log` as you go. For each meaningful step, record:
+Keep `commands.log` as you go. Use the exact step format in `references/commands-log-template.md`; the `new_run.rb` helper copies that template into each run artifact.
 
-```text
-## <ISO-8601 timestamp> <short step name>
-cwd: <working directory>
-AI agent intent: <why the AI agent is doing this>
-user approval: <not needed | requested | granted | denied>
-command: <command with secrets redacted>
-exit: <exit code>
-output excerpt:
-<minimal stdout/stderr or JSON proving the result>
-AI agent interpretation:
-<what the AI agent concluded and next action>
-```
-
-Use placeholders such as `$TOKEN`, `<redacted>`, or `<private-host>` instead of secret values or private identifiers.
+For each meaningful step, capture the timestamp, working directory, AI agent intent, user approval state, redacted command, exit code, minimal output/JSON evidence, and AI agent interpretation. Use placeholders such as `$TOKEN`, `<redacted>`, or `<private-host>` instead of secret values or private identifiers.
 
 ## Workflow
 

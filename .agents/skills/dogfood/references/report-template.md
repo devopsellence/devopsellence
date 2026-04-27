@@ -32,12 +32,12 @@ Trustworthy user summary possible:
 
 ## Scores
 
-AI-agent-mediated product completeness:
-AI agent DevX:
-AI agent observability:
+AI-Agent-Mediated Product Completeness:
+AI Agent DevX:
+AI Agent Observability:
 Docs and Machine Contracts:
-Delegation trust:
-AI-agent-primary operability:
+Delegation Trust:
+AI-Agent-Primary Operability:
 
 ## Commands
 

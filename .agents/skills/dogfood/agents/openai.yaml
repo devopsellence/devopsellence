@@ -1,4 +1,4 @@
 interface:
   display_name: "Dogfood"
   short_description: "AI-agent-mediated devopsellence dogfooding runs"
-  default_prompt: "Dogfood devopsellence from the perspective of an AI coding/operator agent acting for a delegating user: run a blind pass, then an expert pass, and write an evidence-backed report."
+  default_prompt: "Dogfood devopsellence from the perspective of an AI coding/operator agent acting for a delegating user: run a blind pass, perform AI-agent-primary non-interactive/structured-output checks, capture approval and cleanup evidence, then run an expert pass and write an evidence-backed report."

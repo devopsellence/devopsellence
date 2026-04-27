@@ -22,7 +22,7 @@ Time to first useful agent confidence:
 Time to first verified success:
 Blocking issue:
 Cleanup result:
-Could the agent report a trustworthy summary to the user?:
+Trustworthy user summary possible:
 
 ## Top Fixes
 
@@ -87,7 +87,7 @@ Actual behavior:
 Reproduction evidence:
 Suggested fix:
 
-## Docs and Machine Contract Gaps
+## Docs and Machine Contracts Gaps
 
 ### Finding: <title>
 

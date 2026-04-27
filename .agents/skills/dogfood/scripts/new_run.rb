@@ -154,7 +154,7 @@ commands_template = <<~LOG
   # agent interpretation:
   # <what the agent concluded and next action>
   #
-  # Use placeholders such as $TOKEN, <redacted>, or <private-host> instead of secret values or private identifiers.
+  # Use placeholders such as \$TOKEN, <redacted>, or <private-host> instead of secret values or private identifiers.
 LOG
 
 begin

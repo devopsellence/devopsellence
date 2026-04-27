@@ -91,22 +91,15 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}, "\n"),
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		PersistentPreRun: func(_ *cobra.Command, _ []string) {
-			app.Printer.JSON = true
-		},
 	}
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI version",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if app.Printer.JSON {
-				return app.Printer.PrintJSON(map[string]any{
-					"schema_version": outputSchemaVersion,
-					"version":        version.String(),
-				})
-			}
-			app.Printer.Println(version.String())
-			return nil
+			return app.Printer.PrintJSON(map[string]any{
+				"schema_version": outputSchemaVersion,
+				"version":        version.String(),
+			})
 		},
 	})
 
@@ -133,16 +126,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			if err := app.SetMode(mode); err != nil {
 				return ExitError{Code: 1, Err: err}
 			}
-			if app.Printer.JSON {
-				return app.Printer.PrintJSON(map[string]any{
-					"schema_version": outputSchemaVersion,
-					"mode":           string(mode),
-					"workspace_key":  app.modeWorkspaceKey(),
-				})
-			}
-			app.Printer.Println("Mode:", mode)
-			app.Printer.Println("Workspace:", app.modeWorkspaceKey())
-			return nil
+			return app.Printer.PrintJSON(map[string]any{
+				"schema_version": outputSchemaVersion,
+				"mode":           string(mode),
+				"workspace_key":  app.modeWorkspaceKey(),
+			})
 		},
 	})
 	root.AddCommand(modeCommand)

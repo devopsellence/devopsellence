@@ -282,7 +282,6 @@ func TestContextShowJSONIncludesWorkspaceContext(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
-	app.Printer.JSON = true
 
 	if err := app.ContextShow(); err != nil {
 		t.Fatalf("ContextShow() error = %v", err)
@@ -503,7 +502,6 @@ func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
-	app.Printer.JSON = true
 
 	if err := app.ConfigResolve(ConfigResolveOptions{Environment: "staging"}); err != nil {
 		t.Fatalf("ConfigResolve() error = %v", err)
@@ -568,7 +566,6 @@ func TestStatusUsesSavedWorkspaceEnvironment(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app.Printer.Out = &stdout
-	app.Printer.JSON = true
 
 	if err := app.Status(context.Background(), StatusOptions{}); err != nil {
 		t.Fatalf("Status() error = %v", err)
@@ -1321,6 +1318,44 @@ func TestNodeDiagnose(t *testing.T) {
 	container := jsonMapFromAny(t, containers[0])
 	if container["log_tail"] != "boot failed" {
 		t.Fatalf("container = %#v, want log tail", container)
+	}
+}
+
+func TestNodeDiagnoseFailedStatusReturnsExitErrorAfterPrintingJSON(t *testing.T) {
+	t.Parallel()
+
+	root := makeRailsRoot(t, "ShopApp")
+	var stdout bytes.Buffer
+	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/nodes/8/diagnose_requests":
+			return jsonResponseWithStatus(t, http.StatusAccepted, map[string]any{
+				"id":            42,
+				"status":        "failed",
+				"requested_at":  "2026-03-29T20:00:00Z",
+				"completed_at":  "2026-03-29T20:00:02Z",
+				"error_message": "docker unavailable",
+				"node":          map[string]any{"id": 8, "name": "node-a", "organization_id": 7},
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	}))
+	app.Printer.Out = &stdout
+
+	err := app.NodeDiagnose(context.Background(), NodeDiagnoseOptions{NodeID: 8, Wait: 2 * time.Second})
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("NodeDiagnose() error = %#v, want ExitError code 1", err)
+	}
+	if !strings.Contains(err.Error(), "docker unavailable") {
+		t.Fatalf("NodeDiagnose() error = %v, want request error message", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	request := jsonMapFromAny(t, payload["request"])
+	if intValueAny(request["id"]) != 42 || request["status"] != "failed" {
+		t.Fatalf("request = %#v, want failed request #42", request)
 	}
 }
 
@@ -3056,27 +3091,6 @@ func TestDeployFailsWhenExistingConfigIsUncommitted(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "git add "+config.GenericFilePath) {
 		t.Fatalf("Deploy() error = %v", err)
-	}
-}
-
-func TestWarnAboutPrebuiltImageConfigForRails(t *testing.T) {
-	t.Parallel()
-
-	root := makeRailsRoot(t, "ShopApp")
-	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		return nil, nil
-	}))
-	var stderr bytes.Buffer
-	app.Printer = output.New(io.Discard, &stderr)
-
-	cfg := config.DefaultProjectConfig("default", "ShopApp", "production")
-	app.warnAboutPrebuiltImageConfig(DeployOptions{
-		Image: "docker.io/mccutchen/go-httpbin@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	}, cfg)
-
-	if stderr.String() != "" {
-		t.Fatalf("warning output = %q, want no unstructured warning output in JSON mode", stderr.String())
 	}
 }
 

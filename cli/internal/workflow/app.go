@@ -26,10 +26,7 @@ import (
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/state"
-	"github.com/devopsellence/cli/internal/ui"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
-
-	"gopkg.in/yaml.v3"
 )
 
 const OutputSchemaVersion = 1
@@ -403,18 +400,12 @@ func (a *App) Logout() error {
 	if err != nil {
 		return ExitError{Code: 1, Err: err}
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"deleted":        deleted,
-		})
-	}
-	if deleted {
-		a.Printer.Println("Signed out.")
-		return nil
-	}
-	a.Printer.Println("Not signed in.")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"deleted":        deleted,
+	})
+
 }
 
 func (a *App) Whoami(ctx context.Context, _ WhoamiOptions) error {
@@ -437,21 +428,8 @@ func (a *App) Whoami(ctx context.Context, _ WhoamiOptions) error {
 		result["trial_state"] = trialState
 	}
 
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
+	return a.Printer.PrintJSON(result)
 
-	a.Printer.Println("Signed in.")
-	a.Printer.Println("Account kind:", firstNonEmpty(tokens.AccountKind, "unknown"))
-	a.Printer.Println("Auth mode:", authMode(tokens))
-	a.Printer.Println("API base:", firstNonEmpty(tokens.APIBase, a.API.BaseURL))
-	if strings.TrimSpace(tokens.ExpiresAt) != "" {
-		a.Printer.Println("Expires at:", tokens.ExpiresAt)
-	}
-	if trialState := trialState(tokens); trialState != "" {
-		a.Printer.Println("Trial state:", trialState)
-	}
-	return nil
 }
 
 func (a *App) AliasLFG(_ context.Context) error {
@@ -459,17 +437,15 @@ func (a *App) AliasLFG(_ context.Context) error {
 	if err != nil {
 		return ExitError{Code: 1, Err: err}
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"created":        true,
-			"alias":          result.AliasName,
-			"alias_path":     result.AliasPath,
-			"target_path":    result.TargetPath,
-		})
-	}
-	a.Printer.Println("Created lfg alias at " + result.AliasPath + ".")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"created":        true,
+		"alias":          result.AliasName,
+		"alias_path":     result.AliasPath,
+		"target_path":    result.TargetPath,
+	})
+
 }
 
 func (a *App) installAlias(aliasName string) (aliasInstallResult, error) {
@@ -509,7 +485,6 @@ func (a *App) installAlias(aliasName string) (aliasInstallResult, error) {
 }
 
 func (a *App) Init(ctx context.Context, opts InitOptions) error {
-	renderer := ui.DefaultRenderer()
 	tokens, err := a.ensureAuth(ctx, true)
 	if err != nil {
 		return err
@@ -550,44 +525,14 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 		return err
 	}
 
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
+	return a.Printer.PrintJSON(result)
 
-	a.Printer.Println(renderer.Success("Initialized " + initialized.Discovered.ProjectName))
-	if initialized.Discovered.AppType == config.AppTypeRails && initialized.Discovered.FallbackUsed {
-		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", initialized.Discovered.ProjectName))
-	}
-	a.Printer.Println(ui.RenderCard(ui.Card{
-		Title: "Workspace",
-		Rows: []ui.Row{
-			{Label: "Organization", Value: initialized.Organization.Name},
-			{Label: "Project", Value: initialized.Project.Name},
-			{Label: "Environment", Value: initialized.Environment.Name},
-			{Label: "Config", Value: result["config_path"].(string)},
-		},
-	}))
-	if initialized.CreatedOrg {
-		a.Printer.Println("Created organization", initialized.Organization.Name)
-	}
-	if initialized.CreatedProject {
-		a.Printer.Println("Created project", initialized.Project.Name)
-	}
-	if initialized.CreatedEnv {
-		a.Printer.Println("Created environment", initialized.Environment.Name)
-	}
-	if initialized.Discovered.AppType == config.AppTypeGeneric {
-		a.Printer.Println("Generic app detected. Review", result["config_path"].(string), "and adjust build/web settings before deploy if needed.")
-	}
-	return nil
 }
 
 func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
-	renderer := ui.DefaultRenderer()
 	startedAt := time.Now()
 	var result map[string]any
 	var accessToken string
-	var deployTokens auth.Tokens
 	var buildPushDuration time.Duration
 	var autoInitSummary string
 	run := func(runCtx context.Context, update, log func(string)) error {
@@ -627,7 +572,6 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 		if err != nil {
 			return err
 		}
-		deployTokens = preflight.Tokens
 		accessToken = preflight.Tokens.AccessToken
 		session := newAuthSession(a, preflight.Tokens.AccessToken, update)
 		withAuth := func(fn func(string) error) error {
@@ -660,7 +604,6 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 			return ExitError{Code: 1, Err: err}
 		}
 		cfg = resolvedCfg
-		a.warnAboutPrebuiltImageConfig(opts, cfg)
 		a.API.BaseURL = firstNonEmpty(preflight.Tokens.APIBase, a.API.BaseURL)
 
 		envVarOverrides, err := parseRuntimeValueOverrides(os.Getenv(deployEnvVarsOverrideEnv), deployEnvVarsOverrideEnv)
@@ -790,12 +733,6 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	if !a.Printer.JSON && autoInitSummary != "" {
-		a.Printer.Println("Deploy:", autoInitSummary)
-	}
-	if !a.Printer.JSON && stringFromMap(result, "public_url") != "" {
-		a.Printer.Println("Ingress URL:", stringFromMap(result, "public_url"))
-	}
 
 	progress, err := a.waitForDeployment(ctx, accessToken, result)
 	if err != nil {
@@ -815,35 +752,8 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 		result["public_url"] = progress.Ingress.PublicURL
 	}
 
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	a.Printer.Println(renderer.Success("Deploy complete."))
-	rows := []ui.Row{
-		{Label: "Project", Value: nestedString(result, "project", "name")},
-		{Label: "Environment", Value: nestedString(result, "environment", "name")},
-		{Label: "Git SHA", Value: stringFromMap(result, "git_sha")},
-		{Label: "Rollout", Value: fmt.Sprintf("%d/%d settled", progress.Summary.Settled, progress.Summary.AssignedNodes)},
-		{Label: "Image Build/Push", Value: formatDuration(timings.BuildPush)},
-		{Label: "Control Plane", Value: formatDuration(maxDuration(timings.Total-timings.BuildPush, 0))},
-		{Label: "Total", Value: formatDuration(timings.Total)},
-		{Label: "URL", Value: stringFromMap(result, "public_url")},
-	}
-	if trialExpiresAt := stringFromMap(result, "trial_expires_at"); trialExpiresAt != "" {
-		rows = append(rows, ui.Row{Label: "Trial Expires", Value: trialExpiresAt})
-	}
-	a.Printer.Println(ui.RenderCard(ui.Card{
-		Title: "Release",
-		Rows:  rows,
-	}))
-	if warning := stringFromMap(result, "warning"); warning != "" {
-		a.Printer.Println("Warning:", warning)
-	}
-	if a.shouldPrintClaimReminder(deployTokens, result) {
-		a.Printer.Println("Claim this account before local state is lost: devopsellence auth claim --email you@example.com")
-		_ = a.markClaimReminderShown(deployTokens.AnonymousID)
-	}
-	return nil
+	return a.Printer.PrintJSON(result)
+
 }
 
 type deployReadOnlyPreflight struct {
@@ -950,15 +860,9 @@ func (a *App) Delete(ctx context.Context, opts DeleteOptions) error {
 	result["schema_version"] = outputSchemaVersion
 	result["organization"] = map[string]any{"id": workspace.Organization.ID, "name": workspace.Organization.Name}
 	result["project"] = map[string]any{"id": workspace.Project.ID, "name": workspace.Project.Name}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	a.Printer.Println("Deleted environment", workspace.Environment.Name+".")
-	a.Printer.Println(
-		"Customer nodes unassigned:", fmt.Sprintf("%d", len(anySlice(result["customer_node_ids"]))),
-		"Managed servers scheduled for delete:", fmt.Sprintf("%d", len(anySlice(result["managed_node_ids"]))),
-	)
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) ensureDeployWorktreeClean(discovered discovery.Result, existing *config.ProjectConfig) error {
@@ -1055,14 +959,11 @@ func (a *App) waitForDeployment(ctx context.Context, token string, result map[st
 	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return a.waitForDeploymentPlain(rolloutCtx, token, deploymentID, pollInterval)
+	return a.pollDeploymentProgress(rolloutCtx, token, deploymentID, pollInterval)
 }
 
-func (a *App) waitForDeploymentPlain(ctx context.Context, token string, deploymentID int, pollInterval time.Duration) (api.DeploymentProgress, error) {
+func (a *App) pollDeploymentProgress(ctx context.Context, token string, deploymentID int, pollInterval time.Duration) (api.DeploymentProgress, error) {
 	var latest api.DeploymentProgress
-	lastSummary := ""
-	lastMilestone := ""
-	nodeStates := map[int]string{}
 
 	for {
 		err := a.callWithAuthRetry(ctx, &token, nil, func(accessToken string) error {
@@ -1083,34 +984,6 @@ func (a *App) waitForDeploymentPlain(ctx context.Context, token string, deployme
 				}
 			}
 			return latest, err
-		}
-
-		if !a.Printer.JSON {
-			summary := fmt.Sprintf("rollout pending=%d reconciling=%d settled=%d error=%d",
-				latest.Summary.Pending,
-				latest.Summary.Reconciling,
-				latest.Summary.Settled,
-				latest.Summary.Error,
-			)
-			if detail := deploymentStatusDetail(latest); detail != "" {
-				summary += " - " + detail
-			}
-			if summary != lastSummary {
-				a.Printer.Println(summary)
-				lastSummary = summary
-			}
-			if milestone := rolloutMilestone(latest); milestone != "" && milestone != lastMilestone {
-				a.Printer.Println("milestone:", milestone)
-				lastMilestone = milestone
-			}
-			for _, node := range latest.Nodes {
-				state := node.Phase + "|" + firstNonEmpty(node.Error, node.Message)
-				if nodeStates[node.ID] == state {
-					continue
-				}
-				a.Printer.Println(" ", firstNonEmpty(node.Name, fmt.Sprintf("node-%d", node.ID))+":", nodePhaseDetail(node))
-				nodeStates[node.ID] = state
-			}
 		}
 
 		if latest.Summary.Complete {
@@ -1146,30 +1019,9 @@ func (a *App) Status(ctx context.Context, opts StatusOptions) error {
 	}
 	status["schema_version"] = outputSchemaVersion
 	status["project_id"] = workspace.Project.ID
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(status)
-	}
-	rows := []ui.Row{
-		{Label: "Organization", Value: nestedString(status, "organization", "name")},
-		{Label: "Project", Value: nestedString(status, "project", "name")},
-		{Label: "Environment", Value: nestedString(status, "environment", "name")},
-		{Label: "Ingress", Value: nestedString(status, "environment", "ingress_strategy")},
-		{Label: "Assigned", Value: fmt.Sprintf("%d", intFromMap(status, "assigned_nodes"))},
-		{Label: "Release", Value: formatRelease(status["current_release"])},
-		{Label: "Deployment", Value: formatDeployment(status["latest_deployment"])},
-		{Label: "URL", Value: nestedString(status, "ingress", "public_url")},
-	}
-	if trialExpiresAt := stringFromMap(status, "trial_expires_at"); trialExpiresAt != "" {
-		rows = append(rows, ui.Row{Label: "Trial Expires", Value: trialExpiresAt})
-	}
-	a.Printer.Println(ui.RenderCard(ui.Card{
-		Title: "Environment",
-		Rows:  rows,
-	}))
-	if warning := stringFromMap(status, "warning"); warning != "" {
-		a.Printer.Println("Warning:", warning)
-	}
-	return nil
+
+	return a.Printer.PrintJSON(status)
+
 }
 
 func (a *App) Doctor(ctx context.Context) error {
@@ -1289,17 +1141,9 @@ func (a *App) Doctor(ctx context.Context) error {
 		"ok":             ok,
 		"checks":         checks,
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	for _, check := range checks {
-		prefix := "FAIL"
-		if check["ok"] == true {
-			prefix = "OK"
-		}
-		a.Printer.Println(prefix, fmt.Sprintf("%v:", check["name"]), check["detail"])
-	}
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) ConfigResolve(opts ConfigResolveOptions) error {
@@ -1307,19 +1151,13 @@ func (a *App) ConfigResolve(opts ConfigResolveOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version":       outputSchemaVersion,
-			"selected_environment": selectedEnvironment,
-			"config":               resolved,
-		})
-	}
-	data, err := yaml.Marshal(resolved)
-	if err != nil {
-		return ExitError{Code: 1, Err: err}
-	}
-	fmt.Fprint(a.Printer.Out, string(data))
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version":       outputSchemaVersion,
+		"selected_environment": selectedEnvironment,
+		"config":               resolved,
+	})
+
 }
 
 func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) error {
@@ -1357,52 +1195,8 @@ func (a *App) NodeBootstrap(ctx context.Context, opts NodeBootstrapOptions) erro
 		result["assignment_mode"] = firstNonEmpty(stringFromMap(result, "assignment_mode"), "environment")
 	}
 
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	if !opts.Unassigned && workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
-		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
-	}
-	if bootstrap.Initialized != nil {
-		a.Printer.Println(ui.DefaultRenderer().Muted("Initialized workspace config for this app automatically."))
-	}
+	return a.Printer.PrintJSON(result)
 
-	expiresAt := stringFromMap(result, "expires_at")
-	if t, err := time.Parse(time.RFC3339, expiresAt); err == nil {
-		local := t.Local()
-		expiresAt = local.Format("Jan 2, 2006 at 3:04 PM ") + local.Format("MST")
-	}
-
-	rows := []ui.Row{
-		{Label: "Organization", Value: organization.Name},
-	}
-	if opts.Unassigned {
-		rows = append(rows, ui.Row{Label: "Assignment", Value: "Unassigned"})
-	} else {
-		rows = append(rows,
-			ui.Row{Label: "Project", Value: workspace.Project.Name},
-			ui.Row{Label: "Environment", Value: workspace.Environment.Name},
-		)
-	}
-	rows = append(rows, ui.Row{Label: "Token expires", Value: expiresAt})
-	a.Printer.Println(ui.RenderCard(ui.Card{Rows: rows}))
-	a.Printer.Println("\n" + ui.DefaultRenderer().Muted("⚡ Run on your server to install the devopsellence agent and register it:"))
-	r := ui.DefaultRenderer()
-	a.Printer.Println(r.Accent(stringFromMap(result, "install_command")))
-	a.Printer.Println("")
-	if opts.Unassigned {
-		a.Printer.Println(r.Muted("· Registers the node without assigning it to an environment"))
-		a.Printer.Println(r.Muted("· Later: run `devopsellence node attach <id>` to attach it"))
-	} else {
-		a.Printer.Println(r.Muted("· Registers the node and auto-assigns it to the selected environment"))
-	}
-	a.Printer.Println(r.Muted("· Installs Docker Engine if absent (auto-install: Ubuntu 22.04/24.04 only)"))
-	a.Printer.Println(r.Muted("  └ Other Linux distros: install Docker Engine manually before running"))
-	a.Printer.Println(r.Muted("· Downloads and verifies the devopsellence agent binary"))
-	a.Printer.Println(r.Muted("· Registers and starts a systemd service"))
-	a.Printer.Println(r.Muted("· Requires: Linux x86_64 or arm64, sudo access"))
-	a.Printer.Println("")
-	return nil
 }
 
 func (a *App) createNodeBootstrapToken(ctx context.Context, tokens *auth.Tokens, opts NodeBootstrapOptions, update func(string)) (nodeBootstrapToken, error) {
@@ -1465,40 +1259,16 @@ func (a *App) NodeList(ctx context.Context, opts NodeListOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"organization": map[string]any{
-				"id":   organization.ID,
-				"name": organization.Name,
-			},
-			"nodes": nodes,
-		})
-	}
-	if len(nodes) == 0 {
-		a.Printer.Println("No nodes.")
-		return nil
-	}
-	for _, node := range nodes {
-		var assignment string
-		if strings.TrimSpace(node.RevokedAt) != "" {
-			assignment = " [revoked]"
-		} else {
-			envName := nestedString(node.Environment, "name")
-			projectName := nestedString(node.Environment, "project_name")
-			if envName != "" {
-				if projectName != "" {
-					assignment = " project=" + projectName + " env=" + envName
-				} else {
-					assignment = " env=" + envName
-				}
-			} else {
-				assignment = " [unassigned]"
-			}
-		}
-		a.Printer.Println(fmt.Sprintf("node #%d  %s  labels=%s%s", node.ID, firstNonEmpty(node.Name, "(unnamed)"), strings.Join(node.Labels, ","), assignment))
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"organization": map[string]any{
+			"id":   organization.ID,
+			"name": organization.Name,
+		},
+		"nodes": nodes,
+	})
+
 }
 
 func (a *App) NodeAssign(ctx context.Context, opts NodeAssignOptions) error {
@@ -1513,27 +1283,14 @@ func (a *App) NodeAssign(ctx context.Context, opts NodeAssignOptions) error {
 	if err != nil {
 		return err
 	}
-	var onProgress func(string)
-	if !a.Printer.JSON {
-		onProgress = func(msg string) { a.Printer.Println(msg) }
-	}
-	result, err := a.API.CreateEnvironmentAssignment(ctx, tokens.AccessToken, workspace.Environment.ID, opts.NodeID, onProgress)
+	result, err := a.API.CreateEnvironmentAssignment(ctx, tokens.AccessToken, workspace.Environment.ID, opts.NodeID, nil)
 	if err != nil {
 		return wrapError(err)
 	}
 	result["schema_version"] = outputSchemaVersion
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
-		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
-	}
-	a.Printer.Println(
-		"Assigned node #" + strconv.Itoa(intFromMap(result, "node_id")) +
-			" to env #" + strconv.Itoa(intFromMap(result, "environment_id")) +
-			" (desired state: " + stringFromMap(result, "desired_state_uri") + ").",
-	)
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) NodeUnassign(ctx context.Context, opts NodeUnassignOptions) error {
@@ -1549,16 +1306,9 @@ func (a *App) NodeUnassign(ctx context.Context, opts NodeUnassignOptions) error 
 		return wrapError(err)
 	}
 	result["schema_version"] = outputSchemaVersion
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	if managed, _ := result["managed"].(bool); managed {
-		a.Printer.Println("Unassigned managed node #" + strconv.Itoa(intFromMap(result, "id")) + "; server scheduled for delete.")
-		return nil
-	}
-	a.Printer.Println("Unassigned node #" + strconv.Itoa(intFromMap(result, "id")) + " from env #" + strconv.Itoa(intFromMap(result, "environment_id")) + ".")
-	a.Printer.Println("Next step: run `devopsellence-agent uninstall --purge-runtime` on the node when you are ready to remove it.")
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) NodeDelete(ctx context.Context, opts NodeDeleteOptions) error {
@@ -1574,16 +1324,9 @@ func (a *App) NodeDelete(ctx context.Context, opts NodeDeleteOptions) error {
 		return wrapError(err)
 	}
 	result["schema_version"] = outputSchemaVersion
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	if managed, _ := result["managed"].(bool); managed {
-		a.Printer.Println("Delete requested for managed node #" + strconv.Itoa(intFromMap(result, "id")) + "; server scheduled for delete.")
-		return nil
-	}
-	a.Printer.Println("Removed node #" + strconv.Itoa(intFromMap(result, "id")) + ".")
-	a.Printer.Println("If the agent is still installed, run `devopsellence-agent uninstall --purge-runtime` on the machine to clean it up.")
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) NodeLabelSet(ctx context.Context, opts NodeLabelSetOptions) error {
@@ -1602,11 +1345,9 @@ func (a *App) NodeLabelSet(ctx context.Context, opts NodeLabelSetOptions) error 
 		return wrapError(err)
 	}
 	result["schema_version"] = outputSchemaVersion
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	a.Printer.Println("Updated node #"+strconv.Itoa(intFromMap(result, "id"))+" labels:", strings.Join(stringSlice(result["labels"]), ","))
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) NodeDiagnose(ctx context.Context, opts NodeDiagnoseOptions) error {
@@ -1648,18 +1389,18 @@ func (a *App) NodeDiagnose(ctx context.Context, opts NodeDiagnoseOptions) error 
 		}
 	}
 
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"request":        request,
-		})
+	if err := a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"request":        request,
+	}); err != nil {
+		return err
 	}
-
-	a.printNodeDiagnose(request)
-	if request.Status == "failed" {
-		return ExitError{Code: 1, Err: errors.New(firstNonEmpty(request.ErrorMessage, "node diagnose failed"))}
+	if strings.TrimSpace(request.Status) == "failed" {
+		message := firstNonEmpty(strings.TrimSpace(request.ErrorMessage), fmt.Sprintf("diagnose request %d failed", request.ID))
+		return ExitError{Code: 1, Err: fmt.Errorf("node diagnose failed: %s", message)}
 	}
 	return nil
+
 }
 
 func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
@@ -1689,14 +1430,11 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	configUpdated := false
 	configUpdateErr := ""
 	if ref := stringFromMap(result, "secret_ref"); ref != "" {
 		updated, err := a.upsertWorkspaceSecretRef(workspace.Discovery.WorkspaceRoot, serviceName, config.SecretRef{Name: opts.Name, Secret: ref})
 		if err != nil {
 			configUpdateErr = err.Error()
-		} else {
-			configUpdated = updated
 		}
 		result["config_updated"] = updated
 		result["config_path"] = a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot)
@@ -1705,26 +1443,12 @@ func (a *App) SecretSet(ctx context.Context, opts SecretSetOptions) error {
 		}
 	}
 	result["schema_version"] = outputSchemaVersion
-	if a.Printer.JSON {
-		if err := a.Printer.PrintJSON(result); err != nil {
-			return err
-		}
-		if configUpdateErr != "" {
-			return ExitError{Code: 1, Err: fmt.Errorf("secret saved, but devopsellence.yml was not updated: %s", configUpdateErr)}
-		}
-		return nil
+
+	if err := a.Printer.PrintJSON(result); err != nil {
+		return err
 	}
-	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
-		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
-	}
-	a.Printer.Println("Saved secret", stringFromMap(result, "name"), "for", stringFromMap(result, "service_name")+".")
-	a.Printer.Println("Ref:", stringFromMap(result, "secret_ref"))
 	if configUpdateErr != "" {
-		a.Printer.Errorln("Secret saved, but devopsellence.yml was not updated:", configUpdateErr)
 		return ExitError{Code: 1, Err: fmt.Errorf("secret saved, but devopsellence.yml was not updated: %s", configUpdateErr)}
-	}
-	if configUpdated {
-		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot))
 	}
 	return nil
 }
@@ -1746,23 +1470,12 @@ func (a *App) SecretList(ctx context.Context, opts SecretListOptions) error {
 	if err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"secrets":        items,
-		})
-	}
-	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
-		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
-	}
-	if len(items) == 0 {
-		a.Printer.Println("No secrets configured.")
-		return nil
-	}
-	for _, item := range items {
-		a.Printer.Println(formatListedSecret(item))
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"secrets":        items,
+	})
+
 }
 
 func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error {
@@ -1800,25 +1513,12 @@ func (a *App) SecretDelete(ctx context.Context, opts SecretDeleteOptions) error 
 		result["config_error"] = configUpdateErr
 	}
 	result["schema_version"] = outputSchemaVersion
-	if a.Printer.JSON {
-		if err := a.Printer.PrintJSON(result); err != nil {
-			return err
-		}
-		if configUpdateErr != "" {
-			return ExitError{Code: 1, Err: fmt.Errorf("secret deleted, but devopsellence.yml was not updated: %s", configUpdateErr)}
-		}
-		return nil
+
+	if err := a.Printer.PrintJSON(result); err != nil {
+		return err
 	}
-	if workspace.Discovery.AppType == config.AppTypeRails && workspace.Discovery.FallbackUsed {
-		a.Printer.Errorln("Could not infer Rails module name; using directory name", fmt.Sprintf("%q.", workspace.Discovery.ProjectName))
-	}
-	a.Printer.Println("Deleted secret", stringFromMap(result, "name"), "for", stringFromMap(result, "service_name")+".")
 	if configUpdateErr != "" {
-		a.Printer.Errorln("Secret deleted, but devopsellence.yml was not updated:", configUpdateErr)
 		return ExitError{Code: 1, Err: fmt.Errorf("secret deleted, but devopsellence.yml was not updated: %s", configUpdateErr)}
-	}
-	if configUpdated {
-		a.Printer.Println("Updated:", a.ConfigStore.PathFor(workspace.Discovery.WorkspaceRoot))
 	}
 	return nil
 }
@@ -2013,11 +1713,9 @@ func (a *App) Claim(ctx context.Context, opts ClaimOptions) error {
 		return wrapError(err)
 	}
 	result["schema_version"] = outputSchemaVersion
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	a.Printer.Println("Claim email sent to", stringFromMap(result, "email")+".")
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) TokenCreate(ctx context.Context, opts TokenCreateOptions) error {
@@ -2030,18 +1728,14 @@ func (a *App) TokenCreate(ctx context.Context, opts TokenCreateOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"token":          result.Token,
-			"name":           result.Name,
-			"created_at":     result.CreatedAt,
-		})
-	}
-	a.Printer.Println("Token:", result.Token)
-	a.Printer.Println("Name:", result.Name)
-	a.Printer.Errorln("Save this token — it will not be shown again.")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"token":          result.Token,
+		"name":           result.Name,
+		"created_at":     result.CreatedAt,
+	})
+
 }
 
 func (a *App) TokenList(ctx context.Context, _ TokenListOptions) error {
@@ -2053,35 +1747,13 @@ func (a *App) TokenList(ctx context.Context, _ TokenListOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"tokens":         result,
-		})
-	}
-	if len(result) == 0 {
-		a.Printer.Println("No tokens.")
-		return nil
-	}
-	for _, token := range result {
-		notes := []string{}
-		if token.Current {
-			notes = append(notes, "current")
-		}
-		if strings.TrimSpace(token.RevokedAt) != "" {
-			notes = append(notes, "revoked")
-		}
-		if strings.TrimSpace(token.LastUsedAt) != "" {
-			notes = append(notes, "last_used="+token.LastUsedAt)
-		}
-		suffix := ""
-		if len(notes) > 0 {
-			suffix = " [" + strings.Join(notes, ", ") + "]"
-		}
-		a.Printer.Println(fmt.Sprintf("#%d  %s  created=%s%s", token.ID, token.Name, token.CreatedAt, suffix))
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"tokens":         result,
+	})
+
 }
 
 func (a *App) TokenRevoke(ctx context.Context, opts TokenRevokeOptions) error {
@@ -2096,15 +1768,13 @@ func (a *App) TokenRevoke(ctx context.Context, opts TokenRevokeOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"token":          result,
-		})
-	}
-	a.Printer.Println(fmt.Sprintf("Revoked token #%d %s.", result.ID, result.Name))
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"token":          result,
+	})
+
 }
 
 func (a *App) OrganizationList(ctx context.Context, _ OrganizationListOptions) error {
@@ -2116,28 +1786,13 @@ func (a *App) OrganizationList(ctx context.Context, _ OrganizationListOptions) e
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organizations":  organizations,
-		})
-	}
-	if len(organizations) == 0 {
-		a.Printer.Println("No organizations.")
-		return nil
-	}
-	for _, organization := range organizations {
-		parts := []string{organization.Name}
-		if strings.TrimSpace(organization.Role) != "" {
-			parts = append(parts, "role="+organization.Role)
-		}
-		if strings.TrimSpace(organization.PlanTier) != "" {
-			parts = append(parts, "plan="+organization.PlanTier)
-		}
-		a.Printer.Println(strings.Join(parts, "  "))
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organizations":  organizations,
+	})
+
 }
 
 func (a *App) OrganizationUse(ctx context.Context, opts OrganizationUseOptions) error {
@@ -2158,19 +1813,17 @@ func (a *App) OrganizationUse(ctx context.Context, opts OrganizationUseOptions) 
 		return wrapError(err)
 	}
 	_ = a.rememberOrganization(organization.ID)
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization": map[string]any{
-				"id":   organization.ID,
-				"name": organization.Name,
-			},
-			"config_path": a.ConfigStore.PathFor(discovered.WorkspaceRoot),
-		})
-	}
-	a.Printer.Println("Using organization", organization.Name+".")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization": map[string]any{
+			"id":   organization.ID,
+			"name": organization.Name,
+		},
+		"config_path": a.ConfigStore.PathFor(discovered.WorkspaceRoot),
+	})
+
 }
 
 func (a *App) OrganizationRegistryShow(ctx context.Context, opts OrganizationRegistryShowOptions) error {
@@ -2187,25 +1840,14 @@ func (a *App) OrganizationRegistryShow(ctx context.Context, opts OrganizationReg
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   organization,
-			"registry":       registryConfig,
-		})
-	}
-	if !registryConfig.Configured {
-		a.Printer.Println("Registry not configured for", organization.Name+".")
-		return nil
-	}
-	a.Printer.Println("Registry host:", registryConfig.RegistryHost)
-	a.Printer.Println("Namespace:", registryConfig.RepositoryNamespace)
-	a.Printer.Println("Username:", registryConfig.Username)
-	if strings.TrimSpace(registryConfig.ExpiresAt) != "" {
-		a.Printer.Println("Expires at:", registryConfig.ExpiresAt)
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization":   organization,
+		"registry":       registryConfig,
+	})
+
 }
 
 func (a *App) OrganizationRegistrySet(ctx context.Context, opts OrganizationRegistrySetOptions) error {
@@ -2246,16 +1888,14 @@ func (a *App) OrganizationRegistrySet(ctx context.Context, opts OrganizationRegi
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   organization,
-			"registry":       registryConfig,
-		})
-	}
-	a.Printer.Println("Updated registry config for", organization.Name+".")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization":   organization,
+		"registry":       registryConfig,
+	})
+
 }
 
 func (a *App) ProjectList(ctx context.Context, opts ProjectListOptions) error {
@@ -2272,22 +1912,14 @@ func (a *App) ProjectList(ctx context.Context, opts ProjectListOptions) error {
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   organization,
-			"projects":       projects,
-		})
-	}
-	if len(projects) == 0 {
-		a.Printer.Println("No projects.")
-		return nil
-	}
-	for _, project := range projects {
-		a.Printer.Println(project.Name)
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization":   organization,
+		"projects":       projects,
+	})
+
 }
 
 func (a *App) ProjectCreate(ctx context.Context, opts ProjectCreateOptions) error {
@@ -2307,16 +1939,14 @@ func (a *App) ProjectCreate(ctx context.Context, opts ProjectCreateOptions) erro
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   organization,
-			"project":        project,
-		})
-	}
-	a.Printer.Println("Created project", project.Name+".")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization":   organization,
+		"project":        project,
+	})
+
 }
 
 func (a *App) ProjectDelete(ctx context.Context, opts ProjectDeleteOptions) error {
@@ -2342,11 +1972,9 @@ func (a *App) ProjectDelete(ctx context.Context, opts ProjectDeleteOptions) erro
 	}
 	result["schema_version"] = outputSchemaVersion
 	result["organization"] = organization
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(result)
-	}
-	a.Printer.Println("Deleted project", project.Name+".")
-	return nil
+
+	return a.Printer.PrintJSON(result)
+
 }
 
 func (a *App) ProjectUse(ctx context.Context, opts ProjectUseOptions) error {
@@ -2375,17 +2003,15 @@ func (a *App) ProjectUse(ctx context.Context, opts ProjectUseOptions) error {
 		return wrapError(err)
 	}
 	_ = a.rememberOrganization(organization.ID)
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   organization,
-			"project":        project,
-			"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
-		})
-	}
-	a.Printer.Println("Using project", project.Name+".")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization":   organization,
+		"project":        project,
+		"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
+	})
+
 }
 
 func (a *App) EnvironmentList(ctx context.Context, opts EnvironmentListOptions) error {
@@ -2402,23 +2028,15 @@ func (a *App) EnvironmentList(ctx context.Context, opts EnvironmentListOptions) 
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   organization,
-			"project":        project,
-			"environments":   environments,
-		})
-	}
-	if len(environments) == 0 {
-		a.Printer.Println("No environments.")
-		return nil
-	}
-	for _, environment := range environments {
-		a.Printer.Println(environment.Name)
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization":   organization,
+		"project":        project,
+		"environments":   environments,
+	})
+
 }
 
 func (a *App) EnvironmentCreate(ctx context.Context, opts EnvironmentCreateOptions) error {
@@ -2442,21 +2060,15 @@ func (a *App) EnvironmentCreate(ctx context.Context, opts EnvironmentCreateOptio
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   organization,
-			"project":        project,
-			"environment":    environment,
-		})
-	}
-	if environment.IngressStrategy != "" {
-		a.Printer.Println("Created environment", environment.Name+" with ingress", environment.IngressStrategy+".")
-		return nil
-	}
-	a.Printer.Println("Created environment", environment.Name+".")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization":   organization,
+		"project":        project,
+		"environment":    environment,
+	})
+
 }
 
 func (a *App) EnvironmentIngress(ctx context.Context, opts EnvironmentIngressOptions) error {
@@ -2476,17 +2088,15 @@ func (a *App) EnvironmentIngress(ctx context.Context, opts EnvironmentIngressOpt
 	if err != nil {
 		return wrapError(err)
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"organization":   workspace.Organization,
-			"project":        workspace.Project,
-			"environment":    environment,
-		})
-	}
-	a.Printer.Println("Updated environment", environment.Name, "ingress to", environment.IngressStrategy+".")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"organization":   workspace.Organization,
+		"project":        workspace.Project,
+		"environment":    environment,
+	})
+
 }
 
 func (a *App) EnvironmentUse(ctx context.Context, opts EnvironmentUseOptions) error {
@@ -2513,19 +2123,17 @@ func (a *App) EnvironmentUse(ctx context.Context, opts EnvironmentUseOptions) er
 		return wrapError(err)
 	}
 	_ = a.rememberOrganization(organization.ID)
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version":      outputSchemaVersion,
-			"ok":                  true,
-			"organization":        organization,
-			"project":             project,
-			"environment":         environment,
-			"workspace_key":       a.modeWorkspaceKey(),
-			"default_environment": cfg.DefaultEnvironment,
-		})
-	}
-	a.Printer.Println("Using environment", environment.Name+".")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version":      outputSchemaVersion,
+		"ok":                  true,
+		"organization":        organization,
+		"project":             project,
+		"environment":         environment,
+		"workspace_key":       a.modeWorkspaceKey(),
+		"default_environment": cfg.DefaultEnvironment,
+	})
+
 }
 
 func (a *App) EnvironmentOpen(ctx context.Context, opts EnvironmentOpenOptions) error {
@@ -2545,21 +2153,16 @@ func (a *App) EnvironmentOpen(ctx context.Context, opts EnvironmentOpenOptions) 
 	if strings.TrimSpace(publicURL) == "" {
 		return ExitError{Code: 1, Err: errors.New("environment has no public URL")}
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"ok":             true,
-			"url":            publicURL,
-			"organization":   workspace.Organization,
-			"project":        workspace.Project,
-			"environment":    workspace.Environment,
-		})
-	}
-	if err := a.Auth.OpenURL(publicURL); err != nil {
-		return wrapError(err)
-	}
-	a.Printer.Println("Opened", publicURL)
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"url":            publicURL,
+		"organization":   workspace.Organization,
+		"project":        workspace.Project,
+		"environment":    workspace.Environment,
+	})
+
 }
 
 func (a *App) ensureAuth(ctx context.Context, allowAnonymousCreate bool) (auth.Tokens, error) {
@@ -4079,63 +3682,4 @@ func nodeDiagnosePending(status string) bool {
 	default:
 		return false
 	}
-}
-
-func (a *App) printNodeDiagnose(request api.NodeDiagnoseRequest) {
-	a.Printer.Println("Node diagnose #" + strconv.Itoa(request.ID) + " for node #" + strconv.Itoa(request.Node.ID) + " (" + firstNonEmpty(request.Node.Name, "unnamed") + ")")
-	a.Printer.Println("Status:", request.Status)
-	if request.CompletedAt != "" {
-		a.Printer.Println("Completed:", request.CompletedAt)
-	}
-	if request.ErrorMessage != "" {
-		a.Printer.Println("Error:", request.ErrorMessage)
-	}
-	if request.Result == nil {
-		return
-	}
-
-	result := request.Result
-	a.Printer.Println("Collected:", result.CollectedAt)
-	a.Printer.Println("Agent:", result.AgentVersion)
-	a.Printer.Println(
-		"Summary:",
-		fmt.Sprintf("status=%s total=%d running=%d stopped=%d unhealthy=%d logs=%d",
-			result.Summary.Status,
-			result.Summary.Total,
-			result.Summary.Running,
-			result.Summary.Stopped,
-			result.Summary.Unhealthy,
-			result.Summary.LogsIncluded,
-		),
-	)
-
-	for _, container := range result.Containers {
-		name := firstNonEmpty(container.Service, container.System, container.Name)
-		line := name + " container=" + container.Name + " running=" + strconv.FormatBool(container.Running)
-		if container.Health != "" {
-			line += " health=" + container.Health
-		}
-		if container.Hash != "" {
-			line += " hash=" + container.Hash
-		}
-		a.Printer.Println(line)
-		if container.LogTail != "" {
-			for _, logLine := range strings.Split(strings.TrimRight(container.LogTail, "\n"), "\n") {
-				a.Printer.Println("  " + logLine)
-			}
-		}
-	}
-}
-
-func (a *App) warnAboutPrebuiltImageConfig(opts DeployOptions, cfg config.ProjectConfig) {
-	if strings.TrimSpace(opts.Image) == "" || a.Printer.JSON {
-		return
-	}
-	if cfg.App.Type != config.AppTypeRails {
-		return
-	}
-
-	a.Printer.Errorln("Using --image skips the local build.")
-	a.Printer.Errorln("Deploy will still use devopsellence.yml for port and healthcheck settings.")
-	a.Printer.Errorln("If this image is not a Rails image, update devopsellence.yml before deploy.")
 }

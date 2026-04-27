@@ -50,6 +50,124 @@ func TestDockerBuildArgsRejectsMultiplePlatforms(t *testing.T) {
 	}
 }
 
+func TestTailBufferExactLimitWriteIsNotTruncated(t *testing.T) {
+	buf := newTailBuffer(5)
+
+	n, err := buf.Write([]byte("abcde"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("Write() n = %d, want 5", n)
+	}
+	if got := buf.String(); got != "abcde" {
+		t.Fatalf("String() = %q, want %q", got, "abcde")
+	}
+}
+
+func TestTailBufferExactLimitWriteAfterExistingDataIsTruncated(t *testing.T) {
+	buf := newTailBuffer(5)
+	if _, err := buf.Write([]byte("ab")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	n, err := buf.Write([]byte("cdefg"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("Write() n = %d, want 5", n)
+	}
+	if got := buf.String(); got != "[truncated]\ncdefg" {
+		t.Fatalf("String() = %q, want bounded tail", got)
+	}
+}
+
+func TestTailBufferKeepsOnlyBoundedTail(t *testing.T) {
+	buf := newTailBuffer(10)
+
+	n, err := buf.Write([]byte("abcdef"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 6 {
+		t.Fatalf("Write() n = %d, want 6", n)
+	}
+	if got := buf.String(); got != "abcdef" {
+		t.Fatalf("String() = %q, want %q", got, "abcdef")
+	}
+
+	n, err = buf.Write([]byte("ghijklmnop"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 10 {
+		t.Fatalf("Write() n = %d, want 10", n)
+	}
+	if got := buf.String(); got != "[truncated]\nghijklmnop" {
+		t.Fatalf("String() = %q, want bounded tail", got)
+	}
+}
+
+func TestTailBufferLargeWriteKeepsOnlyBoundedTail(t *testing.T) {
+	buf := newTailBuffer(5)
+
+	n, err := buf.Write([]byte("abcdefghijklmnopqrstuvwxyz"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 26 {
+		t.Fatalf("Write() n = %d, want 26", n)
+	}
+	if got := buf.String(); got != "[truncated]\nvwxyz" {
+		t.Fatalf("String() = %q, want bounded tail", got)
+	}
+}
+
+func TestSSHInteractiveErrorIncludesCapturedOutput(t *testing.T) {
+	err := errors.New("exit status 1")
+
+	cases := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "stderr and stdout",
+			stdout: "  boot failed\n",
+			stderr: "  permission denied\n",
+			want:   "failed to run install command over SSH: exit status 1; stderr: permission denied; stdout: boot failed",
+		},
+		{
+			name:   "stderr only",
+			stderr: "  permission denied\n",
+			want:   "failed to run install command over SSH: exit status 1; stderr: permission denied",
+		},
+		{
+			name:   "stdout only",
+			stdout: "  boot failed\n",
+			want:   "failed to run install command over SSH: exit status 1; stdout: boot failed",
+		},
+		{
+			name: "no captured output",
+			want: "failed to run install command over SSH: exit status 1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sshInteractiveError("failed to run install command over SSH", err, tc.stdout, tc.stderr)
+			if got.Error() != tc.want {
+				t.Fatalf("error = %q, want %q", got.Error(), tc.want)
+			}
+			if !errors.Is(got, err) {
+				t.Fatalf("error does not wrap original error")
+			}
+		})
+	}
+}
+
 func TestSoloDefaultProjectConfigBootstrapsExplicitCatchAllIngress(t *testing.T) {
 	t.Parallel()
 

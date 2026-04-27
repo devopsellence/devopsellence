@@ -46,25 +46,21 @@ func (a *App) ProviderLogin(ctx context.Context, opts ProviderLoginOptions) erro
 	if err != nil {
 		return err
 	}
-	if !a.Printer.JSON {
-		a.Printer.Println("Validating " + providerSlug + " token...")
-	}
+
 	if err := provider.Validate(ctx); err != nil {
 		return err
 	}
 	if err := saveProviderToken(a.ProviderState, providerSlug, token); err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"provider":       providerSlug,
-			"configured":     true,
-			"source":         "state",
-		})
-	}
-	a.Printer.Println("Saved " + providerSlug + " provider token.")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"provider":       providerSlug,
+		"configured":     true,
+		"source":         "state",
+	})
+
 }
 
 func (a *App) ProviderStatus(ctx context.Context, opts ProviderStatusOptions) error {
@@ -77,15 +73,13 @@ func (a *App) ProviderStatus(ctx context.Context, opts ProviderStatusOptions) er
 		return err
 	}
 	if strings.TrimSpace(token) == "" {
-		if a.Printer.JSON {
-			return a.Printer.PrintJSON(map[string]any{
-				"schema_version": outputSchemaVersion,
-				"provider":       providerSlug,
-				"configured":     false,
-			})
-		}
-		a.Printer.Println(providerSlug + " provider is not configured.")
-		return nil
+
+		return a.Printer.PrintJSON(map[string]any{
+			"schema_version": outputSchemaVersion,
+			"provider":       providerSlug,
+			"configured":     false,
+		})
+
 	}
 	provider, err := providers.ResolveWithToken(providerSlug, token)
 	if err != nil {
@@ -94,16 +88,14 @@ func (a *App) ProviderStatus(ctx context.Context, opts ProviderStatusOptions) er
 	if err := provider.Validate(ctx); err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"provider":       providerSlug,
-			"configured":     true,
-			"source":         source,
-		})
-	}
-	a.Printer.Println(providerSlug + " provider is configured (" + source + ").")
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"provider":       providerSlug,
+		"configured":     true,
+		"source":         source,
+	})
+
 }
 
 func (a *App) ProviderLogout(_ context.Context, opts ProviderLogoutOptions) error {
@@ -115,19 +107,13 @@ func (a *App) ProviderLogout(_ context.Context, opts ProviderLogoutOptions) erro
 	if err != nil {
 		return err
 	}
-	if a.Printer.JSON {
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version": outputSchemaVersion,
-			"provider":       providerSlug,
-			"deleted":        deleted,
-		})
-	}
-	if deleted {
-		a.Printer.Println("Removed " + providerSlug + " provider token.")
-	} else {
-		a.Printer.Println(providerSlug + " provider token was not stored.")
-	}
-	return nil
+
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"provider":       providerSlug,
+		"deleted":        deleted,
+	})
+
 }
 
 func (a *App) resolveSoloProvider(providerSlug string) (providers.Provider, error) {

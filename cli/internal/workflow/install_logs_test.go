@@ -2,49 +2,31 @@ package workflow
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"github.com/devopsellence/cli/internal/output"
 )
 
-func TestNewSoloInstallReporterJSONDiscardsInstallNoise(t *testing.T) {
+func TestNewSoloInstallReporterCapturesInstallNoiseWithoutPrinting(t *testing.T) {
 	var out bytes.Buffer
-	reporter := newSoloInstallReporter(t.Context(), output.Printer{Out: &out, JSON: true}, "prod-2")
+	reporter := newSoloInstallReporter(t.Context(), output.Printer{Out: &out}, "prod-2")
 
 	reporter.Progress("Installing Docker, agent, and systemd service...")
-	if _, err := reporter.Stream().Write([]byte("progress: downloading agent binary\nplain log\npartial")); err != nil {
+	if _, err := reporter.Stdout().Write([]byte("progress: downloading agent binary\nplain log\npartial")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reporter.Stderr().Write([]byte("stderr: package install failed")); err != nil {
 		t.Fatal(err)
 	}
 	reporter.Close()
 
 	if got := out.String(); got != "" {
-		t.Fatalf("reporter output = %q, want no unstructured output in JSON mode", got)
+		t.Fatalf("reporter output = %q, want no unstructured output", got)
 	}
-}
-
-func TestNewSoloInstallReporterPlainLinesWhenJSONDisabled(t *testing.T) {
-	var out bytes.Buffer
-	reporter := newSoloInstallReporter(t.Context(), output.Printer{Out: &out}, "prod-2")
-
-	reporter.Progress("Installing Docker, agent, and systemd service...")
-	if _, err := reporter.Stream().Write([]byte("progress: downloading agent binary\nplain log\npartial")); err != nil {
-		t.Fatal(err)
+	if got := reporter.CapturedStdout(); got != "progress: downloading agent binary\nplain log\npartial" {
+		t.Fatalf("captured stdout = %q", got)
 	}
-	reporter.Close()
-
-	text := out.String()
-	for _, fragment := range []string{
-		"[prod-2] Installing Docker, agent, and systemd service...",
-		"[prod-2] downloading agent binary",
-		"[prod-2] plain log",
-		"[prod-2] partial",
-	} {
-		if !strings.Contains(text, fragment) {
-			t.Fatalf("reporter output = %q, want fragment %q", text, fragment)
-		}
-	}
-	if strings.Contains(text, "\x1b[") {
-		t.Fatalf("reporter output = %q, want no ANSI redraw codes", text)
+	if got := reporter.CapturedStderr(); got != "stderr: package install failed" {
+		t.Fatalf("captured stderr = %q", got)
 	}
 }

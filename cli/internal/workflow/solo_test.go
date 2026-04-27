@@ -2341,9 +2341,43 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 	if runtimeContract["service"] != "web" || runtimeContract["port"] != float64(3000) || runtimeContract["port_source"] != "default" {
 		t.Fatalf("runtime_contract = %#v, want default web port contract", runtimeContract)
 	}
+	if runtimeContract["healthcheck_path"] != "/" || runtimeContract["healthcheck_port"] != float64(3000) {
+		t.Fatalf("runtime_contract healthcheck = %#v, want / on port 3000", runtimeContract)
+	}
 	requirement := stringValueAny(runtimeContract["requirement"])
 	if !strings.Contains(requirement, "EXPOSE") || !strings.Contains(requirement, "devopsellence.yml") {
 		t.Fatalf("runtime_contract.requirement = %q, want Dockerfile/config guidance", requirement)
+	}
+}
+
+func TestSoloInitReportsConfigPortContract(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	web := cfg.Services["web"]
+	web.Ports = []config.ServicePort{{Name: "http", Port: 8080}}
+	web.Healthcheck = &config.HTTPHealthcheck{Path: "/health", Port: 8080}
+	cfg.Services["web"] = web
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["service"] != "web" || runtimeContract["port"] != float64(8080) || runtimeContract["port_source"] != "config" {
+		t.Fatalf("runtime_contract = %#v, want configured web port contract", runtimeContract)
+	}
+	if runtimeContract["healthcheck_path"] != "/health" || runtimeContract["healthcheck_port"] != float64(8080) {
+		t.Fatalf("runtime_contract healthcheck = %#v, want /health on port 8080", runtimeContract)
 	}
 }
 

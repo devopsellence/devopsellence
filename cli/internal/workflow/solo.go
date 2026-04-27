@@ -1133,8 +1133,8 @@ func (a *App) soloProgress(operation string, fields map[string]any) func(string)
 
 func soloNodeLogNextSteps(nodes map[string]config.Node) []string {
 	steps := []string{}
-	for _, node := range sortedNodeNames(nodes) {
-		steps = append(steps, "devopsellence node logs "+shellQuote(node)+" --lines 100")
+	for _, nodeName := range sortedNodeNames(nodes) {
+		steps = append(steps, "devopsellence node logs "+shellQuote(nodeName)+" --lines 100")
 	}
 	return steps
 }
@@ -1848,9 +1848,9 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 		"status": collectRemoteLines(ctx, node, remoteSystemctlStatusCommand("devopsellence-agent", 40)),
 	}
 	payload["docker"] = map[string]any{
-		"containers": collectRemoteJSONLines(ctx, node, remoteDockerPSJSONCommand()),
-		"images":     collectRemoteJSONLines(ctx, node, remoteDockerImagesJSONCommand()),
-		"networks":   collectRemoteJSONLines(ctx, node, remoteDockerNetworksJSONCommand()),
+		"containers": collectRemoteJSONLines(ctx, node, remoteDockerPSJSONCommand(), soloDiagnoseDockerItemLimit),
+		"images":     collectRemoteJSONLines(ctx, node, remoteDockerImagesJSONCommand(), soloDiagnoseDockerItemLimit),
+		"networks":   collectRemoteJSONLines(ctx, node, remoteDockerNetworksJSONCommand(), soloDiagnoseDockerItemLimit),
 	}
 	payload["ports"] = collectRemoteLines(ctx, node, remoteListeningPortsCommand())
 	statusResult, statusErr := readNodeStatus(ctx, node)
@@ -1935,9 +1935,9 @@ func collectRemoteLines(ctx context.Context, node config.Node, command string) m
 	return result
 }
 
-func collectRemoteJSONLines(ctx context.Context, node config.Node, command string) map[string]any {
+func collectRemoteJSONLines(ctx context.Context, node config.Node, command string, limit int) map[string]any {
 	out, err := solo.RunSSH(ctx, node, command, nil)
-	result := map[string]any{"ok": err == nil}
+	result := map[string]any{"ok": err == nil, "limit": limit, "truncated": false}
 	if err != nil {
 		result["error"] = err.Error()
 		return result
@@ -1946,6 +1946,10 @@ func collectRemoteJSONLines(ctx context.Context, node config.Node, command strin
 	for _, line := range splitNonFinalEmptyLines(out) {
 		line = strings.TrimSpace(line)
 		if line == "" {
+			continue
+		}
+		if line == soloDiagnoseTruncatedMarker {
+			result["truncated"] = true
 			continue
 		}
 		var item map[string]any
@@ -2418,6 +2422,8 @@ const sshOutputTailLimit = 64 * 1024
 const (
 	soloLogsDefaultLines                 = 100
 	soloLogsMaxLines                     = 1000
+	soloDiagnoseDockerItemLimit          = 100
+	soloDiagnoseTruncatedMarker          = "__DEVOPSELLENCE_TRUNCATED__"
 	soloRemoteAgentBinaryNotFoundMessage = "devopsellence agent binary not found"
 )
 
@@ -3576,15 +3582,19 @@ func remoteSystemctlStatusCommand(unit string, lines int) string {
 }
 
 func remoteDockerPSJSONCommand() string {
-	return "if docker info >/dev/null 2>&1; then docker ps -a --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker ps -a --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi"
+	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker ps -a --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker ps -a --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
 }
 
 func remoteDockerImagesJSONCommand() string {
-	return "if docker info >/dev/null 2>&1; then docker images --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker images --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi"
+	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker images --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker images --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
 }
 
 func remoteDockerNetworksJSONCommand() string {
-	return "if docker info >/dev/null 2>&1; then docker network ls --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker network ls --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi"
+	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker network ls --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker network ls --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
+}
+
+func withRemoteLineLimit(command string, limit int) string {
+	return fmt.Sprintf("( %s ) | awk 'NR <= %d { print } NR == %d { print %s; exit }'", command, limit, limit+1, shellQuote(soloDiagnoseTruncatedMarker))
 }
 
 func remoteListeningPortsCommand() string {

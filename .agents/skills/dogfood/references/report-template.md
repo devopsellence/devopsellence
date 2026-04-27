@@ -76,7 +76,18 @@ Actual behavior:
 Reproduction evidence:
 Suggested fix:
 
-## AI-Agent-Primary Gaps
+## AI Agent Observability Gaps
+
+### Finding: <title>
+
+Severity:
+Surface:
+Expected AI-agent-mediated behavior:
+Actual behavior:
+Reproduction evidence:
+Suggested fix:
+
+## AI-Agent-Primary Operability Gaps
 
 ### Finding: <title>
 

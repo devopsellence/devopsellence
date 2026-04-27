@@ -373,6 +373,16 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return err
 	}
 	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions); err != nil {
+		var rolloutErr *soloRolloutError
+		if errors.As(err, &rolloutErr) {
+			rolloutErr.Healthchecks = soloDeployHealthcheckDetails(cfg)
+			return ExitError{Code: 1, Err: rolloutErr}
+		}
+		var timeoutErr *soloRolloutTimeoutError
+		if errors.As(err, &timeoutErr) {
+			timeoutErr.Healthchecks = soloDeployHealthcheckDetails(cfg)
+			return ExitError{Code: 1, Err: timeoutErr}
+		}
 		return err
 	}
 
@@ -493,6 +503,83 @@ func readNodeStatus(ctx context.Context, node config.Node) (soloNodeStatusResult
 	}, nil
 }
 
+type soloRolloutError struct {
+	Node         string
+	Message      string
+	Healthchecks []map[string]any
+}
+
+func (e *soloRolloutError) Error() string {
+	if e == nil {
+		return "rollout failed"
+	}
+	return fmt.Sprintf("rollout failed on %s: %s", e.Node, e.Message)
+}
+
+func (e *soloRolloutError) ErrorFields() map[string]any {
+	if e == nil {
+		return map[string]any{}
+	}
+	fields := map[string]any{
+		"node": e.Node,
+		"next_steps": []string{
+			"devopsellence status",
+			"devopsellence node logs " + shellQuote(e.Node) + " --lines 100",
+		},
+	}
+	if len(e.Healthchecks) > 0 {
+		fields["healthchecks"] = e.Healthchecks
+	}
+	return fields
+}
+
+type soloRolloutTimeoutError struct {
+	Summary      string
+	Nodes        []string
+	Healthchecks []map[string]any
+}
+
+func (e *soloRolloutTimeoutError) Error() string {
+	if e == nil {
+		return "timed out waiting for solo rollout"
+	}
+	return "timed out waiting for solo rollout: " + e.Summary
+}
+
+func (e *soloRolloutTimeoutError) ErrorFields() map[string]any {
+	if e == nil {
+		return map[string]any{}
+	}
+	steps := []string{"devopsellence status"}
+	for _, node := range e.Nodes {
+		steps = append(steps, "devopsellence node logs "+shellQuote(node)+" --lines 100")
+	}
+	fields := map[string]any{"next_steps": steps}
+	if len(e.Healthchecks) > 0 {
+		fields["healthchecks"] = e.Healthchecks
+	}
+	return fields
+}
+
+func soloDeployHealthcheckDetails(cfg *config.ProjectConfig) []map[string]any {
+	if cfg == nil {
+		return nil
+	}
+	details := []map[string]any{}
+	for _, serviceName := range cfg.ServiceNames() {
+		service := cfg.Services[serviceName]
+		if service.Healthcheck == nil {
+			continue
+		}
+		details = append(details, map[string]any{
+			"service_name": serviceName,
+			"path":         service.Healthcheck.Path,
+			"port":         service.Healthcheck.Port,
+		})
+	}
+	return details
+}
+
 func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string) error {
 	timeout := a.DeployTimeout
 	if timeout <= 0 {
@@ -523,7 +610,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 			result, err := readNodeStatus(rolloutCtx, nodes[name])
 			if err != nil {
 				if errors.Is(rolloutCtx.Err(), context.DeadlineExceeded) {
-					return ExitError{Code: 1, Err: fmt.Errorf("timed out waiting for solo rollout: %s", latestSummary)}
+					return ExitError{Code: 1, Err: &soloRolloutTimeoutError{Summary: latestSummary, Nodes: nodeNames}}
 				}
 				return fmt.Errorf("[%s] read status: %w", name, err)
 			}
@@ -541,7 +628,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 					settledCount++
 				case "error":
 					message := firstNonEmpty(strings.TrimSpace(result.Status.Error), "node reported phase=error")
-					return ExitError{Code: 1, Err: fmt.Errorf("rollout failed on %s: %s", name, message)}
+					return ExitError{Code: 1, Err: &soloRolloutError{Node: name, Message: message}}
 				default:
 					reconcilingCount++
 					details = append(details, fmt.Sprintf("%s=%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Phase), "reconciling")))
@@ -563,7 +650,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 		case <-rolloutCtx.Done():
 			timer.Stop()
 			if errors.Is(rolloutCtx.Err(), context.DeadlineExceeded) {
-				return ExitError{Code: 1, Err: fmt.Errorf("timed out waiting for solo rollout: %s", latestSummary)}
+				return ExitError{Code: 1, Err: &soloRolloutTimeoutError{Summary: latestSummary, Nodes: nodeNames}}
 			}
 			return rolloutCtx.Err()
 		case <-timer.C:
@@ -1119,11 +1206,13 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 
 	var jsonResults []map[string]any
 	readErrors := 0
+	allSettled := true
 
 	for name, node := range nodes {
 		result, err := readNodeStatus(ctx, node)
 		if err != nil {
 			readErrors++
+			allSettled = false
 
 			jsonResults = append(jsonResults, map[string]any{
 				"node":  name,
@@ -1134,6 +1223,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		}
 
 		if result.Missing {
+			allSettled = false
 			message := "no deploy status yet; run `devopsellence deploy`"
 
 			jsonResults = append(jsonResults, map[string]any{
@@ -1145,6 +1235,9 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			continue
 		}
 
+		if strings.TrimSpace(result.Status.Phase) != "settled" {
+			allSettled = false
+		}
 		jsonResults = append(jsonResults, map[string]any{
 			"node":   name,
 			"status": result.Raw,
@@ -1154,7 +1247,12 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 
 	payload := map[string]any{"nodes": jsonResults}
 	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
-		payload["public_urls"] = urls
+		if allSettled {
+			payload["public_urls"] = urls
+		} else {
+			payload["configured_public_urls"] = urls
+			payload["warnings"] = []string{"public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"}
+		}
 	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
 		return err
@@ -2200,7 +2298,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		return a.Printer.PrintJSON(map[string]any{
 			"node":   opts.Name,
 			"action": "forgotten",
-			"note":   "existing SSH node removed from local state only; remote VM resources were not changed",
+			"note":   fmt.Sprintf("node removed from local state only; if remote cleanup is still needed, run `devopsellence agent uninstall %s --yes`", shellQuote(opts.Name)),
 		})
 
 	}

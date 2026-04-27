@@ -616,6 +616,64 @@ func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	}
 }
 
+func TestSoloStatusUsesConfiguredPublicURLsWhenNodeIsNotSettled(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "*", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"rev","phase":"error","error":"healthcheck failed"}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				NodeNames:     []string{"node-a"},
+			},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not expect public_urls while node is errored", payload)
+	}
+	urls := jsonArrayFromMap(t, payload, "configured_public_urls")
+	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
+		t.Fatalf("configured_public_urls = %#v, want node URL", urls)
+	}
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	if len(warnings) != 1 || !strings.Contains(warnings[0].(string), "not settled") {
+		t.Fatalf("warnings = %#v, want not-settled warning", warnings)
+	}
+}
+
 func TestSoloStatusPublicURLsUseHTTPSForManualTLS(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -1280,6 +1338,60 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	}
 }
 
+func TestSoloDeployRolloutFailureIncludesHealthcheckContext(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"__REVISION__","phase":"error","error":"healthcheck failed"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:            output.New(&stdout, io.Discard),
+		SoloState:          soloState,
+		ConfigStore:        config.NewStore(),
+		Git:                git.Client{},
+		Cwd:                workspaceRoot,
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      time.Second,
+	}
+
+	err := app.SoloDeploy(context.Background(), SoloDeployOptions{})
+	if err == nil {
+		t.Fatal("expected deploy failure")
+	}
+	var rolloutErr *soloRolloutError
+	if !errors.As(err, &rolloutErr) {
+		t.Fatalf("error = %T %v, want soloRolloutError", err, err)
+	}
+	fields := rolloutErr.ErrorFields()
+	healthchecks := fields["healthchecks"].([]map[string]any)
+	if len(healthchecks) != 1 || healthchecks[0]["service_name"] != config.DefaultWebServiceName || healthchecks[0]["path"] != config.DefaultHealthcheckPath {
+		t.Fatalf("healthchecks = %#v, want web healthcheck context", healthchecks)
+	}
+}
+
 func TestWaitForSoloRolloutIgnoresMissingAndStaleStatusUntilExpectedRevisionSettles(t *testing.T) {
 	statusCountPath := installFakeSoloCommands(t, []fakeSSHResponse{
 		{stdout: soloStatusMissingSentinel + "\n"},
@@ -1333,6 +1445,15 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	if !strings.Contains(err.Error(), "rollout failed on node-a: image pull failed") {
 		t.Fatalf("error = %v", err)
 	}
+	var rolloutErr *soloRolloutError
+	if !errors.As(err, &rolloutErr) {
+		t.Fatalf("error = %T %v, want soloRolloutError", err, err)
+	}
+	fields := rolloutErr.ErrorFields()
+	steps := fields["next_steps"].([]string)
+	if len(steps) != 2 || steps[1] != "devopsellence node logs 'node-a' --lines 100" {
+		t.Fatalf("next_steps = %#v, want status and node logs commands", steps)
+	}
 }
 
 func TestWaitForSoloRolloutTimesOutWhenExpectedRevisionNeverSettles(t *testing.T) {
@@ -1365,6 +1486,15 @@ func TestWaitForSoloRolloutTimesOutWhenExpectedRevisionNeverSettles(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "timed out waiting for solo rollout") {
 		t.Fatalf("error = %v", err)
+	}
+	var timeoutErr *soloRolloutTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("error = %T %v, want soloRolloutTimeoutError", err, err)
+	}
+	fields := timeoutErr.ErrorFields()
+	steps := fields["next_steps"].([]string)
+	if len(steps) != 2 || steps[1] != "devopsellence node logs 'node-a' --lines 100" {
+		t.Fatalf("next_steps = %#v, want status and node logs commands", steps)
 	}
 }
 

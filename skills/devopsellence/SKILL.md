@@ -98,6 +98,7 @@ Use these in shared mode for a provider-created node. By default, `node create` 
 ```sh
 devopsellence init --mode shared
 printf '%s' "$HCLOUD_TOKEN" | devopsellence provider login hetzner --stdin
+# or: devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
 devopsellence node create prod-1 --provider hetzner
 devopsellence node list
 devopsellence node detach <id>
@@ -133,6 +134,7 @@ Use these in solo mode for a provider-created node:
 ```sh
 devopsellence init --mode solo
 printf '%s' "$HCLOUD_TOKEN" | devopsellence provider login hetzner --stdin
+# or: devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
 devopsellence node create prod-1 --provider hetzner --install --attach
 devopsellence doctor
 devopsellence deploy

@@ -1073,7 +1073,7 @@ func sortedSoloPeerNames(peers map[string]desiredstate.NodePeer) []string {
 }
 
 func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
-	nodes, err := a.soloStatusNodes(opts)
+	nodes, cfg, err := a.soloStatusSelection(opts)
 	if err != nil {
 		return err
 	}
@@ -1117,10 +1117,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	}
 
 	payload := map[string]any{"nodes": jsonResults}
-	if cfg, _, cfgErr := a.loadSoloProjectConfig(); cfgErr == nil {
-		if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
-			payload["public_urls"] = urls
-		}
+	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+		payload["public_urls"] = urls
 	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
 		return err
@@ -1136,8 +1134,11 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 		return nil
 	}
 	scheme := "http"
-	if cfg.Ingress != nil && strings.EqualFold(strings.TrimSpace(cfg.Ingress.TLS.Mode), "auto") {
-		scheme = "https"
+	if cfg.Ingress != nil {
+		tlsMode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
+		if strings.EqualFold(tlsMode, "auto") || strings.EqualFold(tlsMode, "manual") {
+			scheme = "https"
+		}
 	}
 	hosts := []string{}
 	if cfg.Ingress != nil {
@@ -1151,7 +1152,11 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 	}
 	if len(hosts) == 0 {
 		for _, name := range sortedNodeNames(nodes) {
-			host := strings.TrimSpace(nodes[name].Host)
+			node := nodes[name]
+			if !soloNodeCanRunIngress(node, cfg) {
+				continue
+			}
+			host := strings.TrimSpace(node.Host)
 			if host != "" {
 				hosts = append(hosts, host)
 			}
@@ -2364,25 +2369,32 @@ func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 }
 
 func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.Node, error) {
+	nodes, _, err := a.soloStatusSelection(opts)
+	return nodes, err
+}
+
+func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Node, *config.ProjectConfig, error) {
 	current, err := a.readSoloState()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(opts.Nodes) > 0 {
-		return a.resolveNodes(current, opts.Nodes)
+		nodes, err := a.resolveNodes(current, opts.Nodes)
+		return nodes, nil, err
 	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(nodeNames) == 0 {
-		return map[string]config.Node{}, nil
+		return map[string]config.Node{}, cfg, nil
 	}
-	return a.resolveNodes(current, nodeNames)
+	nodes, err := a.resolveNodes(current, nodeNames)
+	return nodes, cfg, err
 }
 
 func (a *App) attachNode(current *solo.State, workspaceRoot, environmentName, nodeName string) (solo.AttachmentRecord, bool, error) {

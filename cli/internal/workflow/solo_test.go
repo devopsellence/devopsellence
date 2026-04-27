@@ -566,23 +566,32 @@ func TestSoloAffectedNodesForNodeIncludesCoHostedNodes(t *testing.T) {
 func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "*", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
 		t.Fatal(err)
 	}
 	statusJSON := `{"time":"2026-04-27T10:42:45Z","revision":"rev","phase":"settled","summary":{"environments":0,"services":0}}`
-	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON}})
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON}, {stdout: statusJSON}})
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
 		Nodes: map[string]config.Node{
 			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+			"node-b": {Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWorkerRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{
 			workspaceRoot + "\nproduction": {
 				WorkspaceRoot: workspaceRoot,
 				WorkspaceKey:  workspaceRoot,
 				Environment:   "production",
-				NodeNames:     []string{"node-a"},
+				NodeNames:     []string{"node-a", "node-b"},
 			},
 		},
 	}
@@ -603,7 +612,23 @@ func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	payload := decodeJSONOutput(t, &stdout)
 	urls := jsonArrayFromMap(t, payload, "public_urls")
 	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
-		t.Fatalf("public_urls = %#v, want node URL", urls)
+		t.Fatalf("public_urls = %#v, want web node URL only", urls)
+	}
+}
+
+func TestSoloStatusPublicURLsUseHTTPSForManualTLS(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "manual"},
+	}
+
+	urls := soloStatusPublicURLs(&cfg, map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+	})
+	if len(urls) != 1 || urls[0] != "https://app.example.com/" {
+		t.Fatalf("public_urls = %#v, want https URL", urls)
 	}
 }
 

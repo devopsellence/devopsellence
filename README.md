@@ -94,11 +94,11 @@ printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --se
 devopsellence secret list
 ```
 
-To clean up a solo experiment on an existing SSH node, uninstall the agent and remove devopsellence-managed runtime resources before forgetting the node locally:
+To clean up a solo experiment on an existing SSH node, first detach the node from the environment, then uninstall the agent and remove devopsellence-managed runtime resources before forgetting the node locally:
 
 ```bash
-devopsellence agent uninstall prod-1 --yes
 devopsellence node detach prod-1
+devopsellence agent uninstall prod-1 --yes
 devopsellence node remove prod-1 --yes
 ```
 

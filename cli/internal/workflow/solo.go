@@ -69,9 +69,8 @@ type SoloNodeDetachOptions struct {
 }
 
 type SoloLogsOptions struct {
-	Node   string
-	Follow bool
-	Lines  int
+	Node  string
+	Lines int
 }
 
 type SoloNodeLabelSetOptions struct {
@@ -377,14 +376,22 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return err
 	}
 
-	return a.Printer.PrintJSON(map[string]any{
+	payload := map[string]any{
 		"schema_version":          outputSchemaVersion,
 		"workload_revision":       shortSHA,
 		"desired_state_revisions": desiredStateRevisions,
 		"image":                   imageTag,
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
-	})
+		"phase":                   "settled",
+	}
+	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+		payload["public_urls"] = urls
+		payload["next_steps"] = []string{"devopsellence status", "curl " + urls[0]}
+	} else {
+		payload["next_steps"] = []string{"devopsellence status"}
+	}
+	return a.Printer.PrintJSON(payload)
 
 }
 
@@ -1521,21 +1528,44 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	} else if !changed {
 		return fmt.Errorf("node %q is not attached to %s", opts.Node, environmentName)
 	}
-	affectedNodeNames := append([]string{opts.Node}, nodeNamesBefore...)
-	affectedNodeNames = normalizeSoloNames(affectedNodeNames)
+	remainingNodeNames := make([]string, 0, len(nodeNamesBefore))
+	for _, name := range nodeNamesBefore {
+		if name != opts.Node {
+			remainingNodeNames = append(remainingNodeNames, name)
+		}
+	}
+	remainingNodeNames = normalizeSoloNames(remainingNodeNames)
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, err := a.republishNodes(ctx, current, affectedNodeNames); err != nil {
+	if _, err := a.republishNodes(ctx, current, remainingNodeNames); err != nil {
 		return err
 	}
+	warnings := []string{}
+	if _, err := a.republishNodes(ctx, current, []string{opts.Node}); err != nil {
+		if current.NodeHasAttachments(opts.Node) || !soloRepublishMissingAgentError(err) {
+			return err
+		}
+		warnings = append(warnings, "remote desired state was not cleared because the agent is already uninstalled on the node")
+	}
 
-	return a.Printer.PrintJSON(map[string]any{
+	payload := map[string]any{
 		"node":        opts.Node,
 		"environment": environmentName,
 		"changed":     true,
-	})
+	}
+	if len(warnings) > 0 {
+		payload["warnings"] = warnings
+	}
+	return a.Printer.PrintJSON(payload)
 
+}
+
+func soloRepublishMissingAgentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "devopsellence agent binary not found")
 }
 
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
@@ -1583,9 +1613,6 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 		return fmt.Errorf("node %q not found", opts.Node)
 	}
 
-	if opts.Follow {
-		return ExitError{Code: 2, Err: errors.New("--follow streams raw logs and is not supported by the JSON-only CLI")}
-	}
 	linesLimit := opts.Lines
 	if linesLimit < 1 || linesLimit > soloLogsMaxLines {
 		return ExitError{Code: 2, Err: fmt.Errorf("--lines must be between 1 and %d", soloLogsMaxLines)}

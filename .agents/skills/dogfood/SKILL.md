@@ -1,6 +1,11 @@
 ---
 name: dogfood
-description: Use when asked to dogfood devopsellence from an AI-agent-mediated perspective: an AI coding/operator agent acting for a user who delegates deployment, diagnosis, cleanup, and reporting. The skill guides blind-pass and expert-pass testing with evidence, AI-agent-centric scenarios, rubrics, and repeatable run artifacts.
+description: >-
+  Use when asked to dogfood devopsellence from an AI-agent-mediated perspective:
+  an AI coding/operator agent acting for a user who delegates deployment,
+  diagnosis, cleanup, and reporting. The skill guides blind-pass and expert-pass
+  testing with evidence, AI-agent-centric scenarios, rubrics, and repeatable run
+  artifacts.
 ---
 
 # Dogfood

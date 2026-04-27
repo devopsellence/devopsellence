@@ -1666,8 +1666,8 @@ func (a *App) SoloAgentUninstall(ctx context.Context, opts SoloAgentUninstallOpt
 	if !ok {
 		return fmt.Errorf("node %q not found", opts.Node)
 	}
-	stdout := newTailBuffer(16 * 1024)
-	stderr := newTailBuffer(16 * 1024)
+	stdout := newTailBuffer(sshOutputTailLimit)
+	stderr := newTailBuffer(sshOutputTailLimit)
 	script := soloAgentUninstallScript(soloAgentUninstallScriptOptions{
 		StateDir:      firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 		KeepWorkloads: opts.KeepWorkloads,
@@ -2383,7 +2383,7 @@ func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Nod
 		if err != nil {
 			return nil, nil, err
 		}
-		cfg, _, cfgErr := a.loadSoloProjectConfig()
+		_, cfg, cfgErr := a.optionalWorkspaceConfig()
 		if cfgErr != nil {
 			cfg = nil
 		}

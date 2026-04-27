@@ -54,6 +54,10 @@ func (e ExitError) Error() string {
 	return e.Err.Error()
 }
 
+func (e ExitError) Unwrap() error {
+	return e.Err
+}
+
 type App struct {
 	In                  io.Reader
 	Printer             output.Printer

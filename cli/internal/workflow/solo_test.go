@@ -616,6 +616,64 @@ func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	}
 }
 
+func TestSoloStatusUsesConfiguredPublicURLsWhenNodeIsNotSettled(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "*", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"rev","phase":"error","error":"healthcheck failed"}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				NodeNames:     []string{"node-a"},
+			},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not expect public_urls while node is errored", payload)
+	}
+	urls := jsonArrayFromMap(t, payload, "configured_public_urls")
+	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
+		t.Fatalf("configured_public_urls = %#v, want node URL", urls)
+	}
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	if len(warnings) != 1 || !strings.Contains(warnings[0].(string), "not settled") {
+		t.Fatalf("warnings = %#v, want not-settled warning", warnings)
+	}
+}
+
 func TestSoloStatusPublicURLsUseHTTPSForManualTLS(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -1332,6 +1390,15 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rollout failed on node-a: image pull failed") {
 		t.Fatalf("error = %v", err)
+	}
+	var rolloutErr *soloRolloutError
+	if !errors.As(err, &rolloutErr) {
+		t.Fatalf("error = %T %v, want soloRolloutError", err, err)
+	}
+	fields := rolloutErr.ErrorFields()
+	steps := fields["next_steps"].([]string)
+	if len(steps) != 2 || steps[1] != "devopsellence node logs node-a --lines 100" {
+		t.Fatalf("next_steps = %#v, want status and node logs commands", steps)
 	}
 }
 

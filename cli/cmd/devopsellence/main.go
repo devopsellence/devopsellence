@@ -40,15 +40,22 @@ func main() {
 }
 
 func writeError(operation string, exitCode int, err error) {
+	errorObject := map[string]any{
+		"code":      "command_failed",
+		"message":   err.Error(),
+		"exit_code": exitCode,
+	}
+	var structured workflow.StructuredError
+	if errors.As(err, &structured) {
+		for key, value := range structured.ErrorFields() {
+			errorObject[key] = value
+		}
+	}
 	payload := map[string]any{
 		"ok":             false,
 		"schema_version": workflow.OutputSchemaVersion,
 		"operation":      operation,
-		"error": map[string]any{
-			"code":      "command_failed",
-			"message":   err.Error(),
-			"exit_code": exitCode,
-		},
+		"error":          errorObject,
 	}
 	encoder := json.NewEncoder(os.Stderr)
 	encoder.SetIndent("", "  ")

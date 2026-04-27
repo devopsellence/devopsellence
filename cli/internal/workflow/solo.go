@@ -2898,7 +2898,10 @@ func soloInitRuntimeContract(cfg config.ProjectConfig, discovered discovery.Resu
 	serviceName, ok := cfg.PrimaryWebServiceName()
 	if !ok {
 		return map[string]any{
-			"requirement": "containers must listen on the ports configured in devopsellence.yml",
+			"web_service": false,
+			"port_source": "none",
+			"reason":      "no primary web service detected",
+			"requirement": "no web port contract applies unless a service exposes an http port or healthcheck in devopsellence.yml",
 		}
 	}
 	service := cfg.Services[serviceName]
@@ -2913,6 +2916,7 @@ func soloInitRuntimeContract(cfg config.ProjectConfig, discovered discovery.Resu
 		source = "config"
 	}
 	contract := map[string]any{
+		"web_service": true,
 		"service":     serviceName,
 		"port":        port,
 		"port_source": source,

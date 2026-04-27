@@ -93,16 +93,22 @@ devopsellence secret set NAME --service web --store 1password --op-ref op://vaul
 
 ## Bring your own node
 
-Use these in shared mode for a provider-created node:
+Use these in shared mode for a provider-created node. By default, `node create` registers and attaches the node to the current environment:
 
 ```sh
 devopsellence init --mode shared
 printf '%s' "$HCLOUD_TOKEN" | devopsellence provider login hetzner --stdin
 devopsellence node create prod-1 --provider hetzner
 devopsellence node list
-devopsellence node attach <id>
 devopsellence node detach <id>
 devopsellence node remove <id>
+```
+
+If you intentionally create an unassigned shared node, attach it later:
+
+```sh
+devopsellence node create prod-1 --provider hetzner --unassigned
+devopsellence node attach <id>
 ```
 
 Use this in shared mode for an existing server that you will install manually:

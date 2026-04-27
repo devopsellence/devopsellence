@@ -2483,7 +2483,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 		if err != nil {
 			return err
 		}
-		if err := waitForSoloSSH(ctx, node, 30*time.Second); err != nil {
+		if err := validateSoloNodeSSH(ctx, node); err != nil {
 			return fmt.Errorf("node create could not validate SSH for %s@%s:%d; fix --host/--user/--ssh-key or SSH access, then retry: %w", node.User, node.Host, node.Port, err)
 		}
 		result["source"] = "existing_ssh"
@@ -3608,6 +3608,13 @@ func waitForSoloSSH(ctx context.Context, node config.Node, timeout time.Duration
 		_, err := solo.RunSSH(ctx, node, "true", nil)
 		return err
 	})
+}
+
+func validateSoloNodeSSH(ctx context.Context, node config.Node) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := solo.RunSSH(probeCtx, node, "true", nil)
+	return err
 }
 
 func waitForSoloSSHWithProbe(ctx context.Context, node config.Node, timeout, probeTimeout, retryInterval time.Duration, probe func(context.Context) error) error {

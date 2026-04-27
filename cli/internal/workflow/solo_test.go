@@ -533,13 +533,11 @@ func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
 		Cwd:         workspaceRoot,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	err := app.SoloNodeCreate(ctx, SoloNodeCreateOptions{Name: "prod-1", Host: "203.0.113.10", User: "root", Port: 22})
+	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{Name: "prod-1", Host: "203.0.113.10", User: "root", Port: 22})
 	if err == nil {
 		t.Fatal("expected SSH validation error")
 	}
-	if !strings.Contains(err.Error(), "node create could not validate SSH") {
+	if !strings.Contains(err.Error(), "node create could not validate SSH") || !strings.Contains(err.Error(), "Permission denied") {
 		t.Fatalf("error = %v, want SSH validation context", err)
 	}
 	loaded, err := soloState.Read()

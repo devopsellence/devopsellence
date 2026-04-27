@@ -608,6 +608,49 @@ func (a *App) resolveNodes(current solo.State, names []string) (map[string]confi
 	return result, nil
 }
 
+type soloRepublishErrorEntry struct {
+	node      string
+	operation string
+	err       error
+}
+
+func (e soloRepublishErrorEntry) Error() string {
+	return fmt.Sprintf("[%s] %s: %s", e.node, e.operation, e.err)
+}
+
+func (e soloRepublishErrorEntry) Unwrap() error {
+	return e.err
+}
+
+type soloRepublishError struct {
+	entries []soloRepublishErrorEntry
+}
+
+func (e *soloRepublishError) Error() string {
+	parts := make([]string, 0, len(e.entries))
+	for _, entry := range e.entries {
+		parts = append(parts, entry.Error())
+	}
+	return fmt.Sprintf("republish errors:\n  %s", strings.Join(parts, "\n  "))
+}
+
+func (e *soloRepublishError) Unwrap() []error {
+	wrapped := make([]error, 0, len(e.entries))
+	for _, entry := range e.entries {
+		wrapped = append(wrapped, entry)
+	}
+	return wrapped
+}
+
+func appendSoloRepublishError(mu *sync.Mutex, errs *[]soloRepublishErrorEntry, node, operation string, err error) {
+	if err == nil {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	*errs = append(*errs, soloRepublishErrorEntry{node: node, operation: operation, err: err})
+}
+
 func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames []string) (map[string]string, error) {
 	if len(nodeNames) == 0 {
 		return map[string]string{}, nil
@@ -623,7 +666,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 		err  error
 	}
 	var mu sync.Mutex
-	var errs []string
+	var errs []soloRepublishErrorEntry
 	revisions := map[string]string{}
 	var wg sync.WaitGroup
 
@@ -651,18 +694,14 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 			defer wg.Done()
 			if len(inputs.images) > 0 {
 				if _, err := solo.RunSSH(ctx, node, remoteDockerCheckCommand(), nil); err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] remote docker check: %s", name, err))
-					mu.Unlock()
+					appendSoloRepublishError(&mu, &errs, name, "remote docker check", err)
 					return
 				}
 			}
 			for _, image := range inputs.images {
 				present, err := remoteNodeHasImage(ctx, node, image)
 				if err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] remote image check: %s", name, err))
-					mu.Unlock()
+					appendSoloRepublishError(&mu, &errs, name, "remote image check", err)
 					return
 				}
 				if present {
@@ -679,15 +718,11 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 					check.err = a.ensureLocalSoloSnapshotImage(ctx, image)
 				})
 				if check.err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] local image precheck: %s", name, check.err))
-					mu.Unlock()
+					appendSoloRepublishError(&mu, &errs, name, "local image precheck", check.err)
 					return
 				}
 				if err := transferImage(ctx, node, image, func(string) {}); err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Sprintf("[%s] image transfer: %s", name, err))
-					mu.Unlock()
+					appendSoloRepublishError(&mu, &errs, name, "image transfer", err)
 					return
 				}
 			}
@@ -699,25 +734,19 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 				NodePeers:    inputs.peers,
 			})
 			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] build desired state: %s", name, err))
-				mu.Unlock()
+				appendSoloRepublishError(&mu, &errs, name, "build desired state", err)
 				return
 			}
 			desiredStateJSON := publication.DesiredStateJSON
 			overridePath := desiredStateOverridePath(node)
 			cmd := remoteDesiredStateOverrideCommand(overridePath)
 			if _, err := solo.RunSSH(ctx, node, cmd, strings.NewReader(string(desiredStateJSON))); err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] write desired state: %s", name, err))
-				mu.Unlock()
+				appendSoloRepublishError(&mu, &errs, name, "write desired state", err)
 				return
 			}
 			revision, err := desiredStateRevision(desiredStateJSON)
 			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("[%s] parse desired state revision: %s", name, err))
-				mu.Unlock()
+				appendSoloRepublishError(&mu, &errs, name, "parse desired state revision", err)
 				return
 			}
 			mu.Lock()
@@ -727,7 +756,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 	}
 	wg.Wait()
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("republish errors:\n  %s", strings.Join(errs, "\n  "))
+		return nil, &soloRepublishError{entries: errs}
 	}
 	return revisions, nil
 }
@@ -1565,8 +1594,12 @@ func soloRepublishMissingAgentError(err error) bool {
 	if err == nil {
 		return false
 	}
-	message := err.Error()
-	return strings.Contains(message, soloRemoteAgentBinaryNotFoundMessage) && strings.Contains(message, "exit status 127")
+	var sshErr *solo.SSHError
+	if !errors.As(err, &sshErr) {
+		return false
+	}
+	exitCode, ok := sshErr.ExitCode()
+	return ok && exitCode == 127 && strings.Contains(sshErr.Stderr, soloRemoteAgentBinaryNotFoundMessage)
 }
 
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {

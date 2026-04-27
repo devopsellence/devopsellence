@@ -112,6 +112,16 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
+	setPayload := decodeJSONOutput(t, &stdout)
+	if setPayload["secret_ref"] != "devopsellence://plaintext/DATABASE_URL" {
+		t.Fatalf("secret_ref = %#v, want plaintext config ref", setPayload["secret_ref"])
+	}
+	if setPayload["reference"] != nil {
+		t.Fatalf("reference = %#v, want omitted for plaintext secret", setPayload["reference"])
+	}
+	if setPayload["state_path"] != solo.DefaultStatePath() {
+		t.Fatalf("state_path = %#v, want solo state path", setPayload["state_path"])
+	}
 
 	current, err := solo.NewStateStore(solo.DefaultStatePath()).Read()
 	if err != nil {
@@ -168,9 +178,9 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 		seen[stringValueAny(item["name"])] = item
 	}
 	for name, want := range map[string]map[string]any{
-		"DATABASE_URL":   {"configured": true, "stored": true, "exposed": true, "store": "plaintext"},
-		"ONLY_IN_CONFIG": {"configured": true, "stored": false, "exposed": true, "store": "plaintext"},
-		"ONLY_IN_STORE":  {"configured": false, "stored": true, "exposed": false, "store": "plaintext"},
+		"DATABASE_URL":   {"configured": true, "stored": true, "available_to_service": true, "store": "plaintext"},
+		"ONLY_IN_CONFIG": {"configured": true, "stored": false, "available_to_service": true, "store": "plaintext"},
+		"ONLY_IN_STORE":  {"configured": false, "stored": true, "available_to_service": false, "store": "plaintext"},
 	} {
 		item := seen[name]
 		if item == nil {

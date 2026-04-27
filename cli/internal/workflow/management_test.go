@@ -1047,9 +1047,9 @@ func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 		seen[stringValueAny(item["name"])] = item
 	}
 	for name, want := range map[string]map[string]any{
-		"SECRET_KEY_BASE":  {"configured": true, "stored": true, "exposed": true, "store": "managed"},
-		"ONLY_IN_CONFIG":   {"configured": true, "stored": false, "exposed": true, "store": "managed"},
-		"RAILS_MASTER_KEY": {"configured": false, "stored": true, "exposed": false, "store": "managed"},
+		"SECRET_KEY_BASE":  {"configured": true, "stored": true, "available_to_service": true, "store": "managed"},
+		"ONLY_IN_CONFIG":   {"configured": true, "stored": false, "available_to_service": true, "store": "managed"},
+		"RAILS_MASTER_KEY": {"configured": false, "stored": true, "available_to_service": false, "store": "managed"},
 	} {
 		item := seen[name]
 		if item == nil {

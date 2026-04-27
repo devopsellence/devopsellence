@@ -303,7 +303,7 @@ type listedSecret struct {
 	Reference   string `json:"reference,omitempty"`
 	Configured  bool   `json:"configured"`
 	Stored      bool   `json:"stored"`
-	Exposed     bool   `json:"exposed"`
+	Exposed     bool   `json:"available_to_service"`
 }
 
 type TokenCreateOptions struct {
@@ -1602,7 +1602,7 @@ func formatListedSecret(item listedSecret) string {
 	parts := []string{
 		item.ServiceName,
 		item.Name,
-		"exposed=" + yesNo(item.Exposed),
+		"available_to_service=" + yesNo(item.Exposed),
 		"configured=" + yesNo(item.Configured),
 		"stored=" + yesNo(item.Stored),
 	}

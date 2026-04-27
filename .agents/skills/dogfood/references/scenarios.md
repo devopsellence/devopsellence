@@ -15,8 +15,9 @@ Allowed blind-pass context: public website docs, README/docs that match the targ
 Setup:
 
 - Use a fresh app and fresh devopsellence state.
-- If `zirk` is installed and healthy, create a run-scoped VM name such as `dogfood-<timestamp>` and use it as the existing SSH node.
-- Record expected resource creation, required user approval, and cleanup before creating the node.
+- If `zirk` is installed and healthy, create a run-scoped VM named `dogfood-<timestamp>` and use it as the existing SSH node.
+- If `zirk` is not installed or not healthy, the AI coding/operator agent must either use a user-provided existing reachable SSH node or follow a documented provider/node provisioning path discoverable from allowed docs/CLI output. If neither is available, stop and ask the user to provide a reachable SSH node or approve a documented provisioning path before continuing.
+- Record expected resource creation, whether the AI agent will create a node or adopt an existing host, required user approval, and cleanup before taking action.
 
 Success:
 

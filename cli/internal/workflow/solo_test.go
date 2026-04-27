@@ -972,6 +972,15 @@ func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
 	}
 }
 
+func TestRemoteDockerLogsCommandPreservesPerContainerFailure(t *testing.T) {
+	command := remoteDockerLogsCommand("production", "web", 20)
+	for _, snippet := range []string{`rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`} {
+		if !strings.Contains(command, snippet) {
+			t.Fatalf("command = %q, want %q", command, snippet)
+		}
+	}
+}
+
 func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
 	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
 

@@ -1521,15 +1521,30 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 }
 
 func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
-	current, err := a.readSoloState()
+	results, failed, err := a.soloRuntimeDoctorChecks(ctx, opts)
 	if err != nil {
 		return err
+	}
+
+	if err := a.Printer.PrintJSON(map[string]any{"checks": results}); err != nil {
+		return err
+	}
+	if failed {
+		return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
+	}
+	return nil
+}
+
+func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOptions) ([]map[string]any, bool, error) {
+	current, err := a.readSoloState()
+	if err != nil {
+		return nil, false, err
 	}
 	nodes, err := a.resolveNodes(current, opts.Nodes)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-	results := make([]map[string]any, 0, len(nodes))
+	results := make([]map[string]any, 0, len(nodes)*3)
 	failed := false
 	for _, name := range sortedNodeNames(nodes) {
 		node := nodes[name]
@@ -1548,17 +1563,9 @@ func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) err
 				failed = true
 			}
 			results = append(results, map[string]any{"node": name, "check": check.name, "ok": ok})
-
 		}
 	}
-
-	if err := a.Printer.PrintJSON(map[string]any{"checks": results}); err != nil {
-		return err
-	}
-	if failed {
-		return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
-	}
-	return nil
+	return results, failed, nil
 }
 
 func (a *App) runSoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
@@ -1642,11 +1649,28 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		}
 	}
 
-	return a.Printer.PrintJSON(map[string]any{
+	payload := map[string]any{
 		"schema_version": outputSchemaVersion,
 		"ok":             ok,
 		"checks":         checks,
-	})
+	}
+	if ok && len(current.Nodes) > 0 {
+		runtimeChecks, runtimeFailed, err := a.soloRuntimeDoctorChecks(ctx, SoloDoctorOptions{})
+		if err != nil {
+			return err
+		}
+		payload["runtime_checks"] = runtimeChecks
+		payload["ok"] = !runtimeFailed
+		if err := a.Printer.PrintJSON(payload); err != nil {
+			return err
+		}
+		if runtimeFailed {
+			return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
+		}
+		return nil
+	}
+
+	return a.Printer.PrintJSON(payload)
 
 }
 
@@ -2360,8 +2384,11 @@ func installSoloAgent(ctx context.Context, node config.Node, opts SoloAgentInsta
 }
 
 func runSoloAgentInstallScript(ctx context.Context, node config.Node, script string, reporter soloInstallReporter) error {
-	writer := reporter.Stream()
-	return solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), writer, writer)
+	err := solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), reporter.Stdout(), reporter.Stderr())
+	if err != nil {
+		return sshInteractiveError("failed to run install script over SSH", err, reporter.CapturedStdout(), reporter.CapturedStderr())
+	}
+	return nil
 }
 
 type soloAgentInstallScriptOptions struct {

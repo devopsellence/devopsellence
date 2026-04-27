@@ -9,14 +9,16 @@ import (
 
 type soloInstallReporter struct {
 	progress func(string)
-	stream   io.Writer
+	stdout   io.Writer
+	stderr   io.Writer
 	close    func()
 }
 
 func newSoloInstallReporter(_ context.Context, _ output.Printer, _ string) soloInstallReporter {
 	return soloInstallReporter{
 		progress: func(string) {},
-		stream:   io.Discard,
+		stdout:   newTailBuffer(sshOutputTailLimit),
+		stderr:   newTailBuffer(sshOutputTailLimit),
 		close:    func() {},
 	}
 }
@@ -27,11 +29,41 @@ func (r soloInstallReporter) Progress(message string) {
 	}
 }
 
-func (r soloInstallReporter) Stream() io.Writer {
-	if r.stream == nil {
+func (r soloInstallReporter) Stdout() io.Writer {
+	if r.stdout == nil {
 		return io.Discard
 	}
-	return r.stream
+	return r.stdout
+}
+
+func (r soloInstallReporter) Stderr() io.Writer {
+	if r.stderr == nil {
+		return io.Discard
+	}
+	return r.stderr
+}
+
+func (r soloInstallReporter) Stream() io.Writer {
+	return r.Stdout()
+}
+
+func (r soloInstallReporter) CapturedStdout() string {
+	return capturedInstallOutput(r.stdout)
+}
+
+func (r soloInstallReporter) CapturedStderr() string {
+	return capturedInstallOutput(r.stderr)
+}
+
+func capturedInstallOutput(writer io.Writer) string {
+	if writer == nil {
+		return ""
+	}
+	stringer, ok := writer.(interface{ String() string })
+	if !ok {
+		return ""
+	}
+	return stringer.String()
 }
 
 func (r soloInstallReporter) Close() {

@@ -24,6 +24,37 @@ Probe:
 - Time to first useful feedback.
 - Confidence after deploy.
 
+## solo-hetzner-provider-first-deploy
+
+Persona: solo founder who wants devopsellence to create the VM.
+
+Goal: deploy a fresh app with devopsellence solo using a Hetzner-created VM.
+
+Allowed blind-pass context: README, docs, CLI help, command output, product logs/status surfaced by commands, and `op` for retrieving the Hetzner token.
+
+Setup:
+
+- Retrieve the API token from 1Password item `hetzner-devopsellence-solo` with `op`.
+- Export the token as `HCLOUD_TOKEN` or pass it to `devopsellence provider login hetzner --token "$HCLOUD_TOKEN"`.
+- Do not record the token value, raw `op` output, or raw item JSON in `commands.log` or reports.
+- Create the node with `devopsellence node create prod-1 --provider hetzner --install --attach`.
+
+Success:
+
+- Provider login is discoverable and token errors are clear.
+- Hetzner server creation returns usable node metadata.
+- Agent install reaches a usable SSH/Docker/node-agent state.
+- Deploy status and public URL are understandable.
+- Cleanup deletes the provider VM and local node state after detach.
+
+Probe:
+
+- 1Password token retrieval friction.
+- Default Hetzner region/size clarity.
+- SSH key generation/reuse messaging.
+- Provider API error quality.
+- Cleanup confidence and cost-leak risk.
+
 ## existing-app-secrets-redeploy
 
 Persona: Rails developer adding production-like config.

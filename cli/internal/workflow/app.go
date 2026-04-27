@@ -25,6 +25,7 @@ import (
 	"github.com/devopsellence/cli/internal/git"
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
+	"github.com/devopsellence/cli/internal/solo/providers"
 	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
@@ -80,6 +81,7 @@ type App struct {
 	soloNodeAttachFn    func(context.Context, SoloNodeAttachOptions) error
 	soloRuntimeDoctorFn func(context.Context, SoloDoctorOptions) error
 	soloSecretResolveFn func(context.Context, solo.SecretRecord) (string, error)
+	soloProviderFn      func(string) (providers.Provider, error)
 }
 
 type deployTimings struct {

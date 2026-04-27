@@ -68,7 +68,7 @@ func TestHetznerCreateServer(t *testing.T) {
 	if got.ID != "42" || got.PublicIP != "203.0.113.10" || !provider.Ready(got) {
 		t.Fatalf("server = %#v", got)
 	}
-	if createPayload["image"] != defaultHetznerImage {
+	if createPayload["image"] != DefaultHetznerImage {
 		t.Fatalf("image = %v, want default", createPayload["image"])
 	}
 	if firewallPayload["name"] != defaultHetznerFirewall {

@@ -757,6 +757,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var nodeLogsOpts SoloLogsOptions
 	var nodeLabels string
 	var nodeAttachEnvironment string
+	var workloadLogsOpts SoloWorkloadLogsOptions
 	nodeCommand := &cobra.Command{
 		Use:   "node",
 		Short: "Manage nodes for the selected workspace mode",
@@ -951,6 +952,27 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeLogsCommand.Flags().IntVar(&nodeLogsOpts.Lines, "lines", soloLogsDefaultLines, fmt.Sprintf("Number of recent log lines to return, 1-%d", soloLogsMaxLines))
 	nodeCommand.AddCommand(nodeRegisterCommand, nodeCreateCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand)
 	root.AddCommand(nodeCommand)
+
+	logsCommand := &cobra.Command{
+		Use:   "logs [service]",
+		Short: "Show recent workload logs from attached solo nodes",
+		Long: strings.Join([]string{
+			"Show recent Docker logs for a workload service on attached solo nodes.",
+			"Pass --node to target specific solo nodes.",
+		}, "\n"),
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				workloadLogsOpts.ServiceName = args[0]
+			}
+			return runSoloOnly("logs", func(ctx context.Context) error {
+				return app.SoloWorkloadLogs(ctx, workloadLogsOpts)
+			})(cmd, args)
+		},
+	}
+	logsCommand.Flags().StringSliceVar(&workloadLogsOpts.Nodes, "node", nil, "Solo node name to read logs from (repeatable or comma-separated)")
+	logsCommand.Flags().IntVar(&workloadLogsOpts.Lines, "lines", soloLogsDefaultLines, fmt.Sprintf("Number of recent log lines to return, 1-%d", soloLogsMaxLines))
+	root.AddCommand(logsCommand)
 
 	var agentInstallOpts SoloAgentInstallOptions
 	var agentUninstallOpts SoloAgentUninstallOptions

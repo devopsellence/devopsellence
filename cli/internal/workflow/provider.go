@@ -117,6 +117,9 @@ func (a *App) ProviderLogout(_ context.Context, opts ProviderLogoutOptions) erro
 }
 
 func (a *App) resolveSoloProvider(providerSlug string) (providers.Provider, error) {
+	if a.soloProviderFn != nil {
+		return a.soloProviderFn(providerSlug)
+	}
 	token, _, err := providerToken(a.ProviderState, providerSlug)
 	if err != nil {
 		return nil, err

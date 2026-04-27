@@ -20,6 +20,8 @@ import (
 	"github.com/devopsellence/cli/internal/git"
 	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
+	"github.com/devopsellence/cli/internal/solo/providers"
+	"github.com/devopsellence/cli/internal/state"
 	cliversion "github.com/devopsellence/cli/internal/version"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
@@ -402,7 +404,7 @@ func TestCreateProviderNodeRejectsDeprecatedHetznerSize(t *testing.T) {
 		Provider: providerHetzner,
 		Region:   defaultHetznerRegion,
 		Size:     "cx22",
-	}, "")
+	}, "", nil)
 	if err == nil {
 		t.Fatal("expected deprecated size error")
 	}
@@ -419,7 +421,7 @@ func TestCreateProviderNodeNormalizesHetznerProviderBeforeValidation(t *testing.
 		Provider: "Hetzner",
 		Region:   defaultHetznerRegion,
 		Size:     "cx22",
-	}, "")
+	}, "", nil)
 	if err == nil {
 		t.Fatal("expected deprecated size error")
 	}
@@ -448,6 +450,8 @@ func TestSoloNodeCreateRejectsDuplicateAfterTrimmingName(t *testing.T) {
 }
 
 func TestSoloNodeCreateRegistersExistingSSHNode(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	wantKey := filepath.Join(home, ".ssh", "id_ed25519")
@@ -503,8 +507,94 @@ func TestSoloNodeCreateRegistersExistingSSHNode(t *testing.T) {
 		t.Fatalf("attached nodes = %#v", attached)
 	}
 	payload := decodeJSONOutput(t, &stdout)
-	if payload["source"] != "existing_ssh" || payload["attached"] != true || payload["agent_installed"] != false {
+	if payload["source"] != "existing_ssh" || payload["ssh_checked"] != true || payload["attached"] != true || payload["agent_installed"] != false {
 		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "ssh"), "#!/usr/bin/env bash\necho 'Permission denied (publickey).' >&2\nexit 255\n")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{}); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := app.SoloNodeCreate(ctx, SoloNodeCreateOptions{Name: "prod-1", Host: "203.0.113.10", User: "root", Port: 22})
+	if err == nil {
+		t.Fatal("expected SSH validation error")
+	}
+	if !strings.Contains(err.Error(), "node create could not validate SSH") {
+		t.Fatalf("error = %v, want SSH validation context", err)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Nodes["prod-1"]; ok {
+		t.Fatalf("node was written despite SSH validation failure: %#v", loaded.Nodes)
+	}
+}
+
+func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{}); err != nil {
+		t.Fatal(err)
+	}
+	providerState := state.New(filepath.Join(t.TempDir(), "providers.json"))
+	if err := saveProviderToken(providerState, providerHetzner, "test-token"); err != nil {
+		t.Fatal(err)
+	}
+	fakeProvider := &fakeSoloProvider{
+		createServer: providers.Server{ID: "srv-1", Name: "prod-1", Status: "initializing"},
+		readServer:   providers.Server{ID: "srv-1", Name: "prod-1", Status: "running", PublicIP: "203.0.113.20"},
+	}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Printer:       output.New(&stdout, &stderr),
+		SoloState:     soloState,
+		ProviderState: providerState,
+		ConfigStore:   config.NewStore(),
+		Cwd:           workspaceRoot,
+		soloProviderFn: func(slug string) (providers.Provider, error) {
+			if slug != providerHetzner {
+				t.Fatalf("provider slug = %q, want hetzner", slug)
+			}
+			return fakeProvider, nil
+		},
+	}
+
+	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{Name: "prod-1", Provider: "hetzner", Region: "ash", Size: "cpx11"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["provider"] != providerHetzner || payload["provider_server_id"] != "srv-1" || payload["provider_region"] != "ash" || payload["provider_size"] != "cpx11" || payload["provider_image"] != providers.DefaultHetznerImage {
+		t.Fatalf("payload = %#v, want provider metadata", payload)
+	}
+	progress := stderr.String()
+	if !strings.Contains(progress, "Creating hetzner server") || !strings.Contains(progress, "Provider server srv-1 status: running") {
+		t.Fatalf("progress = %q, want provider create/read events", progress)
 	}
 }
 
@@ -847,6 +937,36 @@ func TestSoloLogsUsesRequestedLineLimit(t *testing.T) {
 	}
 	if !strings.Contains(string(commandBytes), " -n 20") {
 		t.Fatalf("journal command = %q, want -n 20", commandBytes)
+	}
+}
+
+func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{ServiceName: "web", Nodes: []string{"node-a"}, Lines: 20}); err != nil {
+		t.Fatalf("SoloWorkloadLogs() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["service"] != "web" || payload["limit"] != float64(20) {
+		t.Fatalf("payload = %#v, want service web limit 20", payload)
+	}
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	lines := jsonArrayFromMap(t, node, "lines")
+	if len(lines) < 3 || lines[1] != "app line one" {
+		t.Fatalf("lines = %#v, want workload logs", lines)
 	}
 }
 
@@ -1278,6 +1398,52 @@ func TestNodeRemoveRejectsIncompleteProviderMetadata(t *testing.T) {
 	}
 }
 
+func TestNodeRemoveProviderPayloadIncludesProviderMetadata(t *testing.T) {
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"managed-a": {
+				Host:             "203.0.113.10",
+				User:             "root",
+				Provider:         "hetzner",
+				ProviderServerID: "srv-1",
+				ProviderRegion:   "ash",
+				ProviderSize:     "cpx11",
+				ProviderImage:    providers.DefaultHetznerImage,
+			},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	providerState := state.New(filepath.Join(t.TempDir(), "providers.json"))
+	if err := saveProviderToken(providerState, providerHetzner, "test-token"); err != nil {
+		t.Fatal(err)
+	}
+	fakeProvider := &fakeSoloProvider{}
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:       output.New(&stdout, io.Discard),
+		SoloState:     soloState,
+		ProviderState: providerState,
+		soloProviderFn: func(string) (providers.Provider, error) {
+			return fakeProvider, nil
+		},
+	}
+
+	if err := app.SoloNodeRemove(context.Background(), SoloNodeRemoveOptions{Name: "managed-a", Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if fakeProvider.deletedID != "srv-1" {
+		t.Fatalf("deletedID = %q, want srv-1", fakeProvider.deletedID)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["provider"] != "hetzner" || payload["provider_server_id"] != "srv-1" || payload["provider_region"] != "ash" || payload["provider_size"] != "cpx11" || payload["provider_image"] != providers.DefaultHetznerImage {
+		t.Fatalf("payload = %#v, want provider metadata", payload)
+	}
+}
+
 func TestDesiredStateRevisionReadsRevision(t *testing.T) {
 	t.Parallel()
 
@@ -1413,7 +1579,7 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		t.Fatalf("public_urls = %#v, want node URL", urls)
 	}
 	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
-	if len(nextSteps) != 3 || nextSteps[0] != "devopsellence status" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence node logs 'node-a' --lines 100" {
+	if len(nextSteps) != 4 || nextSteps[0] != "devopsellence status" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence logs --node 'node-a' --lines 100" || nextSteps[3] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status, curl, and logs commands", nextSteps)
 	}
 }
@@ -1531,8 +1697,8 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	}
 	fields := rolloutErr.ErrorFields()
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 2 || steps[1] != "devopsellence node logs 'node-a' --lines 100" {
-		t.Fatalf("next_steps = %#v, want status and node logs commands", steps)
+	if len(steps) != 3 || steps[1] != "devopsellence logs --node 'node-a' --lines 100" || steps[2] != "devopsellence node logs 'node-a' --lines 100" {
+		t.Fatalf("next_steps = %#v, want status, workload logs, and node logs commands", steps)
 	}
 }
 
@@ -1573,8 +1739,8 @@ func TestWaitForSoloRolloutTimesOutWhenExpectedRevisionNeverSettles(t *testing.T
 	}
 	fields := timeoutErr.ErrorFields()
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 2 || steps[1] != "devopsellence node logs 'node-a' --lines 100" {
-		t.Fatalf("next_steps = %#v, want status and node logs commands", steps)
+	if len(steps) != 3 || steps[1] != "devopsellence logs --node 'node-a' --lines 100" || steps[2] != "devopsellence node logs 'node-a' --lines 100" {
+		t.Fatalf("next_steps = %#v, want status, workload logs, and node logs commands", steps)
 	}
 }
 
@@ -2118,6 +2284,15 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 	if configPayload["created"] != true || configPayload["valid"] != true {
 		t.Fatalf("config payload = %#v", configPayload)
 	}
+	stepValues := jsonArrayFromMap(t, payload, "next_steps")
+	steps := make([]string, 0, len(stepValues))
+	for _, value := range stepValues {
+		steps = append(steps, stringValueAny(value))
+	}
+	nextSteps := strings.Join(steps, "\n")
+	if !strings.Contains(nextSteps, "devopsellence node create prod-1 --provider hetzner --install --attach") {
+		t.Fatalf("next_steps = %q, want provider-created node path", nextSteps)
+	}
 }
 
 func TestSoloInitReportsReadyWhenNodeAttached(t *testing.T) {
@@ -2287,6 +2462,11 @@ if [[ "$command" == *"docker image inspect"* ]]; then
   exit 0
 fi
 
+if [[ "$command" == *" logs --tail "* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n==> svc-production-web <==\napp line one\napp line two\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ps -a"* ]]; then
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
@@ -2440,6 +2620,33 @@ func runTestCommand(t *testing.T, dir, name string, args ...string) string {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
 	}
 	return string(out)
+}
+
+type fakeSoloProvider struct {
+	createServer providers.Server
+	readServer   providers.Server
+	deletedID    string
+}
+
+func (f *fakeSoloProvider) Validate(context.Context) error {
+	return nil
+}
+
+func (f *fakeSoloProvider) CreateServer(context.Context, providers.CreateServerInput) (providers.Server, error) {
+	return f.createServer, nil
+}
+
+func (f *fakeSoloProvider) DeleteServer(_ context.Context, id string) error {
+	f.deletedID = id
+	return nil
+}
+
+func (f *fakeSoloProvider) GetServer(context.Context, string) (providers.Server, error) {
+	return f.readServer, nil
+}
+
+func (f *fakeSoloProvider) Ready(server providers.Server) bool {
+	return server.PublicIP != "" && server.Status == "running"
 }
 
 func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {

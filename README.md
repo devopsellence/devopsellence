@@ -90,6 +90,7 @@ Deploy over SSH:
 ```bash
 devopsellence deploy
 devopsellence status
+devopsellence logs --node prod-1 --lines 100
 devopsellence node logs prod-1 --lines 100
 ```
 

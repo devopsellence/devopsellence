@@ -566,8 +566,7 @@ func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	fakeProvider := &fakeSoloProvider{
-		createServer: providers.Server{ID: "srv-1", Name: "prod-1", Status: "initializing"},
-		readServer:   providers.Server{ID: "srv-1", Name: "prod-1", Status: "running", PublicIP: "203.0.113.20"},
+		createServer: providers.Server{ID: "srv-1", Name: "prod-1", Status: "running", PublicIP: "203.0.113.20"},
 	}
 	var stdout, stderr bytes.Buffer
 	app := &App{
@@ -584,7 +583,7 @@ func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 		},
 	}
 
-	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{Name: "prod-1", Provider: "hetzner", Region: "ash", Size: "cpx11"})
+	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{Name: "prod-1", Provider: "hetzner", Region: "ash", Size: "cpx11", Image: "  "})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,9 +591,12 @@ func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 	if payload["provider"] != providerHetzner || payload["provider_server_id"] != "srv-1" || payload["provider_region"] != "ash" || payload["provider_size"] != "cpx11" || payload["provider_image"] != providers.DefaultHetznerImage {
 		t.Fatalf("payload = %#v, want provider metadata", payload)
 	}
+	if fakeProvider.createInput.Image != providers.DefaultHetznerImage {
+		t.Fatalf("CreateServer image = %q, want normalized default image", fakeProvider.createInput.Image)
+	}
 	progress := stderr.String()
-	if !strings.Contains(progress, "Creating hetzner server") || !strings.Contains(progress, "Provider server srv-1 status: running") {
-		t.Fatalf("progress = %q, want provider create/read events", progress)
+	if !strings.Contains(progress, "Creating hetzner server") || !strings.Contains(progress, "Server srv-1 ready at 203.0.113.20") {
+		t.Fatalf("progress = %q, want provider create/ready events", progress)
 	}
 }
 
@@ -2625,6 +2627,7 @@ func runTestCommand(t *testing.T, dir, name string, args ...string) string {
 type fakeSoloProvider struct {
 	createServer providers.Server
 	readServer   providers.Server
+	createInput  providers.CreateServerInput
 	deletedID    string
 }
 
@@ -2632,7 +2635,8 @@ func (f *fakeSoloProvider) Validate(context.Context) error {
 	return nil
 }
 
-func (f *fakeSoloProvider) CreateServer(context.Context, providers.CreateServerInput) (providers.Server, error) {
+func (f *fakeSoloProvider) CreateServer(_ context.Context, input providers.CreateServerInput) (providers.Server, error) {
+	f.createInput = input
 	return f.createServer, nil
 }
 

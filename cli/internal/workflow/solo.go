@@ -228,7 +228,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 		Name:         opts.Name,
 		Region:       opts.Region,
 		Size:         opts.Size,
-		Image:        opts.Image,
+		Image:        providerImage,
 		SSHPublicKey: sshPublicKey,
 		Labels:       providerLabels,
 	})

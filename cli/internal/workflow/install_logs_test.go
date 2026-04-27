@@ -7,9 +7,10 @@ import (
 	"github.com/devopsellence/cli/internal/output"
 )
 
-func TestNewSoloInstallReporterCapturesInstallNoiseWithoutPrinting(t *testing.T) {
+func TestNewSoloInstallReporterCapturesInstallNoiseAndEmitsStructuredProgress(t *testing.T) {
 	var out bytes.Buffer
-	reporter := newSoloInstallReporter(t.Context(), output.Printer{Out: &out}, "prod-2")
+	var errOut bytes.Buffer
+	reporter := newSoloInstallReporter(t.Context(), output.Printer{Out: &out, Err: &errOut}, "prod-2")
 
 	reporter.Progress("Installing Docker, agent, and systemd service...")
 	if _, err := reporter.Stdout().Write([]byte("progress: downloading agent binary\nplain log\npartial")); err != nil {
@@ -21,7 +22,10 @@ func TestNewSoloInstallReporterCapturesInstallNoiseWithoutPrinting(t *testing.T)
 	reporter.Close()
 
 	if got := out.String(); got != "" {
-		t.Fatalf("reporter output = %q, want no unstructured output", got)
+		t.Fatalf("reporter stdout = %q, want no final output", got)
+	}
+	if got := errOut.String(); !bytes.Contains([]byte(got), []byte(`"event":"progress"`)) || !bytes.Contains([]byte(got), []byte(`"node":"prod-2"`)) {
+		t.Fatalf("progress stderr = %q, want structured progress event", got)
 	}
 	if got := reporter.CapturedStdout(); got != "progress: downloading agent binary\nplain log\npartial" {
 		t.Fatalf("captured stdout = %q", got)

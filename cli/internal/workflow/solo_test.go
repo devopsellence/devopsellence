@@ -850,6 +850,44 @@ func TestSoloLogsUsesRequestedLineLimit(t *testing.T) {
 	}
 }
 
+func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"}); err != nil {
+		t.Fatalf("SoloNodeDiagnose() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["node"] != "node-a" || payload["host"] != "203.0.113.10" {
+		t.Fatalf("payload = %#v, want node identity", payload)
+	}
+	checks := jsonArrayFromMap(t, payload, "checks")
+	if len(checks) != 3 {
+		t.Fatalf("checks = %#v, want ssh/docker/agent checks", checks)
+	}
+	dockerPayload := jsonMapFromAny(t, payload["docker"])
+	containers := jsonMapFromAny(t, dockerPayload["containers"])
+	items := jsonArrayFromMap(t, containers, "items")
+	if len(items) != 1 || jsonMapFromAny(t, items[0])["Names"] != "svc-production-web" {
+		t.Fatalf("containers = %#v, want web container", containers)
+	}
+	status := jsonMapFromAny(t, payload["status"])
+	if status["phase"] != "settled" {
+		t.Fatalf("status = %#v, want settled phase", status)
+	}
+}
+
 func TestSoloAgentUninstallRequiresConfirmation(t *testing.T) {
 	app := &App{SoloState: solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))}
 	err := app.SoloAgentUninstall(context.Background(), SoloAgentUninstallOptions{Node: "node-a"})
@@ -1333,8 +1371,8 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		t.Fatalf("public_urls = %#v, want node URL", urls)
 	}
 	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
-	if len(nextSteps) != 2 || nextSteps[0] != "devopsellence status" || nextSteps[1] != "curl http://203.0.113.10/" {
-		t.Fatalf("next_steps = %#v, want status and curl commands", nextSteps)
+	if len(nextSteps) != 3 || nextSteps[0] != "devopsellence status" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence node logs 'node-a' --lines 100" {
+		t.Fatalf("next_steps = %#v, want status, curl, and logs commands", nextSteps)
 	}
 }
 
@@ -2193,6 +2231,10 @@ func installFakeSoloCommands(t *testing.T, statusResponses []fakeSSHResponse) st
 set -euo pipefail
 command="${!#}"
 
+if [[ "$command" == "true" ]]; then
+  exit 0
+fi
+
 if [[ "$command" == *"desired-state set-override"* ]]; then
   cat >"$DEVOPSELLENCE_FAKE_SSH_REVISION_FILE"
   exit 0
@@ -2203,7 +2245,41 @@ if [[ "$command" == *"docker image inspect"* ]]; then
   exit 0
 fi
 
+if [[ "$command" == *"docker ps -a"* ]]; then
+  printf '{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n'
+  exit 0
+fi
+
+if [[ "$command" == *"docker images"* ]]; then
+  printf '{"Repository":"demo","Tag":"abc","ID":"sha256:abc","Size":"1MB"}\n'
+  exit 0
+fi
+
+if [[ "$command" == *"docker network ls"* ]]; then
+  printf '{"Name":"devopsellence","Driver":"bridge"}\n'
+  exit 0
+fi
+
 if [[ "$command" == *"docker info"* ]]; then
+  exit 0
+fi
+
+if [[ "$command" == *"systemctl is-active devopsellence-agent"* ]]; then
+  printf 'active\n'
+  exit 0
+fi
+
+if [[ "$command" == *"systemctl is-active --quiet devopsellence-agent"* ]]; then
+  exit 0
+fi
+
+if [[ "$command" == *"systemctl status"* ]]; then
+  printf 'devopsellence-agent active\n'
+  exit 0
+fi
+
+if [[ "$command" == *"ss -ltn"* ]] || [[ "$command" == *"netstat -ltn"* ]]; then
+  printf 'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*\n'
   exit 0
 fi
 

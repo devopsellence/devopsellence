@@ -35,11 +35,14 @@ func sshArgs(node config.Node, command string) []string {
 }
 
 func managedKnownHostsPath(node config.Node) string {
+	identity := node.Provider + "\x00" + node.ProviderServerID
+	prefix := "managed-"
 	if node.Provider == "" || node.ProviderServerID == "" {
-		return ""
+		identity = node.User + "\x00" + node.Host + "\x00" + strconv.Itoa(node.Port)
+		prefix = "existing-"
 	}
-	sum := sha256.Sum256([]byte(node.Provider + "\x00" + node.ProviderServerID))
-	filename := "managed-" + hex.EncodeToString(sum[:])
+	sum := sha256.Sum256([]byte(identity))
+	filename := prefix + hex.EncodeToString(sum[:])
 	return filepath.Join(state.DefaultPath(filepath.Join("devopsellence", "ssh_known_hosts")), filename)
 }
 
@@ -93,8 +96,9 @@ func prepareSSH(node config.Node) error {
 }
 
 // RunSSH executes a command on a remote node via ssh.
-// It inherits the user's SSH config and agent behavior; for provider-managed
-// nodes it uses a devopsellence-managed per-server known_hosts file under state.
+// It inherits the user's SSH config and agent behavior, but stores host keys in
+// a devopsellence-managed known_hosts file under state so node bootstrap does
+// not depend on or mutate the operator's global ~/.ssh/known_hosts.
 // If stdin is non-nil it is piped to the remote command.
 func RunSSH(ctx context.Context, node config.Node, command string, stdin io.Reader) (string, error) {
 	if err := prepareSSH(node); err != nil {

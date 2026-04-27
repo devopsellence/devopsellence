@@ -84,6 +84,23 @@ func TestInitModeFlagPersistsWorkspaceModeAndWritesConfig(t *testing.T) {
 	}
 }
 
+func TestModeCommandDefaultsToShow(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"mode"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["mode"] != "solo" || payload["set"] != true {
+		t.Fatalf("payload = %#v, want current solo mode", payload)
+	}
+}
+
 func TestRootSecretSetRejectsExplicitEmptyValue(t *testing.T) {
 	var stdout bytes.Buffer
 	cwd := rootTestWorkspaceWithMode(t, ModeShared)
@@ -398,6 +415,31 @@ func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 		if !strings.Contains(stdout.String(), snippet) {
 			t.Fatalf("help output = %q, want %q command", stdout.String(), snippet)
 		}
+	}
+}
+
+func TestNodeDiagnoseAcceptsSoloNodeName(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	current := solo.State{Nodes: map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+	}}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"node", "diagnose", "node-a"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["node"] != "node-a" {
+		t.Fatalf("payload = %#v, want solo node diagnosis", payload)
 	}
 }
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Dogfood"
-  short_description: "Repeatable devopsellence dogfooding runs"
-  default_prompt: "Dogfood devopsellence: pick a scenario, run a blind pass, then an expert pass, and write a report."
+  short_description: "Agent-mediated devopsellence dogfooding runs"
+  default_prompt: "Dogfood devopsellence from the perspective of an operator agent acting for a delegating user: run a blind pass, then an expert pass, and write an evidence-backed report."

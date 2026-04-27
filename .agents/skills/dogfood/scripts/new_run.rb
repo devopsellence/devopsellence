@@ -135,8 +135,30 @@ rescue SystemCallError => e
   exit_filesystem_error("failed to write", report_path, e)
 end
 
+commands_template = <<~LOG
+  # Commands for #{scenario}
+  # Target version: #{target_version}
+  # Install command:
+  #{install_command}
+
+  # Record each meaningful step in this format:
+  #
+  # ## <ISO-8601 timestamp> <short step name>
+  # cwd: <working directory>
+  # agent intent: <why the agent is doing this>
+  # user approval: <not needed | requested | granted | denied>
+  # command: <command with secrets redacted>
+  # exit: <exit code>
+  # output excerpt:
+  # <minimal stdout/stderr or JSON proving the result>
+  # agent interpretation:
+  # <what the agent concluded and next action>
+  #
+  # Use placeholders such as $TOKEN, <redacted>, or <private-host> instead of secret values or private identifiers.
+LOG
+
 begin
-  File.write(commands_path, "# Commands for #{scenario}\n# Target version: #{target_version}\n# Install command:\n#{install_command}\n")
+  File.write(commands_path, commands_template)
 rescue SystemCallError => e
   exit_filesystem_error("failed to write", commands_path, e)
 end

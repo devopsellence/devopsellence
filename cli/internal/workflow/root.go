@@ -73,6 +73,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}
 	}
 
+	var rootVersion bool
 	root := &cobra.Command{
 		Use:   "devopsellence",
 		Short: "Agent-primary deployment toolkit for containerized apps on VMs",
@@ -92,7 +93,17 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}, "\n"),
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if rootVersion {
+				return app.Printer.PrintJSON(map[string]any{
+					"schema_version": outputSchemaVersion,
+					"version":        version.String(),
+				})
+			}
+			return cmd.Help()
+		},
 	}
+	root.Flags().BoolVar(&rootVersion, "version", false, "Print the CLI version")
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI version",
@@ -528,6 +539,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Long: strings.Join([]string{
 			"Deploy the current app using the selected workspace mode.",
 			"  solo   - deploys to nodes attached to the current workspace/environment; use `devopsellence node attach|detach` to change scope",
+			"           and uses the current git commit as the workload revision, so the app must be inside a git checkout with at least one commit.",
 			"  shared - deploys through the control plane using org/project/environment context",
 		}, "\n"),
 		RunE: runByMode(func(ctx context.Context) error {
@@ -844,7 +856,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeRemoveCommand := &cobra.Command{
 		Use:   "remove <target>",
 		Short: "Remove a node",
-		Args:  cobra.ExactArgs(1),
+		Long: strings.Join([]string{
+			"Remove a node from devopsellence state.",
+			"For solo existing-SSH nodes this only forgets the node locally; run `devopsellence agent uninstall <name> --yes` first to clean the remote VM.",
+			"For provider-managed solo nodes and shared nodes, removal deletes the provider/control-plane node where supported.",
+		}, "\n"),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runByMode(func(ctx context.Context) error {
 				nodeRemoveSoloOpts.Name = args[0]
@@ -911,10 +928,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	nodeLogsCommand.Flags().BoolVarP(&nodeLogsOpts.Follow, "follow", "f", false, "Follow log output")
+	nodeLogsCommand.Flags().IntVar(&nodeLogsOpts.Lines, "lines", soloLogsDefaultLines, fmt.Sprintf("Number of recent log lines to return, 1-%d", soloLogsMaxLines))
 	nodeCommand.AddCommand(nodeRegisterCommand, nodeCreateCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand)
 	root.AddCommand(nodeCommand)
 
 	var agentInstallOpts SoloAgentInstallOptions
+	var agentUninstallOpts SoloAgentUninstallOptions
 	agentCommand := &cobra.Command{
 		Use:   "agent",
 		Short: "Manage the solo agent install",
@@ -932,7 +951,25 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	agentInstallCommand.Flags().StringVar(&agentInstallOpts.AgentBinary, "agent-binary", "", "Local agent binary to upload instead of downloading")
 	agentInstallCommand.Flags().StringVar(&agentInstallOpts.BaseURL, "base-url", "", "Agent download base URL")
-	agentCommand.AddCommand(agentInstallCommand)
+	agentUninstallCommand := &cobra.Command{
+		Use:   "uninstall <name>",
+		Short: "Uninstall the solo agent from a node",
+		Long: strings.Join([]string{
+			"Uninstall the solo agent from a node over SSH.",
+			"By default this also removes devopsellence-managed containers, the Envoy container, the devopsellence Docker network, and agent state.",
+			"Use --keep-workloads only when you intentionally want to stop managing the node without cleaning runtime resources.",
+		}, "\n"),
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			agentUninstallOpts.Node = args[0]
+			return runSoloOnly("agent uninstall", func(ctx context.Context) error {
+				return app.SoloAgentUninstall(ctx, agentUninstallOpts)
+			})(cmd, args)
+		},
+	}
+	agentUninstallCommand.Flags().BoolVar(&agentUninstallOpts.Yes, "yes", false, "Confirm agent uninstall and cleanup")
+	agentUninstallCommand.Flags().BoolVar(&agentUninstallOpts.KeepWorkloads, "keep-workloads", false, "Stop and remove the agent but leave workloads and agent state on the node")
+	agentCommand.AddCommand(agentInstallCommand, agentUninstallCommand)
 	root.AddCommand(agentCommand)
 
 	return root

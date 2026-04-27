@@ -71,6 +71,7 @@ type SoloNodeDetachOptions struct {
 type SoloLogsOptions struct {
 	Node   string
 	Follow bool
+	Lines  int
 }
 
 type SoloNodeLabelSetOptions struct {
@@ -82,6 +83,12 @@ type SoloAgentInstallOptions struct {
 	Node        string
 	AgentBinary string
 	BaseURL     string
+}
+
+type SoloAgentUninstallOptions struct {
+	Node          string
+	Yes           bool
+	KeepWorkloads bool
 }
 
 type SoloDoctorOptions struct {
@@ -1066,7 +1073,7 @@ func sortedSoloPeerNames(peers map[string]desiredstate.NodePeer) []string {
 }
 
 func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
-	nodes, err := a.soloStatusNodes(opts)
+	nodes, cfg, err := a.soloStatusSelection(opts)
 	if err != nil {
 		return err
 	}
@@ -1109,13 +1116,66 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 
 	}
 
-	if err := a.Printer.PrintJSON(map[string]any{"nodes": jsonResults}); err != nil {
+	payload := map[string]any{"nodes": jsonResults}
+	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+		payload["public_urls"] = urls
+	}
+	if err := a.Printer.PrintJSON(payload); err != nil {
 		return err
 	}
 	if readErrors > 0 {
 		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status failed for %d node(s)", readErrors)}}
 	}
 	return nil
+}
+
+func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
+	if cfg == nil || len(nodes) == 0 {
+		return nil
+	}
+	scheme := "http"
+	if cfg.Ingress != nil {
+		tlsMode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
+		if strings.EqualFold(tlsMode, "auto") || strings.EqualFold(tlsMode, "manual") {
+			scheme = "https"
+		}
+	}
+	hosts := []string{}
+	if cfg.Ingress != nil {
+		for _, host := range normalizeIngressHosts(cfg.Ingress.Hosts) {
+			if host == "*" {
+				continue
+			}
+			hosts = append(hosts, host)
+		}
+	}
+	if len(hosts) == 0 {
+		for _, name := range sortedNodeNames(nodes) {
+			node := nodes[name]
+			if !soloNodeCanRunIngress(node, cfg) {
+				continue
+			}
+			host := strings.TrimSpace(node.Host)
+			if host != "" {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	urls := make([]string, 0, len(hosts))
+	seen := map[string]bool{}
+	for _, host := range hosts {
+		if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		url := scheme + "://" + host + "/"
+		if seen[url] {
+			continue
+		}
+		seen[url] = true
+		urls = append(urls, url)
+	}
+	sort.Strings(urls)
+	return urls
 }
 
 func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) error {
@@ -1526,8 +1586,13 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 	if opts.Follow {
 		return ExitError{Code: 2, Err: errors.New("--follow streams raw logs and is not supported by the JSON-only CLI")}
 	}
+	linesLimit := opts.Lines
+	if linesLimit < 1 || linesLimit > soloLogsMaxLines {
+		return ExitError{Code: 2, Err: fmt.Errorf("--lines must be between 1 and %d", soloLogsMaxLines)}
+	}
+	journalArgs := fmt.Sprintf("-u devopsellence-agent --no-pager -n %d", linesLimit)
 
-	out, err := solo.RunSSH(ctx, node, remoteJournalctlCommand("-u devopsellence-agent --no-pager -n 100"), nil)
+	out, err := solo.RunSSH(ctx, node, remoteJournalctlCommand(journalArgs), nil)
 	if err != nil {
 		return err
 	}
@@ -1535,7 +1600,7 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines})
+	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines, "limit": linesLimit})
 }
 
 func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {
@@ -1585,6 +1650,40 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 
 }
 
+func (a *App) SoloAgentUninstall(ctx context.Context, opts SoloAgentUninstallOptions) error {
+	if !opts.Yes {
+		return ExitError{Code: 2, Err: errors.New("agent uninstall requires --yes; rerun with --yes to confirm remote cleanup")}
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	node, ok := current.Nodes[opts.Node]
+	if !ok {
+		return fmt.Errorf("node %q not found", opts.Node)
+	}
+	stateDir, err := safeSoloAgentStateDir(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"))
+	if err != nil {
+		return ExitError{Code: 2, Err: err}
+	}
+	stdout := newTailBuffer(sshOutputTailLimit)
+	stderr := newTailBuffer(sshOutputTailLimit)
+	script := soloAgentUninstallScript(soloAgentUninstallScriptOptions{
+		StateDir:      stateDir,
+		KeepWorkloads: opts.KeepWorkloads,
+	})
+	if err := solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), stdout, stderr); err != nil {
+		return sshInteractiveError("failed to run uninstall script over SSH", err, stdout.String(), stderr.String())
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"node":              opts.Node,
+		"action":            "uninstalled",
+		"workloads_removed": !opts.KeepWorkloads,
+		"state_removed":     !opts.KeepWorkloads,
+	})
+
+}
+
 func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
 	results, failed, err := a.soloRuntimeDoctorChecks(ctx, opts)
 	if err != nil {
@@ -1595,7 +1694,7 @@ func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) err
 		return err
 	}
 	if failed {
-		return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("solo doctor failed")}}
 	}
 	return nil
 }
@@ -1730,12 +1829,18 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 			return err
 		}
 		if runtimeFailed {
-			return ExitError{Code: 1, Err: fmt.Errorf("solo doctor failed")}
+			return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("solo doctor failed")}}
 		}
 		return nil
 	}
 
-	return a.Printer.PrintJSON(payload)
+	if err := a.Printer.PrintJSON(payload); err != nil {
+		return err
+	}
+	if !ok {
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("solo doctor failed")}}
+	}
+	return nil
 
 }
 
@@ -1945,6 +2050,11 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 
 const sshOutputTailLimit = 64 * 1024
 
+const (
+	soloLogsDefaultLines = 100
+	soloLogsMaxLines     = 1000
+)
+
 type tailBuffer struct {
 	limit     int
 	buf       []byte
@@ -2025,7 +2135,11 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 			return err
 		}
 
-		return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "forgotten"})
+		return a.Printer.PrintJSON(map[string]any{
+			"node":   opts.Name,
+			"action": "forgotten",
+			"note":   "existing SSH node removed from local state only; run `devopsellence agent uninstall <name> --yes` before removal to clean the remote VM",
+		})
 
 	}
 	if provider == "" || providerServerID == "" {
@@ -2084,6 +2198,14 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 	if !ready {
 		missing = append(missing, "node")
 	}
+	nextSteps := []string{
+		"git init && git add . && git commit -m 'initial deploy' # if this app is not committed yet",
+		"devopsellence node create prod-1 --host <host> --user root --ssh-key <path>",
+		"devopsellence agent install prod-1",
+		"devopsellence node attach prod-1",
+		"devopsellence doctor",
+		"devopsellence deploy",
+	}
 	return a.Printer.PrintJSON(map[string]any{
 		"schema_version": outputSchemaVersion,
 		"mode":           string(ModeSolo),
@@ -2100,12 +2222,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"environment": environmentName,
 		"ready":       ready,
 		"missing":     missing,
-		"next_steps": []string{
-			"devopsellence node create prod-1 --host <host> --user root --ssh-key <path>",
-			"devopsellence agent install prod-1",
-			"devopsellence node attach prod-1",
-			"devopsellence deploy",
-		},
+		"next_steps":  nextSteps,
 	})
 }
 
@@ -2257,25 +2374,39 @@ func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 }
 
 func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.Node, error) {
+	nodes, _, err := a.soloStatusSelection(opts)
+	return nodes, err
+}
+
+func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Node, *config.ProjectConfig, error) {
 	current, err := a.readSoloState()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(opts.Nodes) > 0 {
-		return a.resolveNodes(current, opts.Nodes)
+		nodes, err := a.resolveNodes(current, opts.Nodes)
+		if err != nil {
+			return nil, nil, err
+		}
+		_, cfg, cfgErr := a.optionalWorkspaceConfig()
+		if cfgErr != nil {
+			cfg = nil
+		}
+		return nodes, cfg, nil
 	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(nodeNames) == 0 {
-		return map[string]config.Node{}, nil
+		return map[string]config.Node{}, cfg, nil
 	}
-	return a.resolveNodes(current, nodeNames)
+	nodes, err := a.resolveNodes(current, nodeNames)
+	return nodes, cfg, err
 }
 
 func (a *App) attachNode(current *solo.State, workspaceRoot, environmentName, nodeName string) (solo.AttachmentRecord, bool, error) {
@@ -2686,6 +2817,93 @@ run_root systemctl enable --now devopsellence-agent
 echo "progress: checking devopsellence-agent service"
 run_root systemctl is-active --quiet devopsellence-agent
 `, shellQuote(stateDir), shellQuote(baseURL), shellQuote(agentVersion), shellQuote(localBinary), systemdQuoteArg(authStatePath), systemdQuoteArg(overridePath), systemdQuoteArg(envoyBootstrapPath))
+}
+
+type soloAgentUninstallScriptOptions struct {
+	StateDir      string
+	KeepWorkloads bool
+}
+
+func safeSoloAgentStateDir(value string) (string, error) {
+	stateDir := path.Clean(strings.TrimSpace(value))
+	if stateDir == "." || stateDir == "/" || !path.IsAbs(stateDir) {
+		return "", fmt.Errorf("unsafe devopsellence agent state dir %q", value)
+	}
+	if !strings.Contains(stateDir, "devopsellence") {
+		return "", fmt.Errorf("unsafe devopsellence agent state dir %q: path must contain devopsellence", value)
+	}
+	return stateDir, nil
+}
+
+func soloAgentUninstallScript(opts soloAgentUninstallScriptOptions) string {
+	stateDir, err := safeSoloAgentStateDir(firstNonEmpty(opts.StateDir, "/var/lib/devopsellence"))
+	if err != nil {
+		// Keep this function side-effect-free for tests/callers; the runtime script
+		// also refuses unsafe values before any rm -rf operation.
+		stateDir = "/var/lib/devopsellence"
+	}
+	keepWorkloads := "0"
+	if opts.KeepWorkloads {
+		keepWorkloads = "1"
+	}
+	return fmt.Sprintf(`set -euo pipefail
+
+STATE_DIR=%s
+KEEP_WORKLOADS=%s
+AGENT_BIN=/usr/local/bin/devopsellence-agent
+SERVICE_FILE=/etc/systemd/system/devopsellence-agent.service
+
+case "$STATE_DIR" in
+  ""|"/"|"/."|"/..") echo "refusing unsafe devopsellence state dir: $STATE_DIR" >&2; exit 1 ;;
+esac
+case "$STATE_DIR" in
+  *devopsellence*) ;;
+  *) echo "refusing unsafe devopsellence state dir without devopsellence in path: $STATE_DIR" >&2; exit 1 ;;
+esac
+
+if [ "$(id -u)" -ne 0 ]; then
+  SUDO=sudo
+else
+  SUDO=
+fi
+
+run_root() {
+  if [ -n "$SUDO" ]; then
+    "$SUDO" "$@"
+  else
+    "$@"
+  fi
+}
+
+echo "progress: stopping devopsellence-agent service"
+run_root systemctl stop devopsellence-agent || true
+run_root systemctl disable devopsellence-agent || true
+run_root rm -f "$SERVICE_FILE"
+run_root systemctl daemon-reload || true
+
+if [ "$KEEP_WORKLOADS" != "1" ] && command -v docker >/dev/null 2>&1; then
+  echo "progress: removing devopsellence-managed containers"
+  container_ids="$(run_root docker ps -aq --filter label=devopsellence.managed=true || true)"
+  if [ -n "$container_ids" ]; then
+    # shellcheck disable=SC2086
+    run_root docker rm -f $container_ids
+  fi
+  system_container_ids="$(run_root docker ps -aq --filter label=devopsellence.system || true)"
+  if [ -n "$system_container_ids" ]; then
+    # shellcheck disable=SC2086
+    run_root docker rm -f $system_container_ids
+  fi
+  run_root docker rm -f devopsellence-envoy || true
+  run_root docker network rm devopsellence || true
+fi
+
+if [ "$KEEP_WORKLOADS" != "1" ]; then
+  echo "progress: removing devopsellence agent state"
+  run_root rm -rf "$STATE_DIR"
+fi
+
+run_root rm -f "$AGENT_BIN"
+`, shellQuote(stateDir), shellQuote(keepWorkloads))
 }
 
 func releasedAgentVersionForInstall() string {

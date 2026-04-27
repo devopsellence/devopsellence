@@ -3881,11 +3881,22 @@ func remoteDockerLogsCommand(environmentName, serviceName string, lines int) str
 	return fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
 ids=$($docker_cmd ps -a -q --filter label=devopsellence.managed=true --filter label=devopsellence.environment=%s --filter label=devopsellence.service=%s)
 if [ -z "$ids" ]; then echo "No workload containers found for service %s in environment %s" >&2; exit 1; fi
+rc=0
 for id in $ids; do
-  name=$($docker_cmd inspect --format '{{.Name}}' "$id" | sed 's#^/##')
+  name=$($docker_cmd inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's#^/##')
+  inspect_status=$?
+  if [ "$inspect_status" -ne 0 ]; then
+    rc=$inspect_status
+    name="$id"
+  fi
   echo "==> $name <=="
   $docker_cmd logs --tail %d "$id" 2>&1
-done`, env, service, service, env, lines)
+  logs_status=$?
+  if [ "$logs_status" -ne 0 ]; then
+    rc=$logs_status
+  fi
+done
+exit "$rc"`, env, service, service, env, lines)
 }
 
 func withRemoteLineLimit(command string, limit int) string {

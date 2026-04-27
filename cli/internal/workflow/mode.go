@@ -19,7 +19,7 @@ const (
 	ModeShared Mode = "shared"
 )
 
-const modeUnsetError = "workspace mode is not set. Run `devopsellence mode use solo|shared`."
+const modeUnsetError = "workspace mode is not set. Run `devopsellence init --mode solo|shared` or `devopsellence mode use solo|shared`."
 
 func normalizeMode(value string) (Mode, error) {
 	switch strings.TrimSpace(strings.ToLower(value)) {
@@ -172,7 +172,7 @@ func (a *App) ResolveMode() (Mode, error) {
 	return "", ExitError{Code: 2, Err: errors.New(modeUnsetError)}
 }
 
-func (a *App) ResolveSetupMode(explicit string) (Mode, error) {
+func (a *App) ResolveInitMode(explicit string) (Mode, error) {
 	if strings.TrimSpace(explicit) == "" {
 		return a.ResolveMode()
 	}

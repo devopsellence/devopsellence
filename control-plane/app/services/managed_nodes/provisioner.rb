@@ -148,7 +148,7 @@ module ManagedNodes
       return error.message unless retryable_placement_error?(error)
 
       pools = pool_candidates.map { |candidate| "#{candidate.fetch(:region)}/#{candidate.fetch(:size_slug)}" }.join(", ")
-      "No managed server capacity is available in #{pools} right now. Retry in a few minutes, or use your own VM/server with `devopsellence mode use solo` and `devopsellence setup`."
+      "No managed server capacity is available in #{pools} right now. Retry in a few minutes, or use your own VM/server with `devopsellence init --mode solo`."
     end
   end
 end

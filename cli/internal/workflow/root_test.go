@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +50,7 @@ func TestRootModeFlagIsNotGlobal(t *testing.T) {
 	}
 }
 
-func TestSetupModeFlagPersistsWorkspaceMode(t *testing.T) {
+func TestInitModeFlagPersistsWorkspaceModeAndWritesConfig(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cwd := t.TempDir()
 
@@ -59,18 +58,10 @@ func TestSetupModeFlagPersistsWorkspaceMode(t *testing.T) {
 	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stdout)
-	cmd.SetArgs([]string{"setup", "--mode", "solo"})
+	cmd.SetArgs([]string{"init", "--mode", "solo"})
 
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("Execute() error = nil, want solo setup to require explicit inputs")
-	}
-	if !strings.Contains(err.Error(), "solo setup requires explicit inputs") {
-		t.Fatalf("error = %v, want explicit input setup path", err)
-	}
-	var exitErr ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
-		t.Fatalf("error = %#v, want ExitError code 2", err)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
 	}
 
 	app := NewApp(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
@@ -80,6 +71,9 @@ func TestSetupModeFlagPersistsWorkspaceMode(t *testing.T) {
 	}
 	if !ok || mode != ModeSolo {
 		t.Fatalf("saved mode = %q, %v; want solo, true", mode, ok)
+	}
+	if _, err := config.LoadFromRoot(cwd); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -261,10 +255,13 @@ func TestRootHelpShowsModeFirstFlows(t *testing.T) {
 	}
 	text := stdout.String()
 	for _, snippet := range []string{
-		"devopsellence mode use solo",
-		"devopsellence setup",
+		"devopsellence init --mode solo",
+		"devopsellence node create prod-1 --host 203.0.113.10 --user root --ssh-key ~/.ssh/id_ed25519",
+		"devopsellence agent install prod-1",
+		"devopsellence node attach prod-1",
 		"devopsellence deploy",
 		"context",
+		"init",
 		"mode",
 		"node",
 		"provider",
@@ -275,7 +272,7 @@ func TestRootHelpShowsModeFirstFlows(t *testing.T) {
 		}
 	}
 	for _, hidden := range []string{
-		"init",
+		"setup",
 		"direct",
 		"project     ",
 		"org         ",

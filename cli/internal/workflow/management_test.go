@@ -1882,7 +1882,7 @@ func TestDeployReportsManagedCapacityFallback(t *testing.T) {
 	}
 	commitAll(t, root, "add config")
 
-	const capacityError = "No managed server capacity is available in ash/cpx11 right now. Retry in a few minutes, or use your own VM/server with `devopsellence mode use solo` and `devopsellence setup`."
+	const capacityError = "No managed server capacity is available in ash/cpx11 right now. Retry in a few minutes, or use your own VM/server with `devopsellence init --mode solo`."
 
 	var stdout bytes.Buffer
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -3086,7 +3086,7 @@ func TestDeployFailsWhenExistingConfigIsUncommitted(t *testing.T) {
 	if err == nil {
 		t.Fatal("Deploy() error = nil, want dirty-worktree failure")
 	}
-	if !strings.Contains(err.Error(), "workspace contains devopsellence setup files that are not committed yet") {
+	if !strings.Contains(err.Error(), "workspace contains devopsellence init files that are not committed yet") {
 		t.Fatalf("Deploy() error = %v", err)
 	}
 	if !strings.Contains(err.Error(), "git add "+config.GenericFilePath) {

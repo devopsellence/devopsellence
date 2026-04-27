@@ -51,7 +51,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 					return modeErr
 				}
 				if mode != ModeSolo {
-					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in solo mode; run `devopsellence mode use solo`", name)}
+					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in solo mode; run `devopsellence init --mode solo`", name)}
 				}
 				return run(ctx)
 			})
@@ -66,7 +66,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 					return modeErr
 				}
 				if mode != ModeShared {
-					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in shared mode; run `devopsellence mode use shared`", name)}
+					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in shared mode; run `devopsellence init --mode shared`", name)}
 				}
 				return run(ctx)
 			})
@@ -81,13 +81,14 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			"Commands emit structured JSON by default and avoid terminal-only interaction.",
 			"Use explicit flags, stdin, plans, and desired-state operations instead of prompts.",
 			"",
-			"Pick a workspace mode once with `devopsellence mode use solo|shared`.",
+			"Initialize a workspace with `devopsellence init --mode solo|shared`.",
 		}, "\n"),
 		Example: strings.Join([]string{
-			"  devopsellence mode use solo",
-			"  devopsellence setup",
+			"  devopsellence init --mode solo",
+			"  devopsellence node create prod-1 --host 203.0.113.10 --user root --ssh-key ~/.ssh/id_ed25519",
+			"  devopsellence agent install prod-1",
+			"  devopsellence node attach prod-1",
 			"  devopsellence deploy",
-			"  devopsellence context show",
 		}, "\n"),
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -485,39 +486,39 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	})
 	root.AddCommand(aliasCommand)
 
-	var setupSharedOpts InitOptions
-	var setupMode string
-	setupCommand := &cobra.Command{
-		Use:   "setup",
-		Short: "Prepare the current workspace for its selected mode",
+	var initSharedOpts InitOptions
+	var initMode string
+	initCommand := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize workspace config for solo or shared mode",
 		Long: strings.Join([]string{
-			"Mode-driven workspace setup.",
-			"  solo   - initialize config if needed, register or create a node, attach it, and install the agent",
-			"  shared - sign in, create/select org/project/env, and write workspace config",
+			"Initialize the current workspace for a selected mode.",
+			"  solo   - write devopsellence.yml if missing and validate it if present",
+			"  shared - sign in, create/select org/project/env, and write devopsellence.yml",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
-				mode, modeErr := app.ResolveSetupMode(setupMode)
+				mode, modeErr := app.ResolveInitMode(initMode)
 				if modeErr != nil {
 					return modeErr
 				}
 				switch mode {
 				case ModeSolo:
-					return app.SoloSetup(ctx, SoloSetupOptions{})
+					return app.SoloInit(ctx, SoloInitOptions{})
 				case ModeShared:
-					return app.Init(ctx, setupSharedOpts)
+					return app.Init(ctx, initSharedOpts)
 				default:
 					return ExitError{Code: 2, Err: fmt.Errorf("unsupported mode %q", mode)}
 				}
 			})
 		},
 	}
-	setupCommand.Flags().StringVar(&setupMode, "mode", "", "Set and use workspace mode for setup (solo or shared)")
-	setupCommand.Flags().StringVar(&setupSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
-	setupCommand.Flags().StringVar(&setupSharedOpts.ProjectName, "project", "", "Project name override (shared mode)")
-	setupCommand.Flags().StringVar(&setupSharedOpts.Environment, "env", "", "Environment name override (shared mode)")
-	setupCommand.Flags().BoolVar(&setupSharedOpts.NonInteractive, "non-interactive", false, "Fail instead of prompting for missing values in shared mode")
-	root.AddCommand(setupCommand)
+	initCommand.Flags().StringVar(&initMode, "mode", "", "Set and use workspace mode for init (solo or shared)")
+	initCommand.Flags().StringVar(&initSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
+	initCommand.Flags().StringVar(&initSharedOpts.ProjectName, "project", "", "Project name override (shared mode)")
+	initCommand.Flags().StringVar(&initSharedOpts.Environment, "env", "", "Environment name override (shared mode)")
+	initCommand.Flags().BoolVar(&initSharedOpts.NonInteractive, "non-interactive", false, "Fail instead of prompting for missing values in shared mode")
+	root.AddCommand(initCommand)
 
 	var deploySharedOpts DeployOptions
 	var deploySoloOpts SoloDeployOptions
@@ -758,7 +759,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeRegisterCommand.Flags().BoolVar(&nodeRegisterOpts.Unassigned, "unassigned", false, "Register the node without auto-attaching it to the current environment")
 	nodeCreateCommand := &cobra.Command{
 		Use:   "create <name>",
-		Short: "Create a provider-managed node",
+		Short: "Create or register a node",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeCreateOpts.Name = args[0]
@@ -772,13 +773,18 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
-	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Provider, "provider", "hetzner", "Provider")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Provider, "provider", "", "Provider for provisioning a new node, for example hetzner")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Host, "host", "", "Existing SSH host or IP address (solo mode)")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.User, "user", "root", "SSH user for an existing node (solo mode)")
+	nodeCreateCommand.Flags().IntVar(&nodeCreateOpts.Port, "port", 22, "SSH port for an existing node (solo mode)")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHKey, "ssh-key", "", "SSH private key path for an existing node (solo mode)")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Region, "region", defaultHetznerRegion, "Provider region")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Size, "size", defaultHetznerSize, "Provider machine size")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Image, "image", "", "Provider image")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.Labels, "labels", "", "Comma-separated labels")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path")
-	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.NoInstall, "no-install", false, "Create the provider machine without installing the agent")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path for provider provisioning")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Install, "install", false, "Install the solo agent after creating the node (solo mode)")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Attach, "attach", false, "Attach the created solo node to the current environment (solo mode)")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Organization, "org", "", "Shared-mode organization name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Project, "project", "", "Shared-mode project name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Environment, "env", "", "Shared-mode environment name override")

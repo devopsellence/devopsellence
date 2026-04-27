@@ -502,6 +502,7 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 		}
 		result = map[string]any{
 			"schema_version":       outputSchemaVersion,
+			"mode":                 string(ModeShared),
 			"organization_id":      initialized.Organization.ID,
 			"organization_name":    initialized.Organization.Name,
 			"organization_created": initialized.CreatedOrg,
@@ -917,7 +918,7 @@ func initGeneratedFilesCommitMessage(discovered discovery.Result, entries []stri
 			paths = append(paths, path)
 		}
 	}
-	return "workspace contains devopsellence setup files that are not committed yet. commit them before deploy:\n\n  git add " + strings.Join(paths, " ") + "\n  git commit -m \"Set up devopsellence\""
+	return "workspace contains devopsellence init files that are not committed yet. commit them before deploy:\n\n  git add " + strings.Join(paths, " ") + "\n  git commit -m \"Initialize devopsellence\""
 }
 
 func deployDirtyIgnorePaths(store config.Store, discovered discovery.Result, existing *config.ProjectConfig) []string {
@@ -1625,7 +1626,7 @@ func (a *App) requireConfiguredService(workspaceRoot, serviceName string) error 
 		return wrapError(err)
 	}
 	if cfg == nil {
-		return ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+		return ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence init --mode shared` first")}
 	}
 	if _, ok := cfg.Services[serviceName]; !ok {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
@@ -1640,7 +1641,7 @@ func (a *App) requireConfigurableSecretRef(workspaceRoot, serviceName, name stri
 		return wrapError(err)
 	}
 	if cfg == nil {
-		return ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+		return ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence init --mode shared` first")}
 	}
 	service, ok := cfg.Services[serviceName]
 	if !ok {
@@ -1659,7 +1660,7 @@ func (a *App) upsertWorkspaceSecretRef(workspaceRoot, serviceName string, ref co
 		return false, wrapError(err)
 	}
 	if cfg == nil {
-		return false, ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+		return false, ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence init --mode shared` first")}
 	}
 	if _, ok := cfg.Services[serviceName]; !ok {
 		return false, ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
@@ -1684,7 +1685,7 @@ func (a *App) removeWorkspaceSecretRef(workspaceRoot, serviceName, name string) 
 		return false, wrapError(err)
 	}
 	if cfg == nil {
-		return false, ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence setup` first")}
+		return false, ExitError{Code: 2, Err: errors.New("missing devopsellence.yml; run `devopsellence init --mode shared` first")}
 	}
 	if _, ok := cfg.Services[serviceName]; !ok {
 		return false, ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
@@ -2585,7 +2586,7 @@ func (a *App) resolveOrganizationReadOnly(ctx context.Context, token, input stri
 		return match, nil
 	}
 	if len(orgs) == 0 {
-		return api.Organization{}, ExitError{Code: 2, Err: errors.New("no organizations found. run `devopsellence setup --mode shared` first")}
+		return api.Organization{}, ExitError{Code: 2, Err: errors.New("no organizations found. run `devopsellence init --mode shared` first")}
 	}
 	if len(orgs) == 1 {
 		_ = a.rememberOrganization(orgs[0].ID)
@@ -3031,7 +3032,7 @@ func (a *App) requiredWorkspaceConfig() (discovery.Result, config.ProjectConfig,
 		return discovery.Result{}, config.ProjectConfig{}, err
 	}
 	if loaded == nil {
-		return discovery.Result{}, config.ProjectConfig{}, errors.New("project not initialized. run `devopsellence setup` first")
+		return discovery.Result{}, config.ProjectConfig{}, errors.New("project not initialized. run `devopsellence init --mode shared` first")
 	}
 	return discovered, *loaded, nil
 }
@@ -3042,7 +3043,7 @@ func (a *App) resolvedWorkspaceConfig(explicitEnvironment string) (discovery.Res
 		return discovery.Result{}, config.ProjectConfig{}, "", err
 	}
 	if loaded == nil {
-		return discovery.Result{}, config.ProjectConfig{}, "", errors.New("project not initialized. run `devopsellence setup` first")
+		return discovery.Result{}, config.ProjectConfig{}, "", errors.New("project not initialized. run `devopsellence init --mode shared` first")
 	}
 	selectedEnvironment := a.effectiveEnvironment(explicitEnvironment, loaded)
 	resolved, err := config.ResolveEnvironmentConfig(*loaded, selectedEnvironment)

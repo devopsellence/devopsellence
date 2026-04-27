@@ -91,12 +91,17 @@ type SoloDoctorOptions struct {
 type SoloNodeCreateOptions struct {
 	Name         string
 	Provider     string
+	Host         string
+	User         string
+	Port         int
+	SSHKey       string
 	Region       string
 	Size         string
 	Image        string
 	Labels       string
 	SSHPublicKey string
-	NoInstall    bool
+	Install      bool
+	Attach       bool
 }
 
 type SoloNodeRemoveOptions struct {
@@ -116,7 +121,7 @@ type providerNodeCreateResult struct {
 	ProviderSlug string
 }
 
-type SoloSetupOptions struct{}
+type SoloInitOptions struct{}
 
 type IngressSetOptions struct {
 	Hosts               []string
@@ -163,7 +168,10 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
-	providerSlug, err := normalizeProvider(firstNonEmpty(opts.Provider, providerHetzner))
+	if strings.TrimSpace(opts.Provider) == "" {
+		return providerNodeCreateResult{}, ExitError{Code: 2, Err: fmt.Errorf("node create requires --provider")}
+	}
+	providerSlug, err := normalizeProvider(opts.Provider)
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
@@ -234,6 +242,63 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 		Labels:       labels,
 		ProviderSlug: providerSlug,
 	}, nil
+}
+
+func existingSSHNodeFromCreateOptions(opts SoloNodeCreateOptions) (config.Node, []string, error) {
+	labels, err := parseSoloLabels(firstNonEmpty(opts.Labels, strings.Join(config.DefaultNodeLabels, ",")))
+	if err != nil {
+		return config.Node{}, nil, err
+	}
+	user := strings.TrimSpace(opts.User)
+	if user == "" {
+		user = "root"
+	}
+	sshKey, err := expandSoloSSHKeyPath(opts.SSHKey)
+	if err != nil {
+		return config.Node{}, nil, err
+	}
+	port := opts.Port
+	if port < 1 || port > 65535 {
+		return config.Node{}, nil, ExitError{Code: 2, Err: fmt.Errorf("ssh port must be between 1 and 65535")}
+	}
+	node := config.Node{
+		Host:          strings.TrimSpace(opts.Host),
+		User:          user,
+		Port:          port,
+		SSHKey:        sshKey,
+		AgentStateDir: "/var/lib/devopsellence",
+		Labels:        labels,
+	}
+	return node, labels, nil
+}
+
+func expandSoloSSHKeyPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	if path == "~" {
+		return "", fmt.Errorf("ssh key path %q must reference a private key file, not the home directory", path)
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("expand ssh key path: %w", err)
+		}
+		path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	}
+	path = filepath.Clean(path)
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("ssh key path %q does not exist", path)
+		}
+		return "", fmt.Errorf("stat ssh key path %q: %w", path, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("ssh key path %q must be a file, not a directory", path)
+	}
+	return path, nil
 }
 
 func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
@@ -1624,7 +1689,7 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 			return "", err
 		}
 		if cfg == nil {
-			return "", errors.New("No config found. Run `devopsellence setup`.")
+			return "", errors.New("No config found. Run `devopsellence init --mode solo`.")
 		}
 		return a.ConfigStore.PathFor(discovered.WorkspaceRoot), nil
 	})
@@ -1636,7 +1701,7 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 			return "", err
 		}
 		if len(current.Nodes) == 0 {
-			return "", errors.New("No solo nodes registered yet. Run `devopsellence node create` or `devopsellence setup`.")
+			return "", errors.New("No solo nodes registered yet. Run `devopsellence node create`.")
 		}
 		return fmt.Sprintf("%d node(s) registered", len(current.Nodes)), nil
 	})
@@ -1675,7 +1740,7 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 }
 
 func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
-	cfg, workspaceRoot, err := a.loadProjectConfigForSoloUpdate()
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
@@ -1683,43 +1748,92 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if err != nil {
 		return err
 	}
-	if opts.Name == "" {
+	nodeName := strings.TrimSpace(opts.Name)
+	if nodeName == "" {
 		return fmt.Errorf("node name is required")
 	}
-	if _, ok := current.Nodes[opts.Name]; ok {
-		return fmt.Errorf("solo node %q already exists", opts.Name)
+	opts.Name = nodeName
+	if _, ok := current.Nodes[nodeName]; ok {
+		return fmt.Errorf("solo node %q already exists", nodeName)
 	}
-	if err := a.ensureSoloNodeCreateSSHPublicKey(&opts, workspaceRoot); err != nil {
+	hasProvider := strings.TrimSpace(opts.Provider) != ""
+	hasHost := strings.TrimSpace(opts.Host) != ""
+	if hasProvider == hasHost {
+		if hasProvider {
+			return ExitError{Code: 2, Err: fmt.Errorf("node create accepts either --provider or --host, not both")}
+		}
+		return ExitError{Code: 2, Err: fmt.Errorf("node create requires --provider or --host")}
+	}
+
+	var node config.Node
+	var labels []string
+	result := map[string]any{
+		"schema_version": outputSchemaVersion,
+		"node":           nodeName,
+		"config_path":    a.ConfigStore.PathFor(workspaceRoot),
+	}
+	if hasHost {
+		node, labels, err = existingSSHNodeFromCreateOptions(opts)
+		if err != nil {
+			return err
+		}
+		result["source"] = "existing_ssh"
+	} else {
+		if err := a.ensureSoloNodeCreateSSHPublicKey(&opts, workspaceRoot); err != nil {
+			return err
+		}
+		created, createErr := a.createProviderNode(ctx, opts, cfg.Project)
+		if createErr != nil {
+			return createErr
+		}
+		node = created.Node
+		labels = created.Labels
+		result["source"] = "provider"
+		result["provider"] = created.ProviderSlug
+		result["provider_server_id"] = created.Server.ID
+	}
+	if err := current.SetNode(nodeName, node); err != nil {
 		return err
 	}
-	created, err := a.createProviderNode(ctx, opts, cfg.Project)
-	if err != nil {
-		return err
-	}
-	if err := current.SetNode(opts.Name, created.Node); err != nil {
-		return err
+	attached := false
+	var attachment solo.AttachmentRecord
+	if opts.Attach {
+		environmentName := soloEnvironmentName(cfg, "")
+		var attachErr error
+		attachment, _, attachErr = a.attachNode(&current, workspaceRoot, environmentName, nodeName)
+		if attachErr != nil {
+			return attachErr
+		}
+		attached = true
+		result["environment"] = environmentName
 	}
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if !opts.NoInstall {
-
-		if err := waitForSoloSSH(ctx, created.Node, 3*time.Minute); err != nil {
+	installed := false
+	if opts.Install {
+		if err := waitForSoloSSH(ctx, node, 3*time.Minute); err != nil {
 			return err
 		}
-		if err := a.installSoloAgent(ctx, opts.Name, created.Node, SoloAgentInstallOptions{}); err != nil {
+		if err := a.installSoloAgent(ctx, nodeName, node, SoloAgentInstallOptions{}); err != nil {
 			return err
+		}
+		installed = true
+	}
+
+	if attached {
+		if _, ok := current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment]; ok {
+			if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
+				return err
+			}
 		}
 	}
 
-	return a.Printer.PrintJSON(map[string]any{
-		"node":               opts.Name,
-		"host":               created.Node.Host,
-		"labels":             created.Labels,
-		"provider":           created.ProviderSlug,
-		"provider_server_id": created.Server.ID,
-		"config_path":        a.ConfigStore.PathFor(workspaceRoot),
-	})
+	result["host"] = node.Host
+	result["labels"] = labels
+	result["agent_installed"] = installed
+	result["attached"] = attached
+	return a.Printer.PrintJSON(result)
 
 }
 
@@ -1750,42 +1864,45 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 	if opts.Name == "" {
 		return fmt.Errorf("node name is required")
 	}
+	if strings.TrimSpace(opts.Host) != "" {
+		return ExitError{Code: 2, Err: fmt.Errorf("node create --host is only available in solo mode")}
+	}
+	if strings.TrimSpace(opts.SSHKey) != "" {
+		return ExitError{Code: 2, Err: fmt.Errorf("node create --ssh-key is only available in solo mode")}
+	}
+	if opts.Install {
+		return ExitError{Code: 2, Err: fmt.Errorf("node create --install is only available in solo mode")}
+	}
+	if opts.Attach {
+		return ExitError{Code: 2, Err: fmt.Errorf("node create --attach is only available in solo mode")}
+	}
+	if strings.TrimSpace(opts.Provider) == "" {
+		return ExitError{Code: 2, Err: fmt.Errorf("node create requires --provider in shared mode")}
+	}
+	tokens, err := a.ensureAuth(ctx, false)
+	if err != nil {
+		return err
+	}
 	var bootstrap nodeBootstrapToken
-	if !opts.NoInstall {
-		tokens, err := a.ensureAuth(ctx, false)
-		if err != nil {
-			return err
-		}
-		run := func(ctx context.Context, update, _ func(string)) error {
-			var err error
-			bootstrap, err = a.createNodeBootstrapToken(ctx, &tokens, opts.NodeBootstrapOptions, update)
-			return err
-		}
-		if err := run(ctx, func(string) {}, func(string) {}); err != nil {
-			return err
-		}
+	run := func(ctx context.Context, update, _ func(string)) error {
+		var err error
+		bootstrap, err = a.createNodeBootstrapToken(ctx, &tokens, opts.NodeBootstrapOptions, update)
+		return err
+	}
+	if err := run(ctx, func(string) {}, func(string) {}); err != nil {
+		return err
 	}
 
 	projectName := opts.Project
 	if !opts.Unassigned && bootstrap.Workspace.Project.Name != "" {
 		projectName = bootstrap.Workspace.Project.Name
 	}
+	if err := a.ensureSoloNodeCreateSSHPublicKey(&opts.SoloNodeCreateOptions, bootstrap.Workspace.Discovery.WorkspaceRoot); err != nil {
+		return err
+	}
 	created, err := a.createProviderNode(ctx, opts.SoloNodeCreateOptions, projectName)
 	if err != nil {
 		return err
-	}
-	if opts.NoInstall {
-
-		return a.Printer.PrintJSON(map[string]any{
-			"schema_version":     outputSchemaVersion,
-			"node":               opts.Name,
-			"host":               created.Node.Host,
-			"labels":             created.Labels,
-			"provider":           created.ProviderSlug,
-			"provider_server_id": created.Server.ID,
-			"registered":         false,
-		})
-
 	}
 
 	installCommand := strings.TrimSpace(stringFromMap(bootstrap.Result, "install_command"))
@@ -1930,28 +2047,66 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 
 }
 
-func (a *App) SoloSetup(context.Context, SoloSetupOptions) error {
-	return ExitError{Code: 2, Err: fmt.Errorf("solo setup requires explicit inputs; use `devopsellence node create <name> --provider hetzner` for provider-managed nodes or `devopsellence node attach <name> --host <host> --user <user> --ssh-key <path>` for existing nodes")}
-}
-
-func (a *App) ensureSoloProjectConfig() (*config.ProjectConfig, string, error) {
+func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 	discovered, err := discovery.Discover(a.Cwd)
 	if err != nil {
-		return nil, "", err
+		return err
 	}
 	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
 	if err != nil {
-		return nil, "", err
+		return err
 	}
-	if cfg != nil {
-		return cfg, discovered.WorkspaceRoot, nil
+	created := false
+	if cfg == nil {
+		cfg = soloDefaultProjectConfig(discovered)
+		written, writeErr := a.ConfigStore.Write(discovered.WorkspaceRoot, *cfg)
+		if writeErr != nil {
+			return writeErr
+		}
+		cfg = &written
+		created = true
 	}
-	defaultCfg := soloDefaultProjectConfig(discovered)
-	written, err := a.ConfigStore.Write(discovered.WorkspaceRoot, *defaultCfg)
-	if err != nil {
-		return nil, "", err
+	configPath := a.ConfigStore.PathFor(discovered.WorkspaceRoot)
+	environmentName := soloEnvironmentName(cfg, "")
+	ready := false
+	if a.SoloState != nil {
+		current, stateErr := a.readSoloState()
+		if stateErr != nil {
+			return stateErr
+		}
+		attached, attachErr := current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
+		if attachErr != nil {
+			return attachErr
+		}
+		ready = len(attached) > 0
 	}
-	return &written, discovered.WorkspaceRoot, nil
+	missing := []string{}
+	if !ready {
+		missing = append(missing, "node")
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"mode":           string(ModeSolo),
+		"workspace_root": discovered.WorkspaceRoot,
+		"project_slug":   discovered.ProjectSlug,
+		"app_type":       discovered.AppType,
+		"fallback_used":  discovered.FallbackUsed,
+		"config": map[string]any{
+			"path":           configPath,
+			"created":        created,
+			"valid":          true,
+			"schema_version": cfg.SchemaVersion,
+		},
+		"environment": environmentName,
+		"ready":       ready,
+		"missing":     missing,
+		"next_steps": []string{
+			"devopsellence node create prod-1 --host <host> --user root --ssh-key <path>",
+			"devopsellence agent install prod-1",
+			"devopsellence node attach prod-1",
+			"devopsellence deploy",
+		},
+	})
 }
 
 func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
@@ -2086,24 +2241,9 @@ func (a *App) loadSoloProjectConfig() (*config.ProjectConfig, string, error) {
 		return nil, "", err
 	}
 	if cfg == nil {
-		return nil, "", fmt.Errorf("no devopsellence.yml found; run `devopsellence setup --mode solo`")
+		return nil, "", fmt.Errorf("no devopsellence.yml found; run `devopsellence init --mode solo`")
 	}
 	return cfg, workspaceRoot, nil
-}
-
-func (a *App) loadProjectConfigForSoloUpdate() (*config.ProjectConfig, string, error) {
-	discovered, err := discovery.Discover(a.Cwd)
-	if err != nil {
-		return nil, "", err
-	}
-	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
-	if err != nil {
-		return nil, "", err
-	}
-	if cfg == nil {
-		cfg = soloDefaultProjectConfig(discovered)
-	}
-	return cfg, discovered.WorkspaceRoot, nil
 }
 
 func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {

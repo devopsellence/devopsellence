@@ -2265,7 +2265,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		return a.Printer.PrintJSON(map[string]any{
 			"node":   opts.Name,
 			"action": "forgotten",
-			"note":   "node remove only forgot local state; remote cleanup, if needed, should be handled by `devopsellence agent uninstall <name> --yes` before running `node remove`",
+			"note":   fmt.Sprintf("node removed from local state only; if remote cleanup is still needed, run `devopsellence agent uninstall %s --yes`", opts.Name),
 		})
 
 	}

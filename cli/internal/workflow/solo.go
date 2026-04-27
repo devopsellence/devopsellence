@@ -378,6 +378,11 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 			rolloutErr.Healthchecks = soloDeployHealthcheckDetails(cfg)
 			return ExitError{Code: 1, Err: rolloutErr}
 		}
+		var timeoutErr *soloRolloutTimeoutError
+		if errors.As(err, &timeoutErr) {
+			timeoutErr.Healthchecks = soloDeployHealthcheckDetails(cfg)
+			return ExitError{Code: 1, Err: timeoutErr}
+		}
 		return err
 	}
 
@@ -528,6 +533,34 @@ func (e *soloRolloutError) ErrorFields() map[string]any {
 	return fields
 }
 
+type soloRolloutTimeoutError struct {
+	Summary      string
+	Nodes        []string
+	Healthchecks []map[string]any
+}
+
+func (e *soloRolloutTimeoutError) Error() string {
+	if e == nil {
+		return "timed out waiting for solo rollout"
+	}
+	return "timed out waiting for solo rollout: " + e.Summary
+}
+
+func (e *soloRolloutTimeoutError) ErrorFields() map[string]any {
+	if e == nil {
+		return map[string]any{}
+	}
+	steps := []string{"devopsellence status"}
+	for _, node := range e.Nodes {
+		steps = append(steps, "devopsellence node logs "+shellQuote(node)+" --lines 100")
+	}
+	fields := map[string]any{"next_steps": steps}
+	if len(e.Healthchecks) > 0 {
+		fields["healthchecks"] = e.Healthchecks
+	}
+	return fields
+}
+
 func soloDeployHealthcheckDetails(cfg *config.ProjectConfig) []map[string]any {
 	if cfg == nil {
 		return nil
@@ -577,7 +610,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 			result, err := readNodeStatus(rolloutCtx, nodes[name])
 			if err != nil {
 				if errors.Is(rolloutCtx.Err(), context.DeadlineExceeded) {
-					return ExitError{Code: 1, Err: fmt.Errorf("timed out waiting for solo rollout: %s", latestSummary)}
+					return ExitError{Code: 1, Err: &soloRolloutTimeoutError{Summary: latestSummary, Nodes: nodeNames}}
 				}
 				return fmt.Errorf("[%s] read status: %w", name, err)
 			}
@@ -617,7 +650,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 		case <-rolloutCtx.Done():
 			timer.Stop()
 			if errors.Is(rolloutCtx.Err(), context.DeadlineExceeded) {
-				return ExitError{Code: 1, Err: fmt.Errorf("timed out waiting for solo rollout: %s", latestSummary)}
+				return ExitError{Code: 1, Err: &soloRolloutTimeoutError{Summary: latestSummary, Nodes: nodeNames}}
 			}
 			return rolloutCtx.Err()
 		case <-timer.C:

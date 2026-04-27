@@ -1487,6 +1487,15 @@ func TestWaitForSoloRolloutTimesOutWhenExpectedRevisionNeverSettles(t *testing.T
 	if !strings.Contains(err.Error(), "timed out waiting for solo rollout") {
 		t.Fatalf("error = %v", err)
 	}
+	var timeoutErr *soloRolloutTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("error = %T %v, want soloRolloutTimeoutError", err, err)
+	}
+	fields := timeoutErr.ErrorFields()
+	steps := fields["next_steps"].([]string)
+	if len(steps) != 2 || steps[1] != "devopsellence node logs 'node-a' --lines 100" {
+		t.Fatalf("next_steps = %#v, want status and node logs commands", steps)
+	}
 }
 
 func TestWaitForSoloRolloutFailsClearlyOnStatusReadAndParseErrors(t *testing.T) {

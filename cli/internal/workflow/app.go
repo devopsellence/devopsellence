@@ -29,7 +29,7 @@ import (
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
-const OutputSchemaVersion = 1
+const OutputSchemaVersion = output.SchemaVersion
 
 const outputSchemaVersion = OutputSchemaVersion
 

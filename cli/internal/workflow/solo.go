@@ -1146,7 +1146,7 @@ func soloDoctorNextSteps(nodes map[string]config.Node) []string {
 		steps = append(steps,
 			"devopsellence agent install "+shellQuote(nodeName),
 			"devopsellence node diagnose "+shellQuote(nodeName),
-			fmt.Sprintf("ssh -p %d %s@%s true", node.Port, shellQuote(node.User), shellQuote(node.Host)),
+			fmt.Sprintf("ssh -p %d %s true", node.Port, shellQuote(node.User+"@"+node.Host)),
 		)
 	}
 	return steps
@@ -1840,11 +1840,11 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	checks := a.soloDiagnoseChecks(ctx, node)
 	payload["checks"] = checks
 	if soloCheckFailed(checks, "ssh") {
-		payload["next_steps"] = []string{fmt.Sprintf("ssh -p %d %s@%s true", node.Port, shellQuote(node.User), shellQuote(node.Host))}
+		payload["next_steps"] = []string{fmt.Sprintf("ssh -p %d %s true", node.Port, shellQuote(node.User+"@"+node.Host))}
 		return a.Printer.PrintJSON(payload)
 	}
 	payload["agent"] = map[string]any{
-		"active": collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent || true"),
+		"active": collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent"),
 		"status": collectRemoteLines(ctx, node, remoteSystemctlStatusCommand("devopsellence-agent", 40)),
 	}
 	payload["docker"] = map[string]any{
@@ -3572,7 +3572,7 @@ func remoteJournalctlCommand(args string) string {
 
 func remoteSystemctlStatusCommand(unit string, lines int) string {
 	args := fmt.Sprintf("status --no-pager -l -n %d %s", lines, shellQuote(unit))
-	return fmt.Sprintf("if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n systemctl %s || true; else systemctl %s || true; fi", args, args)
+	return fmt.Sprintf("if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n systemctl %s; else systemctl %s; fi", args, args)
 }
 
 func remoteDockerPSJSONCommand() string {

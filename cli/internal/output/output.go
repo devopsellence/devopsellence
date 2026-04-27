@@ -5,6 +5,8 @@ import (
 	"io"
 )
 
+const SchemaVersion = 1
+
 // Printer writes command results. The CLI is agent-primary: final command
 // results are JSON on stdout, and progress events are structured JSON on stderr.
 type Printer struct {
@@ -31,7 +33,7 @@ func (p Printer) PrintEvent(event string, fields map[string]any) error {
 		return nil
 	}
 	payload := map[string]any{
-		"schema_version": 1,
+		"schema_version": SchemaVersion,
 		"event":          event,
 	}
 	for key, value := range fields {

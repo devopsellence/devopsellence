@@ -2337,6 +2337,39 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 	if !strings.Contains(nextSteps, "devopsellence node create prod-1 --provider hetzner --install --attach") {
 		t.Fatalf("next_steps = %q, want provider-created node path", nextSteps)
 	}
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["service"] != "web" || runtimeContract["port"] != float64(3000) || runtimeContract["port_source"] != "default" {
+		t.Fatalf("runtime_contract = %#v, want default web port contract", runtimeContract)
+	}
+	requirement := stringValueAny(runtimeContract["requirement"])
+	if !strings.Contains(requirement, "EXPOSE") || !strings.Contains(requirement, "devopsellence.yml") {
+		t.Fatalf("runtime_contract.requirement = %q, want Dockerfile/config guidance", requirement)
+	}
+}
+
+func TestSoloInitReportsDockerfileInferredPortContract(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM nginx:1.27-alpine\nEXPOSE 80\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["service"] != "web" || runtimeContract["port"] != float64(80) || runtimeContract["port_source"] != "dockerfile" {
+		t.Fatalf("runtime_contract = %#v, want inferred Dockerfile web port contract", runtimeContract)
+	}
+	if runtimeContract["healthcheck_port"] != float64(80) {
+		t.Fatalf("runtime_contract.healthcheck_port = %#v, want 80", runtimeContract["healthcheck_port"])
+	}
 }
 
 func TestSoloInitReportsReadyWhenNodeAttached(t *testing.T) {

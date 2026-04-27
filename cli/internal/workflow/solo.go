@@ -2874,12 +2874,13 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"devopsellence deploy",
 	}
 	return a.Printer.PrintJSON(map[string]any{
-		"schema_version": outputSchemaVersion,
-		"mode":           string(ModeSolo),
-		"workspace_root": discovered.WorkspaceRoot,
-		"project_slug":   discovered.ProjectSlug,
-		"app_type":       discovered.AppType,
-		"fallback_used":  discovered.FallbackUsed,
+		"schema_version":   outputSchemaVersion,
+		"mode":             string(ModeSolo),
+		"workspace_root":   discovered.WorkspaceRoot,
+		"project_slug":     discovered.ProjectSlug,
+		"app_type":         discovered.AppType,
+		"fallback_used":    discovered.FallbackUsed,
+		"runtime_contract": soloInitRuntimeContract(*cfg, discovered),
 		"config": map[string]any{
 			"path":           configPath,
 			"created":        created,
@@ -2891,6 +2892,35 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"missing":     missing,
 		"next_steps":  nextSteps,
 	})
+}
+
+func soloInitRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result) map[string]any {
+	serviceName, ok := cfg.PrimaryWebServiceName()
+	if !ok {
+		return map[string]any{
+			"requirement": "containers must listen on the ports configured in devopsellence.yml",
+		}
+	}
+	service := cfg.Services[serviceName]
+	port := service.HTTPPort(0)
+	source := "default"
+	switch {
+	case discovered.InferredWebPort > 0 && port == discovered.InferredWebPort:
+		source = "dockerfile"
+	case port != config.DefaultWebPort:
+		source = "config"
+	}
+	contract := map[string]any{
+		"service":     serviceName,
+		"port":        port,
+		"port_source": source,
+		"requirement": "the container must listen on this port; add EXPOSE to the Dockerfile or edit devopsellence.yml if it listens elsewhere",
+	}
+	if service.Healthcheck != nil {
+		contract["healthcheck_path"] = service.Healthcheck.Path
+		contract["healthcheck_port"] = service.Healthcheck.Port
+	}
+	return contract
 }
 
 func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {

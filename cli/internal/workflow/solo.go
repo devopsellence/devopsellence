@@ -2026,6 +2026,16 @@ func parseRemoteDiagnostic(out string) remoteDiagnosticResult {
 	}
 }
 
+func diagnosticErrorMessage(diag remoteDiagnosticResult) string {
+	if message := strings.TrimSpace(diag.Stderr); message != "" {
+		return message
+	}
+	if message := strings.TrimSpace(diag.Stdout); message != "" {
+		return message
+	}
+	return fmt.Sprintf("command exited with code %d", diag.ExitCode)
+}
+
 func collectRemoteText(ctx context.Context, node config.Node, command string) map[string]any {
 	diag := runRemoteDiagnostic(ctx, node, command)
 	result := map[string]any{"ok": diag.Err == nil && diag.ExitCode == 0}
@@ -2033,7 +2043,7 @@ func collectRemoteText(ctx context.Context, node config.Node, command string) ma
 		result["error"] = diag.Err.Error()
 	} else if diag.ExitCode != 0 {
 		result["exit_code"] = diag.ExitCode
-		result["error"] = strings.TrimSpace(diag.Stderr)
+		result["error"] = diagnosticErrorMessage(diag)
 	}
 	if value := strings.TrimSpace(diag.Stdout); value != "" {
 		result["value"] = value
@@ -2051,7 +2061,7 @@ func collectRemoteLines(ctx context.Context, node config.Node, command string) m
 		result["error"] = diag.Err.Error()
 	} else if diag.ExitCode != 0 {
 		result["exit_code"] = diag.ExitCode
-		result["error"] = strings.TrimSpace(diag.Stderr)
+		result["error"] = diagnosticErrorMessage(diag)
 	}
 	result["lines"] = splitNonFinalEmptyLines(diag.Stdout)
 	if stderr := strings.TrimSpace(diag.Stderr); stderr != "" && diag.ExitCode == 0 {
@@ -2086,7 +2096,7 @@ func collectRemoteJSONLines(ctx context.Context, node config.Node, command strin
 	}
 	if diag.ExitCode != 0 {
 		result["exit_code"] = diag.ExitCode
-		result["error"] = strings.TrimSpace(diag.Stderr)
+		result["error"] = diagnosticErrorMessage(diag)
 	}
 	items := []any{}
 	for _, line := range splitNonFinalEmptyLines(diag.Stdout) {
@@ -2649,11 +2659,11 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	provider := strings.TrimSpace(node.Provider)
 	providerServerID := strings.TrimSpace(node.ProviderServerID)
 	if provider == "" && providerServerID == "" {
-		knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 		current.RemoveNode(opts.Name)
 		if err := a.writeSoloState(current); err != nil {
 			return err
 		}
+		knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 
 		payload := map[string]any{
 			"node":                opts.Name,
@@ -2682,11 +2692,11 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	if err := resolvedProvider.DeleteServer(ctx, providerServerID); err != nil {
 		return err
 	}
-	knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 	current.RemoveNode(opts.Name)
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
+	knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 
 	payload := map[string]any{"node": opts.Name, "action": "deleted", "known_hosts_removed": knownHostsRemoved}
 	if knownHostsErr != nil {

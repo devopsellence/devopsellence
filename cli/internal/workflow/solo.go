@@ -74,6 +74,12 @@ type SoloLogsOptions struct {
 	Lines int
 }
 
+type SoloWorkloadLogsOptions struct {
+	ServiceName string
+	Nodes       []string
+	Lines       int
+}
+
 type SoloNodeDiagnoseOptions struct {
 	Node string
 }
@@ -171,7 +177,7 @@ type soloNodeStatusResult struct {
 	Status  soloNodeStatus
 }
 
-func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions, projectName string) (providerNodeCreateResult, error) {
+func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions, projectName string, progress func(string)) (providerNodeCreateResult, error) {
 	if opts.Name == "" {
 		return providerNodeCreateResult{}, fmt.Errorf("node name is required")
 	}
@@ -195,12 +201,19 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if providerSlug == providerHetzner && strings.EqualFold(strings.TrimSpace(opts.Size), "cx22") {
 		return providerNodeCreateResult{}, fmt.Errorf("Hetzner size %q is deprecated; use %q", opts.Size, defaultHetznerSize)
 	}
+	providerImage := strings.TrimSpace(opts.Image)
+	if providerSlug == providerHetzner && providerImage == "" {
+		providerImage = providers.DefaultHetznerImage
+	}
 	if err := a.ensureProviderTokenConfigured(ctx, providerSlug); err != nil {
 		return providerNodeCreateResult{}, err
 	}
 	provider, err := a.resolveSoloProvider(providerSlug)
 	if err != nil {
 		return providerNodeCreateResult{}, err
+	}
+	if progress != nil {
+		progress(fmt.Sprintf("Creating %s server %q in %s (%s)...", providerSlug, opts.Name, opts.Region, opts.Size))
 	}
 	sshPublicKey, sshPublicKeyPath, err := readSoloSSHPublicKey(opts.SSHPublicKey)
 	if err != nil {
@@ -222,12 +235,18 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
-	server, err = waitForSoloProviderServer(ctx, provider, server)
+	if progress != nil {
+		progress(fmt.Sprintf("Waiting for %s server %s to become ready...", providerSlug, server.ID))
+	}
+	server, err = waitForSoloProviderServer(ctx, provider, server, progress)
 	if err != nil {
 		return providerNodeCreateResult{}, err
 	}
 	if server.PublicIP == "" {
 		return providerNodeCreateResult{}, fmt.Errorf("created server %s but provider did not return a public IPv4 address", server.ID)
+	}
+	if progress != nil {
+		progress(fmt.Sprintf("Server %s ready at %s.", server.ID, server.PublicIP))
 	}
 	node := config.Node{
 		Host:             server.PublicIP,
@@ -239,7 +258,7 @@ func (a *App) createProviderNode(ctx context.Context, opts SoloNodeCreateOptions
 		ProviderServerID: server.ID,
 		ProviderRegion:   opts.Region,
 		ProviderSize:     opts.Size,
-		ProviderImage:    opts.Image,
+		ProviderImage:    providerImage,
 	}
 	if strings.TrimSpace(sshPublicKeyPath) != "" {
 		node.SSHKey = strings.TrimSuffix(sshPublicKeyPath, ".pub")
@@ -532,6 +551,7 @@ func (e *soloRolloutError) ErrorFields() map[string]any {
 		"node": e.Node,
 		"next_steps": []string{
 			"devopsellence status",
+			"devopsellence logs --node " + shellQuote(e.Node) + " --lines 100",
 			"devopsellence node logs " + shellQuote(e.Node) + " --lines 100",
 		},
 	}
@@ -560,6 +580,7 @@ func (e *soloRolloutTimeoutError) ErrorFields() map[string]any {
 	}
 	steps := []string{"devopsellence status"}
 	for _, node := range e.Nodes {
+		steps = append(steps, "devopsellence logs --node "+shellQuote(node)+" --lines 100")
 		steps = append(steps, "devopsellence node logs "+shellQuote(node)+" --lines 100")
 	}
 	fields := map[string]any{"next_steps": steps}
@@ -1135,6 +1156,7 @@ func (a *App) soloProgress(operation string, fields map[string]any) func(string)
 func soloNodeLogNextSteps(nodes map[string]config.Node) []string {
 	steps := []string{}
 	for _, nodeName := range sortedNodeNames(nodes) {
+		steps = append(steps, "devopsellence logs --node "+shellQuote(nodeName)+" --lines 100")
 		steps = append(steps, "devopsellence node logs "+shellQuote(nodeName)+" --lines 100")
 	}
 	return steps
@@ -1821,6 +1843,59 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines, "limit": linesLimit})
 }
 
+func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions) error {
+	serviceName := strings.TrimSpace(opts.ServiceName)
+	if serviceName == "" {
+		serviceName = "web"
+	}
+	linesLimit := opts.Lines
+	if linesLimit < 1 || linesLimit > soloLogsMaxLines {
+		return ExitError{Code: 2, Err: fmt.Errorf("--lines must be between 1 and %d", soloLogsMaxLines)}
+	}
+	nodes, cfg, err := a.soloStatusSelection(SoloStatusOptions{Nodes: opts.Nodes})
+	if err != nil {
+		return err
+	}
+	if len(nodes) == 0 {
+		return fmt.Errorf("no nodes selected; attach a node or pass --node")
+	}
+	environmentName := soloEnvironmentName(cfg, "")
+	results := make([]map[string]any, 0, len(nodes))
+	ok := true
+	for _, nodeName := range sortedNodeNames(nodes) {
+		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(environmentName, serviceName, linesLimit))
+		entry := map[string]any{
+			"node":    nodeName,
+			"service": serviceName,
+			"ok":      diag.Err == nil && diag.ExitCode == 0,
+			"lines":   splitNonFinalEmptyLines(diag.Stdout),
+		}
+		if diag.Err != nil {
+			entry["error"] = diag.Err.Error()
+			ok = false
+		} else if diag.ExitCode != 0 {
+			entry["exit_code"] = diag.ExitCode
+			entry["error"] = diagnosticErrorMessage(diag)
+			ok = false
+		}
+		results = append(results, entry)
+	}
+	payload := map[string]any{
+		"schema_version": outputSchemaVersion,
+		"environment":    environmentName,
+		"service":        serviceName,
+		"limit":          linesLimit,
+		"nodes":          results,
+	}
+	if err := a.Printer.PrintJSON(payload); err != nil {
+		return err
+	}
+	if !ok {
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("workload logs failed")}}
+	}
+	return nil
+}
+
 func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions) error {
 	current, err := a.readSoloState()
 	if err != nil {
@@ -1880,6 +1955,7 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	}
 	payload["next_steps"] = []string{
 		"devopsellence status",
+		"devopsellence logs --node " + shellQuote(opts.Node) + " --lines 100",
 		"devopsellence node logs " + shellQuote(opts.Node) + " --lines 100",
 	}
 	return a.printSoloDiagnoseResult(payload, diagnoseOK)
@@ -2407,12 +2483,17 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 		if err != nil {
 			return err
 		}
+		if err := waitForSoloSSH(ctx, node, 30*time.Second); err != nil {
+			return fmt.Errorf("node create could not validate SSH for %s@%s:%d; fix --host/--user/--ssh-key or SSH access, then retry: %w", node.User, node.Host, node.Port, err)
+		}
 		result["source"] = "existing_ssh"
+		result["ssh_checked"] = true
 	} else {
 		if err := a.ensureSoloNodeCreateSSHPublicKey(&opts, workspaceRoot); err != nil {
 			return err
 		}
-		created, createErr := a.createProviderNode(ctx, opts, cfg.Project)
+		progress := a.soloProgress("devopsellence node create", map[string]any{"node": nodeName, "provider": strings.TrimSpace(opts.Provider)})
+		created, createErr := a.createProviderNode(ctx, opts, cfg.Project, progress)
 		if createErr != nil {
 			return createErr
 		}
@@ -2421,6 +2502,11 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 		result["source"] = "provider"
 		result["provider"] = created.ProviderSlug
 		result["provider_server_id"] = created.Server.ID
+		result["provider_region"] = node.ProviderRegion
+		result["provider_size"] = node.ProviderSize
+		if node.ProviderImage != "" {
+			result["provider_image"] = node.ProviderImage
+		}
 	}
 	if err := current.SetNode(nodeName, node); err != nil {
 		return err
@@ -2530,7 +2616,8 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 	if err := a.ensureSoloNodeCreateSSHPublicKey(&opts.SoloNodeCreateOptions, bootstrap.Workspace.Discovery.WorkspaceRoot); err != nil {
 		return err
 	}
-	created, err := a.createProviderNode(ctx, opts.SoloNodeCreateOptions, projectName)
+	progress := a.soloProgress("devopsellence node create", map[string]any{"node": opts.Name, "provider": strings.TrimSpace(opts.Provider)})
+	created, err := a.createProviderNode(ctx, opts.SoloNodeCreateOptions, projectName, progress)
 	if err != nil {
 		return err
 	}
@@ -2557,6 +2644,9 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 		"labels":             created.Labels,
 		"provider":           created.ProviderSlug,
 		"provider_server_id": created.Server.ID,
+		"provider_region":    created.Node.ProviderRegion,
+		"provider_size":      created.Node.ProviderSize,
+		"provider_image":     created.Node.ProviderImage,
 		"organization_id":    bootstrap.Organization.ID,
 		"organization_name":  bootstrap.Organization.Name,
 		"registered":         true,
@@ -2698,7 +2788,22 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	}
 	knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 
-	payload := map[string]any{"node": opts.Name, "action": "deleted", "known_hosts_removed": knownHostsRemoved}
+	payload := map[string]any{
+		"node":                opts.Name,
+		"action":              "deleted",
+		"known_hosts_removed": knownHostsRemoved,
+		"provider":            provider,
+		"provider_server_id":  providerServerID,
+	}
+	if strings.TrimSpace(node.ProviderRegion) != "" {
+		payload["provider_region"] = node.ProviderRegion
+	}
+	if strings.TrimSpace(node.ProviderSize) != "" {
+		payload["provider_size"] = node.ProviderSize
+	}
+	if strings.TrimSpace(node.ProviderImage) != "" {
+		payload["provider_image"] = node.ProviderImage
+	}
 	if knownHostsErr != nil {
 		payload["known_hosts_error"] = knownHostsErr.Error()
 		payload["warnings"] = []string{"provider node deleted and local state removed, but SSH known_hosts cleanup failed"}
@@ -2751,6 +2856,10 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"devopsellence node create prod-1 --host <host> --user root --ssh-key <path>",
 		"devopsellence agent install prod-1",
 		"devopsellence node attach prod-1",
+		"# or let devopsellence create a Hetzner node:",
+		"devopsellence provider login hetzner --token <token>",
+		"devopsellence provider status hetzner",
+		"devopsellence node create prod-1 --provider hetzner --install --attach",
 		"devopsellence doctor",
 		"devopsellence deploy",
 	}
@@ -3469,7 +3578,7 @@ func systemdQuoteArg(value string) string {
 	return `"` + escaped + `"`
 }
 
-func waitForSoloProviderServer(ctx context.Context, provider providers.Provider, server providers.Server) (providers.Server, error) {
+func waitForSoloProviderServer(ctx context.Context, provider providers.Provider, server providers.Server, progress func(string)) (providers.Server, error) {
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
 		if provider.Ready(server) {
@@ -3488,6 +3597,9 @@ func waitForSoloProviderServer(ctx context.Context, provider providers.Provider,
 			return providers.Server{}, err
 		}
 		server = next
+		if progress != nil {
+			progress(fmt.Sprintf("Provider server %s status: %s", server.ID, firstNonEmpty(server.Status, "unknown")))
+		}
 	}
 }
 
@@ -3761,6 +3873,19 @@ func remoteDockerImagesJSONCommand() string {
 
 func remoteDockerNetworksJSONCommand() string {
 	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker network ls --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker network ls --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
+}
+
+func remoteDockerLogsCommand(environmentName, serviceName string, lines int) string {
+	env := shellQuote(environmentName)
+	service := shellQuote(serviceName)
+	return fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+ids=$($docker_cmd ps -a -q --filter label=devopsellence.managed=true --filter label=devopsellence.environment=%s --filter label=devopsellence.service=%s)
+if [ -z "$ids" ]; then echo "No workload containers found for service %s in environment %s" >&2; exit 1; fi
+for id in $ids; do
+  name=$($docker_cmd inspect --format '{{.Name}}' "$id" | sed 's#^/##')
+  echo "==> $name <=="
+  $docker_cmd logs --tail %d "$id" 2>&1
+done`, env, service, service, env, lines)
 }
 
 func withRemoteLineLimit(command string, limit int) string {

@@ -15,7 +15,7 @@ import (
 
 const (
 	hetznerAPIBaseURL       = "https://api.hetzner.cloud/v1"
-	defaultHetznerImage     = "ubuntu-24.04"
+	DefaultHetznerImage     = "ubuntu-24.04"
 	defaultHetznerFirewall  = "devopsellence-solo"
 	devopsellenceManagedKey = "devopsellence_managed"
 )
@@ -73,7 +73,7 @@ func (h *Hetzner) CreateServer(ctx context.Context, input CreateServerInput) (Se
 	}
 	image := strings.TrimSpace(input.Image)
 	if image == "" {
-		image = defaultHetznerImage
+		image = DefaultHetznerImage
 	}
 	labels := map[string]string{
 		devopsellenceManagedKey: "true",

@@ -390,6 +390,7 @@ tasks:
       <div class="terminal-body">
         <div class="tl"><span class="tp">$</span> devopsellence deploy</div>
         <div class="tl"><span class="tp">$</span> devopsellence status</div>
+        <div class="tl"><span class="tp">$</span> devopsellence logs --node prod-1</div>
         <div class="tl"><span class="tp">$</span> devopsellence node logs prod-1</div>
         <div class="tl"><span class="tp">$</span> devopsellence doctor</div>
       </div>
@@ -977,6 +978,10 @@ tasks:
       <div class="docs-field">
         <dt><code>devopsellence ingress check --wait 5m</code></dt>
         <dd>Check DNS against public web node IPs before deploy.</dd>
+      </div>
+      <div class="docs-field">
+        <dt><code>devopsellence logs [service]</code></dt>
+        <dd>Show recent Docker workload logs from attached solo nodes. Pass <code>--node</code> to target a specific node.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence node logs &lt;name&gt;</code></dt>

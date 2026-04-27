@@ -15,7 +15,8 @@ Dogfood is not only e2e. It asks: can a target user complete the job, understand
 
 - Write `devopsellence` lowercase.
 - Prefer fresh temp apps and fresh state.
-- For solo-mode node tests, prefer `zirk` VMs when available instead of provider-created nodes. Use `zirk health`, `zirk flavors`, `zirk create <name> --flavor <flavor>`, `zirk show <name>`, and `zirk exec <name> ...` as user-facing setup evidence; skip provider flows that require cloud API tokens unless the user explicitly asks for them.
+- For ordinary solo-mode node tests, prefer `zirk` VMs when available instead of provider-created nodes. Use `zirk health`, `zirk flavors`, `zirk create <name> --flavor <flavor>`, `zirk show <name>`, and `zirk exec <name> ...` as user-facing setup evidence.
+- Also QA the Hetzner provider-created VM path for solo first-deploy/provider scenarios. Retrieve the Hetzner API token from 1Password item `hetzner-devopsellence-solo` with `op`, export it as `HCLOUD_TOKEN` or pass it to `devopsellence provider login hetzner --token "$HCLOUD_TOKEN"`, and never log the token value.
 - Start with a blind pass unless the user explicitly asks for code review first.
 - During blind pass, use only public/user-facing context: README, docs, CLI help, web UI, generated errors, logs surfaced by the product.
 - Do not read implementation source during blind pass.
@@ -43,7 +44,8 @@ Dogfood is not only e2e. It asks: can a target user complete the job, understand
    - Use docs, CLI help, UI, and terminal feedback.
    - Do not inspect source.
    - Install the requested target from `commands.log`: preview versions use `curl -fsSL https://www.devopsellence.com/lfg.sh?version=<version> | bash`; default stable uses `curl -fsSL https://www.devopsellence.com/lfg.sh | bash`.
-   - For solo first-deploy scenarios, if `zirk` is installed and healthy, create a fresh VM and use it as the existing SSH node. Record `zirk` commands in `commands.log`. Prefer the smallest flavor that can run Docker builds/deploys reliably; avoid Hetzner/provider login unless provider behavior is the scenario.
+   - For solo first-deploy scenarios, if `zirk` is installed and healthy, create a fresh VM and use it as the existing SSH node. Record `zirk` commands in `commands.log`. Prefer the smallest flavor that can run Docker builds/deploys reliably.
+   - For Hetzner provider QA, create a fresh provider node with `devopsellence provider login hetzner --token "$HCLOUD_TOKEN"` and `devopsellence node create prod-1 --provider hetzner --install --attach`. Use the default region/size unless the scenario asks otherwise. Record commands with `$HCLOUD_TOKEN` redacted, then verify deploy, status, logs/diagnose, detach, and provider-backed `devopsellence node remove prod-1 --yes` cleanup.
    - Work from user goals, not privileged steps.
    - Stop only for hard blockers; otherwise recover like a user would.
 
@@ -74,6 +76,7 @@ Use these default personas:
 Good default devopsellence journeys:
 
 - Solo first deploy for a fresh Rails app.
+- Solo first deploy with a Hetzner provider-created VM.
 - Existing app deploy with secrets.
 - Failed deploy diagnosis and recovery.
 - Status/log inspection after deploy.

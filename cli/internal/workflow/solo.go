@@ -3667,7 +3667,7 @@ func remoteDockerNetworksJSONCommand() string {
 }
 
 func withRemoteLineLimit(command string, limit int) string {
-	pipeline := fmt.Sprintf("( %s ) | awk 'NR <= %d { print } NR == %d { print %s; exit }'", command, limit, limit+1, shellQuote(soloDiagnoseTruncatedMarker))
+	pipeline := fmt.Sprintf("( %s ) | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'", command, shellQuote(soloDiagnoseTruncatedMarker), limit, limit+1)
 	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(pipeline) + "; fi; echo 'bash is required for bounded diagnostic output' >&2; exit 1"
 }
 

@@ -32,13 +32,12 @@ func (p Printer) PrintEvent(event string, fields map[string]any) error {
 	if p.Err == nil {
 		return nil
 	}
-	payload := map[string]any{
-		"schema_version": SchemaVersion,
-		"event":          event,
-	}
+	payload := map[string]any{}
 	for key, value := range fields {
 		payload[key] = value
 	}
+	payload["schema_version"] = SchemaVersion
+	payload["event"] = event
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err

@@ -1565,7 +1565,8 @@ func soloRepublishMissingAgentError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "devopsellence agent binary not found")
+	message := err.Error()
+	return strings.Contains(message, soloRemoteAgentBinaryNotFoundMessage) && strings.Contains(message, "exit status 127")
 }
 
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
@@ -2078,8 +2079,9 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 const sshOutputTailLimit = 64 * 1024
 
 const (
-	soloLogsDefaultLines = 100
-	soloLogsMaxLines     = 1000
+	soloLogsDefaultLines                 = 100
+	soloLogsMaxLines                     = 1000
+	soloRemoteAgentBinaryNotFoundMessage = "devopsellence agent binary not found"
 )
 
 type tailBuffer struct {
@@ -3231,7 +3233,7 @@ func desiredStateOverridePath(node config.Node) string {
 
 func remoteDesiredStateOverrideCommand(overridePath string) string {
 	quotedPath := shellQuote(overridePath)
-	return fmt.Sprintf("agent_bin=$(command -v devopsellence-agent || command -v devopsellence || true); if [ -z \"$agent_bin\" ]; then echo 'devopsellence agent binary not found' >&2; exit 127; fi; override_dir=$(dirname -- %[1]s); if [ \"$(id -u)\" = 0 ] || [ -w \"$override_dir\" ]; then exec \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; echo 'Cannot write desired state override. Make the SSH user able to write the agent state directory or enable passwordless sudo.' >&2; exit 1", quotedPath)
+	return fmt.Sprintf("agent_bin=$(command -v devopsellence-agent || command -v devopsellence || true); if [ -z \"$agent_bin\" ]; then echo %[2]s >&2; exit 127; fi; override_dir=$(dirname -- %[1]s); if [ \"$(id -u)\" = 0 ] || [ -w \"$override_dir\" ]; then exec \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n \"$agent_bin\" desired-state set-override --file - --override-path %[1]s; fi; echo 'Cannot write desired state override. Make the SSH user able to write the agent state directory or enable passwordless sudo.' >&2; exit 1", quotedPath, shellQuote(soloRemoteAgentBinaryNotFoundMessage))
 }
 
 type progressReader struct {

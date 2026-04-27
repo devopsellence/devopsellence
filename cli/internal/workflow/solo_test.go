@@ -791,6 +791,21 @@ func TestSoloLogsUsesRequestedLineLimit(t *testing.T) {
 	}
 }
 
+func TestSoloAgentUninstallRequiresConfirmation(t *testing.T) {
+	app := &App{SoloState: solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))}
+	err := app.SoloAgentUninstall(context.Background(), SoloAgentUninstallOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloAgentUninstall() error = nil, want confirmation error")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("error = %q, want --yes hint", err.Error())
+	}
+}
+
 func TestSoloAgentUninstallRunsCleanupScript(t *testing.T) {
 	binDir := t.TempDir()
 	scriptPath := filepath.Join(t.TempDir(), "uninstall.sh")

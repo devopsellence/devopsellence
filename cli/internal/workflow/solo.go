@@ -1656,7 +1656,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 
 func (a *App) SoloAgentUninstall(ctx context.Context, opts SoloAgentUninstallOptions) error {
 	if !opts.Yes {
-		return fmt.Errorf("agent uninstall requires --yes")
+		return ExitError{Code: 2, Err: errors.New("agent uninstall requires --yes; rerun with --yes to confirm remote cleanup")}
 	}
 	current, err := a.readSoloState()
 	if err != nil {

@@ -145,14 +145,14 @@ commands_template = <<~LOG
   #
   # ## <ISO-8601 timestamp> <short step name>
   # cwd: <working directory>
-  # agent intent: <why the agent is doing this>
+  # AI agent intent: <why the AI agent is doing this>
   # user approval: <not needed | requested | granted | denied>
   # command: <command with secrets redacted>
   # exit: <exit code>
   # output excerpt:
   # <minimal stdout/stderr or JSON proving the result>
-  # agent interpretation:
-  # <what the agent concluded and next action>
+  # AI agent interpretation:
+  # <what the AI agent concluded and next action>
   #
   # Use placeholders such as \$TOKEN, <redacted>, or <private-host> instead of secret values or private identifiers.
 LOG

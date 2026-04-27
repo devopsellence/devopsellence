@@ -93,7 +93,7 @@ devopsellence init --mode solo
 devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
 devopsellence node create prod-1 --provider hetzner --install --attach
 devopsellence deploy
-devopsellence node logs <name> --follow
+devopsellence node logs <name> --lines 100
 ```
 
 ## Lifecycle hooks

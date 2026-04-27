@@ -858,7 +858,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Short: "Remove a node",
 		Long: strings.Join([]string{
 			"Remove a node from devopsellence state.",
-			"For solo existing-SSH nodes this only forgets the node locally; run `devopsellence agent uninstall <name> --yes` first to clean the remote VM.",
+			"For solo existing-SSH nodes this only forgets the node locally; detach the node, then run `devopsellence agent uninstall <name> --yes` before removal to clean the remote VM.",
 			"For provider-managed solo nodes and shared nodes, removal deletes the provider/control-plane node where supported.",
 		}, "\n"),
 		Args: cobra.ExactArgs(1),

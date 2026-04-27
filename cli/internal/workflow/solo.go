@@ -2167,7 +2167,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		return a.Printer.PrintJSON(map[string]any{
 			"node":   opts.Name,
 			"action": "forgotten",
-			"note":   "existing SSH node removed from local state only; run `devopsellence agent uninstall <name> --yes` before removal to clean the remote VM",
+			"note":   "existing SSH node removed from local state only; detach the node, then run `devopsellence agent uninstall <name> --yes` before removal to clean the remote VM",
 		})
 
 	}

@@ -14,21 +14,28 @@ import (
 func TestRootVersionCommand(t *testing.T) {
 	t.Parallel()
 
-	var stdout bytes.Buffer
-	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stdout)
-	cmd.SetArgs([]string{"version"})
+	for _, args := range [][]string{{"version"}, {"--version"}} {
+		args := args
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Parallel()
 
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	payload := decodeJSONOutput(t, &stdout)
-	if payload["schema_version"] != float64(outputSchemaVersion) {
-		t.Fatalf("schema_version = %v, want %d", payload["schema_version"], outputSchemaVersion)
-	}
-	if strings.TrimSpace(payload["version"].(string)) == "" {
-		t.Fatalf("version = %v, want non-empty string", payload["version"])
+			var stdout bytes.Buffer
+			cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stdout)
+			cmd.SetArgs(args)
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			payload := decodeJSONOutput(t, &stdout)
+			if payload["schema_version"] != float64(outputSchemaVersion) {
+				t.Fatalf("schema_version = %v, want %d", payload["schema_version"], outputSchemaVersion)
+			}
+			if strings.TrimSpace(payload["version"].(string)) == "" {
+				t.Fatalf("version = %v, want non-empty string", payload["version"])
+			}
+		})
 	}
 }
 

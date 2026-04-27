@@ -41,10 +41,12 @@ Initialize the workspace:
 devopsellence init --mode solo
 ```
 
-Check local tooling:
+Commit the app before the first deploy. devopsellence uses the current git commit as the workload revision and image tag:
 
 ```bash
-devopsellence doctor
+git init # if this is not already a git checkout
+git add .
+git commit -m "initial deploy"
 ```
 
 Register an existing SSH-accessible VM, install the agent, and attach it to the current environment:
@@ -53,6 +55,7 @@ Register an existing SSH-accessible VM, install the agent, and attach it to the 
 devopsellence node create prod-1 --host 203.0.113.10 --user root --ssh-key ~/.ssh/id_ed25519
 devopsellence agent install prod-1
 devopsellence node attach prod-1
+devopsellence doctor
 ```
 
 Or create a Hetzner-backed node from the provider:
@@ -60,6 +63,7 @@ Or create a Hetzner-backed node from the provider:
 ```bash
 devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
 devopsellence node create prod-1 --provider hetzner --install --attach
+devopsellence doctor
 ```
 
 For provider-created solo nodes, `devopsellence node create` can generate a workspace-scoped SSH keypair under `$XDG_STATE_HOME/devopsellence/solo/keys/` (default: `~/.local/state/devopsellence/solo/keys/`) and reuse it for later node creation from the same workspace.
@@ -70,6 +74,8 @@ Deploy over SSH:
 devopsellence deploy
 devopsellence status
 ```
+
+`devopsellence status` includes `public_urls` when it can infer where the app should be reachable. For default solo HTTP ingress, try the node URL it prints.
 
 Solo deploy scope comes from the nodes attached to the current workspace/environment. Use `devopsellence node attach <name>` and `devopsellence node detach <name>` to change which nodes receive the deploy.
 
@@ -87,6 +93,16 @@ Store solo-mode deploy secrets locally:
 printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --service web --stdin
 devopsellence secret list
 ```
+
+To clean up a solo experiment on an existing SSH node, uninstall the agent and remove devopsellence-managed runtime resources before forgetting the node locally:
+
+```bash
+devopsellence agent uninstall prod-1 --yes
+devopsellence node detach prod-1
+devopsellence node remove prod-1 --yes
+```
+
+`agent uninstall --yes` stops and disables `devopsellence-agent`, removes devopsellence-managed containers, removes the `devopsellence-envoy` container and `devopsellence` Docker network, deletes agent state, and removes `/usr/local/bin/devopsellence-agent`. Use `--keep-workloads` only when you intentionally want to stop the agent without cleaning remote runtime resources.
 
 Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest desired environment snapshots live in `$XDG_STATE_HOME/devopsellence/solo/state.json` (default: `~/.local/state/devopsellence/solo/state.json` when `XDG_STATE_HOME` is unset). Generated solo SSH keys stay local under `$XDG_STATE_HOME/devopsellence/solo/keys/`.
 
@@ -192,7 +208,7 @@ services:
 Then store the token as a project secret and deploy normally:
 
 ```bash
-devopsellence secrets set CLOUDFLARE_TUNNEL_TOKEN
+devopsellence secret set CLOUDFLARE_TUNNEL_TOKEN --service cloudflared
 devopsellence deploy
 ```
 

@@ -563,6 +563,50 @@ func TestSoloAffectedNodesForNodeIncludesCoHostedNodes(t *testing.T) {
 	}
 }
 
+func TestSoloStatusIncludesPublicURLs(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := `{"time":"2026-04-27T10:42:45Z","revision":"rev","phase":"settled","summary":{"environments":0,"services":0}}`
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				NodeNames:     []string{"node-a"},
+			},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
+		t.Fatalf("public_urls = %#v, want node URL", urls)
+	}
+}
+
 func TestSoloStatusNodesWithoutAttachmentsReturnsEmptySet(t *testing.T) {
 	t.Parallel()
 
@@ -596,6 +640,40 @@ func TestSoloStatusNodesWithoutAttachmentsReturnsEmptySet(t *testing.T) {
 	}
 	if len(nodes) != 0 {
 		t.Fatalf("nodes = %#v, want empty", nodes)
+	}
+}
+
+func TestSoloDoctorReturnsFailureWhenLocalChecksFail(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json")),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	var renderedErr RenderedError
+	if !errors.As(exitErr.Err, &renderedErr) {
+		t.Fatalf("exit error = %#v, want RenderedError", exitErr.Err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %v, want false", payload["ok"])
 	}
 }
 
@@ -652,6 +730,86 @@ func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 	node := jsonMapFromAny(t, nodes[0])
 	if node["node"] != "node-a" || !strings.Contains(stringValueAny(node["error"]), "ssh root@203.0.113.10:") {
 		t.Fatalf("node payload = %#v, want node read error", node)
+	}
+}
+
+func TestSoloLogsUsesRequestedLineLimit(t *testing.T) {
+	commandPath := filepath.Join(t.TempDir(), "journal-command")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_JOURNAL_COMMAND", commandPath)
+	installFakeSoloCommands(t, nil)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloLogs(context.Background(), SoloLogsOptions{Node: "node-a", Lines: 20}); err != nil {
+		t.Fatalf("SoloLogs() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["limit"] != float64(20) {
+		t.Fatalf("limit = %v, want 20", payload["limit"])
+	}
+	commandBytes, err := os.ReadFile(commandPath)
+	if err != nil {
+		t.Fatalf("read journal command: %v", err)
+	}
+	if !strings.Contains(string(commandBytes), " -n 20") {
+		t.Fatalf("journal command = %q, want -n 20", commandBytes)
+	}
+}
+
+func TestSoloAgentUninstallRunsCleanupScript(t *testing.T) {
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(t.TempDir(), "uninstall.sh")
+	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
+set -euo pipefail
+command="${!#}"
+if [[ "$command" == "bash -s" ]]; then
+  cat >"$DEVOPSELLENCE_FAKE_UNINSTALL_SCRIPT"
+  exit 0
+fi
+echo "unexpected ssh command: $command" >&2
+exit 1
+`)
+	t.Setenv("DEVOPSELLENCE_FAKE_UNINSTALL_SCRIPT", scriptPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", AgentStateDir: "/var/lib/devopsellence-test"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentUninstall(context.Background(), SoloAgentUninstallOptions{Node: "node-a", Yes: true}); err != nil {
+		t.Fatalf("SoloAgentUninstall() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["action"] != "uninstalled" || payload["workloads_removed"] != true {
+		t.Fatalf("payload = %#v, want uninstall with workload cleanup", payload)
+	}
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read uninstall script: %v", err)
+	}
+	script := string(scriptBytes)
+	for _, want := range []string{"systemctl stop devopsellence-agent", "docker ps -aq --filter label=devopsellence.managed=true", "docker rm -f devopsellence-envoy", "rm -rf \"$STATE_DIR\""} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("uninstall script missing %q:\n%s", want, script)
+		}
 	}
 }
 
@@ -1774,6 +1932,14 @@ if [[ "$command" == *"docker image inspect"* ]]; then
 fi
 
 if [[ "$command" == *"docker info"* ]]; then
+  exit 0
+fi
+
+if [[ "$command" == *"journalctl"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_JOURNAL_COMMAND:-}" ]]; then
+    printf '%s' "$command" >"$DEVOPSELLENCE_FAKE_SSH_JOURNAL_COMMAND"
+  fi
+  printf 'line one\nline two\n'
   exit 0
 fi
 

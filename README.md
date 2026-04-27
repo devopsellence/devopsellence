@@ -43,7 +43,7 @@ devopsellence init --mode solo
 
 Start from an app that already has a Dockerfile. devopsellence does not install language toolchains or generate Rails/Node/etc. projects for you; create the app with your normal framework tools first, then let devopsellence deploy the container.
 
-The generated generic config uses the container port from your Dockerfile when it can infer one, for example `EXPOSE 80`. Otherwise it defaults the `web` service and health check to port `3000`. Your container must listen on the port in `devopsellence.yml`; edit `services.web.ports` and `services.web.healthcheck.port` if it listens elsewhere.
+The generated generic config uses the container port from your Dockerfile when it can infer one, for example `EXPOSE 80`. Otherwise it defaults the `web` service and healthcheck to port `3000`. Your container must listen on the port in `devopsellence.yml`; edit `services.web.ports` and `services.web.healthcheck.port` if it listens elsewhere.
 
 Commit the app before the first deploy. devopsellence uses the current git commit as the workload revision and image tag:
 

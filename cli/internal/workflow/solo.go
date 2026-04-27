@@ -2880,7 +2880,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"project_slug":     discovered.ProjectSlug,
 		"app_type":         discovered.AppType,
 		"fallback_used":    discovered.FallbackUsed,
-		"runtime_contract": soloInitRuntimeContract(*cfg, discovered),
+		"runtime_contract": soloInitRuntimeContract(*cfg, discovered, created),
 		"config": map[string]any{
 			"path":           configPath,
 			"created":        created,
@@ -2894,7 +2894,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 	})
 }
 
-func soloInitRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result) map[string]any {
+func soloInitRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, created bool) map[string]any {
 	serviceName, ok := cfg.PrimaryWebServiceName()
 	if !ok {
 		return map[string]any{
@@ -2905,6 +2905,8 @@ func soloInitRuntimeContract(cfg config.ProjectConfig, discovered discovery.Resu
 	port := service.HTTPPort(0)
 	source := "default"
 	switch {
+	case !created:
+		source = "config"
 	case discovered.InferredWebPort > 0 && port == discovered.InferredWebPort:
 		source = "dockerfile"
 	case port != config.DefaultWebPort:

@@ -1587,10 +1587,7 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 		return ExitError{Code: 2, Err: errors.New("--follow streams raw logs and is not supported by the JSON-only CLI")}
 	}
 	linesLimit := opts.Lines
-	if linesLimit == 0 {
-		linesLimit = soloLogsDefaultLines
-	}
-	if linesLimit < 0 || linesLimit > soloLogsMaxLines {
+	if linesLimit < 1 || linesLimit > soloLogsMaxLines {
 		return ExitError{Code: 2, Err: fmt.Errorf("--lines must be between 1 and %d", soloLogsMaxLines)}
 	}
 	journalArgs := fmt.Sprintf("-u devopsellence-agent --no-pager -n %d", linesLimit)
@@ -2890,6 +2887,11 @@ if [ "$KEEP_WORKLOADS" != "1" ] && command -v docker >/dev/null 2>&1; then
   if [ -n "$container_ids" ]; then
     # shellcheck disable=SC2086
     run_root docker rm -f $container_ids
+  fi
+  system_container_ids="$(run_root docker ps -aq --filter label=devopsellence.system || true)"
+  if [ -n "$system_container_ids" ]; then
+    # shellcheck disable=SC2086
+    run_root docker rm -f $system_container_ids
   fi
   run_root docker rm -f devopsellence-envoy || true
   run_root docker network rm devopsellence || true

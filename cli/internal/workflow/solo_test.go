@@ -872,7 +872,7 @@ exit 1
 		t.Fatalf("read uninstall script: %v", err)
 	}
 	script := string(scriptBytes)
-	for _, want := range []string{"systemctl stop devopsellence-agent", "docker ps -aq --filter label=devopsellence.managed=true", "docker rm -f devopsellence-envoy", "rm -rf \"$STATE_DIR\""} {
+	for _, want := range []string{"systemctl stop devopsellence-agent", "docker ps -aq --filter label=devopsellence.managed=true", "docker ps -aq --filter label=devopsellence.system", "docker rm -f devopsellence-envoy", "rm -rf \"$STATE_DIR\""} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("uninstall script missing %q:\n%s", want, script)
 		}

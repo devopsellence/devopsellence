@@ -14,7 +14,10 @@ type structuredTestError struct{}
 func (structuredTestError) Error() string { return "structured failure" }
 
 func (structuredTestError) ErrorFields() map[string]any {
-	return map[string]any{"next_steps": []string{"devopsellence status"}}
+	return map[string]any{
+		"message":    "do not override standard message",
+		"next_steps": []string{"devopsellence status"},
+	}
 }
 
 func TestWriteErrorIncludesStructuredFields(t *testing.T) {
@@ -36,6 +39,9 @@ func TestWriteErrorIncludesStructuredFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	errorPayload := payload["error"].(map[string]any)
+	if errorPayload["message"] != "structured failure" {
+		t.Fatalf("message = %#v, want standard error message", errorPayload["message"])
+	}
 	steps := errorPayload["next_steps"].([]any)
 	if len(steps) != 1 || steps[0] != "devopsellence status" {
 		t.Fatalf("next_steps = %#v, want structured field", steps)

@@ -512,6 +512,9 @@ func (e *soloRolloutError) Error() string {
 }
 
 func (e *soloRolloutError) ErrorFields() map[string]any {
+	if e == nil {
+		return map[string]any{}
+	}
 	fields := map[string]any{
 		"node": e.Node,
 		"next_steps": []string{
@@ -2262,7 +2265,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		return a.Printer.PrintJSON(map[string]any{
 			"node":   opts.Name,
 			"action": "forgotten",
-			"note":   "node remove only forgot local state; remote cleanup, if needed, is handled by `devopsellence agent uninstall <name> --yes` before forgetting the node",
+			"note":   "node remove only forgot local state; remote cleanup, if needed, should be handled by `devopsellence agent uninstall <name> --yes` before running `node remove`",
 		})
 
 	}

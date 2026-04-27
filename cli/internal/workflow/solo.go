@@ -1537,12 +1537,12 @@ func soloSecretListItems(cfg *config.ProjectConfig, secrets []solo.SecretRecord,
 				key := secretListKey(serviceName, ref.Name)
 				secretRef := strings.TrimSpace(ref.Secret)
 				items[key] = listedSecret{
-					ServiceName: serviceName,
-					Name:        ref.Name,
-					SecretRef:   secretRef,
-					Store:       secretListStore(secretRef, "configured"),
-					Configured:  true,
-					Exposed:     true,
+					ServiceName:        serviceName,
+					Name:               ref.Name,
+					SecretRef:          secretRef,
+					Store:              secretListStore(secretRef, "configured"),
+					Configured:         true,
+					AvailableToService: true,
 				}
 			}
 		}

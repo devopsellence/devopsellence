@@ -1846,16 +1846,23 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 		payload["next_steps"] = []string{fmt.Sprintf("ssh -p %d %s true", node.Port, shellQuote(node.User+"@"+node.Host))}
 		return a.printSoloDiagnoseResult(payload, diagnoseOK)
 	}
-	payload["agent"] = map[string]any{
+	agent := map[string]any{
 		"active": collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent"),
 		"status": collectRemoteLines(ctx, node, remoteSystemctlStatusCommand("devopsellence-agent", 40)),
 	}
-	payload["docker"] = map[string]any{
+	payload["agent"] = agent
+	dockerSnapshot := map[string]any{
 		"containers": collectRemoteJSONLines(ctx, node, remoteDockerPSJSONCommand(), soloDiagnoseDockerItemLimit),
 		"images":     collectRemoteJSONLines(ctx, node, remoteDockerImagesJSONCommand(), soloDiagnoseDockerItemLimit),
 		"networks":   collectRemoteJSONLines(ctx, node, remoteDockerNetworksJSONCommand(), soloDiagnoseDockerItemLimit),
 	}
-	payload["ports"] = collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
+	payload["docker"] = dockerSnapshot
+	ports := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
+	payload["ports"] = ports
+	if !diagnosticSectionsOK(agent, dockerSnapshot, ports) {
+		diagnoseOK = false
+		payload["ok"] = false
+	}
 	statusResult, statusErr := readNodeStatus(ctx, node)
 	if statusErr != nil {
 		payload["status_error"] = statusErr.Error()
@@ -1876,6 +1883,28 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 		"devopsellence node logs " + shellQuote(opts.Node) + " --lines 100",
 	}
 	return a.printSoloDiagnoseResult(payload, diagnoseOK)
+}
+
+func diagnosticSectionsOK(sections ...map[string]any) bool {
+	for _, section := range sections {
+		if !diagnosticSectionOK(section) {
+			return false
+		}
+	}
+	return true
+}
+
+func diagnosticSectionOK(section map[string]any) bool {
+	if section["ok"] == false {
+		return false
+	}
+	for _, value := range section {
+		child, ok := value.(map[string]any)
+		if ok && !diagnosticSectionOK(child) {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) printSoloDiagnoseResult(payload map[string]any, ok bool) error {

@@ -2321,6 +2321,21 @@ if [[ "$command" == *"docker info"* ]]; then
   exit 0
 fi
 
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"systemctl is-active devopsellence-agent"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nactive\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"systemctl status"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\ndevopsellence-agent active\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && ( "$command" == *"ss -ltn"* || "$command" == *"netstat -ltn"* ) ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nLISTEN 0 4096 0.0.0.0:80 0.0.0.0:*\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
 if [[ "$command" == *"systemctl is-active devopsellence-agent"* ]]; then
   printf 'active\n'
   exit 0

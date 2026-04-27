@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"sync"
 )
 
 const SchemaVersion = 1
@@ -13,12 +14,14 @@ const SchemaVersion = 1
 type Printer struct {
 	Out io.Writer
 	Err io.Writer
+	mu  *sync.Mutex
 }
 
 func New(out, err io.Writer) Printer {
 	return Printer{
 		Out: out,
 		Err: err,
+		mu:  &sync.Mutex{},
 	}
 }
 
@@ -44,6 +47,10 @@ func (p Printer) PrintEvent(event string, fields map[string]any) error {
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(payload); err != nil {
 		return err
+	}
+	if p.mu != nil {
+		p.mu.Lock()
+		defer p.mu.Unlock()
 	}
 	_, err := p.Err.Write(buf.Bytes())
 	return err

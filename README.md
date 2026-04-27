@@ -35,10 +35,10 @@ devopsellence is agent-first. The installer prints the agent skill command; to i
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
 ```
 
-Choose the workspace mode once:
+Initialize the workspace:
 
 ```bash
-devopsellence mode use solo
+devopsellence init --mode solo
 ```
 
 Check local tooling:
@@ -47,21 +47,22 @@ Check local tooling:
 devopsellence doctor
 ```
 
-Prepare the app, connect a node, and install the agent:
+Register an existing SSH-accessible VM, install the agent, and attach it to the current environment:
 
 ```bash
-devopsellence provider login hetzner
-devopsellence setup
+devopsellence node create prod-1 --host 203.0.113.10 --user root --ssh-key ~/.ssh/id_ed25519
+devopsellence agent install prod-1
+devopsellence node attach prod-1
 ```
-
-For provider-created solo nodes, `devopsellence setup` and `devopsellence node create` can generate a workspace-scoped SSH keypair under `$XDG_STATE_HOME/devopsellence/solo/keys/` (default: `~/.local/state/devopsellence/solo/keys/`) and reuse it for later node creation from the same workspace.
 
 Or create a Hetzner-backed node from the provider:
 
 ```bash
-devopsellence node create prod-1 --provider hetzner
-devopsellence node attach prod-1
+devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
+devopsellence node create prod-1 --provider hetzner --install --attach
 ```
+
+For provider-created solo nodes, `devopsellence node create` can generate a workspace-scoped SSH keypair under `$XDG_STATE_HOME/devopsellence/solo/keys/` (default: `~/.local/state/devopsellence/solo/keys/`) and reuse it for later node creation from the same workspace.
 
 Deploy over SSH:
 
@@ -83,7 +84,7 @@ devopsellence deploy
 Store solo-mode deploy secrets locally:
 
 ```bash
-printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --stdin
+printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --service web --stdin
 devopsellence secret list
 ```
 
@@ -94,9 +95,8 @@ Solo mode keeps app config workload-only. Solo nodes, local environment attachme
 When you want sign-in, teams, org/project/env context, hosted deploy APIs, or managed node workflows:
 
 ```bash
-devopsellence mode use shared
-devopsellence setup
-devopsellence provider login hetzner
+devopsellence init --mode shared
+devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
 devopsellence node create prod-1 --provider hetzner
 devopsellence deploy
 devopsellence status
@@ -209,7 +209,7 @@ The product layering is deliberate:
 - shared mode when coordination matters.
 - hosted or self-hosted depending on how much convenience you want.
 
-When you outgrow solo, `devopsellence mode use shared` switches to control-plane workflows. Same config, same agent, same deploy verbs.
+When you outgrow solo, `devopsellence init --mode shared` switches to control-plane workflows. Same config, same agent, same deploy verbs.
 
 The design rationale lives in [`docs/vision.md`](docs/vision.md). The explicit ingress-rules + generic-services schema change is documented in [`docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md`](docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md).
 

@@ -657,9 +657,9 @@ class E2E
     def scaffold_app!(plain_env_value, release_marker_value:)
       FileUtils.mkdir_p(@app_dir)
       init_git_repo!
-      set_workspace_mode!
       run!(
-        cli_binary.to_s, "setup",
+        cli_binary.to_s, "init",
+        "--mode", "shared",
         "--non-interactive",
         "--project", @project_name,
         "--env", @environment_name,
@@ -671,17 +671,6 @@ class E2E
       build_app_server_binary!
       update_app_config!(plain_env_value, release_marker_value:)
       commit_all!("Initialize e2e app")
-    end
-
-    def set_workspace_mode!
-      output = run!(
-        cli_binary.to_s, "mode", "use", "shared",
-        chdir: @app_dir.to_s,
-        timeout: 30,
-        env: cli_env
-      )
-      result = parse_json_output(output)
-      raise "mode use shared did not confirm shared mode" unless result["mode"] == "shared"
     end
 
     def write_app_files!

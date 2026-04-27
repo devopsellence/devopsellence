@@ -175,13 +175,13 @@
       </div>
       <div class="terminal-body">
         <div class="tl"><span class="tp">$</span> cd my-app</div>
-        <div class="tl"><span class="tp">$</span> devopsellence mode use solo</div>
-        <div class="tl tl-muted"># Use `shared` instead when you want sign-in, org/project/env context, and team workflows.</div>
+        <div class="tl"><span class="tp">$</span> devopsellence init --mode solo</div>
+        <div class="tl tl-muted"># Use `--mode shared` instead when you want sign-in, org/project/env context, and team workflows.</div>
       </div>
     </div>
-    <p>Mode is saved per workspace. You can switch later with <code>devopsellence mode use shared</code> or override a single command with <code>--mode</code>.</p>
+    <p>Mode is saved per workspace. You can switch later with <code>devopsellence init --mode shared</code> or override individual shared commands with explicit context flags.</p>
 
-    <h3>3. Set up the workspace</h3>
+    <h3>3. Add a node</h3>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -189,9 +189,9 @@
         <span class="dot dot-green"></span>
       </div>
       <div class="terminal-body">
-        <div class="tl"><span class="tp">$</span> devopsellence setup</div>
-        <div class="tl tl-muted"># solo: initialize config if needed, register or create a node, attach it, and install the agent.</div>
-        <div class="tl tl-muted"># shared: sign in, create or select org/project/env, and write workspace config.</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node create prod-1 --host 203.0.113.10 --user root --ssh-key ~/.ssh/id_ed25519</div>
+        <div class="tl"><span class="tp">$</span> devopsellence agent install prod-1</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node attach prod-1</div>
       </div>
     </div>
     <p>The root verbs stay the same across modes. The selected mode decides whether the CLI runs the solo SSH workflow or the shared control-plane workflow.</p>
@@ -307,7 +307,7 @@
     <p>Public ingress uses Envoy in solo and shared mode. Add hostnames with <code>devopsellence ingress set</code>; pass <code>--service</code> when the target web service is not already obvious. The agent answers HTTP-01 challenges and keeps HTTPS certificates on the node.</p>
 
     <h3>Set up a node</h3>
-    <p>Use the setup wizard for an existing SSH node or a Hetzner node created by the CLI:</p>
+    <p>Initialize the workspace, then register an existing SSH node or create a Hetzner node with the CLI:</p>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -315,13 +315,13 @@
         <span class="dot dot-green"></span>
       </div>
       <div class="terminal-body">
-        <div class="tl"><span class="tp">$</span> devopsellence mode use solo</div>
-        <div class="tl"><span class="tp">$</span> devopsellence setup</div>
-        <div class="tl tl-muted"># Existing node: prompts for host, user, labels, and SSH private key path.</div>
-        <div class="tl tl-muted"># Hetzner: prompts for region, size, labels, and defaults to a workspace-scoped generated SSH key.</div>
+        <div class="tl"><span class="tp">$</span> devopsellence init --mode solo</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node create prod-1 --host 203.0.113.10 --user root --ssh-key ~/.ssh/id_ed25519</div>
+        <div class="tl"><span class="tp">$</span> devopsellence agent install prod-1</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node attach prod-1</div>
       </div>
     </div>
-    <p>The wizard creates <code>devopsellence.yml</code> when needed, records the node and attachment in local solo state, installs Docker when supported, installs <code>devopsellence-agent</code>, starts the <code>devopsellence-agent</code> systemd service, and runs <code>doctor</code>. For provider-created solo nodes it can generate and reuse a workspace-scoped SSH keypair under local state instead of requiring a pre-existing SSH public key path.</p>
+    <p><code>devopsellence init --mode solo</code> creates <code>devopsellence.yml</code> when needed. Node commands record node inventory and environment attachments in local solo state. <code>devopsellence agent install</code> installs Docker when supported, installs <code>devopsellence-agent</code>, and starts the systemd service. For provider-created solo nodes, <code>node create</code> can generate and reuse a workspace-scoped SSH keypair under local state instead of requiring a pre-existing SSH public key path.</p>
 
     <h3>Create a Hetzner node</h3>
     <p>Provider tokens stay outside the config file. Save a Hetzner token locally, or set <code>DEVOPSELLENCE_HETZNER_API_TOKEN</code> or <code>HCLOUD_TOKEN</code>:</p>
@@ -847,16 +847,20 @@ tasks:
     <h3>Core</h3>
     <dl class="docs-fields">
       <div class="docs-field">
+        <dt><code>devopsellence init --mode solo|shared</code></dt>
+        <dd>Set the workspace mode and initialize the current checkout for that mode. In solo mode this can create <code>devopsellence.yml</code>; in shared mode this can sign in, create or select org/project/env context, and write <code>devopsellence.yml</code>.</dd>
+      </div>
+      <div class="docs-field">
         <dt><code>devopsellence mode use solo|shared</code></dt>
-        <dd>Persist the workspace mode for this checkout.</dd>
+        <dd>Persist only the workspace mode for this checkout.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence mode show</code></dt>
         <dd>Show the current workspace mode.</dd>
       </div>
       <div class="docs-field">
-        <dt><code>devopsellence setup</code></dt>
-        <dd>Prepare the current workspace for its selected mode.</dd>
+        <dt><code>devopsellence init</code></dt>
+        <dd>Initialize the current workspace using its saved mode.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence deploy</code></dt>
@@ -955,8 +959,8 @@ tasks:
     <h3>Solo mode</h3>
     <dl class="docs-fields">
       <div class="docs-field">
-        <dt><code>devopsellence setup</code></dt>
-        <dd>In solo mode, configure a node, write local node inventory, install the agent over SSH, and run diagnostics.</dd>
+        <dt><code>devopsellence init</code></dt>
+        <dd>In solo mode, ensure or validate <code>devopsellence.yml</code> and report readiness based on whether a node is attached. To prepare a node, use <code>devopsellence node create</code>, <code>devopsellence agent install</code>, and <code>devopsellence node attach</code>.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence deploy</code></dt>
@@ -1107,7 +1111,7 @@ tasks:
 
     <h3>What changes</h3>
     <ul>
-      <li><strong>Mode</strong> &mdash; run <code>devopsellence mode use shared</code>, then <code>devopsellence setup</code> to sign in and create org/project/env context.</li>
+      <li><strong>Mode</strong> &mdash; run <code>devopsellence init --mode shared</code> to sign in and create org/project/env context.</li>
       <li><strong>Nodes</strong> &mdash; register your existing servers with <code>devopsellence node register</code> and run the install command on each server. The agent switches from file-watching to control-plane polling.</li>
       <li><strong>Images</strong> &mdash; instead of streaming over SSH, images are pushed to a container registry. The control plane handles registry credentials.</li>
       <li><strong>Secrets</strong> &mdash; re-create secrets with <code>devopsellence secret set &lt;name&gt; --service web --stdin</code>. They move from your local <code>.env</code> to encrypted server-side storage.</li>

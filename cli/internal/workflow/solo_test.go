@@ -428,6 +428,86 @@ func TestCreateProviderNodeNormalizesHetznerProviderBeforeValidation(t *testing.
 	}
 }
 
+func TestSoloNodeCreateRejectsDuplicateAfterTrimmingName(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"prod-1": {Host: "203.0.113.10", User: "root"}}}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{Printer: output.New(io.Discard, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+
+	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{Name: " prod-1 ", Host: "203.0.113.11", User: "root"})
+	if err == nil || !strings.Contains(err.Error(), `solo node "prod-1" already exists`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSoloNodeCreateRegistersExistingSSHNode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	wantKey := filepath.Join(home, ".ssh", "id_ed25519")
+	if err := os.MkdirAll(filepath.Dir(wantKey), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wantKey, []byte("private key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{
+		Name:   "prod-1",
+		Host:   "203.0.113.10",
+		User:   "deploy",
+		Port:   2222,
+		SSHKey: "~/.ssh/id_ed25519",
+		Labels: "web,worker",
+		Attach: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := current.Nodes["prod-1"]
+	if node.Host != "203.0.113.10" || node.User != "deploy" || node.Port != 2222 || node.SSHKey != wantKey {
+		t.Fatalf("node = %#v, want ssh key %q", node, wantKey)
+	}
+	attached, err := current.AttachedNodeNames(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(attached, []string{"prod-1"}) {
+		t.Fatalf("attached nodes = %#v", attached)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["source"] != "existing_ssh" || payload["attached"] != true || payload["agent_installed"] != false {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
 func TestReleaseNodeForSnapshotSelectsSortedEligibleNode(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"bin/rails", "db:migrate"}}
@@ -785,37 +865,6 @@ func TestDesiredStateRevisionReadsRevision(t *testing.T) {
 	}
 	if revision != "abc123" {
 		t.Fatalf("revision = %q, want abc123", revision)
-	}
-}
-
-func TestEnsureSoloProjectConfigWritesDefaultConfig(t *testing.T) {
-	t.Parallel()
-
-	workspaceRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	app := &App{
-		ConfigStore: config.NewStore(),
-		Cwd:         workspaceRoot,
-	}
-
-	cfg, gotRoot, err := app.ensureSoloProjectConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotRoot != workspaceRoot {
-		t.Fatalf("workspace root = %q, want %q", gotRoot, workspaceRoot)
-	}
-	if cfg == nil {
-		t.Fatal("config is nil")
-	}
-	if cfg.Organization != "solo" {
-		t.Fatalf("organization = %q, want solo", cfg.Organization)
-	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, "devopsellence.yml")); err != nil {
-		t.Fatalf("expected config file: %v", err)
 	}
 }
 
@@ -1539,15 +1588,54 @@ func TestEnsureNodeCreateSSHPublicKeyKeepsExplicitKey(t *testing.T) {
 	}
 }
 
-func TestSoloSetupRequiresExplicitInputs(t *testing.T) {
-	app := &App{Printer: output.New(io.Discard, io.Discard)}
-
-	err := app.SoloSetup(context.Background(), SoloSetupOptions{})
-	if err == nil {
-		t.Fatal("SoloSetup() error = nil, want explicit input error")
+func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
 	}
-	if !strings.Contains(err.Error(), "solo setup requires explicit inputs") {
-		t.Fatalf("SoloSetup() error = %v", err)
+
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadFromRoot(workspaceRoot); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	configPayload := jsonMapFromAny(t, payload["config"])
+	if configPayload["created"] != true || configPayload["valid"] != true {
+		t.Fatalf("config payload = %#v", configPayload)
+	}
+}
+
+func TestSoloInitReportsReadyWhenNodeAttached(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"prod-1": {Host: "203.0.113.10", User: "root"}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "prod-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ready"] != true {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if missing := jsonArrayFromMap(t, payload, "missing"); len(missing) != 0 {
+		t.Fatalf("missing = %#v, want empty", missing)
 	}
 }
 

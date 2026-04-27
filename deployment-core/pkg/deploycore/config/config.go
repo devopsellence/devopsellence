@@ -226,7 +226,7 @@ func Load(path string) (*ProjectConfig, error) {
 		cfg.App.Type = AppTypeGeneric
 	}
 	if cfg.SchemaVersion == 0 {
-		return nil, fmt.Errorf("invalid %s in %s: schema_version must be %d; re-run `devopsellence setup`", filepath.Base(path), path, SchemaVersion)
+		return nil, fmt.Errorf("invalid %s in %s: schema_version must be %d; re-run `devopsellence init --mode solo|shared`", filepath.Base(path), path, SchemaVersion)
 	}
 	applyDefaults(&cfg)
 	if err := Validate(&cfg); err != nil {
@@ -265,7 +265,7 @@ func (s Store) Fetch(workspaceRoot string) (ProjectConfig, error) {
 		return ProjectConfig{}, err
 	}
 	if cfg == nil {
-		return ProjectConfig{}, fmt.Errorf("project not initialized. run `devopsellence setup` from %s", workspaceRoot)
+		return ProjectConfig{}, fmt.Errorf("project not initialized. run `devopsellence init --mode solo|shared` from %s", workspaceRoot)
 	}
 	return *cfg, nil
 }
@@ -342,7 +342,7 @@ func Validate(cfg *ProjectConfig) error {
 		return errors.New("config is required")
 	}
 	if cfg.SchemaVersion != SchemaVersion {
-		return fmt.Errorf("schema_version must be %d; re-run `devopsellence setup`", SchemaVersion)
+		return fmt.Errorf("schema_version must be %d; re-run `devopsellence init --mode solo|shared`", SchemaVersion)
 	}
 	if cfg.App.Type != AppTypeRails && cfg.App.Type != AppTypeGeneric {
 		return fmt.Errorf("app.type must be %q or %q", AppTypeRails, AppTypeGeneric)

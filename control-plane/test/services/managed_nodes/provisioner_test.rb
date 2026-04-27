@@ -121,7 +121,7 @@ module ManagedNodes
         ).call(node_name: "pool-node")
       end
 
-      assert_equal "No managed server capacity is available in ash/cpx11 right now. Retry in a few minutes, or use your own VM/server with `devopsellence mode use solo` and `devopsellence setup`.", error.message
+      assert_equal "No managed server capacity is available in ash/cpx11 right now. Retry in a few minutes, or use your own VM/server with `devopsellence init --mode solo`.", error.message
       assert_equal 3, provider.attempts
       assert NodeBootstrapToken.order(:id).last.consumed_at.present?
     end
@@ -150,7 +150,7 @@ module ManagedNodes
         ).call(node_name: "pool-node")
       end
 
-      assert_equal "No managed server capacity is available in ash/cpx11, hil/cpx11 right now. Retry in a few minutes, or use your own VM/server with `devopsellence mode use solo` and `devopsellence setup`.", error.message
+      assert_equal "No managed server capacity is available in ash/cpx11, hil/cpx11 right now. Retry in a few minutes, or use your own VM/server with `devopsellence init --mode solo`.", error.message
       assert_equal 3, primary.attempts
       assert_equal 3, secondary.attempts
     end

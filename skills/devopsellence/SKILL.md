@@ -25,23 +25,16 @@ If the command is missing, tell the user the devopsellence CLI is required and p
 devopsellence doctor
 ```
 
-4. Choose the workspace mode before the first setup:
+4. Initialize the workspace before the first deploy:
 
 ```sh
-devopsellence mode use shared
-```
-
-Then prepare the project:
-
-```sh
-devopsellence setup
+devopsellence init --mode shared
 ```
 
 If the user already knows the target workspace values, prefer explicit flags:
 
 ```sh
-devopsellence mode use shared
-devopsellence setup --org acme --project shop --env staging
+devopsellence init --mode shared --org acme --project shop --env staging
 ```
 
 5. Deploy the app:
@@ -59,7 +52,7 @@ devopsellence deploy --image docker.io/example/app@sha256:...
 6. Verify the result:
 
 ```sh
-devopsellence status --json
+devopsellence status
 ```
 
 ## Secrets
@@ -75,26 +68,30 @@ devopsellence secret delete NAME --service web
 
 ## Bring your own node
 
-Use these in shared mode when the user wants to run on their own machine or VM:
+Use these in shared mode for a provider-created node:
 
 ```sh
-devopsellence mode use shared
-devopsellence provider login hetzner
-devopsellence node create prod-1
-devopsellence node register
-devopsellence node list --json
+devopsellence init --mode shared
+devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
+devopsellence node create prod-1 --provider hetzner
+devopsellence node list
 devopsellence node attach <id>
 devopsellence node detach <id>
 devopsellence node remove <id>
 ```
 
+Use this in shared mode for an existing server that you will install manually:
+
+```sh
+devopsellence node register
+```
+
 Use these in solo mode when the user wants SSH-first workflows without the control plane:
 
 ```sh
-devopsellence mode use solo
-devopsellence provider login hetzner
-devopsellence node create prod-1
-devopsellence setup
+devopsellence init --mode solo
+devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
+devopsellence node create prod-1 --provider hetzner --install --attach
 devopsellence deploy
 devopsellence node logs <name> --follow
 ```

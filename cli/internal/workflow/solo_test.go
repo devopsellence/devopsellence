@@ -942,6 +942,11 @@ func TestSoloLogsUsesRequestedLineLimit(t *testing.T) {
 
 func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
 	installFakeSoloCommands(t, nil)
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
 
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
@@ -954,7 +959,12 @@ func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
 	if err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{ServiceName: "web", Nodes: []string{"node-a"}, Lines: 20}); err != nil {
 		t.Fatalf("SoloWorkloadLogs() error = %v", err)
 	}
@@ -970,9 +980,34 @@ func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
 	}
 }
 
+func TestSoloWorkloadLogsRequiresWorkspaceConfig(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	workspaceRoot := t.TempDir()
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{ServiceName: "web", Nodes: []string{"node-a"}, Lines: 20})
+	if err == nil || !strings.Contains(err.Error(), "no workspace selected") {
+		t.Fatalf("SoloWorkloadLogs() error = %v, want no workspace selected", err)
+	}
+}
+
 func TestRemoteDockerLogsCommandPreservesPerContainerFailure(t *testing.T) {
 	command := remoteDockerLogsCommand("production", "web", 20)
-	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`} {
+	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`} {
 		if !strings.Contains(command, snippet) {
 			t.Fatalf("command = %q, want %q", command, snippet)
 		}

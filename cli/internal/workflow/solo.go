@@ -1859,6 +1859,9 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes selected; attach a node or pass --node")
 	}
+	if cfg == nil {
+		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
+	}
 	environmentName := soloEnvironmentName(cfg, "")
 	results := make([]map[string]any, 0, len(nodes))
 	ok := true
@@ -2644,12 +2647,18 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 		"labels":             created.Labels,
 		"provider":           created.ProviderSlug,
 		"provider_server_id": created.Server.ID,
-		"provider_region":    created.Node.ProviderRegion,
-		"provider_size":      created.Node.ProviderSize,
-		"provider_image":     created.Node.ProviderImage,
 		"organization_id":    bootstrap.Organization.ID,
 		"organization_name":  bootstrap.Organization.Name,
 		"registered":         true,
+	}
+	if strings.TrimSpace(created.Node.ProviderRegion) != "" {
+		result["provider_region"] = created.Node.ProviderRegion
+	}
+	if strings.TrimSpace(created.Node.ProviderSize) != "" {
+		result["provider_size"] = created.Node.ProviderSize
+	}
+	if strings.TrimSpace(created.Node.ProviderImage) != "" {
+		result["provider_image"] = created.Node.ProviderImage
 	}
 	if opts.Unassigned {
 		result["assignment_mode"] = "unassigned"
@@ -2668,6 +2677,7 @@ const sshOutputTailLimit = 64 * 1024
 const (
 	soloLogsDefaultLines                 = 100
 	soloLogsMaxLines                     = 1000
+	soloWorkloadLogsContainerLimit       = 20
 	soloDiagnoseDockerItemLimit          = 100
 	soloDiagnosePortsLineLimit           = 200
 	soloDiagnoseTruncatedMarker          = "__DEVOPSELLENCE_TRUNCATED__"
@@ -3580,6 +3590,7 @@ func systemdQuoteArg(value string) string {
 
 func waitForSoloProviderServer(ctx context.Context, provider providers.Provider, server providers.Server, progress func(string)) (providers.Server, error) {
 	deadline := time.Now().Add(3 * time.Minute)
+	lastStatus := firstNonEmpty(server.Status, "unknown")
 	for {
 		if provider.Ready(server) {
 			return server, nil
@@ -3597,9 +3608,11 @@ func waitForSoloProviderServer(ctx context.Context, provider providers.Provider,
 			return providers.Server{}, err
 		}
 		server = next
-		if progress != nil {
-			progress(fmt.Sprintf("Provider server %s status: %s", server.ID, firstNonEmpty(server.Status, "unknown")))
+		status := firstNonEmpty(server.Status, "unknown")
+		if progress != nil && status != lastStatus {
+			progress(fmt.Sprintf("Provider server %s status: %s", server.ID, status))
 		}
+		lastStatus = status
 	}
 }
 
@@ -3895,6 +3908,7 @@ if [ "$ps_status" -ne 0 ]; then
   fi
   exit "$ps_status"
 fi
+ids=$(printf '%%s\n' "$ids" | sed '/^$/d' | head -n %d)
 if [ -z "$ids" ]; then echo "No workload containers found for service %s in environment %s" >&2; exit 1; fi
 rc=0
 for id in $ids; do
@@ -3911,7 +3925,7 @@ for id in $ids; do
     rc=$logs_status
   fi
 done
-exit "$rc"`, env, service, service, env, service, env, lines)
+exit "$rc"`, env, service, service, env, soloWorkloadLogsContainerLimit, service, env, lines)
 }
 
 func withRemoteLineLimit(command string, limit int) string {

@@ -928,7 +928,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	nodeLogsCommand.Flags().BoolVarP(&nodeLogsOpts.Follow, "follow", "f", false, "Follow log output")
-	nodeLogsCommand.Flags().IntVar(&nodeLogsOpts.Lines, "lines", 100, "Number of recent log lines to return; use 0 for all available lines")
+	nodeLogsCommand.Flags().IntVar(&nodeLogsOpts.Lines, "lines", soloLogsDefaultLines, fmt.Sprintf("Number of recent log lines to return, 1-%d", soloLogsMaxLines))
 	nodeCommand.AddCommand(nodeRegisterCommand, nodeCreateCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand)
 	root.AddCommand(nodeCommand)
 

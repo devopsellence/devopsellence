@@ -1587,13 +1587,13 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 		return ExitError{Code: 2, Err: errors.New("--follow streams raw logs and is not supported by the JSON-only CLI")}
 	}
 	linesLimit := opts.Lines
-	if linesLimit < 0 {
-		return ExitError{Code: 2, Err: errors.New("--lines must be greater than or equal to 0")}
+	if linesLimit == 0 {
+		linesLimit = soloLogsDefaultLines
 	}
-	journalArgs := "-u devopsellence-agent --no-pager"
-	if linesLimit > 0 {
-		journalArgs = fmt.Sprintf("%s -n %d", journalArgs, linesLimit)
+	if linesLimit < 0 || linesLimit > soloLogsMaxLines {
+		return ExitError{Code: 2, Err: fmt.Errorf("--lines must be between 1 and %d", soloLogsMaxLines)}
 	}
+	journalArgs := fmt.Sprintf("-u devopsellence-agent --no-pager -n %d", linesLimit)
 
 	out, err := solo.RunSSH(ctx, node, remoteJournalctlCommand(journalArgs), nil)
 	if err != nil {
@@ -2052,6 +2052,11 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 }
 
 const sshOutputTailLimit = 64 * 1024
+
+const (
+	soloLogsDefaultLines = 100
+	soloLogsMaxLines     = 1000
+)
 
 type tailBuffer struct {
 	limit     int
@@ -2823,8 +2828,8 @@ type soloAgentUninstallScriptOptions struct {
 }
 
 func safeSoloAgentStateDir(value string) (string, error) {
-	stateDir := filepath.Clean(strings.TrimSpace(value))
-	if stateDir == "." || stateDir == string(filepath.Separator) || !filepath.IsAbs(stateDir) {
+	stateDir := path.Clean(strings.TrimSpace(value))
+	if stateDir == "." || stateDir == "/" || !path.IsAbs(stateDir) {
 		return "", fmt.Errorf("unsafe devopsellence agent state dir %q", value)
 	}
 	if !strings.Contains(stateDir, "devopsellence") {

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,10 @@ type SoloNodeDetachOptions struct {
 type SoloLogsOptions struct {
 	Node  string
 	Lines int
+}
+
+type SoloNodeDiagnoseOptions struct {
+	Node string
 }
 
 type SoloNodeLabelSetOptions struct {
@@ -347,9 +352,12 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 
 	buildCtx := filepath.Join(workspaceRoot, cfg.Build.Context)
 	dockerfile := filepath.Join(workspaceRoot, cfg.Build.Dockerfile)
+	deployProgress := a.soloProgress("devopsellence deploy", map[string]any{"image": imageTag})
+	deployProgress("Building local Docker image...")
 	if err := dockerBuild(ctx, buildCtx, dockerfile, imageTag, cfg.Build.Platforms); err != nil {
 		return fmt.Errorf("docker build: %w", err)
 	}
+	deployProgress("Local Docker image built.")
 
 	secrets, err := a.resolveSoloSecretValues(ctx, current, workspaceRoot, environmentName, cfg)
 	if err != nil {
@@ -397,9 +405,9 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	}
 	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
-		payload["next_steps"] = []string{"devopsellence status", "curl " + urls[0]}
+		payload["next_steps"] = append([]string{"devopsellence status", "curl " + urls[0]}, soloNodeLogNextSteps(nodes)...)
 	} else {
-		payload["next_steps"] = []string{"devopsellence status"}
+		payload["next_steps"] = append([]string{"devopsellence status"}, soloNodeLogNextSteps(nodes)...)
 	}
 	return a.Printer.PrintJSON(payload)
 
@@ -808,7 +816,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 					appendSoloRepublishError(&mu, &errs, name, "local image precheck", check.err)
 					return
 				}
-				if err := transferImage(ctx, node, image, func(string) {}); err != nil {
+				if err := transferImage(ctx, node, image, a.soloProgress("devopsellence deploy", map[string]any{"node": name, "image": image, "step": "image_transfer"})); err != nil {
 					appendSoloRepublishError(&mu, &errs, name, "image transfer", err)
 					return
 				}
@@ -1105,6 +1113,44 @@ func remoteNodeHasImage(ctx context.Context, node config.Node, imageTag string) 
 		return false, err
 	}
 	return strings.TrimSpace(out) == "present", nil
+}
+
+func (a *App) soloProgress(operation string, fields map[string]any) func(string) {
+	return func(message string) {
+		message = strings.TrimSpace(message)
+		if message == "" {
+			return
+		}
+		payload := map[string]any{
+			"operation": operation,
+			"message":   message,
+		}
+		for key, value := range fields {
+			payload[key] = value
+		}
+		_ = a.Printer.PrintEvent("progress", payload)
+	}
+}
+
+func soloNodeLogNextSteps(nodes map[string]config.Node) []string {
+	steps := []string{}
+	for _, nodeName := range sortedNodeNames(nodes) {
+		steps = append(steps, "devopsellence node logs "+shellQuote(nodeName)+" --lines 100")
+	}
+	return steps
+}
+
+func soloDoctorNextSteps(nodes map[string]config.Node) []string {
+	steps := []string{}
+	for _, nodeName := range sortedNodeNames(nodes) {
+		node := nodes[nodeName]
+		steps = append(steps,
+			"devopsellence agent install "+shellQuote(nodeName),
+			"devopsellence node diagnose "+shellQuote(nodeName),
+			fmt.Sprintf("ssh -p %d %s true", node.Port, shellQuote(node.User+"@"+node.Host)),
+		)
+	}
+	return steps
 }
 
 func (a *App) ensureLocalSoloSnapshotImage(ctx context.Context, imageTag string) error {
@@ -1771,11 +1817,306 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 	if err != nil {
 		return err
 	}
+	lines := splitNonFinalEmptyLines(out)
+	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines, "limit": linesLimit})
+}
+
+func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions) error {
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	node, ok := current.Nodes[opts.Node]
+	if !ok {
+		return fmt.Errorf("node %q not found", opts.Node)
+	}
+
+	payload := map[string]any{
+		"schema_version": outputSchemaVersion,
+		"node":           opts.Node,
+		"host":           node.Host,
+		"user":           node.User,
+		"port":           node.Port,
+	}
+	checks := a.soloDiagnoseChecks(ctx, node)
+	payload["checks"] = checks
+	diagnoseOK := soloChecksOK(checks)
+	payload["ok"] = diagnoseOK
+	if soloCheckFailed(checks, "ssh") {
+		payload["next_steps"] = []string{fmt.Sprintf("ssh -p %d %s true", node.Port, shellQuote(node.User+"@"+node.Host))}
+		return a.printSoloDiagnoseResult(payload, diagnoseOK)
+	}
+	agent := map[string]any{
+		"active": collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent"),
+		"status": collectRemoteLines(ctx, node, remoteSystemctlStatusCommand("devopsellence-agent", 40)),
+	}
+	payload["agent"] = agent
+	dockerSnapshot := map[string]any{
+		"containers": collectRemoteJSONLines(ctx, node, remoteDockerPSJSONCommand(), soloDiagnoseDockerItemLimit),
+		"images":     collectRemoteJSONLines(ctx, node, remoteDockerImagesJSONCommand(), soloDiagnoseDockerItemLimit),
+		"networks":   collectRemoteJSONLines(ctx, node, remoteDockerNetworksJSONCommand(), soloDiagnoseDockerItemLimit),
+	}
+	payload["docker"] = dockerSnapshot
+	ports := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
+	payload["ports"] = ports
+	if !diagnosticSectionsOK(agent, dockerSnapshot, ports) {
+		diagnoseOK = false
+		payload["ok"] = false
+	}
+	statusResult, statusErr := readNodeStatus(ctx, node)
+	if statusErr != nil {
+		payload["status_error"] = statusErr.Error()
+		diagnoseOK = false
+		payload["ok"] = false
+	} else if statusResult.Missing {
+		payload["status_missing"] = true
+	} else {
+		var statusPayload any
+		if err := json.Unmarshal(statusResult.Raw, &statusPayload); err == nil {
+			payload["status"] = statusPayload
+		} else {
+			payload["status"] = string(statusResult.Raw)
+		}
+	}
+	payload["next_steps"] = []string{
+		"devopsellence status",
+		"devopsellence node logs " + shellQuote(opts.Node) + " --lines 100",
+	}
+	return a.printSoloDiagnoseResult(payload, diagnoseOK)
+}
+
+func diagnosticSectionsOK(sections ...map[string]any) bool {
+	for _, section := range sections {
+		if !diagnosticSectionOK(section) {
+			return false
+		}
+	}
+	return true
+}
+
+func diagnosticSectionOK(section map[string]any) bool {
+	if section["ok"] == false {
+		return false
+	}
+	for _, value := range section {
+		child, ok := value.(map[string]any)
+		if ok && !diagnosticSectionOK(child) {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) printSoloDiagnoseResult(payload map[string]any, ok bool) error {
+	if err := a.Printer.PrintJSON(payload); err != nil {
+		return err
+	}
+	if !ok {
+		nodeName, _ := payload["node"].(string)
+		if strings.TrimSpace(nodeName) == "" {
+			nodeName = "node"
+		}
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("solo node diagnose failed for %s", nodeName)}}
+	}
+	return nil
+}
+
+func (a *App) soloDiagnoseChecks(ctx context.Context, node config.Node) []map[string]any {
+	checks := []struct {
+		name string
+		cmd  string
+	}{
+		{name: "ssh", cmd: "true"},
+		{name: "docker", cmd: remoteDockerCheckCommand()},
+		{name: "agent", cmd: "systemctl is-active --quiet devopsellence-agent"},
+	}
+	results := make([]map[string]any, 0, len(checks))
+	for _, check := range checks {
+		out, err := solo.RunSSH(ctx, node, check.cmd, nil)
+		result := map[string]any{"check": check.name, "ok": err == nil}
+		if err != nil {
+			result["detail"] = err.Error()
+		} else if detail := strings.TrimSpace(out); detail != "" {
+			result["detail"] = detail
+		}
+		results = append(results, result)
+	}
+	return results
+}
+
+func soloChecksOK(checks []map[string]any) bool {
+	for _, check := range checks {
+		if check["ok"] == false {
+			return false
+		}
+	}
+	return true
+}
+
+func soloCheckFailed(checks []map[string]any, name string) bool {
+	for _, check := range checks {
+		if check["check"] == name && check["ok"] == false {
+			return true
+		}
+	}
+	return false
+}
+
+func splitNonFinalEmptyLines(out string) []string {
 	lines := strings.Split(out, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines, "limit": linesLimit})
+	return lines
+}
+
+type remoteDiagnosticResult struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
+	Err      error
+}
+
+func runRemoteDiagnostic(ctx context.Context, node config.Node, command string) remoteDiagnosticResult {
+	wrapped := fmt.Sprintf(`stdout_file="$(mktemp)" || exit 1
+stderr_file="$(mktemp)" || { rm -f "$stdout_file"; exit 1; }
+(
+%s
+) >"$stdout_file" 2>"$stderr_file"
+rc=$?
+printf '__DEVOPSELLENCE_EXIT_CODE__%%s\n' "$rc"
+printf '__DEVOPSELLENCE_STDOUT__\n'
+cat "$stdout_file"
+printf '\n__DEVOPSELLENCE_STDERR__\n'
+cat "$stderr_file"
+rm -f "$stdout_file" "$stderr_file"
+exit 0`, command)
+	out, err := solo.RunSSH(ctx, node, wrapped, nil)
+	if err != nil {
+		return remoteDiagnosticResult{Err: err}
+	}
+	return parseRemoteDiagnostic(out)
+}
+
+func parseRemoteDiagnostic(out string) remoteDiagnosticResult {
+	const exitPrefix = "__DEVOPSELLENCE_EXIT_CODE__"
+	const stdoutMarker = "\n__DEVOPSELLENCE_STDOUT__\n"
+	const stderrMarker = "\n__DEVOPSELLENCE_STDERR__\n"
+	lineEnd := strings.IndexByte(out, '\n')
+	if lineEnd < 0 || !strings.HasPrefix(out[:lineEnd], exitPrefix) {
+		return remoteDiagnosticResult{ExitCode: 1, Stdout: out, Err: fmt.Errorf("remote diagnostic wrapper returned unexpected output")}
+	}
+	exitCode, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(out[:lineEnd], exitPrefix)))
+	if err != nil {
+		return remoteDiagnosticResult{ExitCode: 1, Stdout: out, Err: fmt.Errorf("parse remote diagnostic exit code: %w", err)}
+	}
+	rest := out[lineEnd:]
+	if !strings.HasPrefix(rest, stdoutMarker) {
+		return remoteDiagnosticResult{ExitCode: exitCode, Stdout: rest, Err: fmt.Errorf("remote diagnostic wrapper missing stdout marker")}
+	}
+	rest = strings.TrimPrefix(rest, stdoutMarker)
+	stderrIndex := strings.LastIndex(rest, stderrMarker)
+	if stderrIndex < 0 {
+		return remoteDiagnosticResult{ExitCode: exitCode, Stdout: rest, Err: fmt.Errorf("remote diagnostic wrapper missing stderr marker")}
+	}
+	return remoteDiagnosticResult{
+		ExitCode: exitCode,
+		Stdout:   strings.TrimSuffix(rest[:stderrIndex], "\n"),
+		Stderr:   rest[stderrIndex+len(stderrMarker):],
+	}
+}
+
+func diagnosticErrorMessage(diag remoteDiagnosticResult) string {
+	if message := strings.TrimSpace(diag.Stderr); message != "" {
+		return message
+	}
+	if message := strings.TrimSpace(diag.Stdout); message != "" {
+		return message
+	}
+	return fmt.Sprintf("command exited with code %d", diag.ExitCode)
+}
+
+func collectRemoteText(ctx context.Context, node config.Node, command string) map[string]any {
+	diag := runRemoteDiagnostic(ctx, node, command)
+	result := map[string]any{"ok": diag.Err == nil && diag.ExitCode == 0}
+	if diag.Err != nil {
+		result["error"] = diag.Err.Error()
+	} else if diag.ExitCode != 0 {
+		result["exit_code"] = diag.ExitCode
+		result["error"] = diagnosticErrorMessage(diag)
+	}
+	if value := strings.TrimSpace(diag.Stdout); value != "" {
+		result["value"] = value
+	}
+	if stderr := strings.TrimSpace(diag.Stderr); stderr != "" && diag.ExitCode == 0 {
+		result["stderr"] = stderr
+	}
+	return result
+}
+
+func collectRemoteLines(ctx context.Context, node config.Node, command string) map[string]any {
+	diag := runRemoteDiagnostic(ctx, node, command)
+	result := map[string]any{"ok": diag.Err == nil && diag.ExitCode == 0}
+	if diag.Err != nil {
+		result["error"] = diag.Err.Error()
+	} else if diag.ExitCode != 0 {
+		result["exit_code"] = diag.ExitCode
+		result["error"] = diagnosticErrorMessage(diag)
+	}
+	result["lines"] = splitNonFinalEmptyLines(diag.Stdout)
+	if stderr := strings.TrimSpace(diag.Stderr); stderr != "" && diag.ExitCode == 0 {
+		result["stderr"] = stderr
+	}
+	return result
+}
+
+func collectRemoteLimitedLines(ctx context.Context, node config.Node, command string, limit int) map[string]any {
+	result := collectRemoteLines(ctx, node, command)
+	result["limit"] = limit
+	result["truncated"] = false
+	lines, _ := result["lines"].([]string)
+	filtered := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) == soloDiagnoseTruncatedMarker {
+			result["truncated"] = true
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	result["lines"] = filtered
+	return result
+}
+
+func collectRemoteJSONLines(ctx context.Context, node config.Node, command string, limit int) map[string]any {
+	diag := runRemoteDiagnostic(ctx, node, command)
+	result := map[string]any{"ok": diag.Err == nil && diag.ExitCode == 0, "limit": limit, "truncated": false}
+	if diag.Err != nil {
+		result["error"] = diag.Err.Error()
+		return result
+	}
+	if diag.ExitCode != 0 {
+		result["exit_code"] = diag.ExitCode
+		result["error"] = diagnosticErrorMessage(diag)
+	}
+	items := []any{}
+	for _, line := range splitNonFinalEmptyLines(diag.Stdout) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == soloDiagnoseTruncatedMarker {
+			result["truncated"] = true
+			continue
+		}
+		var item map[string]any
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			items = append(items, line)
+		} else {
+			items = append(items, item)
+		}
+	}
+	result["items"] = items
+	return result
 }
 
 func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {
@@ -1896,12 +2237,18 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			{name: "agent", cmd: "systemctl is-active --quiet devopsellence-agent"},
 		}
 		for _, check := range checks {
-			err := solo.RunSSHInteractive(ctx, node, check.cmd, io.Discard, io.Discard)
+			out, err := solo.RunSSH(ctx, node, check.cmd, nil)
 			ok := err == nil
-			if !ok {
+			result := map[string]any{"node": name, "check": check.name, "ok": ok}
+			if ok {
+				if detail := strings.TrimSpace(out); detail != "" {
+					result["detail"] = detail
+				}
+			} else {
 				failed = true
+				result["detail"] = strings.TrimSpace(err.Error())
 			}
-			results = append(results, map[string]any{"node": name, "check": check.name, "ok": ok})
+			results = append(results, result)
 		}
 	}
 	return results, failed, nil
@@ -2000,6 +2347,9 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		}
 		payload["runtime_checks"] = runtimeChecks
 		payload["ok"] = !runtimeFailed
+		if runtimeFailed {
+			payload["next_steps"] = soloDoctorNextSteps(current.Nodes)
+		}
 		if err := a.Printer.PrintJSON(payload); err != nil {
 			return err
 		}
@@ -2228,6 +2578,9 @@ const sshOutputTailLimit = 64 * 1024
 const (
 	soloLogsDefaultLines                 = 100
 	soloLogsMaxLines                     = 1000
+	soloDiagnoseDockerItemLimit          = 100
+	soloDiagnosePortsLineLimit           = 200
+	soloDiagnoseTruncatedMarker          = "__DEVOPSELLENCE_TRUNCATED__"
 	soloRemoteAgentBinaryNotFoundMessage = "devopsellence agent binary not found"
 )
 
@@ -2310,12 +2663,23 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		if err := a.writeSoloState(current); err != nil {
 			return err
 		}
+		knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 
-		return a.Printer.PrintJSON(map[string]any{
-			"node":   opts.Name,
-			"action": "forgotten",
-			"note":   fmt.Sprintf("node removed from local state only; if remote cleanup is still needed, run `devopsellence agent uninstall %s --yes`", shellQuote(opts.Name)),
-		})
+		payload := map[string]any{
+			"node":                opts.Name,
+			"action":              "forgotten",
+			"known_hosts_removed": knownHostsRemoved,
+			"note":                "manual SSH node forgotten locally; this command did not contact the VM",
+			"remote_cleanup": map[string]any{
+				"performed": false,
+				"if_needed": fmt.Sprintf("devopsellence agent uninstall %s --yes", shellQuote(opts.Name)),
+			},
+		}
+		if knownHostsErr != nil {
+			payload["known_hosts_error"] = knownHostsErr.Error()
+			payload["warnings"] = []string{"manual SSH node forgotten locally, but SSH known_hosts cleanup failed"}
+		}
+		return a.Printer.PrintJSON(payload)
 
 	}
 	if provider == "" || providerServerID == "" {
@@ -2332,8 +2696,14 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
+	knownHostsRemoved, knownHostsErr := solo.RemoveKnownHosts(node)
 
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Name, "action": "deleted"})
+	payload := map[string]any{"node": opts.Name, "action": "deleted", "known_hosts_removed": knownHostsRemoved}
+	if knownHostsErr != nil {
+		payload["known_hosts_error"] = knownHostsErr.Error()
+		payload["warnings"] = []string{"provider node deleted and local state removed, but SSH known_hosts cleanup failed"}
+	}
+	return a.Printer.PrintJSON(payload)
 
 }
 
@@ -2375,7 +2745,9 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		missing = append(missing, "node")
 	}
 	nextSteps := []string{
-		"git init && git add . && git commit -m 'initial deploy' # if this app is not committed yet",
+		"git init # if this app is not already a git checkout",
+		"git add . # include devopsellence.yml and app files",
+		"git commit -m 'initial deploy' # devopsellence deploys the current commit",
 		"devopsellence node create prod-1 --host <host> --user root --ssh-key <path>",
 		"devopsellence agent install prod-1",
 		"devopsellence node attach prod-1",
@@ -3372,6 +3744,33 @@ func remoteReadOptionalFileCommand(path, missingSentinel string) string {
 
 func remoteJournalctlCommand(args string) string {
 	return fmt.Sprintf("if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then exec sudo -n journalctl %s; fi; exec journalctl %s", args, args)
+}
+
+func remoteSystemctlStatusCommand(unit string, lines int) string {
+	args := fmt.Sprintf("status --no-pager -l -n %d %s", lines, shellQuote(unit))
+	return fmt.Sprintf("if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n systemctl %s; else systemctl %s; fi", args, args)
+}
+
+func remoteDockerPSJSONCommand() string {
+	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker ps -a --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker ps -a --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
+}
+
+func remoteDockerImagesJSONCommand() string {
+	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker images --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker images --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
+}
+
+func remoteDockerNetworksJSONCommand() string {
+	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker network ls --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker network ls --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
+}
+
+func withRemoteLineLimit(command string, limit int) string {
+	pipeline := fmt.Sprintf("( %s ) | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'", command, shellQuote(soloDiagnoseTruncatedMarker), limit, limit+1)
+	script := pipeline + `; status=$?; if [ "$status" -eq 0 ] || [ "$status" -eq 141 ]; then exit 0; fi; exit "$status"`
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for bounded diagnostic output' >&2; exit 1"
+}
+
+func remoteListeningPortsCommand() string {
+	return withRemoteLineLimit("if command -v ss >/dev/null 2>&1; then ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi", soloDiagnosePortsLineLimit)
 }
 
 func desiredStateOverridePath(node config.Node) string {

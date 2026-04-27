@@ -118,6 +118,9 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	modeCommand := &cobra.Command{
 		Use:   "mode",
 		Short: "Select or inspect the current workspace mode",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return app.ModeShow()
+		},
 	}
 	modeCommand.AddCommand(&cobra.Command{
 		Use:   "show",
@@ -750,6 +753,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var nodeLabelSharedOpts NodeLabelSetOptions
 	var nodeLabelSoloOpts SoloNodeLabelSetOptions
 	var nodeDiagnoseOpts NodeDiagnoseOptions
+	var soloNodeDiagnoseOpts SoloNodeDiagnoseOptions
 	var nodeLogsOpts SoloLogsOptions
 	var nodeLabels string
 	var nodeAttachEnvironment string
@@ -772,7 +776,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeCreateCommand := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create or register a node",
-		Args:  cobra.ExactArgs(1),
+		Long: strings.Join([]string{
+			"Create or register a node for the selected workspace mode.",
+			"Solo --host nodes must be reachable over SSH with the selected key. devopsellence stores SSH host keys in its own state directory and uses StrictHostKeyChecking=accept-new, so first contact does not write to ~/.ssh/known_hosts.",
+			"The solo agent install can install Docker on supported Ubuntu VMs when Docker is missing; otherwise install Docker yourself or make the SSH user able to run docker via passwordless sudo.",
+		}, "\n"),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeCreateOpts.Name = args[0]
 			return runByMode(func(ctx context.Context) error {
@@ -901,16 +910,24 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeLabelCommand := &cobra.Command{Use: "label", Short: "Manage node labels"}
 	nodeLabelCommand.AddCommand(nodeLabelSetCommand)
 	nodeDiagnoseCommand := &cobra.Command{
-		Use:   "diagnose <id>",
-		Short: "Collect a runtime snapshot from a shared node",
-		Args:  cobra.ExactArgs(1),
+		Use:   "diagnose <name|id>",
+		Short: "Collect a runtime snapshot from a node",
+		Long: strings.Join([]string{
+			"Collect a bounded runtime snapshot from a node.",
+			"In solo mode, pass the node name and the CLI collects SSH, Docker, agent, port, status, image, network, and container details over SSH.",
+			"In shared mode, pass the numeric node id and the control plane asks the node for a snapshot.",
+		}, "\n"),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, parseErr := strconv.Atoi(args[0])
-			if parseErr != nil {
-				return ExitError{Code: 2, Err: fmt.Errorf("invalid node id %q: must be a number", args[0])}
-			}
-			nodeDiagnoseOpts.NodeID = id
-			return runSharedOnly("node diagnose", func(ctx context.Context) error {
+			return runByMode(func(ctx context.Context) error {
+				soloNodeDiagnoseOpts.Node = args[0]
+				return app.SoloNodeDiagnose(ctx, soloNodeDiagnoseOpts)
+			}, func(ctx context.Context) error {
+				id, parseErr := strconv.Atoi(args[0])
+				if parseErr != nil {
+					return ExitError{Code: 2, Err: fmt.Errorf("invalid node id %q: must be a number", args[0])}
+				}
+				nodeDiagnoseOpts.NodeID = id
 				return app.NodeDiagnose(ctx, nodeDiagnoseOpts)
 			})(cmd, args)
 		},

@@ -41,6 +41,8 @@ Initialize the workspace:
 devopsellence init --mode solo
 ```
 
+Start from an app that already has a Dockerfile. devopsellence does not install language toolchains or generate Rails/Node/etc. projects for you; create the app with your normal framework tools first, then let devopsellence deploy the container.
+
 Commit the app before the first deploy. devopsellence uses the current git commit as the workload revision and image tag:
 
 ```bash
@@ -58,6 +60,21 @@ devopsellence node attach prod-1
 devopsellence doctor
 ```
 
+Existing SSH node prerequisites:
+
+- the host must accept key-based SSH for the selected `--user` and `--ssh-key`;
+- devopsellence stores SSH host keys in its own state directory and uses OpenSSH `StrictHostKeyChecking=accept-new`, so first contact does not write to your global `~/.ssh/known_hosts`;
+- Docker must be reachable by the SSH user, or the SSH user must have passwordless sudo for Docker. On supported Ubuntu VMs, `devopsellence agent install` can install Docker when it is missing;
+- `agent install` writes `/usr/local/bin/devopsellence-agent`, creates a `devopsellence-agent` systemd service, and uses `/var/lib/devopsellence` for node state by default.
+
+If remote checks fail, start with:
+
+```bash
+devopsellence doctor
+devopsellence node diagnose prod-1
+devopsellence node logs prod-1 --lines 100
+```
+
 Or create a Hetzner-backed node from the provider:
 
 ```bash
@@ -73,6 +90,7 @@ Deploy over SSH:
 ```bash
 devopsellence deploy
 devopsellence status
+devopsellence node logs prod-1 --lines 100
 ```
 
 `devopsellence status` includes `public_urls` when it can infer where the app should be reachable. For default solo HTTP ingress, try the node URL it prints.

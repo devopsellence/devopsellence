@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"io"
+	"strings"
 
 	"github.com/devopsellence/cli/internal/output"
 )
@@ -14,12 +15,22 @@ type soloInstallReporter struct {
 	close    func()
 }
 
-func newSoloInstallReporter(_ context.Context, _ output.Printer, _ string) soloInstallReporter {
+func newSoloInstallReporter(_ context.Context, printer output.Printer, node string) soloInstallReporter {
 	return soloInstallReporter{
-		progress: func(string) {},
-		stdout:   newTailBuffer(sshOutputTailLimit),
-		stderr:   newTailBuffer(sshOutputTailLimit),
-		close:    func() {},
+		progress: func(message string) {
+			message = strings.TrimSpace(message)
+			if message == "" {
+				return
+			}
+			_ = printer.PrintEvent("progress", map[string]any{
+				"operation": "devopsellence agent install",
+				"node":      node,
+				"message":   message,
+			})
+		},
+		stdout: newTailBuffer(sshOutputTailLimit),
+		stderr: newTailBuffer(sshOutputTailLimit),
+		close:  func() {},
 	}
 }
 

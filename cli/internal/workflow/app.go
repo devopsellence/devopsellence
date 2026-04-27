@@ -296,14 +296,14 @@ type SecretDeleteOptions struct {
 }
 
 type listedSecret struct {
-	ServiceName string `json:"service_name"`
-	Name        string `json:"name"`
-	SecretRef   string `json:"secret_ref,omitempty"`
-	Store       string `json:"store,omitempty"`
-	Reference   string `json:"reference,omitempty"`
-	Configured  bool   `json:"configured"`
-	Stored      bool   `json:"stored"`
-	Exposed     bool   `json:"exposed"`
+	ServiceName        string `json:"service_name"`
+	Name               string `json:"name"`
+	SecretRef          string `json:"secret_ref,omitempty"`
+	Store              string `json:"store,omitempty"`
+	Reference          string `json:"reference,omitempty"`
+	Configured         bool   `json:"configured"`
+	Stored             bool   `json:"stored"`
+	AvailableToService bool   `json:"available_to_service"`
 }
 
 type TokenCreateOptions struct {
@@ -1539,12 +1539,12 @@ func (a *App) sharedSecretListItems(workspaceRoot string, secrets []api.Environm
 			for _, ref := range cfg.Services[serviceName].SecretRefs {
 				key := secretListKey(serviceName, ref.Name)
 				items[key] = listedSecret{
-					ServiceName: serviceName,
-					Name:        ref.Name,
-					SecretRef:   strings.TrimSpace(ref.Secret),
-					Store:       secretListStore(strings.TrimSpace(ref.Secret), "managed"),
-					Configured:  true,
-					Exposed:     true,
+					ServiceName:        serviceName,
+					Name:               ref.Name,
+					SecretRef:          strings.TrimSpace(ref.Secret),
+					Store:              secretListStore(strings.TrimSpace(ref.Secret), "managed"),
+					Configured:         true,
+					AvailableToService: true,
 				}
 			}
 		}
@@ -1602,7 +1602,7 @@ func formatListedSecret(item listedSecret) string {
 	parts := []string{
 		item.ServiceName,
 		item.Name,
-		"exposed=" + yesNo(item.Exposed),
+		"available_to_service=" + yesNo(item.AvailableToService),
 		"configured=" + yesNo(item.Configured),
 		"stored=" + yesNo(item.Stored),
 	}

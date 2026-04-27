@@ -1371,7 +1371,23 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 		}
 	}
 
-	return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "store": record.Store, "reference": record.Reference, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "saved"})
+	payload := map[string]any{
+		"key":            record.Name,
+		"service_name":   record.ServiceName,
+		"environment":    record.Environment,
+		"store":          record.Store,
+		"secret_ref":     soloSecretConfigRef(record).Secret,
+		"config_updated": configUpdated,
+		"config_path":    a.ConfigStore.PathFor(workspaceRoot),
+		"action":         "saved",
+	}
+	if strings.TrimSpace(record.Reference) != "" {
+		payload["reference"] = record.Reference
+	}
+	if a.SoloState != nil && strings.TrimSpace(a.SoloState.Path) != "" {
+		payload["state_path"] = a.SoloState.Path
+	}
+	return a.Printer.PrintJSON(payload)
 
 }
 
@@ -1521,12 +1537,12 @@ func soloSecretListItems(cfg *config.ProjectConfig, secrets []solo.SecretRecord,
 				key := secretListKey(serviceName, ref.Name)
 				secretRef := strings.TrimSpace(ref.Secret)
 				items[key] = listedSecret{
-					ServiceName: serviceName,
-					Name:        ref.Name,
-					SecretRef:   secretRef,
-					Store:       secretListStore(secretRef, "configured"),
-					Configured:  true,
-					Exposed:     true,
+					ServiceName:        serviceName,
+					Name:               ref.Name,
+					SecretRef:          secretRef,
+					Store:              secretListStore(secretRef, "configured"),
+					Configured:         true,
+					AvailableToService: true,
 				}
 			}
 		}

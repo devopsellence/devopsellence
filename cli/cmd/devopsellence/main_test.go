@@ -26,7 +26,11 @@ func TestWriteErrorIncludesStructuredFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Stderr = originalStderr })
+	t.Cleanup(func() {
+		os.Stderr = originalStderr
+		_ = reader.Close()
+		_ = writer.Close()
+	})
 	os.Stderr = writer
 
 	writeError("devopsellence deploy", 1, structuredTestError{})

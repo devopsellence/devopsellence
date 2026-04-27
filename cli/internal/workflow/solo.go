@@ -519,7 +519,7 @@ func (e *soloRolloutError) ErrorFields() map[string]any {
 		"node": e.Node,
 		"next_steps": []string{
 			"devopsellence status",
-			"devopsellence node logs " + e.Node + " --lines 100",
+			"devopsellence node logs " + shellQuote(e.Node) + " --lines 100",
 		},
 	}
 	if len(e.Healthchecks) > 0 {
@@ -2265,7 +2265,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		return a.Printer.PrintJSON(map[string]any{
 			"node":   opts.Name,
 			"action": "forgotten",
-			"note":   fmt.Sprintf("node removed from local state only; if remote cleanup is still needed, run `devopsellence agent uninstall %s --yes`", opts.Name),
+			"note":   fmt.Sprintf("node removed from local state only; if remote cleanup is still needed, run `devopsellence agent uninstall %s --yes`", shellQuote(opts.Name)),
 		})
 
 	}

@@ -1451,7 +1451,7 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	}
 	fields := rolloutErr.ErrorFields()
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 2 || steps[1] != "devopsellence node logs node-a --lines 100" {
+	if len(steps) != 2 || steps[1] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status and node logs commands", steps)
 	}
 }

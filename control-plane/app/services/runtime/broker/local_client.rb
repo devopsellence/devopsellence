@@ -115,22 +115,6 @@ module Runtime
         environment_secret
       end
 
-      def upsert_environment_ingress_secret!(environment_ingress:, value:)
-        secret_value = value.to_s
-        raise ArgumentError, "secret value is required" if secret_value.blank?
-
-        environment_ingress.save!
-        ensure_environment_runtime_ready!(environment_ingress.environment)
-        ensure_secret_exists!(environment: environment_ingress.environment, gcp_secret_name: environment_ingress.gcp_secret_name)
-        add_secret_version!(environment: environment_ingress.environment, gcp_secret_name: environment_ingress.gcp_secret_name, value: secret_value)
-        ensure_secret_access!(
-          environment: environment_ingress.environment,
-          gcp_secret_name: environment_ingress.gcp_secret_name,
-          service_account_email: environment_ingress.environment.service_account_email
-        )
-        environment_ingress
-      end
-
       def destroy_environment_secret!(environment_secret:)
         delete_secret_if_present!(
           environment: environment_secret.environment,
@@ -153,15 +137,6 @@ module Runtime
         environment_secret.update_columns(
           access_grantee_email: service_account_email,
           access_verified_at: Time.current
-        )
-      end
-
-      def ensure_environment_ingress_access!(environment_ingress:)
-        ensure_environment_runtime_ready!(environment_ingress.environment)
-        ensure_secret_access!(
-          environment: environment_ingress.environment,
-          gcp_secret_name: environment_ingress.gcp_secret_name,
-          service_account_email: environment_ingress.environment.service_account_email
         )
       end
 
@@ -214,20 +189,6 @@ module Runtime
           repository_name: bundle.organization_bundle.gar_repository_name,
           role: "roles/artifactregistry.reader",
           member: service_account_member(bundle.service_account_email)
-        )
-        Result.new(status: :ready, message: nil)
-      rescue StandardError => error
-        Result.new(status: :failed, message: utf8(error.message))
-      end
-
-      def upsert_environment_bundle_tunnel_secret!(bundle:, tunnel_token:)
-        ctx = Struct.new(:gcp_project_id).new(bundle.runtime_project.gcp_project_id)
-        ensure_secret_exists!(environment: ctx, gcp_secret_name: bundle.gcp_secret_name)
-        add_secret_version!(environment: ctx, gcp_secret_name: bundle.gcp_secret_name, value: tunnel_token)
-        ensure_secret_access!(
-          environment: ctx,
-          gcp_secret_name: bundle.gcp_secret_name,
-          service_account_email: bundle.service_account_email
         )
         Result.new(status: :ready, message: nil)
       rescue StandardError => error

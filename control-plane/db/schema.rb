@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_23_000100) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_28_010000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -68,9 +68,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_23_000100) do
     t.text "error_message"
     t.datetime "finished_at"
     t.datetime "published_at", null: false
+    t.integer "release_id", null: false
     t.bigint "release_task_node_id"
     t.string "release_task_status"
-    t.integer "release_id", null: false
     t.string "request_token", null: false
     t.integer "sequence", null: false
     t.string "status", default: "published", null: false
@@ -80,16 +80,14 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_23_000100) do
     t.index ["environment_id", "request_token"], name: "index_deployments_on_environment_id_and_request_token", unique: true
     t.index ["environment_id", "sequence"], name: "index_deployments_on_environment_id_and_sequence", unique: true
     t.index ["environment_id"], name: "index_deployments_on_environment_id"
-    t.index ["release_task_node_id"], name: "index_deployments_on_release_task_node_id"
     t.index ["release_id"], name: "index_deployments_on_release_id"
+    t.index ["release_task_node_id"], name: "index_deployments_on_release_task_node_id"
   end
 
   create_table "environment_bundles", force: :cascade do |t|
     t.datetime "claimed_at"
     t.integer "claimed_by_environment_id"
-    t.string "cloudflare_tunnel_id"
     t.datetime "created_at", null: false
-    t.string "gcp_secret_name", null: false
     t.string "hostname"
     t.integer "organization_bundle_id", null: false
     t.datetime "provisioned_at"
@@ -98,31 +96,14 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_23_000100) do
     t.string "service_account_email", null: false
     t.string "status", default: "provisioning", null: false
     t.string "token", null: false
-    t.text "tunnel_token"
     t.datetime "updated_at", null: false
     t.index ["claimed_by_environment_id"], name: "index_environment_bundles_on_claimed_by_environment_id"
-    t.index ["gcp_secret_name"], name: "index_environment_bundles_on_gcp_secret_name", unique: true
     t.index ["hostname"], name: "index_environment_bundles_on_hostname", unique: true
     t.index ["organization_bundle_id", "status"], name: "index_env_bundles_on_org_bundle_and_status"
     t.index ["organization_bundle_id"], name: "index_environment_bundles_on_organization_bundle_id"
     t.index ["runtime_project_id"], name: "index_environment_bundles_on_runtime_project_id"
     t.index ["service_account_email"], name: "index_environment_bundles_on_service_account_email", unique: true
     t.index ["token"], name: "index_environment_bundles_on_token", unique: true
-  end
-
-  create_table "environment_ingresses", force: :cascade do |t|
-    t.string "cloudflare_tunnel_id", default: "", null: false
-    t.datetime "created_at", null: false
-    t.integer "environment_id", null: false
-    t.string "gcp_secret_name", null: false
-    t.string "hostname", null: false
-    t.text "last_error"
-    t.datetime "provisioned_at"
-    t.string "status", default: "pending", null: false
-    t.datetime "updated_at", null: false
-    t.index ["environment_id"], name: "index_environment_ingresses_on_environment_id", unique: true
-    t.index ["gcp_secret_name"], name: "index_environment_ingresses_on_gcp_secret_name", unique: true
-    t.index ["hostname"], name: "index_environment_ingresses_on_hostname", unique: true
   end
 
   create_table "environment_ingress_hosts", force: :cascade do |t|
@@ -134,6 +115,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_23_000100) do
     t.index ["environment_ingress_id", "position"], name: "index_env_ingress_hosts_on_ingress_and_position", unique: true
     t.index ["environment_ingress_id"], name: "index_environment_ingress_hosts_on_environment_ingress_id"
     t.index ["hostname"], name: "index_environment_ingress_hosts_on_hostname", unique: true
+  end
+
+  create_table "environment_ingresses", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.integer "environment_id", null: false
+    t.string "hostname", null: false
+    t.text "last_error"
+    t.datetime "provisioned_at"
+    t.string "status", default: "pending", null: false
+    t.datetime "updated_at", null: false
+    t.index ["environment_id"], name: "index_environment_ingresses_on_environment_id", unique: true
+    t.index ["hostname"], name: "index_environment_ingresses_on_hostname", unique: true
   end
 
   create_table "environment_secrets", force: :cascade do |t|
@@ -159,7 +152,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_23_000100) do
     t.string "gcp_project_id", null: false
     t.string "gcp_project_number", null: false
     t.integer "identity_version", default: 1, null: false
-    t.string "ingress_strategy", default: "tunnel", null: false
+    t.string "ingress_strategy", default: "direct_dns", null: false
     t.string "managed_provider", default: "hetzner", null: false
     t.string "managed_region", default: "nbg1", null: false
     t.string "managed_size_slug", default: "cpx11", null: false

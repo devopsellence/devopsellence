@@ -510,16 +510,6 @@ func (a *Authority) resolveSecretRefs(ctx context.Context, desired *desiredstate
 			task.SecretRefs = nil
 		}
 	}
-	if desired.Ingress != nil && desired.Ingress.TunnelTokenSecretRef != "" {
-		value, resolvedGoogleToken, resolvedControlPlaneToken, err := a.resolveSecretRef(ctx, desired.Ingress.TunnelTokenSecretRef, googleToken, controlPlaneToken)
-		if err != nil {
-			return fmt.Errorf("ingress tunnel_token_secret_ref: %w", err)
-		}
-		googleToken = resolvedGoogleToken
-		controlPlaneToken = resolvedControlPlaneToken
-		desired.Ingress.TunnelToken = value
-		desired.Ingress.TunnelTokenSecretRef = ""
-	}
 	return nil
 }
 

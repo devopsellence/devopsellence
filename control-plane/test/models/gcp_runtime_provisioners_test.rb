@@ -80,9 +80,7 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
       runtime_project: runtime_project,
       organization_bundle: organization_bundle,
       service_account_email: "env-bundle-a@gcp-proj-a.iam.gserviceaccount.com",
-      gcp_secret_name: "eb-a-ingress-secret",
       hostname: "env-a.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-a",
       status: EnvironmentBundle::STATUS_WARM
     )
 
@@ -92,8 +90,6 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
     assert_equal bundle, environment.reload.environment_bundle
     assert_equal bundle.service_account_email, environment.service_account_email
     assert_equal bundle.hostname, environment.environment_ingress.hostname
-    assert_equal bundle.cloudflare_tunnel_id, environment.environment_ingress.cloudflare_tunnel_id
-    assert_equal bundle.gcp_secret_name, environment.environment_ingress.gcp_secret_name
   end
 
   test "environment runtime provisioner provisions and claims a bundle when none are warm" do
@@ -146,9 +142,7 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
       runtime_project: organization_bundle.runtime_project,
       organization_bundle: organization_bundle,
       service_account_email: "new-env-bundle@gcp-proj-a.iam.gserviceaccount.com",
-      gcp_secret_name: "new-env-bundle-secret",
       hostname: "new-env.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-new",
       status: EnvironmentBundle::STATUS_WARM
     )
     EnvironmentBundles::Provisioner.any_instance.stubs(:call).returns(fake_bundle)
@@ -210,9 +204,7 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
       claimed_by_environment: existing_environment,
       claimed_at: Time.current,
       service_account_email: "env-bundle-existing@gcp-proj-c.iam.gserviceaccount.com",
-      gcp_secret_name: "eb-existing-ingress-secret",
       hostname: "existing.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-existing",
       status: EnvironmentBundle::STATUS_CLAIMED
     )
     existing_environment.update!(environment_bundle: existing_bundle)
@@ -221,9 +213,7 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
       runtime_project: runtime_project,
       organization_bundle: organization_bundle,
       service_account_email: "env-bundle-warm@gcp-proj-c.iam.gserviceaccount.com",
-      gcp_secret_name: "eb-warm-ingress-secret",
       hostname: "warm.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-warm",
       status: EnvironmentBundle::STATUS_WARM
     )
 
@@ -240,9 +230,7 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
       runtime_project: organization_bundle.runtime_project,
       organization_bundle: organization_bundle,
       service_account_email: "new-env-bundle@gcp-proj-c.iam.gserviceaccount.com",
-      gcp_secret_name: "new-env-bundle-secret",
       hostname: "new-env.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-new",
       status: EnvironmentBundle::STATUS_WARM
     )
     EnvironmentBundles::Provisioner.any_instance.stubs(:call).returns(provisioned_bundle)
@@ -517,7 +505,6 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
       runtime_project: runtime,
       organization_bundle: organization_bundle,
       service_account_email: "env-bundle-a@gcp-proj-a.iam.gserviceaccount.com",
-      gcp_secret_name: "env-bundle-secret",
       status: EnvironmentBundle::STATUS_WARM
     )
     node_bundle = NodeBundle.create!(
@@ -652,9 +639,7 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
       runtime_project: runtime,
       organization_bundle: organization_bundle,
       service_account_email: "eb#{SecureRandom.hex(4)}@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-      gcp_secret_name: "eb-#{SecureRandom.hex(3)}-secret",
       hostname: "eb-#{SecureRandom.hex(3)}.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-#{SecureRandom.hex(3)}",
       status: EnvironmentBundle::STATUS_PROVISIONING
     )
 
@@ -852,67 +837,6 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
     ], members
   end
 
-  test "environment tunnel secret access retries until service account propagation completes" do
-    runtime = RuntimeProject.default!
-    organization_bundle = OrganizationBundle.create!(
-      runtime_project: runtime,
-      gcs_bucket_name: "#{runtime.gcs_bucket_prefix}-ob-#{SecureRandom.hex(3)}",
-      gar_repository_name: "ob-#{SecureRandom.hex(3)}-apps",
-      gar_repository_region: runtime.gar_region,
-      gar_writer_service_account_email: "ob#{SecureRandom.hex(4)}@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-      status: OrganizationBundle::STATUS_WARM
-    )
-    bundle = EnvironmentBundle.create!(
-      runtime_project: runtime,
-      organization_bundle: organization_bundle,
-      service_account_email: "eb#{SecureRandom.hex(4)}@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-      gcp_secret_name: "eb-#{SecureRandom.hex(3)}-secret",
-      hostname: "eb-#{SecureRandom.hex(3)}.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-#{SecureRandom.hex(3)}",
-      status: EnvironmentBundle::STATUS_PROVISIONING
-    )
-
-    client = Class.new do
-      attr_reader :secret_set_iam_calls
-
-      def initialize
-        @secret_set_iam_calls = 0
-      end
-
-      def get(uri)
-        return GcpRuntimeProvisionersTest::TestResponse.new(code: "200", body: "{\"bindings\":[]}") if uri.include?(":getIamPolicy")
-
-        raise "unexpected uri: #{uri}"
-      end
-
-      def post(uri, payload:)
-        return GcpRuntimeProvisionersTest::TestResponse.new(code: "200", body: "{}") if uri.include?("/secrets?secretId=")
-        return GcpRuntimeProvisionersTest::TestResponse.new(code: "200", body: "{}") if uri.include?(":addVersion")
-
-        if uri.include?(":setIamPolicy")
-          @secret_set_iam_calls += 1
-          member = payload.dig(:policy, "bindings", 0, "members", 0).to_s.sub("serviceAccount:", "")
-          return GcpRuntimeProvisionersTest::TestResponse.new(
-            code: "400",
-            body: JSON.generate(error: { message: "Service account #{member} does not exist." })
-          ) if @secret_set_iam_calls <= 10
-
-          return GcpRuntimeProvisionersTest::TestResponse.new(code: "200", body: JSON.generate(payload))
-        end
-
-        raise "unexpected uri: #{uri}"
-      end
-    end.new
-
-    result = Runtime::Broker::LocalClient.new(client:, retry_sleep_seconds: 0).upsert_environment_bundle_tunnel_secret!(
-      bundle: bundle,
-      tunnel_token: "token-123"
-    )
-
-    assert_equal :ready, result.status
-    assert_equal 11, client.secret_set_iam_calls
-  end
-
   test "environment runtime provisioner returns ready when environment already has a claimed bundle" do
     runtime_project = RuntimeProject.create!(
       name: "Runtime Skip",
@@ -962,9 +886,7 @@ class GcpRuntimeProvisionersTest < ActiveSupport::TestCase
       claimed_by_environment: environment,
       claimed_at: Time.current,
       service_account_email: "env-bundle-skip@gcp-proj-skip.iam.gserviceaccount.com",
-      gcp_secret_name: "skip-ingress-secret",
       hostname: "skip.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-skip",
       status: EnvironmentBundle::STATUS_CLAIMED
     )
     organization.update!(organization_bundle: organization_bundle)

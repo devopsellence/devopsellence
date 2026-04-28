@@ -73,13 +73,7 @@ module EnvironmentBundles
 
         ingress = environment.environment_ingress || environment.build_environment_ingress
         ingress.hostname = bundle.hostname
-        ingress.cloudflare_tunnel_id = bundle.cloudflare_tunnel_id
-        ingress.gcp_secret_name = bundle.gcp_secret_name
-        ingress.status = if environment.direct_dns_ingress?
-          EnvironmentIngress::STATUS_PENDING
-        else
-          EnvironmentIngress::STATUS_READY
-        end
+        ingress.status = EnvironmentIngress::STATUS_PENDING
         ingress.last_error = nil
         ingress.provisioned_at = bundle.provisioned_at || Time.current
         ingress.save!

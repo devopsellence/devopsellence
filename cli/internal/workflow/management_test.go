@@ -161,11 +161,12 @@ func TestInitBootstrapsSharedIngressFromCanonicalDomain(t *testing.T) {
 				"project":              map[string]any{"id": 11, "name": "ShopApp", "organization_id": 7},
 				"project_created":      false,
 				"environment": map[string]any{
-					"id":            44,
-					"name":          "production",
-					"project_id":    11,
-					"runtime_kind":  "managed",
-					"ingress_hosts": []string{"www.prod-abc.devopsellence.io", "prod-abc.devopsellence.io"},
+					"id":               44,
+					"name":             "production",
+					"project_id":       11,
+					"runtime_kind":     "managed",
+					"ingress_strategy": "direct_dns",
+					"ingress_hosts":    []string{"www.prod-abc.devopsellence.io", "prod-abc.devopsellence.io"},
 				},
 				"environment_created": true,
 			}), nil
@@ -204,14 +205,14 @@ func TestInitBootstrapsSharedIngressFromCanonicalDomain(t *testing.T) {
 	if got, want := loaded.Ingress.Hosts, []string{"www.prod-abc.devopsellence.io", "prod-abc.devopsellence.io"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ingress.hosts = %#v, want %#v", got, want)
 	}
-	if got, want := loaded.Ingress.TLS.Mode, "off"; got != want {
+	if got, want := loaded.Ingress.TLS.Mode, "auto"; got != want {
 		t.Fatalf("ingress.tls.mode = %q, want %q", got, want)
 	}
 	if loaded.Ingress.RedirectHTTP == nil {
-		t.Fatal("expected explicit ingress.redirect_http=false")
+		t.Fatal("expected explicit ingress.redirect_http=true")
 	}
-	if *loaded.Ingress.RedirectHTTP {
-		t.Fatal("ingress.redirect_http = true, want false")
+	if !*loaded.Ingress.RedirectHTTP {
+		t.Fatal("ingress.redirect_http = false, want true")
 	}
 }
 

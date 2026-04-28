@@ -21,11 +21,11 @@ type RequestClient interface {
 }
 
 type Runner struct {
-	client    RequestClient
-	collector SnapshotCollector
-	logger    *slog.Logger
-	now       func() time.Time
-	lastPollAt time.Time
+	client                   RequestClient
+	collector                SnapshotCollector
+	logger                   *slog.Logger
+	now                      func() time.Time
+	lastPollAt               time.Time
 	lastDesiredStateSequence int64
 }
 

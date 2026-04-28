@@ -21,9 +21,7 @@ import (
 
 const webServiceName = "web"
 
-const (
-	ingressModeTunnel = "tunnel"
-)
+const ingressModePublic = "public"
 
 type EnvoyManager interface {
 	Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error
@@ -644,24 +642,21 @@ func volumeBinds(mounts []*desiredstatepb.VolumeMount) []string {
 
 func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {
 	if ingress == nil {
-		return ingressModeTunnel
+		return ""
 	}
 
 	mode := strings.TrimSpace(ingress.Mode)
 	if mode != "" {
 		return mode
 	}
-	if strings.TrimSpace(ingress.TunnelToken) != "" || strings.TrimSpace(ingress.TunnelTokenSecretRef) != "" {
-		return ingressModeTunnel
-	}
-	return "public"
+	return ingressModePublic
 }
 
 func ingressAutoTLSErrorIsNonFatal(ingress *desiredstatepb.Ingress) bool {
 	if ingress == nil {
 		return false
 	}
-	if normalizedIngressMode(ingress) != "public" {
+	if normalizedIngressMode(ingress) != ingressModePublic {
 		return false
 	}
 	tls := ingress.GetTls()

@@ -4,7 +4,7 @@ require "test_helper"
 
 module EnvironmentIngresses
   class ReconcileJobTest < ActiveJob::TestCase
-    test "republishes desired state when tunnel ingress becomes ready" do
+    test "does not republish desired state when direct dns readiness changes without payload changes" do
       organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
       ensure_test_organization_runtime!(organization)
       project = organization.projects.create!(name: "Project A")
@@ -26,8 +26,6 @@ module EnvironmentIngresses
       environment.update!(current_release: release)
       environment.create_environment_ingress!(
         hostname: random_ingress_hostname,
-        cloudflare_tunnel_id: "tunnel-1",
-        gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
         status: EnvironmentIngress::STATUS_PENDING
       )
       node, = issue_test_node!(organization: organization, name: "node-a")
@@ -39,7 +37,7 @@ module EnvironmentIngresses
         true
       end.returns(environment.environment_ingress)
 
-      assert_enqueued_with(job: Environments::RepublishDesiredStateJob, args: [environment.id]) do
+      assert_no_enqueued_jobs only: Environments::RepublishDesiredStateJob do
         ReconcileJob.perform_now(environment.id)
       end
     end
@@ -66,8 +64,6 @@ module EnvironmentIngresses
       environment.update!(current_release: release)
       environment.create_environment_ingress!(
         hostname: random_ingress_hostname,
-        cloudflare_tunnel_id: "tunnel-1",
-        gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
         status: EnvironmentIngress::STATUS_READY,
         provisioned_at: Time.current
       )

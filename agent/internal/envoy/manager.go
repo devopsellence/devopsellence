@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	ingressModeTunnel = "tunnel"
-	ingressModePublic = "public"
+	ingressModeInternal = "internal"
+	ingressModePublic   = "public"
 )
 
 type Config struct {
@@ -532,10 +532,7 @@ func portBindingsForIngress(defaultPort, httpHostPort, httpsHostPort uint16, ing
 			})
 		}
 		return ports
-	case ingressModeTunnel:
-		if ingress != nil {
-			return nil
-		}
+	case ingressModeInternal:
 		if defaultPort == 0 {
 			return nil
 		}
@@ -608,15 +605,12 @@ func cloneIngress(ingress *desiredstatepb.Ingress) *desiredstatepb.Ingress {
 
 func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {
 	if ingress == nil {
-		return ingressModeTunnel
+		return ingressModeInternal
 	}
 
 	mode := strings.TrimSpace(ingress.Mode)
 	if mode != "" {
 		return mode
-	}
-	if strings.TrimSpace(ingress.TunnelToken) != "" || strings.TrimSpace(ingress.TunnelTokenSecretRef) != "" {
-		return ingressModeTunnel
 	}
 	return ingressModePublic
 }

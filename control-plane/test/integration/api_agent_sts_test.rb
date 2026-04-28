@@ -70,7 +70,6 @@ class ApiAgentStsTest < ActionDispatch::IntegrationTest
       runtime_project: runtime,
       organization_bundle: organization_bundle,
       service_account_email: "warm-node@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-      gcp_secret_name: "eb-#{SecureRandom.hex(4)}-secret",
       status: EnvironmentBundle::STATUS_WARM
     )
     node, access_token, _refresh_token = issue_test_node!(

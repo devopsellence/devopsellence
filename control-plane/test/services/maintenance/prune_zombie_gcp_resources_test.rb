@@ -52,7 +52,6 @@ class MaintenancePruneZombieGcpResourcesTest < ActiveSupport::TestCase
       claimed_by_environment: environment,
       claimed_at: Time.current,
       hostname: "a22222222222.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-a222",
       status: EnvironmentBundle::STATUS_CLAIMED,
       provisioned_at: Time.current
     )
@@ -62,7 +61,6 @@ class MaintenancePruneZombieGcpResourcesTest < ActiveSupport::TestCase
     )
     environment.create_environment_ingress!(
       hostname: environment_bundle.hostname,
-      gcp_secret_name: environment_bundle.gcp_secret_name,
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -85,9 +83,7 @@ class MaintenancePruneZombieGcpResourcesTest < ActiveSupport::TestCase
     client = FakeClient.new(
       "https://secretmanager.googleapis.com/v1/projects/#{runtime.gcp_project_id}/secrets" => {
         "secrets" => [
-          { "name" => "projects/#{runtime.gcp_project_id}/secrets/#{environment_bundle.gcp_secret_name}" },
           { "name" => "projects/#{runtime.gcp_project_id}/secrets/env-a22222222222-web-secret-key-base" },
-          { "name" => "projects/#{runtime.gcp_project_id}/secrets/eb-a44444444444-ingress-cloudflare-tunnel-token" },
           { "name" => "projects/#{runtime.gcp_project_id}/secrets/env-a55555555555-web-secret-key-base" },
           { "name" => "projects/#{runtime.gcp_project_id}/secrets/manual-secret" }
         ]
@@ -143,11 +139,10 @@ class MaintenancePruneZombieGcpResourcesTest < ActiveSupport::TestCase
     assert_equal 1, result.deleted_buckets
     assert_equal 2, result.deleted_bucket_objects
     assert_equal 1, result.deleted_repositories
-    assert_equal 2, result.deleted_secrets
+    assert_equal 1, result.deleted_secrets
     assert_equal 2, result.deleted_service_accounts
 
     assert_equal [
-      "https://secretmanager.googleapis.com/v1/projects/#{runtime.gcp_project_id}/secrets/eb-a44444444444-ingress-cloudflare-tunnel-token",
       "https://secretmanager.googleapis.com/v1/projects/#{runtime.gcp_project_id}/secrets/env-a55555555555-web-secret-key-base",
       "https://artifactregistry.googleapis.com/v1/projects/#{runtime.gcp_project_id}/locations/#{runtime.gar_region}/repositories/ob-a44444444444-apps",
       "https://storage.googleapis.com/storage/v1/b/#{organization_bundle.gcs_bucket_name}/o/node-bundles%2Fa44444444444%2Fdesired_state.json",
@@ -217,9 +212,7 @@ class MaintenancePruneZombieGcpResourcesTest < ActiveSupport::TestCase
         organization_bundle: organization_bundle,
         token: "a22222222222",
         service_account_email: "eba22222222222@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-        gcp_secret_name: "eb-a22222222222-ingress-cloudflare-tunnel-token",
         hostname: "a22222222222.devopsellence.test",
-        cloudflare_tunnel_id: "tunnel-a222",
         status: EnvironmentBundle::STATUS_WARM,
         provisioned_at: Time.current
       )

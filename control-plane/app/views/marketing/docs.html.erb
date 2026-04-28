@@ -96,7 +96,7 @@
         <tr>
           <td>HTTPS</td>
           <td><span class="compare-na">Planned</span></td>
-          <td>Tunnel mode or Let's Encrypt</td>
+          <td>Envoy + Let's Encrypt</td>
         </tr>
         <tr>
           <td>Team workflows</td>
@@ -796,28 +796,9 @@ tasks:
     <h2>Ingress &amp; HTTPS <span class="mode-badge mode-badge--shared">shared</span></h2>
     <p>Ingress uses the same desired-state shape in solo and shared mode: hostnames, public web nodes, Envoy, and node-owned TLS certificates.</p>
 
-    <h3>Tunnel mode (default)</h3>
-    <p>The default for getting started quickly. A Cloudflare tunnel routes traffic from a <code>*.devopsellence.io</code> hostname to a single node. No DNS configuration or open ports required.</p>
-    <p>Tunnel mode is great for demos, staging, and home-lab servers that have no public IP &mdash; the tunnel exposes your app publicly without opening ports or configuring a static address. Limitations:</p>
-    <ul>
-      <li>Traffic routes to a <strong>single node</strong> &mdash; no load balancing across multiple servers.</li>
-      <li>You get a devopsellence subdomain, not your own domain.</li>
-      <li>Not designed for production workloads that need high availability.</li>
-    </ul>
-
-    <h3>Switching to direct DNS (production)</h3>
-    <p>Environments start in tunnel mode. When you're ready for production, switch to direct DNS:</p>
-    <div class="terminal">
-      <div class="terminal-bar">
-        <span class="dot dot-red"></span>
-        <span class="dot dot-yellow"></span>
-        <span class="dot dot-green"></span>
-      </div>
-      <div class="terminal-body">
-        <div class="tl"><span class="tp">$</span> devopsellence context env ingress --ingress-strategy direct_dns</div>
-      </div>
-    </div>
-    <p>In direct DNS mode, the agent generates its own TLS certificate via Let's Encrypt and terminates HTTPS directly on public web nodes. DNS can point one hostname at more than one node, and one environment can serve more than one hostname.</p>
+    <h3>Direct DNS</h3>
+    <p>Shared environments use direct DNS. The canonical <code>*.devopsellence.io</code> hostname points at the public IP addresses of eligible web nodes. No tunnel is created or managed by devopsellence.</p>
+    <p>The agent generates its own TLS certificate via Let's Encrypt and terminates HTTPS directly on public web nodes. DNS can point one hostname at more than one node, and one environment can serve more than one hostname.</p>
     <p>To use your own domain:</p>
     <ol>
       <li>Create a <strong>CNAME</strong> or <strong>ALIAS</strong> record pointing your domain to the canonical hostname devopsellence assigns to your environment.</li>
@@ -825,17 +806,8 @@ tasks:
     </ol>
     <p>This gives you full control over DNS, load balancing, and failover. Your TLS private key is generated on the server and never leaves it.</p>
 
-    <h3>Choosing a mode</h3>
-    <dl class="docs-fields">
-      <div class="docs-field">
-        <dt><strong>Tunnel</strong></dt>
-        <dd>Quick setup, no DNS needed, single node only. Good for demos and staging.</dd>
-      </div>
-      <div class="docs-field">
-        <dt><strong>Direct DNS</strong></dt>
-        <dd>Your domain, your load balancer, multi-node support. Use for production.</dd>
-      </div>
-    </dl>
+    <h3>Running your own tunnel</h3>
+    <p>If you prefer Cloudflare Tunnel, run <code>cloudflared</code> as a normal service in <code>devopsellence.yml</code>, store its tunnel token with <code>devopsellence secret set</code>, and configure the tunnel in Cloudflare to reach your app.</p>
 
     <p>Automatic Cloudflare load balancer provisioning in your own zone is coming in an upcoming release.</p>
   </section>
@@ -1041,7 +1013,7 @@ tasks:
       </div>
       <div class="docs-field">
         <dt><code>devopsellence context env ingress</code></dt>
-        <dd>Update ingress mode for an environment. Flag: <code>--ingress-strategy</code> with <code>tunnel</code> or <code>direct_dns</code>.</dd>
+        <dd>Set the environment ingress strategy. The supported strategy is <code>direct_dns</code>.</dd>
       </div>
     </dl>
 

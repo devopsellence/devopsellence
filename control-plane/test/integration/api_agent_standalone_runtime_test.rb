@@ -153,44 +153,6 @@ class ApiAgentStandaloneRuntimeTest < ActionDispatch::IntegrationTest
     end
   end
 
-  test "tunnel token endpoint serves standalone environment bundle tunnel token" do
-    with_env(
-      "DEVOPSELLENCE_RUNTIME_BACKEND" => "standalone",
-      "DEVOPSELLENCE_PUBLIC_BASE_URL" => "https://control.example.test"
-    ) do
-      organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
-      project = organization.projects.create!(name: "Project A")
-      environment = project.environments.create!(name: "production")
-      runtime = RuntimeProject.default!
-      organization_bundle = OrganizationBundle.create!(
-        runtime_project: runtime,
-        claimed_by_organization: organization,
-        status: OrganizationBundle::STATUS_CLAIMED
-      )
-      environment_bundle = EnvironmentBundle.create!(
-        runtime_project: runtime,
-        organization_bundle: organization_bundle,
-        claimed_by_environment: environment,
-        status: EnvironmentBundle::STATUS_CLAIMED
-      )
-      environment_bundle.update!(tunnel_token: "tunnel-secret-token")
-      environment.update!(runtime_project: runtime, environment_bundle:, service_account_email: environment_bundle.service_account_email)
-      node_bundle = NodeBundle.create!(
-        runtime_project: runtime,
-        organization_bundle: organization_bundle,
-        environment_bundle: environment_bundle,
-        status: NodeBundle::STATUS_CLAIMED
-      )
-      node, access_token, = issue_test_node!(organization: organization, name: "node-a")
-      node.update!(environment:, node_bundle:)
-
-      get "/api/v1/agent/secrets/environment_bundles/#{environment_bundle.id}/tunnel_token",
-        headers: { "Authorization" => "Bearer #{access_token}" }, as: :json
-      assert_response :success
-      assert_equal "tunnel-secret-token", json_body.fetch("value")
-    end
-  end
-
   test "secret endpoint returns forbidden when node requests secret from different environment" do
     with_env(
       "DEVOPSELLENCE_RUNTIME_BACKEND" => "standalone",
@@ -233,52 +195,6 @@ class ApiAgentStandaloneRuntimeTest < ActionDispatch::IntegrationTest
       Gcp::EnvironmentSecretManager.new.upsert!(environment_secret: secret, value: "other-value")
 
       get "/api/v1/agent/secrets/environment_secrets/#{secret.id}",
-        headers: { "Authorization" => "Bearer #{access_token}" }, as: :json
-      assert_response :forbidden
-      assert_equal "forbidden", json_body.fetch("error")
-    end
-  end
-
-  test "tunnel token endpoint returns forbidden when node requests token from different environment bundle" do
-    with_env(
-      "DEVOPSELLENCE_RUNTIME_BACKEND" => "standalone",
-      "DEVOPSELLENCE_PUBLIC_BASE_URL" => "https://control.example.test"
-    ) do
-      organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
-      project = organization.projects.create!(name: "Project A")
-      env_a = project.environments.create!(name: "production")
-      env_b = project.environments.create!(name: "staging")
-      runtime = RuntimeProject.default!
-      organization_bundle = OrganizationBundle.create!(
-        runtime_project: runtime,
-        claimed_by_organization: organization,
-        status: OrganizationBundle::STATUS_CLAIMED
-      )
-      env_a_bundle = EnvironmentBundle.create!(
-        runtime_project: runtime,
-        organization_bundle: organization_bundle,
-        claimed_by_environment: env_a,
-        status: EnvironmentBundle::STATUS_CLAIMED
-      )
-      env_a.update!(runtime_project: runtime, environment_bundle: env_a_bundle, service_account_email: env_a_bundle.service_account_email)
-      env_b_bundle = EnvironmentBundle.create!(
-        runtime_project: runtime,
-        organization_bundle: organization_bundle,
-        claimed_by_environment: env_b,
-        status: EnvironmentBundle::STATUS_CLAIMED
-      )
-      env_b_bundle.update!(tunnel_token: "env-b-tunnel-token")
-      env_b.update!(runtime_project: runtime, environment_bundle: env_b_bundle, service_account_email: env_b_bundle.service_account_email)
-      node_bundle = NodeBundle.create!(
-        runtime_project: runtime,
-        organization_bundle: organization_bundle,
-        environment_bundle: env_a_bundle,
-        status: NodeBundle::STATUS_CLAIMED
-      )
-      node, access_token, = issue_test_node!(organization: organization, name: "node-a")
-      node.update!(environment: env_a, node_bundle:)
-
-      get "/api/v1/agent/secrets/environment_bundles/#{env_b_bundle.id}/tunnel_token",
         headers: { "Authorization" => "Bearer #{access_token}" }, as: :json
       assert_response :forbidden
       assert_equal "forbidden", json_body.fetch("error")

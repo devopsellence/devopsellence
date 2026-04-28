@@ -6,10 +6,9 @@ module EnvironmentBundles
   class Provisioner
     Error = Class.new(StandardError)
 
-    def initialize(organization_bundle:, broker: nil, cloudflare_client: nil)
+    def initialize(organization_bundle:, broker: nil)
       @organization_bundle = organization_bundle
       @broker = broker || Runtime::Broker.current
-      @cloudflare_client = cloudflare_client || Cloudflare::RestClient.new
     end
 
     def call
@@ -23,13 +22,9 @@ module EnvironmentBundles
       result = broker.provision_environment_bundle!(bundle:)
       raise Error, result.message unless result.status == :ready
 
-      Rails.logger.info("[environment_bundles/provisioner] provisioning Cloudflare tunnel bundle=#{bundle.token}")
-      hostname, tunnel_id, tunnel_token = provision_cloudflare_tunnel!(bundle)
-      bundle.update!(hostname:, cloudflare_tunnel_id: tunnel_id)
-      Rails.logger.info("[environment_bundles/provisioner] tunnel created bundle=#{bundle.token} hostname=#{hostname} tunnel_id=#{tunnel_id}")
-
-      result = broker.upsert_environment_bundle_tunnel_secret!(bundle:, tunnel_token:)
-      raise Error, result.message unless result.status == :ready
+      hostname = allocate_hostname!
+      bundle.update!(hostname:)
+      Rails.logger.info("[environment_bundles/provisioner] hostname allocated bundle=#{bundle.token} hostname=#{hostname}")
 
       bundle.update!(status: EnvironmentBundle::STATUS_WARM, provisioned_at: Time.current, provisioning_error: nil)
       Rails.logger.info("[environment_bundles/provisioner] environment bundle warm bundle=#{bundle.token}")
@@ -42,28 +37,10 @@ module EnvironmentBundles
 
     private
 
-    attr_reader :organization_bundle, :broker, :cloudflare_client
+    attr_reader :organization_bundle, :broker
 
-    def provision_cloudflare_tunnel!(bundle)
-      if Devopsellence::IngressConfig.local?
-        hostname = next_hostname!
-        tunnel_id = "local-#{bundle.token}"
-        return [ hostname, tunnel_id, tunnel_id ]
-      end
-
-      hostname = next_hostname!
-      tunnel = cloudflare_client.create_tunnel(name: "envb-#{bundle.token}")
-      tunnel_id = tunnel.fetch("id")
-      tunnel_token = cloudflare_client.tunnel_token(tunnel_id: tunnel_id)
-
-      cloudflare_client.configure_tunnel(
-        tunnel_id: tunnel_id,
-        hostname: hostname,
-        service: origin_service
-      )
-      cloudflare_client.create_dns_cname(hostname: hostname, target: "#{tunnel_id}.cfargotunnel.com")
-
-      [ hostname, tunnel_id, tunnel_token ]
+    def allocate_hostname!
+      next_hostname!
     end
 
     def next_hostname!
@@ -75,10 +52,6 @@ module EnvironmentBundles
           EnvironmentBundle.exists?(hostname: candidate)
       end
       raise "failed to allocate a unique bundle ingress hostname"
-    end
-
-    def origin_service
-      Devopsellence::IngressConfig.envoy_origin
     end
 
     def hostname_zone_name

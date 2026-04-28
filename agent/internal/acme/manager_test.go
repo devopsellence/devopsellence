@@ -69,9 +69,9 @@ func TestPeerChallengeURL(t *testing.T) {
 	}
 }
 
-func TestNeedsAutoTLSTreatsBlankModeWithoutTunnelTokenAsPublic(t *testing.T) {
+func TestNeedsAutoTLSTreatsBlankModeAsPublic(t *testing.T) {
 	ingress := &desiredstatepb.Ingress{Hosts: []string{"app.example.com"}}
 	if !needsAutoTLS(ingress) {
-		t.Fatal("expected blank mode ingress without tunnel token to need auto TLS")
+		t.Fatal("expected blank mode ingress to need auto TLS")
 	}
 }

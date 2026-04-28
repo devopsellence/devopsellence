@@ -16,28 +16,15 @@ module NodeDesiredState
       tls = configured_tls(release)
       redirect_http = configured_redirect_http(release)
 
-      if environment.tunnel_ingress?
-        return nil unless ingress.status == EnvironmentIngress::STATUS_READY
+      return nil unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
 
-        {
-          hosts: hosts,
-          mode: Environment::INGRESS_STRATEGY_TUNNEL,
-          tls: tls,
-          redirectHttp: redirect_http,
-          tunnelTokenSecretRef: ingress.tunnel_token_secret_ref,
-          routes: routes_for(environment:, ingress:, release:)
-        }
-      else
-        return nil unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
-
-        {
-          hosts: hosts,
-          mode: "public",
-          tls: tls,
-          redirectHttp: redirect_http,
-          routes: routes_for(environment:, ingress:, release:)
-        }
-      end
+      {
+        hosts: hosts,
+        mode: "public",
+        tls: tls,
+        redirectHttp: redirect_http,
+        routes: routes_for(environment:, ingress:, release:)
+      }
     end
 
     def self.routes_for(environment:, ingress:, release:)

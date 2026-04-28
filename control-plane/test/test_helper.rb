@@ -162,9 +162,7 @@ module ActiveSupport
         organization_bundle: organization_bundle,
         claimed_by_environment: (status == EnvironmentBundle::STATUS_CLAIMED ? environment : nil),
         service_account_email: "eb#{SecureRandom.hex(4)}@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-        gcp_secret_name: "eb-#{SecureRandom.hex(4)}-secret",
         hostname: "#{SecureRandom.alphanumeric(12).downcase}.devopsellence.test",
-        cloudflare_tunnel_id: "tunnel-#{SecureRandom.hex(4)}",
         status: status,
         provisioned_at: Time.current
       )
@@ -218,7 +216,7 @@ module ActiveSupport
       )
     end
 
-    def issue_test_node!(organization: nil, name: nil, labels: [ Node::DEFAULT_LABEL ], managed: false, managed_provider: nil, managed_region: nil, managed_size_slug: nil, provider_server_id: nil, public_ip: nil)
+    def issue_test_node!(organization: nil, name: nil, labels: [ Node::DEFAULT_LABEL ], managed: false, managed_provider: nil, managed_region: nil, managed_size_slug: nil, provider_server_id: nil, public_ip: nil, capabilities: [ Node::CAPABILITY_DIRECT_DNS_INGRESS ])
       ensure_test_organization_runtime!(organization) if organization
 
       raw_access = SecureRandom.hex(Node::TOKEN_BYTES)
@@ -239,6 +237,7 @@ module ActiveSupport
         provider_server_id: provider_server_id,
         public_ip: public_ip,
         labels_json: ::JSON.generate(labels),
+        capabilities_json: ::JSON.generate(capabilities),
         desired_state_bucket: organization&.gcs_bucket_name.to_s,
         desired_state_object_path: organization ? "nodes/#{SecureRandom.hex(6)}/desired_state.json" : ""
       )

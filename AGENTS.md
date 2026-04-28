@@ -25,7 +25,7 @@ Critical defaults:
 
 | Path | Stack | Purpose |
 |---|---|---|
-| `agent/` | Go | Single-node reconciler: desired state, Docker, Envoy, cloudflared, status. |
+| `agent/` | Go | Single-node reconciler: desired state, Docker, Envoy, status. |
 | `cli/` | Go | `devopsellence` CLI: login, deploy, secrets, nodes, solo/shared workflows. |
 | `control-plane/` | Rails 8 | Web/API app: tenants, deployments, nodes, GCP/standalone resources. |
 | `deployment-core/` | Go | Common deployment core: config interpretation, validation, planning, desired-state generation. |
@@ -79,7 +79,7 @@ cd control-plane && mise run test -- test/path/file_test.rb
 ## Key Paths
 
 - `agent/cmd/devopsellence/`: agent entrypoint.
-- `agent/internal/`: engine, reconcile, envoy, gcp, auth, cloudflared, etc.
+- `agent/internal/`: engine, reconcile, envoy, gcp, auth, etc.
 - `agent/proto/`: desired-state protobuf.
 - `cli/cmd/devopsellence/`: CLI entrypoint.
 - `cli/internal/`: api, app, auth, docker, git, workflow, ui, solo, etc.

@@ -33,8 +33,6 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
     hostname = random_ingress_hostname
     environment.create_environment_ingress!(
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -43,7 +41,6 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     deployment = Deployments::Publisher.new(environment: environment, release: release, store: FakeObjectStore.new).call.deployment
 
     post "/api/v1/agent/status",

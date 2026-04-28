@@ -128,7 +128,7 @@ module Api
 
         def requested_ingress_strategy
           params[:ingress_strategy].to_s.strip.presence ||
-            Environment::INGRESS_STRATEGY_TUNNEL
+            Environment::INGRESS_STRATEGY_DIRECT_DNS
         end
       end
     end

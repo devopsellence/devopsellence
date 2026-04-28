@@ -140,8 +140,7 @@ func TestValidateWebRequiresHealthcheck(t *testing.T) {
 func TestValidateIngressRequiresWeb(t *testing.T) {
 	state := desiredState(workerService("worker"))
 	state.Ingress = &desiredstatepb.Ingress{
-		Hosts:       []string{"abc123.devopsellence.io"},
-		TunnelToken: "tok",
+		Hosts: []string{"abc123.devopsellence.io"},
 	}
 	if err := Validate(state); err == nil {
 		t.Fatal("expected error")
@@ -150,20 +149,9 @@ func TestValidateIngressRequiresWeb(t *testing.T) {
 
 func TestValidateIngressRequiresHosts(t *testing.T) {
 	state := desiredState(webService())
-	state.Ingress = &desiredstatepb.Ingress{TunnelToken: "tok"}
+	state.Ingress = &desiredstatepb.Ingress{}
 	if err := Validate(state); err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-func TestValidateIngressAllowsTokenSecretRef(t *testing.T) {
-	state := desiredState(webService())
-	state.Ingress = &desiredstatepb.Ingress{
-		Hosts:                []string{"abc123.devopsellence.io"},
-		TunnelTokenSecretRef: "gsm://projects/test/secrets/cloudflare/versions/latest",
-	}
-	if err := Validate(state); err != nil {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

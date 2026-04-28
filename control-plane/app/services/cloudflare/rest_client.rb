@@ -26,45 +26,6 @@ module Cloudflare
       @api_base = api_base.to_s.strip.presence || DEFAULT_API_BASE
     end
 
-    def create_tunnel(name:)
-      request(:post, "/accounts/#{account_id}/cfd_tunnel", payload: {
-        name: name,
-        config_src: "cloudflare"
-      })
-    end
-
-    def tunnel_token(tunnel_id:)
-      result = request(:get, "/accounts/#{account_id}/cfd_tunnel/#{tunnel_id}/token")
-      return result if result.is_a?(String)
-
-      result.fetch("token")
-    end
-
-    def configure_tunnel(tunnel_id:, service:, hostname: nil, hostnames: nil)
-      routes = Array(hostnames.presence || hostname).map do |entry|
-        { hostname: entry, service: service }
-      end
-      request(:put, "/accounts/#{account_id}/cfd_tunnel/#{tunnel_id}/configurations", payload: {
-        config: {
-          ingress: routes + [ { service: "http_status:404" } ]
-        }
-      })
-    end
-
-    def create_dns_cname(hostname:, target:)
-      existing = dns_records(hostname:, type: "CNAME").find do |record|
-        dns_record_matches?(record, type: "CNAME", content: target, proxied: true)
-      end
-      return existing if existing
-
-      create_dns_record(
-        hostname: hostname,
-        type: "CNAME",
-        content: target,
-        proxied: true
-      )
-    end
-
     def replace_dns_a_records(hostname:, addresses:, ttl: 60)
       replace_dns_records(hostname:, type: "A", values: Array(addresses).map { |entry| entry.to_s.strip }.reject(&:blank?), ttl:, proxied: false)
     end
@@ -83,6 +44,18 @@ module Cloudflare
       params = { name: hostname.to_s.strip }
       params[:type] = type.to_s.strip if type.present?
       request(:get, "/zones/#{zone_id}/dns_records?#{URI.encode_www_form(params)}")
+    end
+
+    def restore_dns_records(records)
+      Array(records).each do |record|
+        create_dns_record(
+          hostname: record.fetch("name"),
+          type: record.fetch("type"),
+          content: record.fetch("content"),
+          proxied: record.fetch("proxied", false),
+          ttl: record["ttl"]
+        )
+      end
     end
 
     private

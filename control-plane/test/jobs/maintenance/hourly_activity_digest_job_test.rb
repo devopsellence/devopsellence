@@ -95,7 +95,6 @@ module Maintenance
         )
         environment.create_environment_ingress!(
           hostname: hostname,
-          gcp_secret_name: "ingress-#{SecureRandom.hex(4)}",
           status: EnvironmentIngress::STATUS_READY
         )
 

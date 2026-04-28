@@ -15,11 +15,8 @@ class EnvironmentBundle < ApplicationRecord
   belongs_to :claimed_by_environment, class_name: "Environment", optional: true
   has_many :node_bundles, dependent: :destroy
 
-  encrypts :tunnel_token
-
   validates :token, presence: true, uniqueness: true
   validates :service_account_email, presence: true, uniqueness: true
-  validates :gcp_secret_name, presence: true, uniqueness: true
   validates :status, inclusion: { in: STATUSES }
 
   scope :warm, -> { where(status: STATUS_WARM) }
@@ -48,7 +45,6 @@ class EnvironmentBundle < ApplicationRecord
 
     if runtime_project.standalone?
       self.service_account_email = "standalone-eb-#{token}" if service_account_email.blank?
-      self.gcp_secret_name = "eb-#{token}-ingress-cloudflare-tunnel-token" if gcp_secret_name.blank?
       return
     end
 
@@ -56,6 +52,5 @@ class EnvironmentBundle < ApplicationRecord
       account_id = "eb#{token}"[0, 30]
       self.service_account_email = "#{account_id}@#{runtime_project.gcp_project_id}.iam.gserviceaccount.com"
     end
-    self.gcp_secret_name = "eb-#{token}-ingress-cloudflare-tunnel-token" if gcp_secret_name.blank?
   end
 end

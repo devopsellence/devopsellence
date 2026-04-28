@@ -3169,9 +3169,9 @@ func applySharedBootstrapIngress(cfg config.ProjectConfig, hosts []string) confi
 		Hosts: resolvedHosts,
 		Rules: rules,
 		TLS: config.IngressTLSConfig{
-			Mode: "off",
+			Mode: "auto",
 		},
-		RedirectHTTP: configBoolPtr(false),
+		RedirectHTTP: configBoolPtr(true),
 	}
 	return cfg
 }
@@ -3344,12 +3344,10 @@ func firstNonEmpty(values ...string) string {
 
 func normalizeIngressStrategy(value string) (string, error) {
 	switch strings.TrimSpace(value) {
-	case "", "tunnel":
-		return strings.TrimSpace(value), nil
-	case "direct_dns":
+	case "", "direct_dns":
 		return "direct_dns", nil
 	default:
-		return "", fmt.Errorf("unsupported ingress strategy %q: use tunnel or direct_dns", value)
+		return "", fmt.Errorf("unsupported ingress strategy %q: use direct_dns", value)
 	}
 }
 

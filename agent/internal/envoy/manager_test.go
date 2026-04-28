@@ -173,7 +173,7 @@ func TestEnsureCreatesEnvoyWithDefaults(t *testing.T) {
 	}
 }
 
-func TestEnsureSkipsHostPortPublishWhenDisabled(t *testing.T) {
+func TestEnsurePublishesDefaultPortWithoutIngress(t *testing.T) {
 	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
 	bootstrapPath := tempBootstrapPath(t)
@@ -188,14 +188,14 @@ func TestEnsureSkipsHostPortPublishWhenDisabled(t *testing.T) {
 		StartupTimeout: 2 * time.Second,
 	}, logger)
 
-	if err := mgr.Ensure(context.Background(), &desiredstatepb.Ingress{Hosts: []string{"abc123.devopsellence.io"}, TunnelToken: "tok"}); err != nil {
+	if err := mgr.Ensure(context.Background(), nil); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	if eng.createdSpec == nil {
 		t.Fatal("expected CreateAndStart to be called")
 	}
-	if len(eng.createdSpec.Ports) != 0 {
-		t.Fatalf("expected envoy host port publish disabled, got %+v", eng.createdSpec.Ports)
+	if len(eng.createdSpec.Ports) != 1 || eng.createdSpec.Ports[0].HostPort != 8000 {
+		t.Fatalf("expected envoy default host port publish, got %+v", eng.createdSpec.Ports)
 	}
 }
 
@@ -260,14 +260,14 @@ func TestEnsureRecreatesWhenPublishedPortsChange(t *testing.T) {
 		StartupTimeout: 2 * time.Second,
 	}, logger)
 
-	if err := mgr.Ensure(context.Background(), &desiredstatepb.Ingress{Hosts: []string{"abc123.devopsellence.io"}, TunnelToken: "tok"}); err != nil {
+	if err := mgr.Ensure(context.Background(), nil); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	if len(eng.removed) == 0 {
-		t.Fatal("expected envoy removal to recreate without host port publish")
+		t.Fatal("expected envoy removal to recreate with default host port publish")
 	}
-	if eng.createdSpec == nil || len(eng.createdSpec.Ports) != 0 {
-		t.Fatalf("expected recreated envoy without host port publish, got %+v", eng.createdSpec)
+	if eng.createdSpec == nil || len(eng.createdSpec.Ports) != 1 || eng.createdSpec.Ports[0].HostPort != 8000 {
+		t.Fatalf("expected recreated envoy with default host port publish, got %+v", eng.createdSpec)
 	}
 }
 
@@ -519,7 +519,7 @@ func TestEnsurePublishesPublicPorts(t *testing.T) {
 	}
 }
 
-func TestEnsureTreatsBlankModeWithoutTunnelTokenAsPublicIngress(t *testing.T) {
+func TestEnsureTreatsBlankModeAsPublicIngress(t *testing.T) {
 	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
 	bootstrapPath := tempBootstrapPath(t)
@@ -794,9 +794,9 @@ func TestUpdateClusterEDSWithRoutesKeepsClustersIndependent(t *testing.T) {
 	}, logger)
 
 	ingress := &desiredstatepb.Ingress{
-		Hosts:       []string{"app.example.com", "staging.example.com"},
-		Mode:        "tunnel",
-		TunnelToken: "tok",
+		Hosts: []string{"app.example.com", "staging.example.com"},
+		Mode:  "public",
+		Tls:   &desiredstatepb.IngressTLS{Mode: "off"},
 		Routes: []*desiredstatepb.IngressRoute{
 			{
 				Match:  &desiredstatepb.IngressMatch{Hostname: "app.example.com", PathPrefix: "/"},

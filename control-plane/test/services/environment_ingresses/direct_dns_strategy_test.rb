@@ -22,12 +22,17 @@ module EnvironmentIngresses
         raise "boom" if @fail_replace
       end
 
-      def create_dns_cname(hostname:, target:)
-        operations << [ :create_cname, hostname, target ]
+      def dns_records(hostname:, type: nil)
+        operations << [ :records, hostname, type ]
+        type == "CNAME" ? [{ "name" => hostname, "type" => "CNAME", "content" => "old.example.test", "proxied" => false, "ttl" => 60 }] : []
+      end
+
+      def restore_dns_records(records)
+        operations << [ :restore, records ]
       end
     end
 
-    test "keeps tunnel cname in place while no eligible direct dns nodes exist" do
+    test "leaves DNS unchanged while no eligible direct dns nodes exist" do
       environment, ingress = build_environment_and_ingress
       client = FakeClient.new
 
@@ -41,7 +46,59 @@ module EnvironmentIngresses
       assert_equal [], client.operations
     end
 
-    test "restores tunnel cname when direct dns cutover fails after cname delete" do
+    test "replaces canonical DNS with eligible node IP addresses" do
+      environment, ingress = build_environment_and_ingress
+      client = FakeClient.new
+      node, = issue_test_node!(organization: environment.project.organization, name: "node-a", labels: [ "web" ])
+      node.capabilities = [ Node::CAPABILITY_DIRECT_DNS_INGRESS ]
+      node.public_ip = "198.51.100.10"
+      node.provisioning_status = Node::PROVISIONING_READY
+      node.environment = environment
+      node.save!
+
+      environment.deployments.create!(
+        release: environment.current_release,
+        sequence: 1,
+        request_token: SecureRandom.hex(8),
+        status: Deployment::STATUS_PUBLISHED,
+        status_message: "rollout settled",
+        published_at: Time.current,
+        finished_at: Time.current
+      ).deployment_node_statuses.create!(
+        node: node,
+        phase: DeploymentNodeStatus::PHASE_SETTLED,
+        message: "ok",
+        reported_at: node.updated_at + 1.second
+      )
+
+      result = DirectDnsStrategy.new(environment:, ingress:, client:).call
+
+      assert_equal ingress, result
+      assert_equal EnvironmentIngress::STATUS_READY, ingress.reload.status
+      assert_nil ingress.last_error
+      assert_equal [
+        [ :records, ingress.hostname, "CNAME" ],
+        [ :records, ingress.hostname, "A" ],
+        [ :delete, ingress.hostname, "CNAME" ],
+        [ :replace_a, ingress.hostname, [ "198.51.100.10" ], 60 ]
+      ], client.operations
+    end
+
+    test "local ingress backend marks direct dns ready without touching cloudflare" do
+      environment, ingress = build_environment_and_ingress
+      client = FakeClient.new
+
+      with_runtime_config(ingress_backend: "local") do
+        result = DirectDnsStrategy.new(environment:, ingress:, client:).call
+
+        assert_equal ingress, result
+        assert_equal EnvironmentIngress::STATUS_READY, ingress.reload.status
+        assert_nil ingress.last_error
+        assert_equal [], client.operations
+      end
+    end
+
+    test "marks ingress failed when direct dns cutover fails" do
       environment, ingress = build_environment_and_ingress
       client = FakeClient.new(fail_replace: true)
       node, = issue_test_node!(organization: environment.project.organization, name: "node-a", labels: [ "web" ])
@@ -76,10 +133,13 @@ module EnvironmentIngresses
       assert_equal EnvironmentIngress::STATUS_FAILED, ingress.reload.status
       assert_equal "boom", ingress.last_error
       assert_equal [
+        [ :records, ingress.hostname, "CNAME" ],
+        [ :records, ingress.hostname, "A" ],
         [ :delete, ingress.hostname, "CNAME" ],
         [ :replace_a, ingress.hostname, [ "198.51.100.10" ], 60 ],
         [ :delete, ingress.hostname, "A" ],
-        [ :create_cname, ingress.hostname, "#{ingress.cloudflare_tunnel_id}.cfargotunnel.com" ]
+        [ :delete, ingress.hostname, "CNAME" ],
+        [ :restore, [{ "name" => ingress.hostname, "type" => "CNAME", "content" => "old.example.test", "proxied" => false, "ttl" => 60 }] ]
       ], client.operations
     end
 
@@ -155,8 +215,6 @@ module EnvironmentIngresses
         environment.update!(current_release: release)
         ingress = environment.create_environment_ingress!(
           hostname: "#{SecureRandom.hex(3)}.devopsellence.io",
-          cloudflare_tunnel_id: "tunnel-1",
-          gcp_secret_name: "env-#{SecureRandom.hex(4)}-ingress-cloudflare-tunnel-token",
           status: EnvironmentIngress::STATUS_PENDING
         )
 

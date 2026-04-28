@@ -1547,6 +1547,10 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 	if err != nil {
 		return err
 	}
+	displayEnvironmentID, err := soloDisplayEnvironmentID(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
 	limit := opts.Limit
 	if limit > 0 && len(releases) > limit {
 		releases = releases[:limit]
@@ -1566,7 +1570,7 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 	return a.Printer.PrintJSON(map[string]any{
 		"schema_version": outputSchemaVersion,
 		"environment":    environmentName,
-		"environment_id": soloDisplayEnvironmentID(workspaceRoot, environmentName),
+		"environment_id": displayEnvironmentID,
 		"current_release_id": func() string {
 			if hasCurrent {
 				return currentRelease.ID
@@ -3956,16 +3960,12 @@ func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 	return strings.TrimSpace(cfg.DefaultEnvironment)
 }
 
-func soloDisplayEnvironmentID(workspaceRoot, environment string) string {
-	workspaceRoot = strings.TrimSpace(workspaceRoot)
-	environment = strings.TrimSpace(environment)
-	if environment == "" {
-		environment = config.DefaultEnvironment
+func soloDisplayEnvironmentID(workspaceRoot, environment string) (string, error) {
+	key, err := solo.EnvironmentStateKey(workspaceRoot, environment)
+	if err != nil {
+		return "", err
 	}
-	if workspaceRoot == "" {
-		return environment
-	}
-	return workspaceRoot + "#" + environment
+	return strings.Replace(key, "\n", "#", 1), nil
 }
 
 func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.Node, error) {

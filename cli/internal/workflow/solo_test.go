@@ -2581,6 +2581,42 @@ func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
 	}
 }
 
+func TestSoloReleaseListEnvironmentIDUsesCanonicalWorkspaceKey(t *testing.T) {
+	realWorkspace := filepath.Join(t.TempDir(), "real")
+	if err := os.Mkdir(realWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(realWorkspace, cfg); err != nil {
+		t.Fatal(err)
+	}
+	linkWorkspace := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(realWorkspace, linkWorkspace); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(realWorkspace)
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         linkWorkspace,
+	}
+	if err := app.SoloReleaseList(context.Background(), SoloReleaseListOptions{Limit: 1}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	want := realWorkspace + "#production"
+	if payload["environment_id"] != want {
+		t.Fatalf("environment_id = %#v, want canonical %q", payload["environment_id"], want)
+	}
+}
+
 func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")

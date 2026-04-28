@@ -1403,22 +1403,8 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 	if cfg == nil || len(nodes) == 0 {
 		return nil
 	}
-	scheme := "http"
-	if cfg.Ingress != nil {
-		tlsMode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
-		if strings.EqualFold(tlsMode, "auto") || strings.EqualFold(tlsMode, "manual") {
-			scheme = "https"
-		}
-	}
-	hosts := []string{}
-	if cfg.Ingress != nil {
-		for _, host := range normalizeIngressHosts(cfg.Ingress.Hosts) {
-			if host == "*" {
-				continue
-			}
-			hosts = append(hosts, host)
-		}
-	}
+	scheme := ingressURLScheme(cfg)
+	hosts := concreteIngressHosts(cfg)
 	if len(hosts) == 0 {
 		for _, name := range sortedNodeNames(nodes) {
 			node := nodes[name]
@@ -1431,6 +1417,38 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 			}
 		}
 	}
+	return publicURLsForHosts(scheme, hosts)
+}
+
+func ingressConfiguredPublicURLs(cfg *config.ProjectConfig) []string {
+	return publicURLsForHosts(ingressURLScheme(cfg), concreteIngressHosts(cfg))
+}
+
+func ingressURLScheme(cfg *config.ProjectConfig) string {
+	if cfg != nil && cfg.Ingress != nil {
+		tlsMode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
+		if strings.EqualFold(tlsMode, "auto") || strings.EqualFold(tlsMode, "manual") {
+			return "https"
+		}
+	}
+	return "http"
+}
+
+func concreteIngressHosts(cfg *config.ProjectConfig) []string {
+	if cfg == nil || cfg.Ingress == nil {
+		return nil
+	}
+	hosts := []string{}
+	for _, host := range normalizeIngressHosts(cfg.Ingress.Hosts) {
+		if host == "*" {
+			continue
+		}
+		hosts = append(hosts, host)
+	}
+	return hosts
+}
+
+func publicURLsForHosts(scheme string, hosts []string) []string {
 	urls := make([]string, 0, len(hosts))
 	seen := map[string]bool{}
 	for _, host := range hosts {
@@ -3171,14 +3189,14 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 		if err != nil {
 			return err
 		}
-		if report.OK || opts.Wait <= 0 || time.Now().After(deadline) {
+		if report.OK || !ingressDNSReportRetryable(report) || opts.Wait <= 0 || time.Now().After(deadline) {
 
 			if err := a.Printer.PrintJSON(report); err != nil {
 				return err
 			}
 
 			if !report.OK {
-				return ExitError{Code: 1, Err: fmt.Errorf("ingress DNS is not ready")}
+				return ExitError{Code: 1, Err: RenderedError{Err: ingressDNSReportError(report)}}
 			}
 			return nil
 		}
@@ -3301,8 +3319,10 @@ func configBoolPtr(value bool) *bool {
 type ingressDNSReportResult struct {
 	SchemaVersion int                    `json:"schema_version"`
 	OK            bool                   `json:"ok"`
+	PublicURLs    []string               `json:"public_urls,omitempty"`
 	ExpectedIPs   []string               `json:"expected_ips"`
 	Hosts         []ingressDNSHostResult `json:"hosts"`
+	NextSteps     []string               `json:"next_steps,omitempty"`
 }
 
 type ingressDNSHostResult struct {
@@ -3326,18 +3346,27 @@ func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectC
 	if report.OK {
 		return nil
 	}
+	reportErr := ingressDNSReportError(report)
+	if len(report.Hosts) == 0 {
+		return fmt.Errorf("%w; configure ingress hostnames or pass --skip-dns-check", reportErr)
+	}
 
-	return fmt.Errorf("ingress DNS is not ready; update DNS or pass --skip-dns-check")
+	return fmt.Errorf("%w; update DNS or pass --skip-dns-check", reportErr)
+}
+
+func ingressDNSReportRetryable(report ingressDNSReportResult) bool {
+	return !report.OK && len(report.Hosts) > 0
+}
+
+func ingressDNSReportError(report ingressDNSReportResult) error {
+	if len(report.Hosts) == 0 {
+		return fmt.Errorf("no ingress hostnames configured")
+	}
+	return fmt.Errorf("ingress DNS is not ready")
 }
 
 func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.Node) (ingressDNSReportResult, error) {
-	hosts := []string{}
-	if cfg != nil && cfg.Ingress != nil {
-		hosts = normalizeIngressHosts(cfg.Ingress.Hosts)
-	}
-	if len(hosts) == 0 {
-		return ingressDNSReportResult{}, fmt.Errorf("ingress.hosts is not configured")
-	}
+	hosts := concreteIngressHosts(cfg)
 	expected := webNodeIPs(cfg, selected)
 	if len(expected) == 0 {
 		return ingressDNSReportResult{}, fmt.Errorf("no web nodes configured")
@@ -3345,8 +3374,14 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 	report := ingressDNSReportResult{
 		SchemaVersion: outputSchemaVersion,
 		OK:            true,
+		PublicURLs:    ingressConfiguredPublicURLs(cfg),
 		ExpectedIPs:   expected,
 		Hosts:         make([]ingressDNSHostResult, 0, len(hosts)),
+	}
+	if len(hosts) == 0 {
+		report.OK = false
+		report.NextSteps = []string{"devopsellence status", "devopsellence ingress set --host <hostname> --service <service>", "devopsellence ingress check --wait 5m"}
+		return report, nil
 	}
 	for _, host := range hosts {
 		result := ingressDNSHostResult{Host: host}
@@ -3361,6 +3396,13 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 			report.OK = false
 		}
 		report.Hosts = append(report.Hosts, result)
+	}
+	if len(report.PublicURLs) > 0 {
+		if report.OK {
+			report.NextSteps = []string{"devopsellence status", "curl " + report.PublicURLs[0]}
+		} else {
+			report.NextSteps = []string{"devopsellence status", "update DNS records to point at expected_ips", "devopsellence ingress check --wait 5m"}
+		}
 	}
 	return report, nil
 }

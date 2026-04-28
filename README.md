@@ -96,7 +96,7 @@ devopsellence logs --node prod-1 --lines 100
 devopsellence node logs prod-1 --lines 100
 ```
 
-`devopsellence status` includes `public_urls` when it can infer where the app should be reachable. For default solo HTTP ingress, try the node URL it prints.
+`devopsellence status` includes `public_urls` when it can infer where the app should be reachable. `devopsellence ingress check` is the public endpoint DNS check for configured hostnames; it prints `public_urls`, DNS diagnostics, and next steps. For default solo HTTP ingress, try the node URL from `status`.
 
 Solo deploy scope comes from the nodes attached to the current workspace/environment. Use `devopsellence node attach <name>` and `devopsellence node detach <name>` to change which nodes receive the deploy.
 
@@ -137,7 +137,6 @@ devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
 devopsellence node create prod-1 --provider hetzner
 devopsellence deploy
 devopsellence status
-devopsellence open
 ```
 
 The root verbs stay the same. The selected workspace mode decides how they behave.

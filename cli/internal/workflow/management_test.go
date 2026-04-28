@@ -418,51 +418,6 @@ func TestEnvironmentUseUpdatesWorkspaceStateNotConfig(t *testing.T) {
 	}
 }
 
-func TestEnvironmentOpenUsesWorkspaceContext(t *testing.T) {
-	t.Parallel()
-
-	root := makeRailsRoot(t, "ShopApp")
-	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
-			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
-			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
-			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "staging"}}}), nil
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/status":
-			return jsonResponse(t, map[string]any{
-				"organization": map[string]any{"id": 7, "name": "default"},
-				"project":      map[string]any{"id": 11, "name": "ShopApp"},
-				"environment":  map[string]any{"id": 44, "name": "staging"},
-				"ingress":      map[string]any{"public_url": "https://shop.example.test"},
-			}), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, nil
-		}
-	}))
-
-	var stdout bytes.Buffer
-	app.Printer = output.New(&stdout, io.Discard)
-	app.Auth.OpenURL = func(value string) error {
-		t.Fatalf("OpenURL(%q) should not run in agent-primary JSON mode", value)
-		return nil
-	}
-
-	if err := app.EnvironmentOpen(context.Background(), EnvironmentOpenOptions{}); err != nil {
-		t.Fatalf("EnvironmentOpen() error = %v", err)
-	}
-	payload := decodeJSONOutput(t, &stdout)
-	if payload["url"] != "https://shop.example.test" {
-		t.Fatalf("url = %v, want https://shop.example.test", payload["url"])
-	}
-}
-
 func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 	t.Parallel()
 

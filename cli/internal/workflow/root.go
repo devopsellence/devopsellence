@@ -585,7 +585,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	ingressSetCommand.Flags().BoolVar(&ingressSetOpts.RedirectHTTP, "redirect-http", true, "Redirect HTTP to HTTPS")
 	ingressCheckCommand := &cobra.Command{
 		Use:   "check",
-		Short: "Check that ingress DNS points at public web nodes",
+		Short: "Check public endpoint DNS for configured hostnames",
 		RunE: runByMode(func(ctx context.Context) error {
 			return app.IngressCheck(ctx, ingressCheckOpts)
 		}, func(ctx context.Context) error {
@@ -622,19 +622,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return app.Doctor(ctx)
 		}),
 	})
-
-	var openSharedOpts EnvironmentOpenOptions
-	openCommand := &cobra.Command{
-		Use:   "open",
-		Short: "Open the current shared environment URL",
-		RunE: runSharedOnly("open", func(ctx context.Context) error {
-			return app.EnvironmentOpen(ctx, openSharedOpts)
-		}),
-	}
-	openCommand.Flags().StringVar(&openSharedOpts.Organization, "org", "", "Organization name override")
-	openCommand.Flags().StringVar(&openSharedOpts.Project, "project", "", "Project name override")
-	openCommand.Flags().StringVar(&openSharedOpts.Environment, "env", "", "Environment name override")
-	root.AddCommand(openCommand)
 
 	var secretSharedSetOpts SecretSetOptions
 	var secretSoloSetOpts SoloSecretsSetOptions

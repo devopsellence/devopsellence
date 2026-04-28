@@ -65,7 +65,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "PATH_EXPORT='export PATH=\"'\"$INSTALL_DIR\"':$PATH\"'"
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
-    assert_includes response.body, "npx skills add devopsellence/devopsellence --skill devopsellence -g"
+    assert_includes response.body, "npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes"
     assert_includes response.body, 'curl -fsSL "$INSTALL_SCRIPT_URL?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
   end
 
@@ -135,7 +135,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
     assert_includes stdout, "installing devopsellence agent skill"
     assert_equal "prerelease build\n", installed_cli
-    assert_equal [ "skills", "add", "devopsellence/devopsellence", "--skill", "devopsellence", "-g" ], skill_args
+    assert_equal [ "--yes", "skills", "add", "devopsellence/devopsellence", "--skill", "devopsellence", "-g", "--yes" ], skill_args
   end
 
   test "cli install script fails when requested agent skill cannot install without npx" do

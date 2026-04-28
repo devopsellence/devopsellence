@@ -4166,10 +4166,17 @@ func temporaryDNSHostname(cfg *config.ProjectConfig, ip string) string {
 
 func isTemporaryDNSIPv4(value string) bool {
 	ip := net.ParseIP(strings.TrimSpace(value))
-	if ip == nil || ip.To4() == nil {
+	if ip == nil {
 		return false
 	}
-	return !ip.IsUnspecified() && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast()
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	if !ip4.IsGlobalUnicast() || ip4.Equal(net.IPv4bcast) {
+		return false
+	}
+	return !ip4.IsUnspecified() && !ip4.IsLoopback() && !ip4.IsPrivate() && !ip4.IsLinkLocalUnicast()
 }
 
 func normalizeIngressHosts(values []string) []string {

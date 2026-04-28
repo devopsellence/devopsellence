@@ -1043,6 +1043,25 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	}
 }
 
+func TestTemporaryDNSIPv4RejectsNonPublicAddresses(t *testing.T) {
+	tests := map[string]bool{
+		"203.0.113.10":    true,
+		"10.0.0.1":        false,
+		"127.0.0.1":       false,
+		"169.254.1.1":     false,
+		"224.0.0.1":       false,
+		"255.255.255.255": false,
+		"2001:db8::1":     false,
+	}
+	for value, want := range tests {
+		t.Run(value, func(t *testing.T) {
+			if got := isTemporaryDNSIPv4(value); got != want {
+				t.Fatalf("isTemporaryDNSIPv4(%q) = %v, want %v", value, got, want)
+			}
+		})
+	}
+}
+
 func TestCheckIngressBeforeDeployIncludesSSLIPHintFields(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{

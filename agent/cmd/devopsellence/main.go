@@ -115,15 +115,15 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 	})
 
 	reconciler := reconcile.New(eng, reconcile.Options{
-		Network:                    cfg.NetworkName,
-		StopTimeout:                cfg.StopTimeout,
-		DrainDelay:                 cfg.DrainDelay,
-		WebPort:                    cfg.WebPort,
-		LogConfig:                  logConfig,
-		PersistentSystemContainers: []string{cfg.EnvoyContainer},
-		Envoy:                      envoyManager,
-		IngressCert:                ingressCertManager,
-		Logger:                     logger,
+		Network:                      cfg.NetworkName,
+		StopTimeout:                  cfg.StopTimeout,
+		DrainDelay:                   cfg.DrainDelay,
+		WebPort:                      cfg.WebPort,
+		LogConfig:                    logConfig,
+		ProtectedEnvoyContainerNames: []string{cfg.EnvoyContainer},
+		Envoy:                        envoyManager,
+		IngressCert:                  ingressCertManager,
+		Logger:                       logger,
 	})
 
 	reporter := file.New(cfg.StatusPath, logger)
@@ -240,16 +240,16 @@ func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 	}
 
 	reconciler := reconcile.New(eng, reconcile.Options{
-		Network:                    cfg.NetworkName,
-		StopTimeout:                cfg.StopTimeout,
-		DrainDelay:                 cfg.DrainDelay,
-		WebPort:                    cfg.WebPort,
-		LogConfig:                  logConfig,
-		PersistentSystemContainers: []string{cfg.EnvoyContainer},
-		Envoy:                      envoyManager,
-		ImagePullAuth:              imagePullAuth,
-		IngressCert:                ingressCertManager,
-		Logger:                     logger,
+		Network:                      cfg.NetworkName,
+		StopTimeout:                  cfg.StopTimeout,
+		DrainDelay:                   cfg.DrainDelay,
+		WebPort:                      cfg.WebPort,
+		LogConfig:                    logConfig,
+		ProtectedEnvoyContainerNames: []string{cfg.EnvoyContainer},
+		Envoy:                        envoyManager,
+		ImagePullAuth:                imagePullAuth,
+		IngressCert:                  ingressCertManager,
+		Logger:                       logger,
 	})
 
 	controlPlaneReporter, err := controlplane.New(controlplane.Config{

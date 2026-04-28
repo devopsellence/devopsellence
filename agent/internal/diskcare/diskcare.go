@@ -83,17 +83,20 @@ func (m *Manager) Run(ctx context.Context, desired *desiredstatepb.DesiredState)
 
 	managed, err := m.engine.ListManaged(ctx)
 	if err != nil {
-		status.LastError = fmt.Sprintf("list managed containers: %v", err)
+		err = fmt.Errorf("list managed containers: %w", err)
+		status.LastError = err.Error()
 		return status, err
 	}
 	allContainers, err := m.engine.ListContainers(ctx)
 	if err != nil {
-		status.LastError = fmt.Sprintf("list containers: %v", err)
+		err = fmt.Errorf("list containers: %w", err)
+		status.LastError = err.Error()
 		return status, err
 	}
 	images, err := m.engine.ListImages(ctx)
 	if err != nil {
-		status.LastError = fmt.Sprintf("list images: %v", err)
+		err = fmt.Errorf("list images: %w", err)
+		status.LastError = err.Error()
 		return status, err
 	}
 

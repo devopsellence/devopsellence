@@ -47,17 +47,17 @@ type HTTPProber interface {
 }
 
 type Options struct {
-	Network                    string
-	StopTimeout                time.Duration
-	DrainDelay                 time.Duration
-	WebPort                    uint16
-	LogConfig                  *engine.LogConfig
-	PersistentSystemContainers []string
-	Envoy                      EnvoyManager
-	ImagePullAuth              ImagePullAuthProvider
-	IngressCert                IngressCertManager
-	HTTPProber                 HTTPProber
-	Logger                     *slog.Logger
+	Network                      string
+	StopTimeout                  time.Duration
+	DrainDelay                   time.Duration
+	WebPort                      uint16
+	LogConfig                    *engine.LogConfig
+	ProtectedEnvoyContainerNames []string
+	Envoy                        EnvoyManager
+	ImagePullAuth                ImagePullAuthProvider
+	IngressCert                  IngressCertManager
+	HTTPProber                   HTTPProber
+	Logger                       *slog.Logger
 }
 
 type Reconciler struct {
@@ -123,7 +123,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		if _, ok := desiredByService[containerServiceKey(c)]; ok {
 			continue
 		}
-		if c.Name == "" || isPersistentSystemContainer(c, r.opts.PersistentSystemContainers) {
+		if c.Name == "" || isPersistentEnvoyContainer(c, r.opts.ProtectedEnvoyContainerNames) {
 			continue
 		}
 		if err := r.stopAndRemove(ctx, c); err != nil {
@@ -432,14 +432,17 @@ func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func isPersistentSystemContainer(c engine.ContainerState, protectedNames []string) bool {
+func isPersistentEnvoyContainer(c engine.ContainerState, protectedNames []string) bool {
+	if strings.TrimSpace(c.System) != "envoy" {
+		return false
+	}
 	name := strings.TrimSpace(c.Name)
 	for _, protected := range protectedNames {
 		if name == strings.TrimSpace(protected) {
 			return true
 		}
 	}
-	return len(protectedNames) == 0 && strings.TrimSpace(c.System) == "envoy" && name == "devopsellence-envoy"
+	return len(protectedNames) == 0 && name == "devopsellence-envoy"
 }
 
 // tearDownFailedContainer stops a container that failed to become healthy,

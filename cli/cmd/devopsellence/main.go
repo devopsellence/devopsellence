@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/workflow"
 )
 
@@ -26,7 +26,7 @@ func main() {
 		if errors.Is(err, context.Canceled) {
 			code = 130
 		}
-		if !errors.Is(err, context.Canceled) && !errors.As(err, &renderedErr) {
+		if !errors.As(err, &renderedErr) {
 			operation := command.CommandPath()
 			if executedCommand != nil {
 				operation = executedCommand.CommandPath()
@@ -40,35 +40,20 @@ func main() {
 }
 
 func writeError(operation string, exitCode int, err error) {
-	errorObject := map[string]any{
-		"code":      "command_failed",
-		"message":   err.Error(),
-		"exit_code": exitCode,
-	}
-	reservedErrorKeys := map[string]struct{}{
-		"code":      {},
-		"message":   {},
-		"exit_code": {},
-	}
+	fields := output.Fields{}
 	var structured workflow.StructuredError
 	if errors.As(err, &structured) {
 		for key, value := range structured.ErrorFields() {
-			if _, reserved := reservedErrorKeys[key]; reserved {
-				continue
-			}
-			errorObject[key] = value
+			fields[key] = value
 		}
 	}
-	payload := map[string]any{
-		"ok":             false,
-		"schema_version": workflow.OutputSchemaVersion,
-		"operation":      operation,
-		"error":          errorObject,
+	payload := output.ErrorPayload{
+		Code:     "command_failed",
+		Message:  err.Error(),
+		ExitCode: exitCode,
+		Fields:   fields,
 	}
-	encoder := json.NewEncoder(os.Stderr)
-	encoder.SetIndent("", "  ")
-	encoder.SetEscapeHTML(false)
-	if encodeErr := encoder.Encode(payload); encodeErr != nil {
+	if encodeErr := output.New(os.Stdout, os.Stderr).PrintErrorEvent(operation, payload); encodeErr != nil {
 		_, _ = os.Stderr.WriteString(err.Error() + "\n")
 	}
 }

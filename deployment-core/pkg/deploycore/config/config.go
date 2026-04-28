@@ -15,7 +15,7 @@ import (
 const (
 	FilePath               = "devopsellence.yml"
 	GenericFilePath        = FilePath
-	SchemaVersion          = 6
+	SchemaVersion          = 1
 	DefaultEnvironment     = "production"
 	DefaultBuildContext    = "."
 	DefaultDockerfile      = "Dockerfile"

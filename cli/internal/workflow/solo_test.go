@@ -849,6 +849,61 @@ func TestSoloDoctorReturnsFailureWhenLocalChecksFail(t *testing.T) {
 	if payload["ok"] != false {
 		t.Fatalf("payload ok = %v, want false", payload["ok"])
 	}
+	checks := jsonArrayFromMap(t, payload, "checks")
+	var nodesDetail string
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["name"] == "nodes" {
+			nodesDetail, _ = check["detail"].(string)
+			break
+		}
+	}
+	if nodesDetail != "No nodes registered in solo state. Run `devopsellence node create <name>`." {
+		t.Fatalf("nodes check detail = %q, want node create guidance", nodesDetail)
+	}
+}
+
+func TestSoloDoctorScopesRuntimeChecksToCurrentEnvironment(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+			"node-b": {Host: "203.0.113.11", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloDoctor(context.Background()); err != nil {
+		t.Fatalf("SoloDoctor() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["node"] != "node-a" {
+			t.Fatalf("runtime check node = %v, want only node-a", check["node"])
+		}
+	}
 }
 
 func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
@@ -904,6 +959,115 @@ func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 	node := jsonMapFromAny(t, nodes[0])
 	if node["node"] != "node-a" || !strings.Contains(stringValueAny(node["error"]), "ssh root@203.0.113.10:") {
 		t.Fatalf("node payload = %#v, want node read error", node)
+	}
+}
+
+func TestSoloNodeListDefaultsToCurrentEnvironmentAndRedactsPrivateFields(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", SSHKey: "/secret/key", ProviderServerID: "123", Labels: []string{"web"}},
+			"node-b": {Host: "203.0.113.11", User: "root", SSHKey: "/other/key"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, Cwd: workspaceRoot}
+	if err := app.SoloNodeList(context.Background(), SoloNodeListOptions{}); err != nil {
+		t.Fatalf("SoloNodeList() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["scope"] != "current_environment" {
+		t.Fatalf("scope = %v, want current_environment", payload["scope"])
+	}
+	nodes := jsonMapFromAny(t, payload["nodes"])
+	if _, ok := nodes["node-b"]; ok {
+		t.Fatalf("nodes = %#v, want node-b omitted", nodes)
+	}
+	nodeA := jsonMapFromAny(t, nodes["node-a"])
+	if _, ok := nodeA["ssh_key"]; ok {
+		t.Fatalf("node-a = %#v, want ssh_key redacted", nodeA)
+	}
+	if _, ok := nodeA["provider_server_id"]; ok {
+		t.Fatalf("node-a = %#v, want provider_server_id redacted", nodeA)
+	}
+	if nodeA["ssh_key_configured"] != true || nodeA["provider_server_id_configured"] != true {
+		t.Fatalf("node-a = %#v, want configured booleans", nodeA)
+	}
+	items := jsonArrayFromMap(t, payload, "node_items")
+	item := jsonMapFromAny(t, items[0])
+	attachments := jsonArrayFromMap(t, item, "attachments")
+	attachment := jsonMapFromAny(t, attachments[0])
+	if _, ok := attachment["workspace_root"]; ok {
+		t.Fatalf("attachment = %#v, want workspace_root redacted", attachment)
+	}
+	if _, ok := attachment["workspace_key"]; ok {
+		t.Fatalf("attachment = %#v, want workspace_key redacted", attachment)
+	}
+
+	stdout.Reset()
+	if err := app.SoloNodeList(context.Background(), SoloNodeListOptions{All: true}); err != nil {
+		t.Fatalf("SoloNodeList(--all) error = %v", err)
+	}
+	payload = decodeJSONOutput(t, &stdout)
+	if payload["scope"] != "global" {
+		t.Fatalf("scope = %v, want global", payload["scope"])
+	}
+	items = jsonArrayFromMap(t, payload, "node_items")
+	for _, rawItem := range items {
+		item := jsonMapFromAny(t, rawItem)
+		if item["name"] != "node-a" {
+			continue
+		}
+		if item["current_environment_bound"] != true {
+			t.Fatalf("node-a item = %#v, want current_environment_bound", item)
+		}
+		attachments := jsonArrayFromMap(t, item, "attachments")
+		attachment := jsonMapFromAny(t, attachments[0])
+		if attachment["current_environment"] != true {
+			t.Fatalf("attachment = %#v, want current_environment marker", attachment)
+		}
+		return
+	}
+	t.Fatalf("node_items = %#v, want node-a", items)
+}
+
+func TestSoloNodeListRequiresConfigForDefaultScope(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, Cwd: workspaceRoot}
+	err := app.SoloNodeList(context.Background(), SoloNodeListOptions{})
+	if err == nil || !strings.Contains(err.Error(), "use `--all` to list all nodes") {
+		t.Fatalf("SoloNodeList() error = %v, want --all guidance", err)
+	}
+
+	if err := app.SoloNodeList(context.Background(), SoloNodeListOptions{All: true}); err != nil {
+		t.Fatalf("SoloNodeList(--all) error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["scope"] != "global" {
+		t.Fatalf("scope = %v, want global", payload["scope"])
 	}
 }
 
@@ -1007,10 +1171,45 @@ func TestSoloWorkloadLogsRequiresWorkspaceConfig(t *testing.T) {
 
 func TestRemoteDockerLogsCommandPreservesPerContainerFailure(t *testing.T) {
 	command := remoteDockerLogsCommand("production", "web", 20)
-	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`} {
+	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`} {
 		if !strings.Contains(command, snippet) {
 			t.Fatalf("command = %q, want %q", command, snippet)
 		}
+	}
+}
+
+func TestSoloWorkloadLogsFallsBackToAgentLogsWhenContainersMissing(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_EMPTY", "1")
+	installFakeSoloCommands(t, nil)
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root"}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{ServiceName: "web", Lines: 20})
+	if err == nil {
+		t.Fatal("SoloWorkloadLogs() error = nil, want failure with fallback payload")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	if node["fallback"] != "devopsellence_agent_logs" {
+		t.Fatalf("node payload = %#v, want agent-log fallback", node)
+	}
+	lines := jsonArrayFromMap(t, node, "fallback_lines")
+	if len(lines) == 0 || !strings.Contains(stringValueAny(lines[0]), "agent captured failure") {
+		t.Fatalf("fallback_lines = %#v, want captured failure", lines)
 	}
 }
 
@@ -2615,8 +2814,18 @@ if [[ "$command" == *"docker image inspect"* ]]; then
   exit 0
 fi
 
+if [[ "$command" == *" logs --tail "* && -n "${DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_EMPTY:-}" ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\n__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__\nNo workload containers found for service web in environment production\n'
+  exit 0
+fi
+
 if [[ "$command" == *" logs --tail "* ]]; then
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n==> svc-production-web <==\napp line one\napp line two\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"journalctl"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nagent captured failure\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi
 

@@ -537,7 +537,7 @@ PY
 
   def write_devopsellence_yml!
     config = {
-      "schema_version" => 6,
+      "schema_version" => 1,
       "organization" => "solo",
       "project" => @project_name,
       "default_environment" => "production",

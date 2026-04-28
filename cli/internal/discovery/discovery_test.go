@@ -77,7 +77,7 @@ func TestDiscoverFindsGenericWorkspaceFromConfig(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "devopsellence.yml"), []byte("schema_version: 6\norganization: acme\nproject: demo\ndefault_environment: production\nbuild:\n  context: .\n  dockerfile: Dockerfile\nservices:\n  web:\n    ports:\n      - name: http\n        port: 8080\n    healthcheck:\n      path: /\n      port: 8080\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "devopsellence.yml"), []byte("schema_version: 1\norganization: acme\nproject: demo\ndefault_environment: production\nbuild:\n  context: .\n  dockerfile: Dockerfile\nservices:\n  web:\n    ports:\n      - name: http\n        port: 8080\n    healthcheck:\n      path: /\n      port: 8080\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	start := filepath.Join(root, "src", "api")

@@ -82,7 +82,7 @@ func TestLoadAppliesDefaultBuildPlatforms(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -119,7 +119,7 @@ func TestLoadRejectsLegacyInitHook(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -152,7 +152,7 @@ func TestLoadRejectsStringCommandSyntax(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -202,7 +202,7 @@ func TestLoadRejectsLegacyDirectConfig(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -238,7 +238,7 @@ func TestLoadRejectsLegacySoloConfigBlock(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: solo",
 		"project: ShopApp",
 		"default_environment: production",
@@ -286,7 +286,7 @@ func TestLoadNormalizesIngressHostsAndRuleHosts(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -333,7 +333,7 @@ func TestLoadRejectsDuplicateIngressHostsAfterNormalization(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -606,7 +606,7 @@ func TestLoadRejectsOverlayServiceNotInBase(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",
@@ -643,7 +643,7 @@ func TestLoadRejectsUnknownOverlayKeys(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, FilePath)
 	content := strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: acme",
 		"project: ShopApp",
 		"default_environment: production",

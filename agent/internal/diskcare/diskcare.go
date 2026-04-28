@@ -15,6 +15,7 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstate"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 	"github.com/devopsellence/devopsellence/agent/internal/engine"
+	"github.com/devopsellence/devopsellence/agent/internal/fileaccess"
 	"github.com/devopsellence/devopsellence/agent/internal/report"
 )
 
@@ -258,6 +259,7 @@ func (m *Manager) loadStore() (*store, string, error) {
 		}
 		return &store{}, warning, nil
 	}
+	s.normalize()
 	return &s, "", nil
 }
 
@@ -266,11 +268,8 @@ func (m *Manager) saveStore(s *store) error {
 		return nil
 	}
 	dir := filepath.Dir(m.cfg.StatePath)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create disk care state dir: %w", err)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return fmt.Errorf("set disk care state dir permissions: %w", err)
+	if err := fileaccess.EnsureDirMode(dir, 0o700); err != nil {
+		return fmt.Errorf("prepare disk care state dir: %w", err)
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -340,7 +339,40 @@ func addReleaseImage(releases map[string]*releaseRecord, environment string, rev
 	}
 }
 
+func (s *store) normalize() {
+	if s == nil || len(s.Releases) == 0 {
+		return
+	}
+	byKey := map[string]releaseRecord{}
+	order := make([]string, 0, len(s.Releases))
+	for _, release := range s.Releases {
+		release.Environment = strings.TrimSpace(release.Environment)
+		release.Revision = strings.TrimSpace(release.Revision)
+		release.Images = mergeStrings(nil, release.Images)
+		if release.Environment == "" || release.Revision == "" || len(release.Images) == 0 {
+			continue
+		}
+		key := releaseKey(release.Environment, release.Revision)
+		existing, ok := byKey[key]
+		if !ok {
+			byKey[key] = release
+			order = append(order, key)
+			continue
+		}
+		existing.Images = mergeStrings(existing.Images, release.Images)
+		if release.LastSeenAt.After(existing.LastSeenAt) {
+			existing.LastSeenAt = release.LastSeenAt
+		}
+		byKey[key] = existing
+	}
+	s.Releases = s.Releases[:0]
+	for _, key := range order {
+		s.Releases = append(s.Releases, byKey[key])
+	}
+}
+
 func (s *store) upsert(releases []releaseRecord) {
+	s.normalize()
 	byKey := map[string]int{}
 	for i, release := range s.Releases {
 		byKey[releaseKey(release.Environment, release.Revision)] = i
@@ -392,7 +424,8 @@ func retainedReleaseKeys(releases []releaseRecord, current []releaseRecord, keep
 	}
 	byEnvironment := map[string][]releaseRecord{}
 	for _, release := range releases {
-		byEnvironment[release.Environment] = append(byEnvironment[release.Environment], release)
+		environment := strings.TrimSpace(release.Environment)
+		byEnvironment[environment] = append(byEnvironment[environment], release)
 	}
 	for _, envReleases := range byEnvironment {
 		sort.SliceStable(envReleases, func(i, j int) bool {

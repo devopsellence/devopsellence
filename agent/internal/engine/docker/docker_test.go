@@ -33,3 +33,28 @@ func TestBuildContainerCreateConfigSetsNetworkModeForManagedNetwork(t *testing.T
 		t.Fatalf("expected endpoint config for managed network")
 	}
 }
+
+func TestBuildContainerCreateConfigSetsPerContainerLogConfig(t *testing.T) {
+	spec := engine.ContainerSpec{
+		Name:  "web",
+		Image: "example/web:rev1",
+		Log: &engine.LogConfig{
+			Driver: "json-file",
+			Options: map[string]string{
+				"max-size": "10m",
+				"max-file": "5",
+			},
+		},
+	}
+
+	_, hostCfg, _, err := buildContainerCreateConfig(spec)
+	if err != nil {
+		t.Fatalf("buildContainerCreateConfig returned error: %v", err)
+	}
+	if hostCfg.LogConfig.Type != "json-file" {
+		t.Fatalf("log driver = %q, want json-file", hostCfg.LogConfig.Type)
+	}
+	if hostCfg.LogConfig.Config["max-size"] != "10m" || hostCfg.LogConfig.Config["max-file"] != "5" {
+		t.Fatalf("unexpected log options: %#v", hostCfg.LogConfig.Config)
+	}
+}

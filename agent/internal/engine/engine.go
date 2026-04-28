@@ -46,10 +46,17 @@ type ContainerSpec struct {
 	Labels     map[string]string
 	Health     *Healthcheck
 	Restart    *RestartPolicy
+	Log        *LogConfig
 	Network    string
 	Binds      []string
 	Ports      []PortBinding
 	ExtraHosts []string // e.g. ["host.docker.internal:host-gateway"]
+}
+
+// LogConfig describes per-container Docker logging configuration.
+type LogConfig struct {
+	Driver  string
+	Options map[string]string
 }
 
 type Healthcheck struct {
@@ -75,11 +82,26 @@ type ContainerState struct {
 	Name        string
 	Image       string
 	Running     bool
+	Managed     bool
 	Hash        string
 	Environment string
 	Service     string
 	ServiceKind string
 	System      string
+}
+
+// ImageState describes a local Docker image known to the engine.
+type ImageState struct {
+	ID          string
+	RepoTags    []string
+	RepoDigests []string
+	Size        int64
+}
+
+// ImageDelete reports an image delete/untag operation returned by Docker.
+type ImageDelete struct {
+	Deleted  string
+	Untagged string
 }
 
 type ContainerInfo struct {
@@ -90,4 +112,7 @@ type ContainerInfo struct {
 	PublishHostPort bool
 	PublishedPorts  []PortBinding
 	NetworkIP       map[string]string
+	LogPath         string
+	LogDriver       string
+	LogOptions      map[string]string
 }

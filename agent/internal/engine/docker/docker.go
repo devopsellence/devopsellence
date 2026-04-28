@@ -43,6 +43,14 @@ func New(socketPath string) (*Engine, error) {
 
 func (e *Engine) ListManaged(ctx context.Context) ([]engine.ContainerState, error) {
 	filters := make(client.Filters).Add("label", engine.LabelManaged+"=true")
+	return e.listContainers(ctx, filters)
+}
+
+func (e *Engine) ListContainers(ctx context.Context) ([]engine.ContainerState, error) {
+	return e.listContainers(ctx, nil)
+}
+
+func (e *Engine) listContainers(ctx context.Context, filters client.Filters) ([]engine.ContainerState, error) {
 	result, err := e.client.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: filters,
@@ -58,6 +66,7 @@ func (e *Engine) ListManaged(ctx context.Context) ([]engine.ContainerState, erro
 			Name:        name,
 			Image:       c.Image,
 			Running:     c.State == "running",
+			Managed:     c.Labels[engine.LabelManaged] == "true",
 			Hash:        c.Labels[engine.LabelHash],
 			Environment: c.Labels[engine.LabelEnvironment],
 			Service:     c.Labels[engine.LabelService],
@@ -123,6 +132,12 @@ func buildContainerCreateConfig(spec engine.ContainerSpec) (*container.Config, *
 		hostCfg.RestartPolicy = container.RestartPolicy{
 			Name:              container.RestartPolicyMode(spec.Restart.Name),
 			MaximumRetryCount: spec.Restart.MaxRetries,
+		}
+	}
+	if spec.Log != nil {
+		hostCfg.LogConfig = container.LogConfig{
+			Type:   spec.Log.Driver,
+			Config: cloneStringMap(spec.Log.Options),
 		}
 	}
 
@@ -223,6 +238,35 @@ func (e *Engine) PullImage(ctx context.Context, image string, auth *engine.Regis
 	return err
 }
 
+func (e *Engine) ListImages(ctx context.Context) ([]engine.ImageState, error) {
+	result, err := e.client.ImageList(ctx, client.ImageListOptions{All: true})
+	if err != nil {
+		return nil, err
+	}
+	images := make([]engine.ImageState, 0, len(result.Items))
+	for _, item := range result.Items {
+		images = append(images, engine.ImageState{
+			ID:          item.ID,
+			RepoTags:    append([]string(nil), item.RepoTags...),
+			RepoDigests: append([]string(nil), item.RepoDigests...),
+			Size:        item.Size,
+		})
+	}
+	return images, nil
+}
+
+func (e *Engine) RemoveImage(ctx context.Context, reference string) ([]engine.ImageDelete, error) {
+	result, err := e.client.ImageRemove(ctx, reference, client.ImageRemoveOptions{Force: false, PruneChildren: false})
+	if err != nil {
+		return nil, err
+	}
+	removed := make([]engine.ImageDelete, 0, len(result.Items))
+	for _, item := range result.Items {
+		removed = append(removed, engine.ImageDelete{Deleted: item.Deleted, Untagged: item.Untagged})
+	}
+	return removed, nil
+}
+
 func (e *Engine) Inspect(ctx context.Context, name string) (engine.ContainerInfo, error) {
 	res, err := e.client.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if err != nil {
@@ -265,6 +309,11 @@ func (e *Engine) Inspect(ctx context.Context, name string) (engine.ContainerInfo
 		PublishHostPort: len(publishedPorts) > 0,
 		PublishedPorts:  publishedPorts,
 		NetworkIP:       map[string]string{},
+		LogPath:         res.Container.LogPath,
+	}
+	if res.Container.HostConfig != nil {
+		info.LogDriver = res.Container.HostConfig.LogConfig.Type
+		info.LogOptions = cloneStringMap(res.Container.HostConfig.LogConfig.Config)
 	}
 	if res.Container.State != nil && res.Container.State.Health != nil {
 		info.Health = string(res.Container.State.Health.Status)
@@ -357,4 +406,15 @@ func encodeRegistryAuth(auth *engine.RegistryAuth) (string, error) {
 		return "", fmt.Errorf("encode registry auth: %w", err)
 	}
 	return base64.URLEncoding.EncodeToString(payload), nil
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }

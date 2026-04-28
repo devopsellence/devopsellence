@@ -19,46 +19,50 @@ const (
 )
 
 type Config struct {
-	Mode                         string
-	ShowVersion                  bool
-	MetricsAddr                  string
-	DockerSock                   string
-	NetworkName                  string
-	PrefetchSystemImages         bool
-	StopTimeout                  time.Duration
-	DrainDelay                   time.Duration
-	ReconcileInterval            time.Duration
-	LogLevel                     slog.Level
-	StatusPath                   string
-	LifecycleStatePath           string
-	DesiredStateCachePath        string
-	DesiredStateOverridePath     string
-	EnvoyImage                   string
-	EnvoyContainer               string
-	EnvoyBootstrapPath           string
-	EnvoyPort                    uint16
-	EnvoyUID                     int
-	EnvoyGID                     int
-	EnvoyTLSCertPath             string
-	EnvoyTLSKeyPath              string
-	EnvoyPublicHTTPPublishPort   uint16
-	EnvoyPublicHTTPSPublishPort  uint16
-	IngressCertRenewBefore       time.Duration
-	EnvoyRestartPolicy           string
-	WebPort                      uint16
-	ControlPlaneBaseURL          string
-	BootstrapToken               string
-	NodeName                     string
-	CloudInitInstanceDataPath    string
-	AuthStatePath                string
-	AuthCheckInterval            time.Duration
-	TokenRefreshSkew             time.Duration
-	GCSAPIEndpoint               string
-	SecretManagerEndpoint        string
-	GoogleMetadataEndpoint       string
-	GoogleSTSEndpoint            string
-	GoogleIAMCredentialsEndpoint string
-	GoogleScopes                 []string
+	Mode                          string
+	ShowVersion                   bool
+	MetricsAddr                   string
+	DockerSock                    string
+	NetworkName                   string
+	PrefetchSystemImages          bool
+	StopTimeout                   time.Duration
+	DrainDelay                    time.Duration
+	ReconcileInterval             time.Duration
+	LogLevel                      slog.Level
+	StatusPath                    string
+	LifecycleStatePath            string
+	DiskCareStatePath             string
+	DesiredStateCachePath         string
+	DesiredStateOverridePath      string
+	ContainerLogMaxSize           string
+	ContainerLogMaxFile           int
+	ImageRetainedPreviousReleases int
+	EnvoyImage                    string
+	EnvoyContainer                string
+	EnvoyBootstrapPath            string
+	EnvoyPort                     uint16
+	EnvoyUID                      int
+	EnvoyGID                      int
+	EnvoyTLSCertPath              string
+	EnvoyTLSKeyPath               string
+	EnvoyPublicHTTPPublishPort    uint16
+	EnvoyPublicHTTPSPublishPort   uint16
+	IngressCertRenewBefore        time.Duration
+	EnvoyRestartPolicy            string
+	WebPort                       uint16
+	ControlPlaneBaseURL           string
+	BootstrapToken                string
+	NodeName                      string
+	CloudInitInstanceDataPath     string
+	AuthStatePath                 string
+	AuthCheckInterval             time.Duration
+	TokenRefreshSkew              time.Duration
+	GCSAPIEndpoint                string
+	SecretManagerEndpoint         string
+	GoogleMetadataEndpoint        string
+	GoogleSTSEndpoint             string
+	GoogleIAMCredentialsEndpoint  string
+	GoogleScopes                  []string
 }
 
 const DefaultEnvoyImage = "docker.io/envoyproxy/envoy@sha256:d9b4a70739d92b3e28cd407f106b0e90d55df453d7d87773efd22b4429777fe8"
@@ -78,6 +82,10 @@ func Load(args []string) (*Config, error) {
 	var logLevel string
 	var desiredStateCachePath string
 	var desiredStateOverridePath string
+	var diskCareStatePath string
+	var containerLogMaxSize string
+	var containerLogMaxFile int
+	var imageRetainedPreviousReleases int
 	var envoyImage string
 	var envoyContainer string
 	var envoyBootstrapPath string
@@ -122,6 +130,10 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
 	fs.StringVar(&desiredStateCachePath, "desired-state-cache-path", "", "path to persisted last-known-good desired state cache (defaults next to auth state)")
 	fs.StringVar(&desiredStateOverridePath, "desired-state-override-path", "", "path to optional emergency local desired state override (defaults next to auth state)")
+	fs.StringVar(&diskCareStatePath, "disk-care-state-path", "", "path to persisted node disk care state (defaults next to auth state)")
+	fs.StringVar(&containerLogMaxSize, "container-log-max-size", "10m", "max size for each Docker json-file log on devopsellence-managed containers")
+	fs.IntVar(&containerLogMaxFile, "container-log-max-file", 5, "max rotated Docker json-file log files for devopsellence-managed containers")
+	fs.IntVar(&imageRetainedPreviousReleases, "image-retained-previous-releases", 10, "previous successful releases to retain for devopsellence-managed app image rollback")
 	fs.StringVar(&envoyImage, "envoy-image", DefaultEnvoyImage, "envoy image reference")
 	fs.StringVar(&envoyContainer, "envoy-container", "devopsellence-envoy", "envoy container name")
 	fs.StringVar(&envoyBootstrapPath, "envoy-bootstrap-path", envOrDefault("DEVOPSELLENCE_ENVOY_BOOTSTRAP_PATH", envoy.DefaultBootstrapPath), "path to the rendered envoy bootstrap file")
@@ -154,43 +166,47 @@ func Load(args []string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Mode:                         mode,
-		ShowVersion:                  showVersion,
-		MetricsAddr:                  metricsAddr,
-		DockerSock:                   dockerSock,
-		NetworkName:                  networkName,
-		PrefetchSystemImages:         prefetchSystemImages,
-		StopTimeout:                  stopTimeout,
-		DrainDelay:                   drainDelay,
-		ReconcileInterval:            reconcileInterval,
-		EnvoyImage:                   envoyImage,
-		EnvoyContainer:               envoyContainer,
-		EnvoyBootstrapPath:           strings.TrimSpace(envoyBootstrapPath),
-		EnvoyPort:                    uint16(envoyPort),
-		EnvoyUID:                     envoyUID,
-		EnvoyGID:                     envoyGID,
-		EnvoyTLSCertPath:             strings.TrimSpace(envoyTLSCertPath),
-		EnvoyTLSKeyPath:              strings.TrimSpace(envoyTLSKeyPath),
-		EnvoyPublicHTTPPublishPort:   uint16(envoyPublicHTTPPort),
-		EnvoyPublicHTTPSPublishPort:  uint16(envoyPublicHTTPSPort),
-		IngressCertRenewBefore:       ingressCertRenewBefore,
-		EnvoyRestartPolicy:           envoyRestartPolicy,
-		WebPort:                      uint16(webPort),
-		ControlPlaneBaseURL:          strings.TrimRight(strings.TrimSpace(controlPlaneBaseURL), "/"),
-		BootstrapToken:               strings.TrimSpace(bootstrapToken),
-		NodeName:                     strings.TrimSpace(nodeName),
-		CloudInitInstanceDataPath:    strings.TrimSpace(cloudInitInstanceDataPath),
-		AuthStatePath:                strings.TrimSpace(authStatePath),
-		DesiredStateCachePath:        strings.TrimSpace(desiredStateCachePath),
-		DesiredStateOverridePath:     strings.TrimSpace(desiredStateOverridePath),
-		AuthCheckInterval:            authCheckInterval,
-		TokenRefreshSkew:             tokenRefreshSkew,
-		GCSAPIEndpoint:               strings.TrimRight(strings.TrimSpace(gcsAPIEndpoint), "/"),
-		SecretManagerEndpoint:        strings.TrimRight(strings.TrimSpace(secretManagerEndpoint), "/"),
-		GoogleMetadataEndpoint:       strings.TrimRight(strings.TrimSpace(googleMetadataEndpoint), "/"),
-		GoogleSTSEndpoint:            strings.TrimSpace(googleSTSEndpoint),
-		GoogleIAMCredentialsEndpoint: strings.TrimRight(strings.TrimSpace(googleIAMCredentialsEndpoint), "/"),
-		GoogleScopes:                 parseCSV(googleScopesCSV),
+		Mode:                          mode,
+		ShowVersion:                   showVersion,
+		MetricsAddr:                   metricsAddr,
+		DockerSock:                    dockerSock,
+		NetworkName:                   networkName,
+		PrefetchSystemImages:          prefetchSystemImages,
+		StopTimeout:                   stopTimeout,
+		DrainDelay:                    drainDelay,
+		ReconcileInterval:             reconcileInterval,
+		EnvoyImage:                    envoyImage,
+		EnvoyContainer:                envoyContainer,
+		EnvoyBootstrapPath:            strings.TrimSpace(envoyBootstrapPath),
+		EnvoyPort:                     uint16(envoyPort),
+		EnvoyUID:                      envoyUID,
+		EnvoyGID:                      envoyGID,
+		EnvoyTLSCertPath:              strings.TrimSpace(envoyTLSCertPath),
+		EnvoyTLSKeyPath:               strings.TrimSpace(envoyTLSKeyPath),
+		EnvoyPublicHTTPPublishPort:    uint16(envoyPublicHTTPPort),
+		EnvoyPublicHTTPSPublishPort:   uint16(envoyPublicHTTPSPort),
+		IngressCertRenewBefore:        ingressCertRenewBefore,
+		EnvoyRestartPolicy:            envoyRestartPolicy,
+		WebPort:                       uint16(webPort),
+		ControlPlaneBaseURL:           strings.TrimRight(strings.TrimSpace(controlPlaneBaseURL), "/"),
+		BootstrapToken:                strings.TrimSpace(bootstrapToken),
+		NodeName:                      strings.TrimSpace(nodeName),
+		CloudInitInstanceDataPath:     strings.TrimSpace(cloudInitInstanceDataPath),
+		AuthStatePath:                 strings.TrimSpace(authStatePath),
+		DesiredStateCachePath:         strings.TrimSpace(desiredStateCachePath),
+		DesiredStateOverridePath:      strings.TrimSpace(desiredStateOverridePath),
+		DiskCareStatePath:             strings.TrimSpace(diskCareStatePath),
+		ContainerLogMaxSize:           strings.TrimSpace(containerLogMaxSize),
+		ContainerLogMaxFile:           containerLogMaxFile,
+		ImageRetainedPreviousReleases: imageRetainedPreviousReleases,
+		AuthCheckInterval:             authCheckInterval,
+		TokenRefreshSkew:              tokenRefreshSkew,
+		GCSAPIEndpoint:                strings.TrimRight(strings.TrimSpace(gcsAPIEndpoint), "/"),
+		SecretManagerEndpoint:         strings.TrimRight(strings.TrimSpace(secretManagerEndpoint), "/"),
+		GoogleMetadataEndpoint:        strings.TrimRight(strings.TrimSpace(googleMetadataEndpoint), "/"),
+		GoogleSTSEndpoint:             strings.TrimSpace(googleSTSEndpoint),
+		GoogleIAMCredentialsEndpoint:  strings.TrimRight(strings.TrimSpace(googleIAMCredentialsEndpoint), "/"),
+		GoogleScopes:                  parseCSV(googleScopesCSV),
 	}
 
 	lvl, err := parseLevel(logLevel)
@@ -219,6 +235,15 @@ func Load(args []string) (*Config, error) {
 	if cfg.Mode != ModeShared && cfg.Mode != ModeSolo {
 		return nil, fmt.Errorf("--mode must be %q or %q", ModeShared, ModeSolo)
 	}
+	if cfg.ContainerLogMaxSize == "" {
+		return nil, errors.New("--container-log-max-size is required")
+	}
+	if cfg.ContainerLogMaxFile < 1 {
+		return nil, errors.New("--container-log-max-file must be at least 1")
+	}
+	if cfg.ImageRetainedPreviousReleases < 0 {
+		return nil, errors.New("--image-retained-previous-releases cannot be negative")
+	}
 
 	if cfg.AuthStatePath == "" {
 		return nil, errors.New("--auth-state-path is required")
@@ -233,6 +258,9 @@ func Load(args []string) (*Config, error) {
 	}
 	if cfg.DesiredStateOverridePath == "" {
 		cfg.DesiredStateOverridePath = filepath.Join(stateDir, "desired-state-override.json")
+	}
+	if cfg.DiskCareStatePath == "" {
+		cfg.DiskCareStatePath = filepath.Join(stateDir, "disk-care-state.json")
 	}
 	if cfg.EnvoyTLSCertPath == "" {
 		cfg.EnvoyTLSCertPath = filepath.Join(stateDir, "ingress-cert.pem")

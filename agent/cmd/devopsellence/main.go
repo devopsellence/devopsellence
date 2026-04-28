@@ -85,6 +85,7 @@ func main() {
 
 func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, metrics *observability.Metrics) {
 	desiredAuthority := solo.New(cfg.DesiredStateOverridePath, logger.With("authority", "solo"))
+	logConfig := managedLogConfig(cfg)
 
 	envoyManager := envoy.New(eng, envoy.Config{
 		Image:               cfg.EnvoyImage,
@@ -101,6 +102,7 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 		ClusterName:         "devopsellence_web",
 		StartupTimeout:      cfg.StopTimeout,
 		RestartPolicy:       cfg.EnvoyRestartPolicy,
+		LogConfig:           logConfig,
 	}, logger)
 
 	ingressCertManager := acme.New(acme.Config{
@@ -117,6 +119,7 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 		StopTimeout: cfg.StopTimeout,
 		DrainDelay:  cfg.DrainDelay,
 		WebPort:     cfg.WebPort,
+		LogConfig:   logConfig,
 		Envoy:       envoyManager,
 		IngressCert: ingressCertManager,
 		Logger:      logger,
@@ -133,6 +136,7 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 		metrics,
 		lifecycle.NewStore(cfg.LifecycleStatePath),
 	)
+	ag.SetDiskCare(newDiskCare(eng, cfg, logger))
 	logger.Info("starting agent in solo mode", "desired_state_path", cfg.DesiredStateOverridePath)
 	if err := ag.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("agent stopped", "error", err)
@@ -141,6 +145,7 @@ func runSolo(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger
 }
 
 func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logger *slog.Logger, _ *prometheus.Registry, metrics *observability.Metrics) {
+	logConfig := managedLogConfig(cfg)
 	var systemImagePrefetcher *systemimages.Prefetcher
 	var prefetchOnce sync.Once
 	triggerSystemImagePrefetch := func() {
@@ -218,6 +223,7 @@ func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		ClusterName:         "devopsellence_web",
 		StartupTimeout:      cfg.StopTimeout,
 		RestartPolicy:       cfg.EnvoyRestartPolicy,
+		LogConfig:           logConfig,
 	}, logger)
 
 	ingressCertManager := acme.New(acme.Config{
@@ -237,6 +243,7 @@ func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		StopTimeout:   cfg.StopTimeout,
 		DrainDelay:    cfg.DrainDelay,
 		WebPort:       cfg.WebPort,
+		LogConfig:     logConfig,
 		Envoy:         envoyManager,
 		ImagePullAuth: imagePullAuth,
 		IngressCert:   ingressCertManager,
@@ -270,6 +277,7 @@ func runShared(ctx context.Context, cfg *config.Config, eng *docker.Engine, logg
 		metrics,
 		lifecycle.NewStore(cfg.LifecycleStatePath),
 	)
+	ag.SetDiskCare(newDiskCare(eng, cfg, logger))
 	ag.SetDiagnoser(diagnose.NewRunner(diagnoseClient, diagnose.NewCollector(eng), logger))
 	if err := ag.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("agent stopped", "error", err)

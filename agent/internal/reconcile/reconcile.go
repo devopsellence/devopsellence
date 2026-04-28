@@ -49,6 +49,7 @@ type Options struct {
 	StopTimeout   time.Duration
 	DrainDelay    time.Duration
 	WebPort       uint16
+	LogConfig     *engine.LogConfig
 	Envoy         EnvoyManager
 	ImagePullAuth ImagePullAuthProvider
 	IngressCert   IngressCertManager
@@ -119,7 +120,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		if _, ok := desiredByService[containerServiceKey(c)]; ok {
 			continue
 		}
-		if c.Name == "" {
+		if c.Name == "" || c.Service == "" {
 			continue
 		}
 		if err := r.stopAndRemove(ctx, c); err != nil {
@@ -586,6 +587,7 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		Env:        env,
 		Binds:      volumeBinds(service.VolumeMounts),
 		Labels:     labels,
+		Log:        cloneLogConfig(r.opts.LogConfig),
 		Network:    r.opts.Network,
 	}
 
@@ -621,10 +623,25 @@ func (r *Reconciler) specForTask(task *desiredstatepb.Task, revision string) (st
 			engine.LabelRevision: revision,
 			engine.LabelSystem:   task.GetName(),
 		},
+		Log:     cloneLogConfig(r.opts.LogConfig),
 		Network: r.opts.Network,
 	}
 
 	return name, hash, spec, nil
+}
+
+func cloneLogConfig(cfg *engine.LogConfig) *engine.LogConfig {
+	if cfg == nil {
+		return nil
+	}
+	cloned := &engine.LogConfig{Driver: cfg.Driver}
+	if len(cfg.Options) > 0 {
+		cloned.Options = make(map[string]string, len(cfg.Options))
+		for key, value := range cfg.Options {
+			cloned.Options[key] = value
+		}
+	}
+	return cloned
 }
 
 func volumeBinds(mounts []*desiredstatepb.VolumeMount) []string {

@@ -23,6 +23,7 @@ type Agent struct {
 	reporter               report.Reporter
 	reconciler             *reconcile.Reconciler
 	diagnoser              Diagnoser
+	diskCare               DiskCare
 	interval               time.Duration
 	logger                 *slog.Logger
 	metrics                *observability.Metrics
@@ -33,6 +34,11 @@ type Agent struct {
 
 type Diagnoser interface {
 	RunOnce(ctx context.Context, desiredStateSequence int64) error
+}
+
+// DiskCare performs best-effort node-local cleanup after successful reconcile.
+type DiskCare interface {
+	Run(ctx context.Context, desired *desiredstatepb.DesiredState) (*report.DiskCareStatus, error)
 }
 
 func New(authority authority.Authority, reconciler *reconcile.Reconciler, reporter report.Reporter, interval time.Duration, logger *slog.Logger, metrics *observability.Metrics, taskStore *lifecycle.Store) *Agent {
@@ -49,6 +55,11 @@ func New(authority authority.Authority, reconciler *reconcile.Reconciler, report
 
 func (a *Agent) SetDiagnoser(diagnoser Diagnoser) {
 	a.diagnoser = diagnoser
+}
+
+// SetDiskCare enables best-effort automatic cleanup after successful reconcile.
+func (a *Agent) SetDiskCare(diskCare DiskCare) {
+	a.diskCare = diskCare
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -133,6 +144,8 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	a.metrics.ContainersUpdated.Add(float64(result.Updated))
 	a.metrics.ContainersRemoved.Add(float64(result.Removed))
 
+	diskCareStatus := a.runDiskCare(ctx, desired)
+
 	summary, environments, err := a.reconciler.CurrentStatus(ctx, desired)
 	if err != nil {
 		a.metrics.ReconcileErrors.Inc()
@@ -151,6 +164,7 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		Revision:     desired.Revision,
 		Message:      fmt.Sprintf("created=%d updated=%d removed=%d unchanged=%d", result.Created, result.Updated, result.Removed, result.Unchanged),
 		Summary:      summary,
+		DiskCare:     diskCareStatus,
 		Environments: environments,
 	}, fetched.Sequence)
 
@@ -163,6 +177,22 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+func (a *Agent) runDiskCare(ctx context.Context, desired *desiredstatepb.DesiredState) *report.DiskCareStatus {
+	if a.diskCare == nil {
+		return nil
+	}
+	status, err := a.diskCare.Run(ctx, desired)
+	if err != nil {
+		a.logger.Warn("disk care failed", "error", err)
+		if status == nil {
+			status = &report.DiskCareStatus{LastError: err.Error()}
+		} else if status.LastError == "" {
+			status.LastError = err.Error()
+		}
+	}
+	return status
 }
 
 func (a *Agent) runTaskOnce(ctx context.Context, sequence int64, revision string, task *desiredstatepb.Task) error {
@@ -271,6 +301,7 @@ type reportFingerprint struct {
 	message          string
 	err              string
 	taskHash         string
+	diskCareHash     string
 	environmentsHash string
 }
 
@@ -282,6 +313,7 @@ func newReportFingerprint(sequence int64, status report.Status) *reportFingerpri
 		message:          status.Message,
 		err:              status.Error,
 		taskHash:         fingerprintTask(status.Task),
+		diskCareHash:     fingerprintDiskCare(status.DiskCare),
 		environmentsHash: fingerprintEnvironments(status.Environments),
 	}
 }
@@ -294,12 +326,16 @@ func (f *reportFingerprint) suppresses(other *reportFingerprint) bool {
 		return false
 	}
 	if f.phase == report.PhaseSettled {
-		return true
+		if f.diskCareHash == "" && other.diskCareHash == "" {
+			return true
+		}
+		return f.diskCareHash == other.diskCareHash
 	}
 	return f.revision == other.revision &&
 		f.message == other.message &&
 		f.err == other.err &&
 		f.taskHash == other.taskHash &&
+		f.diskCareHash == other.diskCareHash &&
 		f.environmentsHash == other.environmentsHash
 }
 
@@ -318,6 +354,38 @@ func fingerprintTask(task *report.TaskStatus) string {
 	builder.WriteString(task.Error)
 	builder.WriteByte(0)
 	builder.WriteString(fmt.Sprintf("%d", task.ExitCode))
+	return builder.String()
+}
+
+func fingerprintDiskCare(status *report.DiskCareStatus) string {
+	if status == nil {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("%d", status.RetainedPreviousReleases))
+	builder.WriteByte(0)
+	builder.WriteString(fmt.Sprintf("%d", status.RetainedReleaseCount))
+	builder.WriteByte(0)
+	builder.WriteString(status.LogMaxSize)
+	builder.WriteByte(0)
+	builder.WriteString(fmt.Sprintf("%d", status.LogMaxFile))
+	builder.WriteByte(0)
+	builder.WriteString(fmt.Sprintf("%d", status.ReclaimedBytes))
+	builder.WriteByte(0)
+	builder.WriteString(fmt.Sprintf("%d", status.DockerLogBytes))
+	builder.WriteByte(0)
+	builder.WriteString(status.LastError)
+	builder.WriteByte(0)
+	for _, artifact := range status.RemovedArtifacts {
+		builder.WriteString(artifact.Type)
+		builder.WriteByte(0)
+		builder.WriteString(artifact.Reference)
+		builder.WriteByte(0)
+		builder.WriteString(artifact.Reason)
+		builder.WriteByte(0)
+		builder.WriteString(fmt.Sprintf("%d", artifact.Bytes))
+		builder.WriteByte(0)
+	}
 	return builder.String()
 }
 

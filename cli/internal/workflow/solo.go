@@ -4151,21 +4151,8 @@ func temporaryDNSHints(cfg *config.ProjectConfig, expectedIPs []string) []ingres
 	return hints
 }
 
-func temporaryDNSHostname(cfg *config.ProjectConfig, ip string) string {
-	labels := []string{}
-	if cfg != nil {
-		if project := discovery.Slugify(cfg.Project); project != "" {
-			labels = append(labels, project)
-		}
-		if environment := discovery.Slugify(soloEnvironmentName(cfg, "")); environment != "" {
-			labels = append(labels, environment)
-		}
-	}
-	if len(labels) == 0 {
-		labels = append(labels, "app")
-	}
-	encodedIP := strings.ReplaceAll(strings.TrimSpace(ip), ".", "-")
-	return encodedIP + "." + strings.Join(labels, "-") + ".sslip.io"
+func temporaryDNSHostname(_ *config.ProjectConfig, ip string) string {
+	return strings.TrimSpace(ip) + ".sslip.io"
 }
 
 func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string) string {

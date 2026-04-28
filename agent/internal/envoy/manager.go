@@ -611,11 +611,7 @@ func cloneIngress(ingress *desiredstatepb.Ingress) *desiredstatepb.Ingress {
 	if ingress == nil {
 		return nil
 	}
-	cloned, ok := proto.Clone(ingress).(*desiredstatepb.Ingress)
-	if !ok {
-		return ingress
-	}
-	return cloned
+	return proto.Clone(ingress).(*desiredstatepb.Ingress)
 }
 
 func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {

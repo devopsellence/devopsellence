@@ -313,7 +313,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	envCreateCommand.Flags().StringVar(&envCreateOpts.Organization, "org", "", "Organization name override")
 	envCreateCommand.Flags().StringVar(&envCreateOpts.Project, "project", "", "Project name override")
-	envCreateCommand.Flags().StringVar(&envCreateOpts.IngressStrategy, "ingress-strategy", "tunnel", "Ingress strategy: tunnel or direct_dns")
+	envCreateCommand.Flags().StringVar(&envCreateOpts.IngressStrategy, "ingress-strategy", "direct_dns", "Ingress strategy: direct_dns")
 	envUseCommand := &cobra.Command{
 		Use:   "use <name>",
 		Short: "Use an environment in the current workspace",
@@ -355,7 +355,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	envIngressCommand.Flags().StringVar(&envIngressOpts.Organization, "org", "", "Organization name override")
 	envIngressCommand.Flags().StringVar(&envIngressOpts.Project, "project", "", "Project name override")
 	envIngressCommand.Flags().StringVar(&envIngressOpts.Environment, "env", "", "Environment name override")
-	envIngressCommand.Flags().StringVar(&envIngressOpts.IngressStrategy, "ingress-strategy", "", "Ingress strategy: tunnel or direct_dns")
+	envIngressCommand.Flags().StringVar(&envIngressOpts.IngressStrategy, "ingress-strategy", "", "Ingress strategy: direct_dns")
 	envCommand.AddCommand(envListCommand, envCreateCommand, envUseCommand, envDeleteCommand, envIngressCommand)
 	contextCommand.AddCommand(envCommand)
 	root.AddCommand(contextCommand)

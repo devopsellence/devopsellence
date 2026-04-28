@@ -23,8 +23,6 @@ class ApiAgentIngressCertificatesTest < ActionDispatch::IntegrationTest
     secondary_hostname = random_ingress_hostname
     ingress = environment.create_environment_ingress!(
       hostname: primary_hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_PENDING,
       provisioned_at: Time.current
     )
@@ -78,8 +76,6 @@ class ApiAgentIngressCertificatesTest < ActionDispatch::IntegrationTest
     hostname = random_ingress_hostname
     environment.create_environment_ingress!(
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_PENDING,
       provisioned_at: Time.current
     )

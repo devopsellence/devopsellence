@@ -266,11 +266,7 @@ module Maintenance
 
       def live_secret_names(project_id)
         Set.new(
-          EnvironmentSecret.joins(:environment).where(environments: { gcp_project_id: project_id }).pluck(:gcp_secret_name) +
-            EnvironmentIngress.joins(:environment).where(environments: { gcp_project_id: project_id }).pluck(:gcp_secret_name) +
-            EnvironmentBundle.joins(:runtime_project)
-              .where(runtime_projects: { gcp_project_id: project_id }, status: ACTIVE_BUNDLE_STATUSES)
-              .pluck(:gcp_secret_name)
+          EnvironmentSecret.joins(:environment).where(environments: { gcp_project_id: project_id }).pluck(:gcp_secret_name)
         )
       end
 
@@ -313,8 +309,7 @@ module Maintenance
       end
 
       def managed_secret_name?(secret_name)
-        secret_name.match?(/\Aeb-[a-z0-9]+-ingress-cloudflare-tunnel-token\z/) ||
-          secret_name.match?(/\Aenv-[a-z0-9]+-[a-z0-9-]+-[a-z0-9-]+\z/)
+        secret_name.match?(/\Aenv-[a-z0-9]+-[a-z0-9-]+-[a-z0-9-]+\z/)
       end
 
       def managed_service_account_email?(project_id, email)

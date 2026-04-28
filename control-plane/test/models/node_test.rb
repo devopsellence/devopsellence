@@ -35,9 +35,7 @@ class NodeTest < ActiveSupport::TestCase
           organization_bundle: organization_bundle,
           claimed_by_environment: nil,
           service_account_email: "runtime@example.test",
-          gcp_secret_name: "env-secret",
           hostname: "env.example.test",
-          cloudflare_tunnel_id: "tunnel-a",
           status: EnvironmentBundle::STATUS_CLAIMED,
           provisioned_at: Time.current
         )

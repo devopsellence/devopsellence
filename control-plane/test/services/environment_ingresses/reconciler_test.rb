@@ -5,7 +5,7 @@ require "test_helper"
 
 module EnvironmentIngresses
   class ReconcilerTest < ActiveSupport::TestCase
-    test "passes stale hosts to the cloudflare provisioner after syncing ingress hosts" do
+    test "passes stale hosts to the direct dns strategy after syncing ingress hosts" do
       organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
       ensure_test_organization_runtime!(organization)
       project = organization.projects.create!(name: "Project A")
@@ -37,21 +37,19 @@ module EnvironmentIngresses
       environment.update!(current_release: release)
       ingress = environment.create_environment_ingress!(
         hostname: previous_host,
-        cloudflare_tunnel_id: "tunnel-1",
-        gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
         status: EnvironmentIngress::STATUS_READY,
         provisioned_at: Time.current
       )
       client = Object.new
-      provisioner = mock("provisioner")
+      strategy = mock("direct_dns_strategy")
 
-      Cloudflare::EnvironmentIngressProvisioner.expects(:new).with(
+      DirectDnsStrategy.expects(:new).with(
         environment: environment,
+        ingress: ingress,
         client: client,
-        release: release,
         stale_hosts: [ previous_host ]
-      ).returns(provisioner)
-      provisioner.expects(:call).returns(ingress)
+      ).returns(strategy)
+      strategy.expects(:call).returns(ingress)
 
       Reconciler.new(environment: environment, client: client, release: release).call
 
@@ -90,21 +88,19 @@ module EnvironmentIngresses
       environment.update!(current_release: release)
       ingress = environment.create_environment_ingress!(
         hostname: bundle.hostname,
-        cloudflare_tunnel_id: bundle.cloudflare_tunnel_id,
-        gcp_secret_name: bundle.gcp_secret_name,
         status: EnvironmentIngress::STATUS_READY,
         provisioned_at: bundle.provisioned_at
       )
       client = Object.new
-      provisioner = mock("provisioner")
+      strategy = mock("direct_dns_strategy")
 
-      Cloudflare::EnvironmentIngressProvisioner.expects(:new).with(
+      DirectDnsStrategy.expects(:new).with(
         environment: environment,
+        ingress: ingress,
         client: client,
-        release: release,
         stale_hosts: []
-      ).returns(provisioner)
-      provisioner.expects(:call).returns(ingress)
+      ).returns(strategy)
+      strategy.expects(:call).returns(ingress)
 
       Reconciler.new(environment: environment, client: client, release: release).call
 

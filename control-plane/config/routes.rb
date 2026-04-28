@@ -94,7 +94,6 @@ Rails.application.routes.draw do
         get "desired_state" => "desired_states#show"
         post "ingress_certificates" => "ingress_certificates#create"
         post "registry_auth" => "registry_auth#create"
-        get "secrets/environment_bundles/:id/tunnel_token" => "secrets#show_environment_bundle_tunnel_token"
         get "secrets/environment_secrets/:id" => "secrets#show_environment_secret"
         post "sts/token" => "sts#create"
         post "status" => "statuses#create"

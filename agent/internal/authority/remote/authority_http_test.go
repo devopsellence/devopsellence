@@ -78,42 +78,6 @@ func TestFetchReadsDesiredStateFromControlPlaneHTTPAndUsesETag(t *testing.T) {
 	}
 }
 
-func TestFetchReadsStandaloneHTTPDesiredStateIngressSecret(t *testing.T) {
-	serverState := newFakeRemoteServer()
-	server := httptest.NewServer(serverState.handler())
-	defer server.Close()
-	serverState.mu.Lock()
-	serverState.desiredStateURI = server.URL + "/api/v1/agent/desired_state"
-	serverState.desiredPayload = []byte(`{
-  "schemaVersion": 2,
-  "revision": "rev-http",
-  "ingress": {
-    "hosts": ["abc123.devopsellence.io"],
-    "tunnelTokenSecretRef": "` + server.URL + `/api/v1/agent/secrets/environment_secrets/1"
-  },
-  "environments": []
-}`)
-	serverState.mu.Unlock()
-
-	authManager := newRemoteAuthManager(t, server.URL)
-	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	authority := New(Config{}, authManager, logger)
-
-	fetchResult, err := authority.Fetch(context.Background())
-	if err != nil {
-		t.Fatalf("fetch: %v", err)
-	}
-	if fetchResult.Desired.Ingress == nil {
-		t.Fatal("expected ingress payload")
-	}
-	if fetchResult.Desired.Ingress.TunnelToken != "super-secret" {
-		t.Fatalf("unexpected ingress token: %q", fetchResult.Desired.Ingress.TunnelToken)
-	}
-	if fetchResult.Desired.Ingress.TunnelTokenSecretRef != "" {
-		t.Fatalf("expected ingress secret ref to be cleared, got %q", fetchResult.Desired.Ingress.TunnelTokenSecretRef)
-	}
-}
-
 func TestFetchKeepsDesiredStateProtoShapeWithHTTPSource(t *testing.T) {
 	serverState := newFakeRemoteServer()
 	server := httptest.NewServer(serverState.handler())

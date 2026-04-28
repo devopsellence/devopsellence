@@ -32,7 +32,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
     node.update!(
       environment: environment,
-      capabilities: [Node::CAPABILITY_RELEASE_TASK]
+      capabilities: [Node::CAPABILITY_DIRECT_DNS_INGRESS, Node::CAPABILITY_RELEASE_TASK]
     )
     store = FakeObjectStore.new
 
@@ -40,7 +40,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
 
     result = Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
@@ -108,8 +107,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
     environment.create_environment_ingress!(
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -118,7 +115,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     result = Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     assert_equal 1, result.assigned_nodes
@@ -145,7 +141,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
     assert_equal({ "mode" => "manual", "email" => "ops@example.com", "caDirectoryUrl" => "https://ca.example.test/directory" }, desired_state.dig("ingress", "tls"))
     assert_equal false, desired_state.dig("ingress", "redirectHttp")
-    assert_equal "gsm://projects/gcp-proj-a/secrets/env-#{environment.id}-ingress-cloudflare-tunnel-token/versions/latest", desired_state.dig("ingress", "tunnelTokenSecretRef")
     assert_equal "Production", desired_state.dig("ingress", "routes", 0, "target", "environment")
     assert_equal "/up", service.dig("healthcheck", "path")
     assert_equal 3000, service.dig("healthcheck", "port")
@@ -199,8 +194,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
     environment.create_environment_ingress!(
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -209,7 +202,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
 
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
@@ -270,8 +262,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     store = FakeObjectStore.new
     environment.create_environment_ingress!(
       hostname: "managed.example.devopsellence.test",
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -280,7 +270,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
 
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
@@ -318,7 +307,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     direct = store.find_write(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
@@ -367,7 +355,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
     ManagedNodes::EnsureCapacity.any_instance.stubs(:call).returns(true)
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
 
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
@@ -405,7 +392,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
@@ -443,7 +429,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
@@ -486,15 +471,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       .with do
         environment.create_environment_ingress!(
           hostname: hostname,
-          cloudflare_tunnel_id: "tunnel-1",
-          gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
           status: EnvironmentIngress::STATUS_READY,
           provisioned_at: Time.current
         )
         true
       end
       .returns(true)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
@@ -540,15 +522,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       .with do
         environment.create_environment_ingress!(
           hostname: hostname,
-          cloudflare_tunnel_id: "tunnel-1",
-          gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
           status: EnvironmentIngress::STATUS_READY,
           provisioned_at: Time.current
         )
         true
       end
       .returns(true)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
@@ -578,8 +557,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
     environment.create_environment_ingress!(
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -605,7 +582,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
     Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_environment_access!).returns(true)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
@@ -653,15 +629,12 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
         provisioned = true
         environment.create_environment_ingress!(
           hostname: hostname,
-          cloudflare_tunnel_id: "tunnel-1",
-          gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
           status: EnvironmentIngress::STATUS_READY,
           provisioned_at: Time.current
         )
         true
       end
       .returns(true)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     Deployments::Publisher.new(environment: environment, release: release, store: FakeObjectStore.new).call
 
     assert_equal true, provisioned
@@ -700,21 +673,18 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       .with do
         environment.create_environment_ingress!(
           hostname: hostname,
-          cloudflare_tunnel_id: "tunnel-1",
-          gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
           status: EnvironmentIngress::STATUS_READY,
           provisioned_at: Time.current
         )
         true
       end
       .returns(true)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
 
     Deployments::Publisher.new(environment: environment, release: release, store: store).call
 
     desired_state = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node.desired_state_object_path)
     assert_equal [hostname] + release.ingress_config.fetch("hosts"), desired_state.dig("ingress", "hosts")
-    assert_equal Environment::INGRESS_STRATEGY_TUNNEL, desired_state.dig("ingress", "mode")
+    assert_equal "public", desired_state.dig("ingress", "mode")
   end
 
   test "runs ingress provisioning and desired state publish outside the release transaction" do
@@ -750,8 +720,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
         ingress_transactions << ApplicationRecord.connection.open_transactions
         environment.create_environment_ingress!(
           hostname: "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io",
-          cloudflare_tunnel_id: "tunnel-1",
-          gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
           status: EnvironmentIngress::STATUS_READY,
           provisioned_at: Time.current
         )
@@ -800,8 +768,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
     environment.create_environment_ingress!(
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -810,7 +776,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
     EnvironmentIngresses::Reconciler.any_instance.stubs(:call).returns(environment.environment_ingress)
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     error = assert_raises(Deployments::Publisher::SchedulingError) do
       Deployments::Publisher.new(environment: environment, release: release, store: FakeObjectStore.new).call
     end
@@ -835,7 +800,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     )
     environment.create_environment_ingress!(
       hostname: random_ingress_hostname,
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -848,7 +812,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       }),
       revision: "rel-1"
     )
-    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: ["web"])
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", labels: ["web"], capabilities: [])
     node.update!(environment: environment)
 
     error = assert_raises(Deployments::Publisher::SchedulingError) do
@@ -875,7 +839,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     hostname = random_ingress_hostname
     environment.create_environment_ingress!(
       hostname: hostname,
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -923,6 +886,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     state_a = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_a.reload.desired_state_object_path)
     state_b = store.desired_state_payload(bucket: organization.gcs_bucket_name, object_path: node_b.reload.desired_state_object_path)
     assert_equal [hostname] + release.ingress_config.fetch("hosts"), state_a.dig("ingress", "hosts")
+    assert_equal "public", state_a.dig("ingress", "mode")
     assert_equal({ "mode" => "manual", "email" => "ops@example.com" }, state_a.dig("ingress", "tls"))
     assert_equal false, state_a.dig("ingress", "redirectHttp")
 
@@ -977,9 +941,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       organization_bundle: organization_bundle,
       claimed_by_environment: environment,
       service_account_email: "env-bsa@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-      gcp_secret_name: "eb-env-tunnel",
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-env",
       status: EnvironmentBundle::STATUS_CLAIMED,
       provisioned_at: 30.minutes.ago
     )
@@ -996,7 +958,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     with_object_store(store) do
       result = Deployments::Publisher.new(environment: environment, release: release, store: store).call
       assert_equal 1, result.assigned_nodes
@@ -1054,9 +1015,7 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
       organization_bundle: organization_bundle,
       claimed_by_environment: environment,
       service_account_email: "bsa@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-      gcp_secret_name: "eb-mgd-tunnel",
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-mgd",
       status: EnvironmentBundle::STATUS_CLAIMED,
       provisioned_at: 30.minutes.ago
     )
@@ -1073,7 +1032,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
     with_object_store(store) do
       result = Deployments::Publisher.new(environment: environment, release: release, store: store).call
       assert_equal 1, result.assigned_nodes
@@ -1108,8 +1066,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     hostname = random_ingress_hostname
     environment.create_environment_ingress!(
       hostname:             hostname,
-      cloudflare_tunnel_id: "tunnel-pre",
-      gcp_secret_name:      "wb-pre-tunnel",
       status:               EnvironmentIngress::STATUS_READY,
       provisioned_at:       1.hour.ago
     )
@@ -1123,20 +1079,16 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     node, _, _ = issue_test_node!(organization: organization, name: "pre-node")
     node.update!(environment: environment)
 
-    ingress_provisioner_called = false
-
     Gcp::EnvironmentRuntimeProvisioner.any_instance.stubs(:call).returns(
       Gcp::EnvironmentRuntimeProvisioner::Result.new(status: :ready, message: nil)
     )
-    Gcp::EnvironmentSecretManager.any_instance.stubs(:ensure_ingress_access!).returns(true)
-    Cloudflare::EnvironmentIngressProvisioner.any_instance.expects(:call).never
+    EnvironmentIngresses::Reconciler.any_instance.expects(:call).never
     Deployments::Publisher.new(
       environment: environment,
       release:     release,
       store:       FakeObjectStore.new
     ).call
 
-    assert_equal false, ingress_provisioner_called, "CloudflareIngressProvisioner must not be called when ingress is already ready"
     environment.reload
     assert_equal hostname, environment.environment_ingress.hostname
   end
@@ -1156,8 +1108,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
     ensure_test_environment_bundle!(environment)
     environment.create_environment_ingress!(
       hostname: random_ingress_hostname,
-      cloudflare_tunnel_id: "tunnel-fast",
-      gcp_secret_name: "wb-fast-tunnel",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: 1.hour.ago
     )
@@ -1180,7 +1130,6 @@ class DeploymentsPublisherTest < ActiveSupport::TestCase
 
     Gcp::EnvironmentRuntimeProvisioner.any_instance.expects(:call).never
     Gcp::EnvironmentSecretManager.any_instance.expects(:ensure_environment_access!).never
-    Gcp::EnvironmentSecretManager.any_instance.expects(:ensure_ingress_access!).never
 
     Deployments::Publisher.new(
       environment: environment,

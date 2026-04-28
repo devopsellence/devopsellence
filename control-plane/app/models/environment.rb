@@ -4,10 +4,8 @@ require "securerandom"
 
 class Environment < ApplicationRecord
   ID_LENGTH = 12
-  INGRESS_STRATEGY_TUNNEL = "tunnel"
   INGRESS_STRATEGY_DIRECT_DNS = "direct_dns"
   INGRESS_STRATEGIES = [
-    INGRESS_STRATEGY_TUNNEL,
     INGRESS_STRATEGY_DIRECT_DNS
   ].freeze
   RUNTIME_CUSTOMER_NODES = "customer_nodes"
@@ -62,10 +60,6 @@ class Environment < ApplicationRecord
 
   def customer_nodes_runtime?
     runtime_kind == RUNTIME_CUSTOMER_NODES
-  end
-
-  def tunnel_ingress?
-    ingress_strategy == INGRESS_STRATEGY_TUNNEL
   end
 
   def direct_dns_ingress?

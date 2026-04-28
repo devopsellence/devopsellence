@@ -19,8 +19,6 @@ class EnvironmentIngressTest < ActiveSupport::TestCase
 
     ingress = environment.create_environment_ingress!(
       hostname: "APP.Example.Test",
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )

@@ -241,9 +241,7 @@ class NodesAssignmentManagerTest < ActiveSupport::TestCase
       claimed_by_environment: environment,
       claimed_at: Time.current,
       service_account_email: "envbundle-#{SecureRandom.hex(3)}@#{runtime.gcp_project_id}.iam.gserviceaccount.com",
-      gcp_secret_name: "envbundle-#{SecureRandom.hex(3)}-secret",
       hostname: random_ingress_hostname,
-      cloudflare_tunnel_id: "tunnel-#{SecureRandom.hex(2)}",
       status: EnvironmentBundle::STATUS_CLAIMED
     )
     environment.update!(environment_bundle: environment_bundle, service_account_email: environment_bundle.service_account_email)

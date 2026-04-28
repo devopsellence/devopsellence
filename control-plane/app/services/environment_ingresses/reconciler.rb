@@ -12,11 +12,7 @@ module EnvironmentIngresses
       ingress, stale_hosts = ensure_ingress!
       return nil unless ingress
 
-      if environment.direct_dns_ingress?
-        DirectDnsStrategy.new(environment:, ingress:, client:, stale_hosts:).call
-      else
-        Cloudflare::EnvironmentIngressProvisioner.new(environment:, client:, release:, stale_hosts:).call
-      end
+      DirectDnsStrategy.new(environment:, ingress:, client:, stale_hosts:).call
     end
 
     private
@@ -29,19 +25,14 @@ module EnvironmentIngresses
       return [ sync_ingress_hosts!(ingress), previous_hosts - ingress.hosts ] if ingress
 
       bundle = environment.environment_bundle
-      if bundle&.hostname.present?
-        ingress = environment.create_environment_ingress!(
-          hostname: bundle.hostname,
-          cloudflare_tunnel_id: bundle.cloudflare_tunnel_id,
-          gcp_secret_name: bundle.gcp_secret_name,
-          status: environment.direct_dns_ingress? ? EnvironmentIngress::STATUS_PENDING : EnvironmentIngress::STATUS_READY,
-          provisioned_at: bundle.provisioned_at || Time.current
-        )
-        return [ sync_ingress_hosts!(ingress), [] ]
-      end
+      return [ nil, [] ] unless bundle&.hostname.present?
 
-      ingress = Cloudflare::EnvironmentIngressProvisioner.new(environment:, client:, release:).call
-      [ ingress, [] ]
+      ingress = environment.create_environment_ingress!(
+        hostname: bundle.hostname,
+        status: EnvironmentIngress::STATUS_PENDING,
+        provisioned_at: bundle.provisioned_at || Time.current
+      )
+      [ sync_ingress_hosts!(ingress), [] ]
     end
 
     def sync_ingress_hosts!(ingress)

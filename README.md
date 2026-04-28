@@ -15,7 +15,7 @@ Pick a workspace mode.
 | Auth | SSH keys | Browser (GitHub / Google) |
 | Secrets | Local `.env` file | Encrypted server-side |
 | Images | Streamed over SSH | Pushed to registry |
-| HTTPS | Built-in (Envoy + Let's Encrypt) | Built-in (Envoy + tunnel or Let's Encrypt) |
+| HTTPS | Built-in (Envoy + Let's Encrypt) | Built-in (Envoy + Let's Encrypt) |
 | Team workflows | Single operator | Orgs, projects, environments |
 | Best for | Side projects, single-dev apps | Teams, production, multi-env |
 

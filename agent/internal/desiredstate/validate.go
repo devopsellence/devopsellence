@@ -7,10 +7,7 @@ import (
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 )
 
-const (
-	ingressModeTunnel = "tunnel"
-	ingressModePublic = "public"
-)
+const ingressModePublic = "public"
 
 func Validate(state *desiredstatepb.DesiredState) error {
 	if state == nil {
@@ -182,10 +179,6 @@ func validateIngress(state *desiredstatepb.DesiredState) error {
 		return fmt.Errorf("ingress requires web service")
 	}
 	switch normalizedIngressMode(state.Ingress) {
-	case ingressModeTunnel:
-		if state.Ingress.TunnelToken == "" && state.Ingress.TunnelTokenSecretRef == "" {
-			return fmt.Errorf("ingress: tunnel_token or tunnel_token_secret_ref required")
-		}
 	case ingressModePublic:
 		if state.Ingress.Tls != nil {
 			switch strings.TrimSpace(state.Ingress.Tls.Mode) {
@@ -331,18 +324,11 @@ func validateTask(name string, task *desiredstatepb.Task) error {
 
 func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {
 	if ingress == nil {
-		return ingressModeTunnel
+		return ""
 	}
 
 	switch strings.TrimSpace(ingress.Mode) {
-	case "":
-		if strings.TrimSpace(ingress.TunnelToken) != "" || strings.TrimSpace(ingress.TunnelTokenSecretRef) != "" {
-			return ingressModeTunnel
-		}
-		return ingressModePublic
-	case ingressModeTunnel:
-		return ingressModeTunnel
-	case ingressModePublic:
+	case "", ingressModePublic:
 		return ingressModePublic
 	default:
 		return strings.TrimSpace(ingress.Mode)

@@ -335,9 +335,6 @@ func needsAutoTLS(ingress *desiredstatepb.Ingress) bool {
 	}
 	mode := strings.TrimSpace(ingress.Mode)
 	if mode == "" {
-		if strings.TrimSpace(ingress.TunnelToken) != "" || strings.TrimSpace(ingress.TunnelTokenSecretRef) != "" {
-			return false
-		}
 		mode = "public"
 	}
 	if mode != "public" {

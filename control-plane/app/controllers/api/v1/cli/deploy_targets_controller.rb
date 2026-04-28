@@ -146,7 +146,8 @@ module Api
             gcp_project_number: organization.gcp_project_number,
             workload_identity_pool: organization.workload_identity_pool,
             workload_identity_provider: organization.workload_identity_provider,
-            runtime_kind: organization.trial? ? Environment::RUNTIME_MANAGED : Environment.column_defaults["runtime_kind"].presence || Environment::RUNTIME_MANAGED
+            runtime_kind: organization.trial? ? Environment::RUNTIME_MANAGED : Environment.column_defaults["runtime_kind"].presence || Environment::RUNTIME_MANAGED,
+            ingress_strategy: Environment::INGRESS_STRATEGY_DIRECT_DNS
           )
 
           unless environment.save
@@ -184,6 +185,7 @@ module Api
             project_id: environment.project_id,
             identity_version: environment.identity_version,
             runtime_kind: environment.runtime_kind,
+            ingress_strategy: environment.ingress_strategy,
             ingress_hosts: environment_ingress_hosts(environment)
           }
         end

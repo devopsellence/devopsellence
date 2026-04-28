@@ -16,12 +16,10 @@ class EnvironmentIngress < ApplicationRecord
   belongs_to :environment
   has_many :environment_ingress_hosts, -> { order(:position, :id) }, dependent: :destroy
 
-  before_validation :assign_gcp_secret_name
   before_validation :normalize_hostname!
   after_commit :ensure_primary_host_record!, on: [ :create, :update ]
 
   validates :hostname, presence: true, uniqueness: true
-  validates :gcp_secret_name, presence: true, uniqueness: true
   validates :status, inclusion: { in: STATUSES }
 
   def hosts
@@ -42,21 +40,6 @@ class EnvironmentIngress < ApplicationRecord
 
   def public_url
     Devopsellence::IngressConfig.public_url(primary_hostname)
-  end
-
-  def tunnel_token_secret_ref
-    return nil if gcp_secret_name.blank?
-    if environment.active_runtime_project.standalone?
-      base_url = PublicBaseUrl.configured
-      raise "standalone ingress secret ref requires DEVOPSELLENCE_PUBLIC_BASE_URL" if base_url.blank?
-
-      bundle = environment.environment_bundle
-      return nil unless bundle
-
-      return "#{base_url}/api/v1/agent/secrets/environment_bundles/#{bundle.id}/tunnel_token"
-    end
-
-    "gsm://projects/#{environment.gcp_project_id}/secrets/#{gcp_secret_name}/versions/latest"
   end
 
   def ready?
@@ -104,16 +87,5 @@ class EnvironmentIngress < ApplicationRecord
 
     def normalize_hostname!
       self.hostname = normalize_host(hostname)
-    end
-
-    def assign_gcp_secret_name
-      return if gcp_secret_name.present? || environment.blank?
-
-      if environment.environment_bundle&.gcp_secret_name.present?
-        self.gcp_secret_name = environment.environment_bundle.gcp_secret_name
-        return
-      end
-      env_slug = environment.environment_bundle&.token || SecureRandom.alphanumeric(12).downcase
-      self.gcp_secret_name = "env-#{env_slug}-ingress-cloudflare-tunnel-token"
     end
 end

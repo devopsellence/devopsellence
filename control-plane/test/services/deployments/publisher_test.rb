@@ -36,8 +36,6 @@ module Deployments
       )
       ingress = environment.create_environment_ingress!(
         hostname: bundle.hostname,
-        cloudflare_tunnel_id: bundle.cloudflare_tunnel_id,
-        gcp_secret_name: bundle.gcp_secret_name,
         status: EnvironmentIngress::STATUS_READY,
         provisioned_at: bundle.provisioned_at
       )

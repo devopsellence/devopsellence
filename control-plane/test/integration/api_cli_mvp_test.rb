@@ -206,6 +206,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_equal "ShopApp", json_body.dig("project", "name")
     assert_equal "production", json_body.dig("environment", "name")
     assert_equal "managed", json_body.dig("environment", "runtime_kind")
+    assert_equal "direct_dns", json_body.dig("environment", "ingress_strategy")
   end
 
   test "deploy target includes canonical ingress hosts for existing environment" do
@@ -224,7 +225,6 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     )
     ingress = environment.create_environment_ingress!(
       hostname: "prod-abc.devopsellence.io",
-      gcp_secret_name: "env-#{SecureRandom.hex(4)}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -526,8 +526,6 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
     environment.create_environment_ingress!(
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -599,8 +597,6 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     hostname = "#{SecureRandom.alphanumeric(6).downcase}.devopsellence.io"
     ingress = environment.create_environment_ingress!(
       hostname: hostname,
-      cloudflare_tunnel_id: "tunnel-1",
-      gcp_secret_name: "env-#{environment.id}-ingress-cloudflare-tunnel-token",
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
@@ -751,6 +747,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
 
     assert_response :created
     assert_equal "managed", json_body.fetch("runtime_kind")
+    assert_equal "direct_dns", json_body.fetch("ingress_strategy")
   end
 
   test "contributor cannot create an environment through the cli api" do
@@ -784,7 +781,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       workload_identity_provider: organization.workload_identity_provider,
       runtime_kind: Environment::RUNTIME_CUSTOMER_NODES
     )
-    node, = issue_test_node!(organization: organization, name: "node-a", labels: ["web"])
+    node, = issue_test_node!(organization: organization, name: "node-a", labels: ["web"], capabilities: [])
     node.update!(environment: environment)
     release = project.releases.create!(
       git_sha: "a" * 40,

@@ -41,18 +41,6 @@ module Runtime
         environment_secret
       end
 
-      def upsert_environment_ingress_secret!(environment_ingress:, value:)
-        secret_value = value.to_s
-        raise ArgumentError, "secret value is required" if secret_value.blank?
-
-        bundle = environment_ingress.environment.environment_bundle
-        raise "environment has no bundle" unless bundle
-
-        bundle.update!(tunnel_token: secret_value)
-        environment_ingress.save! unless environment_ingress.persisted?
-        environment_ingress
-      end
-
       def destroy_environment_secret!(environment_secret:)
         environment_secret.destroy!
         environment_secret
@@ -62,10 +50,6 @@ module Runtime
         environment_secret.update_columns(access_grantee_email: nil, access_verified_at: Time.current)
       end
 
-      def ensure_environment_ingress_access!(environment_ingress:)
-        true
-      end
-
       def provision_organization_bundle!(bundle:)
         Result.new(status: :ready, message: nil)
       rescue StandardError => error
@@ -73,13 +57,6 @@ module Runtime
       end
 
       def provision_environment_bundle!(bundle:)
-        Result.new(status: :ready, message: nil)
-      rescue StandardError => error
-        Result.new(status: :failed, message: error.message)
-      end
-
-      def upsert_environment_bundle_tunnel_secret!(bundle:, tunnel_token:)
-        bundle.update!(tunnel_token:)
         Result.new(status: :ready, message: nil)
       rescue StandardError => error
         Result.new(status: :failed, message: error.message)

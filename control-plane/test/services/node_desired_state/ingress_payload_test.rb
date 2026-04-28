@@ -51,18 +51,19 @@ module NodeDesiredState
       def release.ingress_target_service_names = [ "web" ]
       def release.ingress_scheduled_on?(_node) = true
 
-      ingress = Struct.new(:hostname, :hosts, :status, :tunnel_token_secret_ref).new(
+      ingress = Struct.new(:hostname, :hosts, :status).new(
         "bundle.example.test",
         [ "bundle.example.test", "App.Example.com" ],
-        EnvironmentIngress::STATUS_READY,
-        "gsm://projects/example/secrets/tunnel-token/versions/latest"
+        EnvironmentIngress::STATUS_READY
       )
       environment = Struct.new(:environment_ingress, :name).new(ingress, "Production")
-      def environment.tunnel_ingress? = true
+      node = Object.new
+      def node.supports_capability?(capability) = capability == Node::CAPABILITY_DIRECT_DNS_INGRESS
 
-      payload = IngressPayload.build(node: Object.new, environment:, release:)
+      payload = IngressPayload.build(node:, environment:, release:)
 
       assert_equal [ "bundle.example.test", "app.example.com" ], payload.fetch(:hosts)
+      assert_equal "public", payload.fetch(:mode)
     end
 
     test "rejects malformed route targets instead of emitting invalid desired state" do

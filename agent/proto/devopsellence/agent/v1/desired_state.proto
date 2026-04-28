@@ -66,12 +66,13 @@ message Task {
 }
 
 message Ingress {
+  reserved 5, 6;
+  reserved "tunnel_token", "tunnel_token_secret_ref";
+
   repeated string hosts = 1;
   string mode = 2;
   IngressTLS tls = 3;
   bool redirect_http = 4;
-  string tunnel_token = 5;
-  string tunnel_token_secret_ref = 6;
   repeated IngressRoute routes = 7;
 }
 

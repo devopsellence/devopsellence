@@ -530,7 +530,7 @@ func TestOptionsDoesNotExposeCloudflaredManager(t *testing.T) {
 	}
 }
 
-func TestReconcileWebWithTunnelIngressStillConfiguresEnvoy(t *testing.T) {
+func TestReconcileWebWithPublicIngressConfiguresEnvoy(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["httpbin"] = true
 
@@ -543,7 +543,7 @@ func TestReconcileWebWithTunnelIngressStillConfiguresEnvoy(t *testing.T) {
 		HTTPProber:  &fakeHTTPProber{statuses: []int{200}},
 	})
 	state := desiredState(webService(80, "/up"))
-	state.Ingress = tunnelIngress()
+	state.Ingress = publicIngress()
 
 	if _, err := rec.Reconcile(context.Background(), state); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -839,14 +839,6 @@ func webService(port uint32, healthPath string) *desiredstatepb.Service {
 			Retries:        1,
 			TimeoutSeconds: 1,
 		},
-	}
-}
-
-func tunnelIngress() *desiredstatepb.Ingress {
-	return &desiredstatepb.Ingress{
-		Hosts:       []string{"abc123.devopsellence.io"},
-		TunnelToken: "tok",
-		Routes:      []*desiredstatepb.IngressRoute{ingressRoute("abc123.devopsellence.io")},
 	}
 }
 

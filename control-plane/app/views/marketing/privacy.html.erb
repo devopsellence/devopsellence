@@ -15,7 +15,7 @@
       <li>Identity-provider data from GitHub or Google, including provider identifiers, verified email, and basic profile metadata.</li>
       <li>Workspace data such as organizations, projects, environments, releases, deployments, node names, labels, and runtime configuration.</li>
       <li>Infrastructure metadata such as desired-state locations, public IPs, provider server identifiers, region and size selections, and environment secret names.</li>
-      <li>Secrets and Cloudflare tunnel tokens that you submit so we can provision runtime access and managed HTTPS ingress.</li>
+      <li>Secrets that you submit so we can provision runtime access.</li>
       <li>Authentication and security data such as session state, API token digests, refresh token digests, bootstrap token digests, and audit timestamps.</li>
       <li>Technical data such as IP address, user agent, request logs, and operational telemetry.</li>
     </ul>
@@ -39,7 +39,7 @@
     <ul>
       <li>With infrastructure providers we use to run the service, including Google Cloud and configured managed-node providers.</li>
       <li>With identity providers you choose for login, such as GitHub or Google.</li>
-      <li>With Cloudflare when you enable tunnel-backed ingress.</li>
+      <li>With DNS and infrastructure providers we use to publish managed ingress records.</li>
       <li>With service providers that help us operate the product, only as needed.</li>
       <li>When required by law or to protect safety and security.</li>
     </ul>
@@ -49,7 +49,7 @@
     <h2>Secrets and runtime data</h2>
     <p>devopsellence handles operationally sensitive deployment data. We use it to run your workloads, not to inspect application content for unrelated purposes.</p>
     <ul>
-      <li>Environment secrets and tunnel tokens are used to provision runtime access and managed HTTPS ingress.</li>
+      <li>Environment secrets are used to provision runtime access.</li>
       <li>Release and deployment metadata are used to build, publish, and reconcile desired state on nodes.</li>
       <li>You are responsible for the content of the applications, images, data, and secrets you deploy.</li>
     </ul>

@@ -72,8 +72,7 @@ func newFakeRemoteServer() *fakeRemoteServer {
   "schemaVersion": 2,
   "revision": "rev-1",
   "ingress": {
-    "hosts": ["abc123.devopsellence.io"],
-    "tunnelTokenSecretRef": "gsm://projects/test-project/secrets/API_KEY/versions/7"
+    "hosts": ["abc123.devopsellence.io"]
   },
   "environments": [
     {"name": "production", "services": [{
@@ -336,14 +335,11 @@ func TestFetchReadsDesiredStateFromAssignmentLocatorAndCachesMetadata(t *testing
 	if len(desired.Environments[0].Services[0].SecretRefs) != 0 {
 		t.Fatal("expected secret refs to be cleared after resolution")
 	}
-	if desired.Ingress == nil || desired.Ingress.TunnelToken != "super-secret" {
-		t.Fatalf("unexpected ingress token: %+v", desired.Ingress)
-	}
-	if desired.Ingress.TunnelTokenSecretRef != "" {
-		t.Fatal("expected ingress secret ref to be cleared after resolution")
+	if desired.Ingress == nil || len(desired.Ingress.Hosts) != 1 {
+		t.Fatalf("unexpected ingress: %+v", desired.Ingress)
 	}
 	serverState.mu.Lock()
-	if serverState.gcsMetadataCalls != 1 || serverState.gcsMediaCalls != 1 || serverState.secretCalls != 2 {
+	if serverState.gcsMetadataCalls != 1 || serverState.gcsMediaCalls != 1 || serverState.secretCalls != 1 {
 		t.Fatalf("unexpected initial fetch counts: metadata=%d media=%d secret=%d", serverState.gcsMetadataCalls, serverState.gcsMediaCalls, serverState.secretCalls)
 	}
 	serverState.mu.Unlock()
@@ -353,7 +349,7 @@ func TestFetchReadsDesiredStateFromAssignmentLocatorAndCachesMetadata(t *testing
 		t.Fatalf("second fetch: %v", err)
 	}
 	serverState.mu.Lock()
-	if serverState.gcsMetadataCalls != 2 || serverState.gcsMediaCalls != 1 || serverState.secretCalls != 2 {
+	if serverState.gcsMetadataCalls != 2 || serverState.gcsMediaCalls != 1 || serverState.secretCalls != 1 {
 		t.Fatalf("expected cheap second fetch: metadata=%d media=%d secret=%d", serverState.gcsMetadataCalls, serverState.gcsMediaCalls, serverState.secretCalls)
 	}
 	serverState.mu.Unlock()
@@ -375,7 +371,7 @@ func TestFetchReadsDesiredStateFromAssignmentLocatorAndCachesMetadata(t *testing
 	if serverState.gcsMediaCalls != 2 {
 		t.Fatalf("expected media re-fetch on generation change, got %d", serverState.gcsMediaCalls)
 	}
-	if serverState.secretCalls != 4 {
+	if serverState.secretCalls != 2 {
 		t.Fatalf("expected secrets re-fetched on generation change, got %d", serverState.secretCalls)
 	}
 }
@@ -391,8 +387,7 @@ func TestFetchReadsDesiredStateOverControlPlaneHTTPAndCachesETag(t *testing.T) {
   "schemaVersion": 2,
   "revision": "rev-http",
   "ingress": {
-    "hosts": ["abc123.devopsellence.io"],
-    "tunnelTokenSecretRef": "%s/api/v1/agent/secrets/environment_bundles/1/tunnel_token"
+    "hosts": ["abc123.devopsellence.io"]
   },
   "environments": [
     {"name": "production", "services": [{
@@ -402,7 +397,7 @@ func TestFetchReadsDesiredStateOverControlPlaneHTTPAndCachesETag(t *testing.T) {
       "secretRefs": {"API_KEY": "%s/api/v1/agent/secrets/environment_secrets/1"}
     }]}
   ]
-}`, server.URL, server.URL))
+}`, server.URL))
 	serverState.mu.Unlock()
 
 	authManager := newRemoteAuthManager(t, server.URL)
@@ -419,12 +414,12 @@ func TestFetchReadsDesiredStateOverControlPlaneHTTPAndCachesETag(t *testing.T) {
 	if got := fetchResult.Desired.Environments[0].Services[0].Env["API_KEY"]; got != "super-secret" {
 		t.Fatalf("unexpected resolved secret: %q", got)
 	}
-	if fetchResult.Desired.Ingress == nil || fetchResult.Desired.Ingress.TunnelToken != "super-secret" {
-		t.Fatalf("unexpected ingress token: %+v", fetchResult.Desired.Ingress)
+	if fetchResult.Desired.Ingress == nil || len(fetchResult.Desired.Ingress.Hosts) != 1 {
+		t.Fatalf("unexpected ingress: %+v", fetchResult.Desired.Ingress)
 	}
 
 	serverState.mu.Lock()
-	if serverState.httpDesiredCalls != 1 || serverState.httpSecretCalls != 2 || serverState.googleSTSCalls != 0 || serverState.secretCalls != 0 {
+	if serverState.httpDesiredCalls != 1 || serverState.httpSecretCalls != 1 || serverState.googleSTSCalls != 0 || serverState.secretCalls != 0 {
 		t.Fatalf("unexpected initial http fetch counts: desired=%d cp_secret=%d google_sts=%d gsm_secret=%d", serverState.httpDesiredCalls, serverState.httpSecretCalls, serverState.googleSTSCalls, serverState.secretCalls)
 	}
 	serverState.mu.Unlock()
@@ -438,7 +433,7 @@ func TestFetchReadsDesiredStateOverControlPlaneHTTPAndCachesETag(t *testing.T) {
 	if serverState.httpDesiredCalls != 2 {
 		t.Fatalf("expected etag recheck on second fetch, got %d", serverState.httpDesiredCalls)
 	}
-	if serverState.httpSecretCalls != 2 {
+	if serverState.httpSecretCalls != 1 {
 		t.Fatalf("expected no secret ref re-fetch on not modified, got %d", serverState.httpSecretCalls)
 	}
 	if serverState.googleSTSCalls != 0 || serverState.secretCalls != 0 {

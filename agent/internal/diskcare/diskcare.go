@@ -120,17 +120,19 @@ func (m *Manager) Run(ctx context.Context, desired *desiredstatepb.DesiredState)
 		}
 
 		size := sizeForImage(image, imageSizes)
-		if _, removeErr := m.engine.RemoveImage(ctx, image); removeErr != nil {
+		removeResp, removeErr := m.engine.RemoveImage(ctx, image)
+		if removeErr != nil {
 			firstErr = joinFirst(firstErr, fmt.Errorf("remove image %s: %w", image, removeErr))
 			continue
 		}
+		reclaimedBytes := reclaimedBytesForRemoval(removeResp, size)
 		removedImages[image] = struct{}{}
-		status.ReclaimedBytes += size
+		status.ReclaimedBytes += reclaimedBytes
 		status.RemovedArtifacts = append(status.RemovedArtifacts, report.DiskCareArtifact{
 			Type:      "image",
 			Reference: image,
 			Reason:    "older_than_retention_window",
-			Bytes:     size,
+			Bytes:     reclaimedBytes,
 		})
 	}
 
@@ -162,6 +164,31 @@ func (m *Manager) imageExists(ctx context.Context, image string, imageRefs map[s
 	return m.engine.ImageExists(ctx, image)
 }
 
+func reclaimedBytesForRemoval(removed []engine.ImageDelete, size int64) int64 {
+	for _, item := range removed {
+		if strings.TrimSpace(item.Deleted) != "" {
+			return size
+		}
+	}
+	return 0
+}
+
+func logPaths(path string, maxFile int) []string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	if maxFile < 1 {
+		maxFile = 1
+	}
+	paths := make([]string, 0, maxFile)
+	paths = append(paths, path)
+	for i := 1; i < maxFile; i++ {
+		paths = append(paths, fmt.Sprintf("%s.%d", path, i))
+	}
+	return paths
+}
+
 func (m *Manager) dockerLogBytes(ctx context.Context, containers []engine.ContainerState) (int64, error) {
 	var total int64
 	var firstErr error
@@ -177,15 +204,17 @@ func (m *Manager) dockerLogBytes(ctx context.Context, containers []engine.Contai
 		if strings.TrimSpace(info.LogPath) == "" {
 			continue
 		}
-		stat, err := os.Stat(info.LogPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+		for _, path := range logPaths(info.LogPath, m.cfg.ContainerLogMaxFile) {
+			stat, err := os.Stat(path)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				firstErr = joinFirst(firstErr, fmt.Errorf("stat log %s: %w", path, err))
 				continue
 			}
-			firstErr = joinFirst(firstErr, fmt.Errorf("stat log %s: %w", info.LogPath, err))
-			continue
+			total += stat.Size()
 		}
-		total += stat.Size()
 	}
 	return total, firstErr
 }

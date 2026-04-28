@@ -2386,7 +2386,7 @@ func TestDesiredStateRevisionReadsRevision(t *testing.T) {
 	}
 }
 
-func TestNodeAttachDoesNotPersistDesiredStateOnRepublishError(t *testing.T) {
+func TestNodeAttachPersistsAttachmentBeforeRepublishError(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoot := t.TempDir()
@@ -2432,8 +2432,67 @@ func TestNodeAttachDoesNotPersistDesiredStateOnRepublishError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Attachments) != 0 {
-		t.Fatalf("attachments = %#v, want no persisted attachment after failed republish", loaded.Attachments)
+	attached, err := loaded.AttachedNodeNames(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(attached, []string{"node-a"}) {
+		t.Fatalf("attached = %#v, want persisted attachment after failed republish", attached)
+	}
+}
+
+func TestNodeLabelRemovePersistsLabelsBeforeRepublishError(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole, config.DefaultWorkerRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots: map[string]desiredstate.DeploySnapshot{
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				Revision:      "abc1234",
+				Image:         "demo:missing",
+				Metadata:      desiredstate.SnapshotMetadata{ConfigPath: filepath.Join(workspaceRoot, "devopsellence.yml")},
+			},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+		Docker:      &fakeDocker{imageMetadataErr: errors.New("Error response from daemon: No such image: demo:missing")},
+	}
+
+	if err := app.SoloNodeLabelRemove(context.Background(), SoloNodeLabelRemoveOptions{Node: "node-a", Labels: config.DefaultWorkerRole}); err == nil {
+		t.Fatal("expected label remove to fail")
+	}
+
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := loaded.Nodes["node-a"].Labels
+	if !reflect.DeepEqual(labels, []string{config.DefaultWebRole}) {
+		t.Fatalf("labels = %#v, want persisted labels after failed republish", labels)
 	}
 }
 

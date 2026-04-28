@@ -2098,13 +2098,13 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	if err != nil {
 		return err
 	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
 	if soloAttachmentHasReleaseState(current, attachment) {
 		if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
 			return err
 		}
-	}
-	if err := a.writeSoloState(current); err != nil {
-		return err
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
@@ -3085,10 +3085,10 @@ func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveO
 	}
 	node.Labels = kept
 	current.Nodes[opts.Node] = solo.NormalizeNode(node)
-	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if err := a.writeSoloState(current); err != nil {
+	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
 		return err
 	}
 	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "labels": current.Nodes[opts.Node].Labels, "removed": labels})

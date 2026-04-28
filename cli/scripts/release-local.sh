@@ -105,17 +105,17 @@ case "$INSTALL_AGENT_SKILL" in
   1|true|TRUE|yes|YES)
     if command -v npx >/dev/null 2>&1; then
       echo "installing devopsellence agent skill..."
-      npx skills add devopsellence/devopsellence --skill devopsellence -g
+      npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes
     else
       echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
       echo "Install the skill later with:" >&2
-      echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g" >&2
+      echo "  npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes" >&2
       exit 1
     fi
     ;;
   *)
     echo "agent skill available:"
-    echo "  npx skills add devopsellence/devopsellence --skill devopsellence -g"
+    echo "  npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes"
     echo "or rerun installer with DEVOPSELLENCE_INSTALL_AGENT_SKILL=1"
     ;;
 esac

@@ -773,6 +773,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var nodeRemoveSharedOpts NodeDeleteOptions
 	var nodeLabelSharedOpts NodeLabelSetOptions
 	var nodeLabelSoloOpts SoloNodeLabelSetOptions
+	var nodeLabelListSoloOpts SoloNodeLabelListOptions
+	var nodeLabelRemoveSoloOpts SoloNodeLabelRemoveOptions
 	var nodeDiagnoseOpts NodeDiagnoseOptions
 	var soloNodeDiagnoseOpts SoloNodeDiagnoseOptions
 	var nodeLogsOpts SoloLogsOptions
@@ -932,8 +934,35 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	nodeLabelSetCommand.Flags().StringVar(&nodeLabels, "labels", "", "Comma-separated labels")
+	nodeLabelListCommand := &cobra.Command{
+		Use:   "list [target]",
+		Short: "List node labels",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nodeLabelListSoloOpts.Node = ""
+			if len(args) > 0 {
+				nodeLabelListSoloOpts.Node = args[0]
+			}
+			return runSoloOnly("node label list", func(ctx context.Context) error {
+				return app.SoloNodeLabelList(ctx, nodeLabelListSoloOpts)
+			})(cmd, args)
+		},
+	}
+	nodeLabelRemoveCommand := &cobra.Command{
+		Use:   "remove <target>",
+		Short: "Remove labels from a node",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nodeLabelRemoveSoloOpts.Node = args[0]
+			nodeLabelRemoveSoloOpts.Labels = nodeLabels
+			return runSoloOnly("node label remove", func(ctx context.Context) error {
+				return app.SoloNodeLabelRemove(ctx, nodeLabelRemoveSoloOpts)
+			})(cmd, args)
+		},
+	}
+	nodeLabelRemoveCommand.Flags().StringVar(&nodeLabels, "labels", "", "Comma-separated labels to remove")
 	nodeLabelCommand := &cobra.Command{Use: "label", Short: "Manage node labels"}
-	nodeLabelCommand.AddCommand(nodeLabelSetCommand)
+	nodeLabelCommand.AddCommand(nodeLabelSetCommand, nodeLabelListCommand, nodeLabelRemoveCommand)
 	nodeDiagnoseCommand := &cobra.Command{
 		Use:   "diagnose <name|id>",
 		Short: "Collect a runtime snapshot from a node",

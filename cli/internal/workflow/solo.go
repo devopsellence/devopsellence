@@ -120,6 +120,15 @@ type SoloNodeLabelSetOptions struct {
 	Labels string
 }
 
+type SoloNodeLabelListOptions struct {
+	Node string
+}
+
+type SoloNodeLabelRemoveOptions struct {
+	Node   string
+	Labels string
+}
+
 type SoloAgentInstallOptions struct {
 	Node        string
 	AgentBinary string
@@ -1530,7 +1539,7 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 		return err
 	}
 	environmentName := soloEnvironmentName(cfg, "")
-	environmentID, currentRelease, hasCurrent, err := current.CurrentRelease(workspaceRoot, environmentName)
+	_, currentRelease, hasCurrent, err := current.CurrentRelease(workspaceRoot, environmentName)
 	if err != nil {
 		return err
 	}
@@ -1557,7 +1566,7 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 	return a.Printer.PrintJSON(map[string]any{
 		"schema_version": outputSchemaVersion,
 		"environment":    environmentName,
-		"environment_id": environmentID,
+		"environment_id": soloDisplayEnvironmentID(workspaceRoot, environmentName),
 		"current_release_id": func() string {
 			if hasCurrent {
 				return currentRelease.ID
@@ -1812,6 +1821,9 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	}
 	if strings.TrimSpace(record.Reference) != "" {
 		payload["reference"] = record.Reference
+	}
+	if record.Store == solo.SecretStorePlaintext {
+		payload["warnings"] = []string{"solo plaintext secrets are stored locally in the devopsellence solo state file; use --store 1password --op-ref for production secrets"}
 	}
 	if a.SoloState != nil && strings.TrimSpace(a.SoloState.Path) != "" {
 		payload["state_path"] = a.SoloState.Path
@@ -2082,13 +2094,13 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	if err != nil {
 		return err
 	}
-	if err := a.writeSoloState(current); err != nil {
-		return err
-	}
 	if soloAttachmentHasReleaseState(current, attachment) {
 		if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
 			return err
 		}
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
@@ -3024,6 +3036,60 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 
 }
 
+func (a *App) SoloNodeLabelList(_ context.Context, opts SoloNodeLabelListOptions) error {
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(opts.Node) != "" {
+		node, ok := current.Nodes[opts.Node]
+		if !ok {
+			return fmt.Errorf("node %q not found", opts.Node)
+		}
+		return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "labels": solo.NormalizeNode(node).Labels})
+	}
+	items := make([]map[string]any, 0, len(current.Nodes))
+	for name, node := range current.Nodes {
+		items = append(items, map[string]any{"node": name, "labels": solo.NormalizeNode(node).Labels})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i]["node"].(string) < items[j]["node"].(string) })
+	return a.Printer.PrintJSON(map[string]any{"nodes": items})
+}
+
+func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveOptions) error {
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	node, ok := current.Nodes[opts.Node]
+	if !ok {
+		return fmt.Errorf("node %q not found", opts.Node)
+	}
+	labels, err := parseSoloLabels(opts.Labels)
+	if err != nil {
+		return err
+	}
+	remove := map[string]bool{}
+	for _, label := range labels {
+		remove[label] = true
+	}
+	kept := make([]string, 0, len(node.Labels))
+	for _, label := range node.Labels {
+		if !remove[label] {
+			kept = append(kept, label)
+		}
+	}
+	node.Labels = kept
+	current.Nodes[opts.Node] = solo.NormalizeNode(node)
+	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "labels": current.Nodes[opts.Node].Labels, "removed": labels})
+}
+
 func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions) error {
 	current, err := a.readSoloState()
 	if err != nil {
@@ -3888,6 +3954,18 @@ func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 		return config.DefaultEnvironment
 	}
 	return strings.TrimSpace(cfg.DefaultEnvironment)
+}
+
+func soloDisplayEnvironmentID(workspaceRoot, environment string) string {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	environment = strings.TrimSpace(environment)
+	if environment == "" {
+		environment = config.DefaultEnvironment
+	}
+	if workspaceRoot == "" {
+		return environment
+	}
+	return workspaceRoot + "#" + environment
 }
 
 func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.Node, error) {

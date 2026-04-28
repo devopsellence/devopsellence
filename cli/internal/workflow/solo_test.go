@@ -2386,7 +2386,7 @@ func TestDesiredStateRevisionReadsRevision(t *testing.T) {
 	}
 }
 
-func TestNodeAttachPersistsDesiredStateOnRepublishError(t *testing.T) {
+func TestNodeAttachDoesNotPersistDesiredStateOnRepublishError(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoot := t.TempDir()
@@ -2432,8 +2432,8 @@ func TestNodeAttachPersistsDesiredStateOnRepublishError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Attachments) != 1 {
-		t.Fatalf("attachments = %#v, want persisted desired attachment", loaded.Attachments)
+	if len(loaded.Attachments) != 0 {
+		t.Fatalf("attachments = %#v, want no persisted attachment after failed republish", loaded.Attachments)
 	}
 }
 
@@ -2551,6 +2551,9 @@ func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
+	if environmentID, ok := payload["environment_id"].(string); !ok || strings.Contains(environmentID, "\n") || !strings.Contains(environmentID, "#production") {
+		t.Fatalf("environment_id = %#v, want newline-free workspace/environment identifier", payload["environment_id"])
+	}
 	if payload["current_release_id"] != "rel-2" {
 		t.Fatalf("payload = %#v, want current release rel-2", payload)
 	}

@@ -1078,6 +1078,54 @@ func TestWaitForRoute(t *testing.T) {
 	}
 }
 
+func TestWaitForRouteReconnectsWorkloadNetworksAfterRestart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no healthy upstream", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	host, portString, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split host/port: %v", err)
+	}
+	port, err := strconv.Atoi(portString)
+	if err != nil {
+		t.Fatalf("atoi port: %v", err)
+	}
+
+	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  tempBootstrapPath(t),
+		Port:           uint16(port),
+		ClusterName:    "devopsellence_web",
+		HTTPClient:     server.Client(),
+		RouteTimeout:   20 * time.Millisecond,
+		RouteInterval:  10 * time.Millisecond,
+		StartupTimeout: time.Second,
+	}, logger)
+
+	if err := mgr.Ensure(context.Background(), nil, "devopsellence-env-production"); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	eng.inspectInfo.NetworkIP["devopsellence"] = host
+	if err := mgr.WaitForRoute(context.Background(), "/up"); err == nil {
+		t.Fatal("expected route probe to fail after restart")
+	}
+	connections := 0
+	for _, network := range eng.connectedNetworks {
+		if network == "devopsellence-env-production" {
+			connections++
+		}
+	}
+	if connections != 2 {
+		t.Fatalf("workload network connections = %d, want 2 (initial ensure and post-restart reconnect); all connections: %#v", connections, eng.connectedNetworks)
+	}
+}
+
 func TestWaitForRouteRestartsAndIncludesBody(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

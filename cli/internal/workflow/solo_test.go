@@ -25,12 +25,57 @@ import (
 	cliversion "github.com/devopsellence/cli/internal/version"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
+	corerelease "github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/release"
 )
 
 func TestSoloImageTagSlugifiesProjectName(t *testing.T) {
 	got := soloImageTag("ShopApp", "abc1234")
 	if got != "shop-app:abc1234" {
 		t.Fatalf("image tag = %q, want shop-app:abc1234", got)
+	}
+}
+
+func TestSoloIDsIncludeUniqueSuffix(t *testing.T) {
+	now := time.Now().UTC()
+	releaseA := soloReleaseID("abc1234", now)
+	releaseB := soloReleaseID("abc1234", now)
+	if releaseA == releaseB {
+		t.Fatalf("release IDs matched: %q", releaseA)
+	}
+	if releaseA >= releaseB {
+		t.Fatalf("release IDs are not sortable: %q >= %q", releaseA, releaseB)
+	}
+	if got := strings.TrimPrefix(releaseA, "rel_abc1234_"); len(got) != 26 || got == releaseA {
+		t.Fatalf("release ID = %q, want ULID suffix", releaseA)
+	}
+	deploymentA := soloDeploymentID(corerelease.DeploymentKindDeploy, "abc1234", now)
+	deploymentB := soloDeploymentID(corerelease.DeploymentKindDeploy, "abc1234", now)
+	if deploymentA == deploymentB {
+		t.Fatalf("deployment IDs matched: %q", deploymentA)
+	}
+	if deploymentA >= deploymentB {
+		t.Fatalf("deployment IDs are not sortable: %q >= %q", deploymentA, deploymentB)
+	}
+}
+
+func TestPublicationReleasesFromSnapshotsDefaultsEnvironment(t *testing.T) {
+	t.Parallel()
+
+	releases := publicationReleasesFromSnapshots([]desiredstate.DeploySnapshot{{
+		WorkspaceKey: " /workspace/demo ",
+		Environment:  " ",
+		Revision:     " abc1234 ",
+		Image:        " demo:abc1234 ",
+	}})
+	if len(releases) != 1 {
+		t.Fatalf("releases = %#v, want one release", releases)
+	}
+	release := releases[0]
+	if release.ID != "/workspace/demo\nproduction" {
+		t.Fatalf("release ID = %q, want normalized production key", release.ID)
+	}
+	if release.Snapshot.WorkspaceKey != "/workspace/demo" || release.Snapshot.Environment != config.DefaultEnvironment {
+		t.Fatalf("snapshot = %#v, want normalized workspace/environment", release.Snapshot)
 	}
 }
 
@@ -374,13 +419,17 @@ func TestNodeDesiredStateInputsUsesOtherAttachedNodesAsPeers(t *testing.T) {
 		}
 	}
 	key := attachment.WorkspaceKey + "\nproduction"
-	current.Snapshots[key] = desiredstate.DeploySnapshot{
+	snapshot := desiredstate.DeploySnapshot{
 		WorkspaceRoot: "/workspace/demo",
 		WorkspaceKey:  attachment.WorkspaceKey,
 		Environment:   "production",
 		Revision:      "abc1234",
 		Image:         "demo:abc1234",
 	}
+	current.Releases = map[string]corerelease.Release{
+		"rel-1": {ID: "rel-1", EnvironmentID: key, Revision: "abc1234", Snapshot: snapshot},
+	}
+	current.Current = map[string]string{key: "rel-1"}
 
 	_, _, got, _, err := soloNodeDesiredStateInputs(current, "web-a")
 	if err != nil {
@@ -2043,9 +2092,19 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	if payload["environment"] != "production" || payload["workload_revision"] == "" || payload["phase"] != "settled" {
 		t.Fatalf("payload = %#v, want settled deploy JSON", payload)
 	}
+	if payload["release_id"] == "" || payload["deployment_id"] == "" {
+		t.Fatalf("payload = %#v, want release and deployment ids", payload)
+	}
 	revisions := jsonMapFromAny(t, payload["desired_state_revisions"])
 	if revisions["node-a"] == "" {
 		t.Fatalf("desired_state_revisions = %#v, want node revision", revisions)
+	}
+	updatedState, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updatedState.Releases) != 1 || len(updatedState.Deployments) != 1 {
+		t.Fatalf("state releases=%#v deployments=%#v, want one release and deployment", updatedState.Releases, updatedState.Deployments)
 	}
 	urls := jsonArrayFromMap(t, payload, "public_urls")
 	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
@@ -2054,6 +2113,240 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
 	if len(nextSteps) != 4 || nextSteps[0] != "devopsellence status" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence logs --node 'node-a' --lines 100" || nextSteps[3] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status, curl, and logs commands", nextSteps)
+	}
+}
+
+func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloReleaseList(context.Background(), SoloReleaseListOptions{Limit: 1}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["current_release_id"] != "rel-2" {
+		t.Fatalf("payload = %#v, want current release rel-2", payload)
+	}
+	releases := jsonArrayFromMap(t, payload, "releases")
+	if len(releases) != 1 {
+		t.Fatalf("releases = %#v, want limit 1", releases)
+	}
+	release := jsonMapFromAny(t, releases[0])
+	if release["id"] != "rel-2" || release["revision"] != "bbb2222" || release["current"] != true {
+		t.Fatalf("release = %#v, want current rel-2", release)
+	}
+	targets := jsonArrayFromMap(t, release, "target_nodes")
+	if !reflect.DeepEqual(targets, []any{"node-a", "node-c"}) {
+		t.Fatalf("target_nodes = %#v, want node-a/node-c", targets)
+	}
+
+	stdout.Reset()
+	if err := app.SoloReleaseList(context.Background(), SoloReleaseListOptions{Limit: 0}); err != nil {
+		t.Fatal(err)
+	}
+	payload = decodeJSONOutput(t, &stdout)
+	releases = jsonArrayFromMap(t, payload, "releases")
+	if len(releases) != 2 {
+		t.Fatalf("releases = %#v, want unlimited result", releases)
+	}
+}
+
+func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: soloStatusMissingSentinel + "\n"},
+		{stdout: `{"revision":"__REVISION__","phase":"reconciling"}` + "\n"},
+		{stdout: `{"revision":"__REVISION__","phase":"settled"}` + "\n"},
+	})
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:            output.New(&stdout, io.Discard),
+		SoloState:          soloState,
+		ConfigStore:        config.NewStore(),
+		Cwd:                workspaceRoot,
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      time.Second,
+	}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111"}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["release_id"] != "rel-1" || payload["rolled_back_from"] != "rel-2" || payload["phase"] != "settled" {
+		t.Fatalf("payload = %#v, want settled rollback to rel-1", payload)
+	}
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	if !reflect.DeepEqual(nodes, []any{"node-a"}) {
+		t.Fatalf("nodes = %#v, want only selected release target", nodes)
+	}
+	revisions := jsonMapFromAny(t, payload["desired_state_revisions"])
+	if len(revisions) != 1 || revisions["node-a"] == "" {
+		t.Fatalf("desired_state_revisions = %#v, want only node-a", revisions)
+	}
+	updatedState, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := workspaceRoot + "\nproduction"
+	if updatedState.Current[key] != "rel-1" {
+		t.Fatalf("current release = %q, want rel-1", updatedState.Current[key])
+	}
+	var deployment corerelease.Deployment
+	for _, candidate := range updatedState.Deployments {
+		deployment = candidate
+	}
+	if deployment.Status != corerelease.DeploymentStatusSettled || !reflect.DeepEqual(deployment.TargetNodeIDs, []string{"node-a"}) {
+		t.Fatalf("deployment = %#v, want settled target node-a", deployment)
+	}
+}
+
+func TestSoloReleaseRollbackPersistsSelectedReleaseOnRolloutFailure(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: `{"revision":"__REVISION__","phase":"error","error":"healthcheck failed"}` + "\n"},
+	})
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:            output.New(&stdout, io.Discard),
+		SoloState:          soloState,
+		ConfigStore:        config.NewStore(),
+		Cwd:                workspaceRoot,
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      time.Second,
+	}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111"})
+	if err == nil {
+		t.Fatal("expected rollout failure")
+	}
+	updatedState, readErr := soloState.Read()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	key := workspaceRoot + "\nproduction"
+	if updatedState.Current[key] != "rel-1" {
+		t.Fatalf("current release = %q, want selected rollback release rel-1", updatedState.Current[key])
+	}
+	var deployment corerelease.Deployment
+	for _, candidate := range updatedState.Deployments {
+		deployment = candidate
+	}
+	if deployment.Status != corerelease.DeploymentStatusFailed || !strings.Contains(deployment.StatusMessage, "rollout failed") {
+		t.Fatalf("deployment = %#v, want failed rollout deployment", deployment)
+	}
+}
+
+func TestSoloRollbackTargetNodeNamesRejectsEmptyIntersection(t *testing.T) {
+	_, err := soloRollbackTargetNodeNames([]string{"node-b"}, corerelease.Release{
+		Revision:      "aaa1111",
+		TargetNodeIDs: []string{"node-a"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not target any currently attached nodes") {
+		t.Fatalf("error = %v, want empty intersection error", err)
+	}
+}
+
+func TestSoloRollbackTargetNodeNamesDefaultsEmptyTargetsToAttachedNodes(t *testing.T) {
+	targets, err := soloRollbackTargetNodeNames([]string{" node-b ", "", "node-a", "node-b"}, corerelease.Release{
+		Revision: "aaa1111",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(targets, []string{"node-b", "node-a"}) {
+		t.Fatalf("targets = %#v, want normalized attached nodes", targets)
+	}
+}
+
+func soloReleaseWorkflowState(workspaceRoot string) solo.State {
+	key := workspaceRoot + "\nproduction"
+	oldSnapshot := desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceRoot,
+		WorkspaceKey:  workspaceRoot,
+		Environment:   "production",
+		Revision:      "aaa1111",
+		Image:         "demo:aaa1111",
+		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:aaa1111"}},
+	}
+	currentSnapshot := desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceRoot,
+		WorkspaceKey:  workspaceRoot,
+		Environment:   "production",
+		Revision:      "bbb2222",
+		Image:         "demo:bbb2222",
+		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:bbb2222"}},
+	}
+	return solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+			"node-b": {Host: "203.0.113.11", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+			"node-c": {Host: "203.0.113.12", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			key: {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				NodeNames:     []string{"node-a", "node-b", "node-c"},
+			},
+		},
+		Snapshots: map[string]desiredstate.DeploySnapshot{key: currentSnapshot},
+		Releases: map[string]corerelease.Release{
+			"rel-1": {
+				ID:            "rel-1",
+				EnvironmentID: key,
+				Revision:      "aaa1111",
+				Snapshot:      oldSnapshot,
+				Image:         corerelease.ImageRef{Reference: "demo:aaa1111"},
+				TargetNodeIDs: []string{"node-a"},
+				CreatedAt:     "2026-04-28T12:01:00Z",
+			},
+			"rel-2": {
+				ID:            "rel-2",
+				EnvironmentID: key,
+				Revision:      "bbb2222",
+				Snapshot:      currentSnapshot,
+				Image:         corerelease.ImageRef{Reference: "demo:bbb2222"},
+				TargetNodeIDs: []string{"node-a", "node-c"},
+				CreatedAt:     "2026-04-28T12:02:00Z",
+			},
+		},
+		Current:     map[string]string{key: "rel-2"},
+		Deployments: map[string]corerelease.Deployment{},
 	}
 }
 
@@ -2108,6 +2401,26 @@ func TestSoloDeployRolloutFailureIncludesHealthcheckContext(t *testing.T) {
 	healthchecks := fields["healthchecks"].([]map[string]any)
 	if len(healthchecks) != 1 || healthchecks[0]["service_name"] != config.DefaultWebServiceName || healthchecks[0]["path"] != config.DefaultHealthcheckPath {
 		t.Fatalf("healthchecks = %#v, want web healthcheck context", healthchecks)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Deployments) != 1 {
+		t.Fatalf("deployments = %#v, want one failed deployment", loaded.Deployments)
+	}
+	var deployment corerelease.Deployment
+	for _, candidate := range loaded.Deployments {
+		deployment = candidate
+	}
+	if deployment.Status != corerelease.DeploymentStatusFailed || !strings.HasPrefix(deployment.StatusMessage, "rollout failed:") {
+		t.Fatalf("deployment = %#v, want rollout failure status", deployment)
+	}
+	if deployment.PublicationResult == nil || deployment.PublicationResult.Status != corerelease.PublicationStatusWritten || deployment.PublicationResult.ErrorMessage != "" {
+		t.Fatalf("publication result = %#v, want written result without rollout error", deployment.PublicationResult)
+	}
+	if len(deployment.PublicationResult.NodeResults) != 1 || deployment.PublicationResult.NodeResults[0].PublishedAt != "" {
+		t.Fatalf("node results = %#v, want no synthetic published_at", deployment.PublicationResult.NodeResults)
 	}
 }
 

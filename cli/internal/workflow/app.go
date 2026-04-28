@@ -514,8 +514,6 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 			"environment_created":  initialized.CreatedEnv,
 			"config_path":          initialized.ConfigPath,
 			"project_slug":         initialized.Discovered.ProjectSlug,
-			"app_type":             initialized.Discovered.AppType,
-			"fallback_used":        initialized.Discovered.FallbackUsed,
 			"config":               initialized.Config,
 		}
 		return nil
@@ -766,7 +764,7 @@ func deployPreflightConfig(discovered discovery.Result, existing *config.Project
 	if existing != nil {
 		return *existing
 	}
-	return config.DefaultProjectConfigForType("", discovered.ProjectName, firstNonEmpty(opts.Environment, config.DefaultEnvironment), discovered.AppType)
+	return config.DefaultProjectConfig("", discovered.ProjectName, firstNonEmpty(opts.Environment, config.DefaultEnvironment))
 }
 
 func (a *App) runDeployReadOnlyPreflight(ctx context.Context, opts DeployOptions, workspaceRoot string, cfg config.ProjectConfig, update func(string)) (deployReadOnlyPreflight, error) {
@@ -891,7 +889,7 @@ func initGeneratedFilesCommitMessage(discovered discovery.Result, entries []stri
 		return ""
 	}
 
-	configPath := config.PathForType(discovered.WorkspaceRoot, discovered.AppType)
+	configPath := filepath.Join(discovered.WorkspaceRoot, config.FilePath)
 	relativeConfigPath, err := filepath.Rel(discovered.WorkspaceRoot, configPath)
 	if err != nil {
 		return ""
@@ -927,7 +925,7 @@ func deployDirtyIgnorePaths(store config.Store, discovered discovery.Result, exi
 		return paths
 	}
 
-	configPath := store.PathForType(discovered.WorkspaceRoot, discovered.AppType)
+	configPath := store.PathFor(discovered.WorkspaceRoot)
 	relativePath, err := filepath.Rel(discovered.WorkspaceRoot, configPath)
 	if err == nil {
 		paths = append(paths, relativePath)
@@ -1041,7 +1039,7 @@ func (a *App) Doctor(ctx context.Context) error {
 		if discoveryErr != nil {
 			return "", discoveryErr
 		}
-		return discovered.AppType + " @ " + discovered.WorkspaceRoot, nil
+		return discovered.WorkspaceRoot, nil
 	})
 	addCheck("git", func() (string, error) {
 		if discoveryErr != nil {
@@ -2764,7 +2762,7 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 	environment := target.Environment
 
 	update("Writing config…")
-	projectConfig := config.DefaultProjectConfigForType(org.Name, project.Name, environment.Name, discovered.AppType)
+	projectConfig := config.DefaultProjectConfig(org.Name, project.Name, environment.Name)
 	if existing == nil && discovered.InferredWebPort > 0 {
 		projectConfig = setPrimaryWebServicePort(projectConfig, discovered.InferredWebPort)
 	}
@@ -2776,7 +2774,6 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 		projectConfig.Services = existing.Services
 		projectConfig.Tasks = existing.Tasks
 		projectConfig.Ingress = existing.Ingress
-		projectConfig.App = existing.App
 		projectConfig.Organization = org.Name
 		projectConfig.Project = project.Name
 		projectConfig.DefaultEnvironment = environment.Name
@@ -3069,9 +3066,6 @@ func inferredHealthcheckPath(cfg config.ProjectConfig) string {
 	service, ok := primaryWebService(cfg)
 	if ok && service.Healthcheck != nil && strings.TrimSpace(service.Healthcheck.Path) != "" {
 		return service.Healthcheck.Path
-	}
-	if cfg.App.Type == config.AppTypeGeneric {
-		return "/"
 	}
 	return config.DefaultHealthcheckPath
 }

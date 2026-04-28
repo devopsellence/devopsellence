@@ -220,7 +220,6 @@ func TestSoloDefaultProjectConfigBootstrapsExplicitCatchAllIngress(t *testing.T)
 
 	cfg := soloDefaultProjectConfig(discovery.Result{
 		ProjectName:     "shop-app",
-		AppType:         config.AppTypeRails,
 		InferredWebPort: 3001,
 	})
 
@@ -277,7 +276,7 @@ func TestValidateNodeScheduleSelectsReleaseNode(t *testing.T) {
 		Tasks: config.TasksConfig{
 			Release: &config.TaskConfig{
 				Service: config.DefaultWebServiceName,
-				Command: []string{"rails", "db:migrate"},
+				Command: []string{"bin/migrate"},
 			},
 		},
 	}
@@ -335,7 +334,7 @@ func TestValidateNodeScheduleInfersKindsWithoutStoredConfigKind(t *testing.T) {
 		Tasks: config.TasksConfig{
 			Release: &config.TaskConfig{
 				Service: config.DefaultWebServiceName,
-				Command: []string{"rails", "db:migrate"},
+				Command: []string{"bin/migrate"},
 			},
 		},
 	}
@@ -656,7 +655,7 @@ func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 
 func TestReleaseNodeForSnapshotSelectsSortedEligibleNode(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
-	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"bin/rails", "db:migrate"}}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"bin/migrate"}}
 	snapshot, err := solo.BuildDeploySnapshot(&cfg, "/workspace/demo", "/workspace/demo/devopsellence.yml", "demo:abc1234", "abc1234", map[string]string{})
 	if err != nil {
 		t.Fatal(err)
@@ -2031,7 +2030,7 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
 		Hosts: []string{"*"},
 		Rules: []config.IngressRuleConfig{{
@@ -2118,7 +2117,7 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 
 func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
 	workspaceRoot := t.TempDir()
-	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -2168,7 +2167,7 @@ func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
 
 func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 	workspaceRoot := t.TempDir()
-	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -2227,7 +2226,7 @@ func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 
 func TestSoloReleaseRollbackPersistsSelectedReleaseOnRolloutFailure(t *testing.T) {
 	workspaceRoot := t.TempDir()
-	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -3086,8 +3085,8 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 	if runtimeContract["web_service"] != true {
 		t.Fatalf("runtime_contract.web_service = %#v, want true", runtimeContract["web_service"])
 	}
-	if runtimeContract["healthcheck_path"] != "/" || runtimeContract["healthcheck_port"] != float64(3000) {
-		t.Fatalf("runtime_contract healthcheck = %#v, want / on port 3000", runtimeContract)
+	if runtimeContract["healthcheck_path"] != config.DefaultHealthcheckPath || runtimeContract["healthcheck_port"] != float64(3000) {
+		t.Fatalf("runtime_contract healthcheck = %#v, want %s on port 3000", runtimeContract, config.DefaultHealthcheckPath)
 	}
 	requirement := stringValueAny(runtimeContract["requirement"])
 	if !strings.Contains(requirement, "EXPOSE") || !strings.Contains(requirement, "devopsellence.yml") {
@@ -3100,7 +3099,7 @@ func TestSoloInitReportsConfigPortContract(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM nginx:1.27-alpine\nEXPOSE 8080\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	web := cfg.Services["web"]
 	web.Ports = []config.ServicePort{{Name: "http", Port: 8080}}
 	web.Healthcheck = &config.HTTPHealthcheck{Path: "/health", Port: 8080}
@@ -3131,7 +3130,7 @@ func TestSoloInitReportsConfigPortContract(t *testing.T) {
 
 func TestSoloInitReportsNoWebServicePortContract(t *testing.T) {
 	workspaceRoot := t.TempDir()
-	cfg := config.DefaultProjectConfigForType("solo", "demo", "production", config.AppTypeGeneric)
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Services = map[string]config.ServiceConfig{
 		"worker": {
 			Command: []string{"bin/worker"},
@@ -3253,14 +3252,10 @@ func TestWaitForSoloSSHWithProbeBoundsSingleAttempt(t *testing.T) {
 func TestSoloDefaultProjectConfigUsesDiscovery(t *testing.T) {
 	cfg := soloDefaultProjectConfig(discovery.Result{
 		ProjectName:     "ShopApp",
-		AppType:         config.AppTypeGeneric,
 		InferredWebPort: 8080,
 	})
 	if cfg.Organization != "solo" || cfg.Project != "ShopApp" {
 		t.Fatalf("config identity = org %q project %q", cfg.Organization, cfg.Project)
-	}
-	if cfg.App.Type != config.AppTypeGeneric {
-		t.Fatalf("app.type = %q", cfg.App.Type)
 	}
 	web := cfg.Services[config.DefaultWebServiceName]
 	if web.HTTPPort(0) != 8080 || web.Healthcheck.Port != 8080 {
@@ -3272,7 +3267,7 @@ func TestIngressSetInfersPrimaryWebService(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cfg := config.DefaultProjectConfigForType("solo", "demo", config.DefaultEnvironment, config.AppTypeGeneric)
+	cfg := config.DefaultProjectConfig("solo", "demo", config.DefaultEnvironment)
 	if _, err := config.Write(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -3560,7 +3555,7 @@ func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cfg := config.DefaultProjectConfigForType("solo", "demo", config.DefaultEnvironment, config.AppTypeGeneric)
+	cfg := config.DefaultProjectConfig("solo", "demo", config.DefaultEnvironment)
 	cfg.Services["frontend"] = cfg.Services[config.DefaultWebServiceName]
 	delete(cfg.Services, config.DefaultWebServiceName)
 	cfg.Ingress = &config.IngressConfig{

@@ -28,7 +28,7 @@ import (
 func TestInitWritesConfigOnly(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
@@ -60,7 +60,7 @@ func TestInitWritesConfigOnly(t *testing.T) {
 func TestInitLeavesExistingAgentsFileAlone(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	path := filepath.Join(root, "AGENTS.md")
 	existing := strings.Join([]string{
 		"# Team Conventions",
@@ -132,26 +132,26 @@ func TestInitWritesGenericConfigAtRepoRoot(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(root, config.GenericFilePath)); err != nil {
+	if _, err := os.Stat(filepath.Join(root, config.FilePath)); err != nil {
 		t.Fatalf("generic config missing: %v", err)
 	}
 	loaded, err := config.LoadFromRoot(root)
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	if loaded == nil || loaded.App.Type != config.AppTypeGeneric {
-		t.Fatalf("loaded generic config mismatch: %#v", loaded)
+	if loaded == nil {
+		t.Fatal("loaded config is nil")
 	}
 	web := webService(t, loaded)
-	if web.Healthcheck == nil || web.Healthcheck.Path != "/" {
-		t.Fatalf("generic healthcheck path = %#v, want /", web.Healthcheck)
+	if web.Healthcheck == nil || web.Healthcheck.Path != config.DefaultHealthcheckPath {
+		t.Fatalf("healthcheck path = %#v, want %s", web.Healthcheck, config.DefaultHealthcheckPath)
 	}
 }
 
 func TestInitBootstrapsSharedIngressFromCanonicalDomain(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	app := newTestAppWithDeployTarget(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/deploy_target":
@@ -219,7 +219,7 @@ func TestInitBootstrapsSharedIngressFromCanonicalDomain(t *testing.T) {
 func TestInitLeavesSharedIngressUnsetUntilCanonicalDomainExists(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	app := newTestAppWithDeployTarget(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/deploy_target":
@@ -261,7 +261,7 @@ func TestInitLeavesSharedIngressUnsetUntilCanonicalDomainExists(t *testing.T) {
 func TestContextShowJSONIncludesWorkspaceContext(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestContextShowJSONIncludesWorkspaceContext(t *testing.T) {
 func TestOrganizationUseUpdatesConfig(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestOrganizationUseUpdatesConfig(t *testing.T) {
 func TestProjectUseUpdatesConfig(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestProjectUseUpdatesConfig(t *testing.T) {
 func TestEnvironmentUseUpdatesWorkspaceStateNotConfig(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestEnvironmentUseUpdatesWorkspaceStateNotConfig(t *testing.T) {
 func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
 	project.Ingress = &config.IngressConfig{
 		Hosts: []string{"app.example.test"},
@@ -442,7 +442,7 @@ func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 			},
 			Services: map[string]config.ServiceConfigOverlay{
 				"web": {
-					Env: map[string]string{"RAILS_ENV": "staging"},
+					Env: map[string]string{"APP_ENV": "staging"},
 				},
 			},
 		},
@@ -484,7 +484,7 @@ func TestConfigResolvePrintsResolvedEnvironmentConfig(t *testing.T) {
 func TestStatusUsesSavedWorkspaceEnvironment(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -540,7 +540,7 @@ func TestStatusUsesSavedWorkspaceEnvironment(t *testing.T) {
 func TestNodeBootstrapUsesWorkspaceEnvironment(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -623,7 +623,7 @@ func TestNodeBootstrapAutoInitializesWorkspaceWhenConfigMissing(t *testing.T) {
 func TestNodeBootstrapUnassignedUsesOrganizationOnly(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestNodeBootstrapUnassignedUsesOrganizationOnly(t *testing.T) {
 func TestNodeBootstrapRejectsTrialOrganizationsBeforeAPICall(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("trial-org", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestNodeBootstrapRejectsTrialOrganizationsBeforeAPICall(t *testing.T) {
 func TestStatusPrintsWarningWhenPresent(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -735,7 +735,7 @@ func TestStatusPrintsWarningWhenPresent(t *testing.T) {
 func TestNodeAssignUsesWorkspaceEnvironmentAndNodeID(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestNodeAssignUsesWorkspaceEnvironmentAndNodeID(t *testing.T) {
 func TestNodeAssignRequiresExplicitNodeID(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		t.Fatalf("unexpected request without explicit node ID: %s %s", r.Method, r.URL.Path)
 		return nil, nil
@@ -786,7 +786,7 @@ func TestNodeAssignRequiresExplicitNodeID(t *testing.T) {
 func TestNodeUnassignDeletesAssignment(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	var stdout bytes.Buffer
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
@@ -810,7 +810,7 @@ func TestNodeUnassignDeletesAssignment(t *testing.T) {
 func TestNodeUnassignManagedNodeSignalsDelete(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	var stdout bytes.Buffer
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
@@ -834,7 +834,7 @@ func TestNodeUnassignManagedNodeSignalsDelete(t *testing.T) {
 func TestNodeDeleteDeletesUnassignedManagedNode(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	var stdout bytes.Buffer
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
@@ -858,7 +858,7 @@ func TestNodeDeleteDeletesUnassignedManagedNode(t *testing.T) {
 func TestNodeDeleteDeletesUnassignedCustomerManagedNode(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	var stdout bytes.Buffer
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
@@ -882,7 +882,7 @@ func TestNodeDeleteDeletesUnassignedCustomerManagedNode(t *testing.T) {
 func TestSecretSetUsesWorkspaceEnvironment(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -926,7 +926,7 @@ func TestSecretSetUsesWorkspaceEnvironment(t *testing.T) {
 func TestSecretSetReadsValueFromStdin(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "staging")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -960,7 +960,7 @@ func TestSecretSetReadsValueFromStdin(t *testing.T) {
 func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "staging")
 	web := project.Services["web"]
 	web.SecretRefs = []config.SecretRef{
@@ -984,7 +984,7 @@ func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/99/secrets":
 			return jsonResponse(t, map[string]any{"secrets": []map[string]any{
 				{"service_name": "web", "name": "SECRET_KEY_BASE", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"},
-				{"service_name": "web", "name": "RAILS_MASTER_KEY", "secret_ref": "gsm://projects/test/secrets/rails/versions/latest"},
+				{"service_name": "web", "name": "API_TOKEN", "secret_ref": "gsm://projects/test/secrets/api-token/versions/latest"},
 			}}), nil
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -1003,9 +1003,9 @@ func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 		seen[stringValueAny(item["name"])] = item
 	}
 	for name, want := range map[string]map[string]any{
-		"SECRET_KEY_BASE":  {"configured": true, "stored": true, "available_to_service": true, "store": "managed"},
-		"ONLY_IN_CONFIG":   {"configured": true, "stored": false, "available_to_service": true, "store": "managed"},
-		"RAILS_MASTER_KEY": {"configured": false, "stored": true, "available_to_service": false, "store": "managed"},
+		"SECRET_KEY_BASE": {"configured": true, "stored": true, "available_to_service": true, "store": "managed"},
+		"ONLY_IN_CONFIG":  {"configured": true, "stored": false, "available_to_service": true, "store": "managed"},
+		"API_TOKEN":       {"configured": false, "stored": true, "available_to_service": false, "store": "managed"},
 	} {
 		item := seen[name]
 		if item == nil {
@@ -1022,7 +1022,7 @@ func TestSecretListUsesWorkspaceEnvironment(t *testing.T) {
 func TestSecretDeleteUsesWorkspaceEnvironment(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "staging")
 	web := project.Services["web"]
 	web.SecretRefs = []config.SecretRef{{Name: "SECRET_KEY_BASE", Secret: "gsm://projects/test/secrets/abc/versions/latest"}}
@@ -1148,7 +1148,7 @@ func TestAliasLFGRefusesWhenCommandAlreadyExists(t *testing.T) {
 func TestNodeListAndLabelSet(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	var labelCaptured map[string]any
 	var stdout bytes.Buffer
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1197,7 +1197,7 @@ func TestNodeListAndLabelSet(t *testing.T) {
 func TestNodeDiagnose(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	var stdout bytes.Buffer
 	polls := 0
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1280,7 +1280,7 @@ func TestNodeDiagnose(t *testing.T) {
 func TestNodeDiagnoseFailedStatusReturnsExitErrorAfterPrintingJSON(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	var stdout bytes.Buffer
 	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
@@ -1318,7 +1318,7 @@ func TestNodeDiagnoseFailedStatusReturnsExitErrorAfterPrintingJSON(t *testing.T)
 func TestDeployWaitsForRolloutProgress(t *testing.T) {
 	t.Parallel()
 
-	root := makeGitRailsRoot(t, "ShopApp")
+	root := makeGitRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "production")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1337,7 +1337,7 @@ func TestDeployWaitsForRolloutProgress(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
 			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"name": "RAILS_MASTER_KEY", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
+			return jsonResponse(t, map[string]any{"name": "API_TOKEN", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
 			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
@@ -1437,7 +1437,7 @@ func TestDeployUsesResolveDeployTargetWhenAvailable(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	project.Ingress = &config.IngressConfig{
 		Hosts: []string{"app.example.com"},
 		Rules: []config.IngressRuleConfig{{
@@ -1530,7 +1530,7 @@ func TestDeployUsesResolveDeployTargetWhenAvailable(t *testing.T) {
 
 func TestDeployAppliesGitHubActionEnvVarOverrides(t *testing.T) {
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	web := project.Services[config.DefaultWebServiceName]
 	web.Env = map[string]string{"FROM_CONFIG": "1"}
 	project.Services[config.DefaultWebServiceName] = web
@@ -1543,7 +1543,7 @@ func TestDeployAppliesGitHubActionEnvVarOverrides(t *testing.T) {
 	}
 	commitAll(t, root, "add config")
 
-	t.Setenv(deployEnvVarsOverrideEnv, `{"all":{"RAILS_ENV":"production"},"web":{"WEB_ONLY":"true"},"worker":{"QUEUE":"critical"}}`)
+	t.Setenv(deployEnvVarsOverrideEnv, `{"all":{"APP_ENV":"production"},"web":{"WEB_ONLY":"true"},"worker":{"QUEUE":"critical"}}`)
 
 	var releaseCaptured api.ReleaseCreateRequest
 	app := newTestAppWithDeployTarget(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1612,10 +1612,10 @@ func TestDeployAppliesGitHubActionEnvVarOverrides(t *testing.T) {
 	if _, ok := workerPayload["kind"]; ok {
 		t.Fatalf("worker payload unexpectedly includes kind: %#v", workerPayload)
 	}
-	if got, want := webPayload["env"], map[string]any{"FROM_CONFIG": "1", "RAILS_ENV": "production", "WEB_ONLY": "true"}; !equalJSONMap(got, want) {
+	if got, want := webPayload["env"], map[string]any{"FROM_CONFIG": "1", "APP_ENV": "production", "WEB_ONLY": "true"}; !equalJSONMap(got, want) {
 		t.Fatalf("web env = %#v, want %#v", got, want)
 	}
-	if got, want := workerPayload["env"], map[string]any{"WORKER_FROM_CONFIG": "1", "RAILS_ENV": "production", "QUEUE": "critical"}; !equalJSONMap(got, want) {
+	if got, want := workerPayload["env"], map[string]any{"WORKER_FROM_CONFIG": "1", "APP_ENV": "production", "QUEUE": "critical"}; !equalJSONMap(got, want) {
 		t.Fatalf("worker env = %#v, want %#v", got, want)
 	}
 }
@@ -1623,7 +1623,7 @@ func TestDeployAppliesGitHubActionEnvVarOverrides(t *testing.T) {
 func TestDeployShowsSchedulingStatusWhileManagedNodeBoots(t *testing.T) {
 	t.Parallel()
 
-	root := makeGitRailsRoot(t, "ShopApp")
+	root := makeGitRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "production")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1642,7 +1642,7 @@ func TestDeployShowsSchedulingStatusWhileManagedNodeBoots(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
 			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"name": "RAILS_MASTER_KEY", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
+			return jsonResponse(t, map[string]any{"name": "API_TOKEN", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
 			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
@@ -1722,7 +1722,7 @@ func TestDeployShowsSchedulingStatusWhileManagedNodeBoots(t *testing.T) {
 func TestDeployShowsWarmCapacityMilestones(t *testing.T) {
 	t.Parallel()
 
-	root := makeGitRailsRoot(t, "ShopApp")
+	root := makeGitRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "production")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1741,7 +1741,7 @@ func TestDeployShowsWarmCapacityMilestones(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
 			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"name": "RAILS_MASTER_KEY", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
+			return jsonResponse(t, map[string]any{"name": "API_TOKEN", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
 			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
@@ -1832,7 +1832,7 @@ func TestDeployShowsWarmCapacityMilestones(t *testing.T) {
 func TestDeployReportsManagedCapacityFallback(t *testing.T) {
 	t.Parallel()
 
-	root := makeGitRailsRoot(t, "ShopApp")
+	root := makeGitRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "production")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1852,7 +1852,7 @@ func TestDeployReportsManagedCapacityFallback(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
 			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"name": "RAILS_MASTER_KEY", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
+			return jsonResponse(t, map[string]any{"name": "API_TOKEN", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
 			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
@@ -1908,7 +1908,7 @@ func TestDeployReportsManagedCapacityFallback(t *testing.T) {
 func TestDeployRetriesPublishAfter524WithSameRequestToken(t *testing.T) {
 	t.Parallel()
 
-	root := makeGitRailsRoot(t, "ShopApp")
+	root := makeGitRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "production")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1927,7 +1927,7 @@ func TestDeployRetriesPublishAfter524WithSameRequestToken(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
 			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"name": "RAILS_MASTER_KEY", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
+			return jsonResponse(t, map[string]any{"name": "API_TOKEN", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
 			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/releases/22/publish":
@@ -1991,7 +1991,7 @@ func TestDeployRetriesPublishAfter524WithSameRequestToken(t *testing.T) {
 func TestDeployBuildsAndPushesMultiArchImage(t *testing.T) {
 	t.Parallel()
 
-	root := makeGitRailsRoot(t, "ShopApp")
+	root := makeGitRubyRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
 	project.Build.Platforms = []string{"linux/amd64", "linux/arm64"}
 	if _, err := config.Write(root, project); err != nil {
@@ -2016,7 +2016,7 @@ func TestDeployBuildsAndPushesMultiArchImage(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
 			return jsonResponse(t, map[string]any{"secrets": []map[string]any{}}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			return jsonResponse(t, map[string]any{"name": "RAILS_MASTER_KEY", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
+			return jsonResponse(t, map[string]any{"name": "API_TOKEN", "service_name": "web", "secret_ref": "gsm://projects/test/secrets/abc/versions/latest"}), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/registry/push_auth":
 			return jsonResponse(t, map[string]any{
 				"registry_host":    "northamerica-northeast1-docker.pkg.dev",
@@ -2098,7 +2098,7 @@ func TestDeployBuildsAndPushesMultiArchImage(t *testing.T) {
 func TestDeleteUsesWorkspaceEnvironment(t *testing.T) {
 	t.Parallel()
 
-	root := makeRailsRoot(t, "ShopApp")
+	root := makeRubyRoot(t, "ShopApp")
 	if _, err := config.Write(root, config.DefaultProjectConfig("default", "ShopApp", "production")); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2135,10 +2135,10 @@ func TestDeleteUsesWorkspaceEnvironment(t *testing.T) {
 	}
 }
 
-func TestDeployRailsAllowsMissingMasterKey(t *testing.T) {
+func TestDeployDoesNotSyncImplicitMasterKey(t *testing.T) {
 	t.Parallel()
 
-	root := makeGitRailsRoot(t, "ShopApp")
+	root := makeGitRubyRoot(t, "ShopApp")
 	if err := os.Remove(filepath.Join(root, "config", "master.key")); err != nil {
 		t.Fatalf("remove master.key: %v", err)
 	}
@@ -2157,10 +2157,10 @@ func TestDeployRailsAllowsMissingMasterKey(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
 			return jsonResponse(t, map[string]any{"environments": []map[string]any{{"id": 44, "name": "production"}}}), nil
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			t.Fatalf("unexpected secret lookup for Rails app without master.key")
+			t.Fatalf("unexpected secret lookup without configured secret refs")
 			return nil, nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/environments/44/secrets":
-			t.Fatalf("unexpected secret sync for Rails app without master.key")
+			t.Fatalf("unexpected secret sync without configured secret refs")
 			return nil, nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cli/projects/11/releases":
 			return jsonResponseWithStatus(t, http.StatusCreated, map[string]any{"id": 22}), nil
@@ -2211,7 +2211,7 @@ func TestDeployBuildsGenericWorkspaceImage(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	web := project.Services[config.DefaultWebServiceName]
 	for i := range web.Ports {
 		if web.Ports[i].Name == "http" {
@@ -2298,8 +2298,8 @@ func TestDeployBuildsGenericWorkspaceImage(t *testing.T) {
 	if !ok {
 		t.Fatalf("web env payload type = %T", webPayload["env"])
 	}
-	if _, exists := envMap["RAILS_MASTER_KEY"]; exists {
-		t.Fatalf("generic deploy should not inject RAILS_MASTER_KEY: %#v", envMap)
+	if _, exists := envMap["API_TOKEN"]; exists {
+		t.Fatalf("deploy should not inject unconfigured API_TOKEN: %#v", envMap)
 	}
 }
 
@@ -2493,7 +2493,7 @@ func TestDeployRecoversFromUnauthorizedAPIResponse(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2581,16 +2581,7 @@ func TestInitInfersThrustPortForFirstGeneratedConfig(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "Gemfile"), []byte("source 'https://rubygems.org'\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "config", "application.rb"), []byte("module SmokePort\n  class Application < Rails::Application\n  end\nend\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte("FROM ruby:4.0.0-slim\nEXPOSE 80\nCMD [\"./bin/thrust\", \"./bin/rails\", \"server\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte("FROM scratch\nEXPOSE 80\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2636,7 +2627,7 @@ func TestDeployBootstrapsAnonymousTrialWhenStateMissing(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2843,7 +2834,7 @@ func TestDeployClaimReminderPrintsOncePerAnonymousAccount(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2932,7 +2923,7 @@ func TestDeployFailsFastWhenDockerDaemonUnavailable(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2961,7 +2952,7 @@ func TestDeployFailsFastWhenDockerDaemonUnavailable(t *testing.T) {
 func TestDeployFailsBeforeRemoteWritesWhenBuildInputsInvalid(t *testing.T) {
 	t.Parallel()
 
-	root := makeGitRailsRoot(t, "ShopApp")
+	root := makeGitRubyRoot(t, "ShopApp")
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -2991,11 +2982,11 @@ func TestDeployFailsFastWhenWorkspaceDirty(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	runGit(t, root, "add", config.GenericFilePath)
+	runGit(t, root, "add", config.FilePath)
 	runGit(t, root, "commit", "-m", "add config")
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("dirty\n"), 0o644); err != nil {
 		t.Fatalf("write notes: %v", err)
@@ -3025,7 +3016,7 @@ func TestDeployFailsWhenExistingConfigIsUncommitted(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -3045,7 +3036,7 @@ func TestDeployFailsWhenExistingConfigIsUncommitted(t *testing.T) {
 	if !strings.Contains(err.Error(), "workspace contains devopsellence init files that are not committed yet") {
 		t.Fatalf("Deploy() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "git add "+config.GenericFilePath) {
+	if !strings.Contains(err.Error(), "git add "+config.FilePath) {
 		t.Fatalf("Deploy() error = %v", err)
 	}
 }
@@ -3109,11 +3100,11 @@ func TestDeployTreatsAgentsMarkdownAsUserChange(t *testing.T) {
 	t.Parallel()
 
 	root := makeGitGenericRoot(t)
-	project := config.DefaultProjectConfigForType("default", filepath.Base(root), "production", config.AppTypeGeneric)
+	project := config.DefaultProjectConfig("default", filepath.Base(root), "production")
 	if _, err := config.Write(root, project); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	runGit(t, root, "add", config.GenericFilePath)
+	runGit(t, root, "add", config.FilePath)
 	runGit(t, root, "commit", "-m", "add config")
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# local notes\n"), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
@@ -3251,9 +3242,12 @@ func (d *dockerUnavailableStub) ImageMetadata(_ context.Context, _ string) (dock
 	panic("unexpected ImageMetadata call")
 }
 
-func makeRailsRoot(t *testing.T, moduleName string) string {
+func makeRubyRoot(t *testing.T, moduleName string) string {
 	t.Helper()
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), moduleName)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "Gemfile"), []byte("source 'https://rubygems.org'\n"), 0o644); err != nil {
 		t.Fatalf("write Gemfile: %v", err)
 	}
@@ -3266,19 +3260,15 @@ func makeRailsRoot(t *testing.T, moduleName string) string {
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatalf("mkdir config: %v", err)
 	}
-	content := "module " + moduleName + "\n  class Application < Rails::Application\n  end\nend\n"
-	if err := os.WriteFile(filepath.Join(root, "config", "application.rb"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write application.rb: %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(root, "config", "master.key"), []byte("test-master-key\n"), 0o600); err != nil {
 		t.Fatalf("write master.key: %v", err)
 	}
 	return root
 }
 
-func makeGitRailsRoot(t *testing.T, moduleName string) string {
+func makeGitRubyRoot(t *testing.T, moduleName string) string {
 	t.Helper()
-	root := makeRailsRoot(t, moduleName)
+	root := makeRubyRoot(t, moduleName)
 	runGit(t, root, "init")
 	runGit(t, root, "config", "user.email", "test@example.com")
 	runGit(t, root, "config", "user.name", "Test User")

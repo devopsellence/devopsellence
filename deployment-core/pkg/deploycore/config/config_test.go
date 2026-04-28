@@ -19,9 +19,9 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 		Command:    []string{"./bin/jobs"},
 		Env:        map[string]string{"QUEUE": "default"},
 		SecretRefs: []SecretRef{{Name: "API_KEY", Secret: "gsm://projects/test/secrets/api-key"}},
-		Volumes:    []Volume{{Source: "app_storage", Target: "/rails/storage"}},
+		Volumes:    []Volume{{Source: "app_storage", Target: "/app/storage"}},
 	}
-	project.Tasks.Release = &TaskConfig{Service: "web", Command: []string{"bundle", "exec", "rails", "db:migrate"}}
+	project.Tasks.Release = &TaskConfig{Service: "web", Command: []string{"./bin/migrate"}}
 
 	written, err := Write(root, project)
 	if err != nil {
@@ -53,7 +53,7 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	if strings.Join(loaded.Build.Platforms, ",") != strings.Join(DefaultBuildPlatforms, ",") {
 		t.Fatalf("build platforms = %#v, want %#v", loaded.Build.Platforms, DefaultBuildPlatforms)
 	}
-	if loaded.Tasks.Release == nil || strings.Join(loaded.Tasks.Release.Command, " ") != "bundle exec rails db:migrate" {
+	if loaded.Tasks.Release == nil || strings.Join(loaded.Tasks.Release.Command, " ") != "./bin/migrate" {
 		t.Fatalf("release task = %#v", loaded.Tasks.Release)
 	}
 	if _, err := os.Stat(filepath.Join(root, FilePath)); err != nil {
@@ -407,11 +407,11 @@ func TestValidateIngressRulesRejectsCaseInsensitiveDuplicateRoutes(t *testing.T)
 	}
 }
 
-func TestWriteGenericConfigUsesRepoRootPath(t *testing.T) {
+func TestWriteConfigUsesRepoRootPath(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	project := DefaultProjectConfigForType("acme", "GenericApp", "production", AppTypeGeneric)
+	project := DefaultProjectConfig("acme", "GenericApp", "production")
 	web := project.Services[DefaultWebServiceName]
 	web.Ports = []ServicePort{{Name: "http", Port: 8080}}
 	web.Healthcheck.Path = "/"
@@ -421,15 +421,15 @@ func TestWriteGenericConfigUsesRepoRootPath(t *testing.T) {
 	if _, err := Write(root, project); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, GenericFilePath)); err != nil {
-		t.Fatalf("generic config missing: %v", err)
+	if _, err := os.Stat(filepath.Join(root, FilePath)); err != nil {
+		t.Fatalf("config missing: %v", err)
 	}
 	loaded, err := LoadFromRoot(root)
 	if err != nil {
 		t.Fatalf("LoadFromRoot() error = %v", err)
 	}
-	if loaded == nil || loaded.App.Type != AppTypeGeneric {
-		t.Fatalf("loaded generic config mismatch: %#v", loaded)
+	if loaded == nil {
+		t.Fatal("loaded config is nil")
 	}
 }
 
@@ -489,18 +489,18 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 	project.Services["web"] = ServiceConfig{
 		Command:    []string{"bundle", "exec", "puma"},
 		Args:       []string{"-C", "config/puma.rb"},
-		Env:        map[string]string{"RAILS_ENV": "production", "BASE_ONLY": "1"},
+		Env:        map[string]string{"APP_ENV": "production", "BASE_ONLY": "1"},
 		SecretRefs: []SecretRef{{Name: "BASE_KEY", Secret: "gsm://base"}},
 		Ports:      []ServicePort{{Name: "http", Port: 3000}},
 		Healthcheck: &HTTPHealthcheck{
 			Path: "/up",
 			Port: 3000,
 		},
-		Volumes: []Volume{{Source: "storage", Target: "/rails/storage"}},
+		Volumes: []Volume{{Source: "storage", Target: "/app/storage"}},
 	}
 	project.Tasks.Release = &TaskConfig{
 		Service: "web",
-		Command: []string{"bundle", "exec", "rails", "db:migrate"},
+		Command: []string{"./bin/migrate"},
 		Env:     map[string]string{"RELEASE_ONLY": "base"},
 	}
 	redirectHTTP := false
@@ -525,17 +525,17 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 			Services: map[string]ServiceConfigOverlay{
 				"web": {
 					Command:     []string{"./bin/staging-web"},
-					Env:         map[string]string{"RAILS_ENV": "staging", "STAGING_ONLY": "1"},
+					Env:         map[string]string{"APP_ENV": "staging", "STAGING_ONLY": "1"},
 					SecretRefs:  []SecretRef{{Name: "STAGING_KEY", Secret: "gsm://staging"}},
 					Ports:       []ServicePort{{Name: "http", Port: 8080}},
-					Volumes:     []Volume{{Source: "staging-storage", Target: "/rails/storage"}},
+					Volumes:     []Volume{{Source: "staging-storage", Target: "/app/storage"}},
 					Healthcheck: &HTTPHealthcheckOverlay{Path: &stagingPath, Port: &stagingPort},
 				},
 			},
 			Tasks: &TasksConfigOverlay{
 				Release: &TaskConfigOverlay{
 					Env:     map[string]string{"RELEASE_ONLY": "staging", "MIGRATION_MODE": "online"},
-					Command: []string{"bundle", "exec", "rails", "db:prepare"},
+					Command: []string{"./bin/prepare"},
 				},
 			},
 		},
@@ -564,7 +564,7 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 	if web.Args[0] != "-C" {
 		t.Fatalf("args = %#v", web.Args)
 	}
-	if web.Env["RAILS_ENV"] != "staging" || web.Env["BASE_ONLY"] != "1" || web.Env["STAGING_ONLY"] != "1" {
+	if web.Env["APP_ENV"] != "staging" || web.Env["BASE_ONLY"] != "1" || web.Env["STAGING_ONLY"] != "1" {
 		t.Fatalf("env = %#v", web.Env)
 	}
 	if len(web.SecretRefs) != 1 || web.SecretRefs[0].Name != "STAGING_KEY" {
@@ -576,7 +576,7 @@ func TestResolveEnvironmentConfigMergesOverlay(t *testing.T) {
 	if resolved.Tasks.Release == nil {
 		t.Fatal("release task missing")
 	}
-	if got := strings.Join(resolved.Tasks.Release.Command, " "); got != "bundle exec rails db:prepare" {
+	if got := strings.Join(resolved.Tasks.Release.Command, " "); got != "./bin/prepare" {
 		t.Fatalf("release command = %q", got)
 	}
 	if resolved.Tasks.Release.Env["RELEASE_ONLY"] != "staging" || resolved.Tasks.Release.Env["MIGRATION_MODE"] != "online" {

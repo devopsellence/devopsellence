@@ -125,7 +125,6 @@ func (s ScopedSecrets) ValuesForService(serviceName string) map[string]string {
 }
 
 type SnapshotMetadata struct {
-	AppType    string `json:"app_type,omitempty"`
 	ConfigPath string `json:"config_path,omitempty"`
 	Project    string `json:"project,omitempty"`
 	UpdatedAt  string `json:"updated_at,omitempty"`

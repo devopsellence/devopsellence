@@ -14,15 +14,12 @@ import (
 
 const (
 	FilePath               = "devopsellence.yml"
-	GenericFilePath        = FilePath
 	SchemaVersion          = 1
 	DefaultEnvironment     = "production"
 	DefaultBuildContext    = "."
 	DefaultDockerfile      = "Dockerfile"
 	DefaultHealthcheckPath = "/up"
 	DefaultWebPort         = 3000
-	AppTypeRails           = "rails"
-	AppTypeGeneric         = "generic"
 	DefaultWebRole         = "web"
 	DefaultWorkerRole      = "worker"
 	DefaultWebServiceName  = "web"
@@ -80,10 +77,6 @@ type BuildConfig struct {
 	Context    string   `yaml:"context" json:"context"`
 	Dockerfile string   `yaml:"dockerfile" json:"dockerfile"`
 	Platforms  []string `yaml:"platforms" json:"platforms"`
-}
-
-type AppConfig struct {
-	Type string `yaml:"type,omitempty" json:"type,omitempty"`
 }
 
 type IngressTLSConfig struct {
@@ -176,7 +169,6 @@ type Node struct {
 
 type ProjectConfig struct {
 	SchemaVersion      int                           `yaml:"schema_version" json:"schema_version"`
-	App                AppConfig                     `yaml:"app,omitempty" json:"app,omitempty"`
 	Organization       string                        `yaml:"organization" json:"organization"`
 	Project            string                        `yaml:"project" json:"project"`
 	DefaultEnvironment string                        `yaml:"default_environment" json:"default_environment"`
@@ -200,10 +192,6 @@ func (Store) PathFor(workspaceRoot string) string {
 	return filepath.Join(workspaceRoot, FilePath)
 }
 
-func (Store) PathForType(workspaceRoot, appType string) string {
-	return PathForType(workspaceRoot, appType)
-}
-
 func (s Store) Read(workspaceRoot string) (*ProjectConfig, error) {
 	return LoadFromRoot(workspaceRoot)
 }
@@ -221,9 +209,6 @@ func Load(path string) (*ProjectConfig, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid %s: %w", filepath.Base(path), err)
-	}
-	if strings.TrimSpace(cfg.App.Type) == "" && filepath.Base(path) == GenericFilePath {
-		cfg.App.Type = AppTypeGeneric
 	}
 	if cfg.SchemaVersion == 0 {
 		return nil, fmt.Errorf("invalid %s in %s: schema_version must be %d; re-run `devopsellence init --mode solo|shared`", filepath.Base(path), path, SchemaVersion)
@@ -245,10 +230,6 @@ func ExistingPath(workspaceRoot string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func PathForType(workspaceRoot, _ string) string {
-	return filepath.Join(workspaceRoot, FilePath)
 }
 
 func LoadFromRoot(workspaceRoot string) (*ProjectConfig, error) {
@@ -283,7 +264,7 @@ func Write(workspaceRoot string, cfg ProjectConfig) (ProjectConfig, error) {
 		return ProjectConfig{}, err
 	}
 
-	path := PathForType(workspaceRoot, cfg.App.Type)
+	path := filepath.Join(workspaceRoot, FilePath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return ProjectConfig{}, err
 	}
@@ -298,17 +279,8 @@ func Write(workspaceRoot string, cfg ProjectConfig) (ProjectConfig, error) {
 }
 
 func DefaultProjectConfig(organization, project, environment string) ProjectConfig {
-	return DefaultProjectConfigForType(organization, project, environment, AppTypeRails)
-}
-
-func DefaultProjectConfigForType(organization, project, environment, appType string) ProjectConfig {
-	healthcheckPath := DefaultHealthcheckPath
-	if appType == AppTypeGeneric {
-		healthcheckPath = "/"
-	}
 	cfg := ProjectConfig{
 		SchemaVersion:      SchemaVersion,
-		App:                AppConfig{Type: appType},
 		Organization:       organization,
 		Project:            project,
 		DefaultEnvironment: environment,
@@ -327,7 +299,7 @@ func DefaultProjectConfigForType(organization, project, environment, appType str
 					Port: DefaultWebPort,
 				}},
 				Healthcheck: &HTTPHealthcheck{
-					Path: healthcheckPath,
+					Path: DefaultHealthcheckPath,
 					Port: DefaultWebPort,
 				},
 			},
@@ -343,9 +315,6 @@ func Validate(cfg *ProjectConfig) error {
 	}
 	if cfg.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("schema_version must be %d; re-run `devopsellence init --mode solo|shared`", SchemaVersion)
-	}
-	if cfg.App.Type != AppTypeRails && cfg.App.Type != AppTypeGeneric {
-		return fmt.Errorf("app.type must be %q or %q", AppTypeRails, AppTypeGeneric)
 	}
 	if strings.TrimSpace(cfg.Organization) == "" {
 		return errors.New("organization is required")
@@ -427,9 +396,6 @@ func applyDefaults(cfg *ProjectConfig) {
 	if cfg.SchemaVersion == 0 {
 		cfg.SchemaVersion = SchemaVersion
 	}
-	if strings.TrimSpace(cfg.App.Type) == "" {
-		cfg.App.Type = AppTypeRails
-	}
 	if strings.TrimSpace(cfg.DefaultEnvironment) == "" {
 		cfg.DefaultEnvironment = DefaultEnvironment
 	}
@@ -462,11 +428,7 @@ func applyDefaults(cfg *ProjectConfig) {
 		if service.Healthcheck != nil {
 			service.Healthcheck.Path = strings.TrimSpace(service.Healthcheck.Path)
 			if strings.TrimSpace(service.Healthcheck.Path) == "" {
-				if cfg.App.Type == AppTypeGeneric {
-					service.Healthcheck.Path = "/"
-				} else {
-					service.Healthcheck.Path = DefaultHealthcheckPath
-				}
+				service.Healthcheck.Path = DefaultHealthcheckPath
 			}
 			if service.Healthcheck.Port == 0 {
 				service.Healthcheck.Port = service.HTTPPort(DefaultWebPort)

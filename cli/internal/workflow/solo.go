@@ -2760,7 +2760,7 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		if discoveryErr != nil {
 			return "", discoveryErr
 		}
-		return discovered.AppType + " @ " + discovered.WorkspaceRoot, nil
+		return discovered.WorkspaceRoot, nil
 	})
 	addCheck("git", func() (string, error) {
 		if discoveryErr != nil {
@@ -3300,8 +3300,6 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"mode":             string(ModeSolo),
 		"workspace_root":   discovered.WorkspaceRoot,
 		"project_slug":     discovered.ProjectSlug,
-		"app_type":         discovered.AppType,
-		"fallback_used":    discovered.FallbackUsed,
 		"runtime_contract": soloInitRuntimeContract(*cfg, discovered, created),
 		"config": map[string]any{
 			"path":           configPath,
@@ -3551,7 +3549,7 @@ func soloAffectedNodesForNode(current solo.State, nodeName string) []string {
 }
 
 func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig {
-	cfg := config.DefaultProjectConfigForType("solo", discovered.ProjectName, config.DefaultEnvironment, discovered.AppType)
+	cfg := config.DefaultProjectConfig("solo", discovered.ProjectName, config.DefaultEnvironment)
 	if discovered.InferredWebPort > 0 {
 		if serviceName, ok := cfg.PrimaryWebServiceName(); ok {
 			service := cfg.Services[serviceName]

@@ -11,7 +11,7 @@ import (
 )
 
 func TestNewReleaseNormalizesImmutableSnapshot(t *testing.T) {
-	env := map[string]string{"RAILS_ENV": "production"}
+	env := map[string]string{"APP_ENV": "production"}
 	release, err := NewRelease(ReleaseCreateInput{
 		ID:            " rel-1 ",
 		EnvironmentID: " env-1 ",
@@ -44,8 +44,8 @@ func TestNewReleaseNormalizesImmutableSnapshot(t *testing.T) {
 	if got, want := strings.Join(release.TargetNodeIDs, ","), "web-a,worker-a"; got != want {
 		t.Fatalf("target nodes = %q, want %q", got, want)
 	}
-	env["RAILS_ENV"] = "staging"
-	if got := release.Snapshot.Services[0].Env["RAILS_ENV"]; got != "production" {
+	env["APP_ENV"] = "staging"
+	if got := release.Snapshot.Services[0].Env["APP_ENV"]; got != "production" {
 		t.Fatalf("release snapshot env = %q, want immutable production value", got)
 	}
 }

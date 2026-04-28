@@ -4122,6 +4122,9 @@ func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Node) []st
 }
 
 func temporaryDNSHints(cfg *config.ProjectConfig, expectedIPs []string) []ingressHint {
+	if len(expectedIPs) != 1 {
+		return nil
+	}
 	hints := []ingressHint{}
 	for _, ip := range expectedIPs {
 		if !isTemporaryDNSIPv4(ip) {

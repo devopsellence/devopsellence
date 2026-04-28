@@ -1043,6 +1043,26 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	}
 }
 
+func TestIngressDNSReportOmitsSSLIPHintForMultipleIngressIPs(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "auto"},
+	}
+
+	report, err := ingressDNSReport(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "8.8.8.8", User: "root", Labels: []string{config.DefaultWebRole}},
+		"node-b": {Host: "1.1.1.1", User: "root", Labels: []string{config.DefaultWebRole}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Hints) != 0 {
+		t.Fatalf("hints = %#v, want no sslip.io hint for multiple expected ingress IPs", report.Hints)
+	}
+}
+
 func TestTemporaryDNSHostnamePutsNodeIPBeforeSlugLabels(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "10.0.0.1", "production")
 

@@ -172,6 +172,15 @@ func (f *fakeEngine) Logs(_ context.Context, _ string, _ int) ([]byte, error) {
 	return nil, nil
 }
 
+type fakeDiskCare struct {
+	calls int
+}
+
+func (f *fakeDiskCare) Run(context.Context, *desiredstatepb.DesiredState) (*report.DiskCareStatus, error) {
+	f.calls++
+	return &report.DiskCareStatus{DockerLogBytes: int64(f.calls)}, nil
+}
+
 type fakeEnvoy struct {
 	updated bool
 }
@@ -489,6 +498,30 @@ func TestEnvironmentTasksAreSatisfiedPerEnvironment(t *testing.T) {
 	}
 	if len(eng.waitCalls) != 2 {
 		t.Fatalf("wait calls = %d, want 2", len(eng.waitCalls))
+	}
+}
+
+func TestDiskCareIsThrottledBetweenDesiredStateChanges(t *testing.T) {
+	diskCare := &fakeDiskCare{}
+	ag := &Agent{
+		diskCare:            diskCare,
+		diskCareMinInterval: time.Hour,
+		logger:              slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	desired := desiredWithWeb("rev-1")
+
+	first := ag.runDiskCare(context.Background(), desired, 1)
+	second := ag.runDiskCare(context.Background(), desired, 1)
+	if diskCare.calls != 1 {
+		t.Fatalf("disk care calls = %d, want 1", diskCare.calls)
+	}
+	if first != second {
+		t.Fatal("expected throttled disk care to reuse last status")
+	}
+
+	ag.runDiskCare(context.Background(), desired, 2)
+	if diskCare.calls != 2 {
+		t.Fatalf("disk care calls after sequence change = %d, want 2", diskCare.calls)
 	}
 }
 

@@ -689,6 +689,48 @@ func TestReconcileWebContainerSpecHasNoDockerHealthcheck(t *testing.T) {
 	}
 }
 
+func TestReconcileAppliesLogConfigToRuntimeContainers(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	rec := New(eng, Options{
+		Network: "devopsellence",
+		LogConfig: &engine.LogConfig{Driver: "json-file", Options: map[string]string{
+			"max-size": "10m",
+			"max-file": "5",
+		}},
+	})
+	if _, err := rec.Reconcile(context.Background(), desiredState(workerService("worker", nil))); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(eng.created) != 1 {
+		t.Fatalf("expected one created container, got %d", len(eng.created))
+	}
+	if eng.created[0].Log == nil || eng.created[0].Log.Options["max-size"] != "10m" || eng.created[0].Log.Options["max-file"] != "5" {
+		t.Fatalf("unexpected log config: %#v", eng.created[0].Log)
+	}
+}
+
+func TestReconcileDoesNotRemoveManagedSystemContainers(t *testing.T) {
+	eng := newFakeEngine()
+	eng.containers["devopsellence-envoy"] = engine.ContainerState{
+		Name:    "devopsellence-envoy",
+		Image:   "envoy:latest",
+		Running: true,
+		Managed: true,
+		System:  "envoy",
+	}
+	eng.images["busybox"] = true
+	rec := New(eng, Options{Network: "devopsellence"})
+	if _, err := rec.Reconcile(context.Background(), desiredState(workerService("worker", nil))); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	for _, name := range eng.removed {
+		if name == "devopsellence-envoy" {
+			t.Fatalf("envoy should not be removed; removed=%#v", eng.removed)
+		}
+	}
+}
+
 func desiredState(services ...*desiredstatepb.Service) *desiredstatepb.DesiredState {
 	return &desiredstatepb.DesiredState{
 		SchemaVersion: 2,

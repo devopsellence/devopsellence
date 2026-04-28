@@ -17,6 +17,7 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 	"github.com/devopsellence/devopsellence/agent/internal/engine"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -44,6 +45,7 @@ type Config struct {
 	Healthcheck         *engine.Healthcheck
 	StartupTimeout      time.Duration
 	RestartPolicy       string
+	LogConfig           *engine.LogConfig
 	RouteTimeout        time.Duration
 	RouteInterval       time.Duration
 	HTTPClient          *http.Client
@@ -312,12 +314,14 @@ func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingre
 		Image:   m.config.Image,
 		Command: []string{"-c", m.config.BootstrapPath, "--log-level", "warning", "--log-path", "/dev/stderr"},
 		Labels: map[string]string{
-			engine.LabelSystem: "envoy",
+			engine.LabelManaged: "true",
+			engine.LabelSystem:  "envoy",
 		},
 		Network: m.config.NetworkName,
 		Binds:   mounts,
 		Health:  m.config.Healthcheck,
 		Restart: engine.RestartPolicyFromString(m.config.RestartPolicy),
+		Log:     cloneLogConfig(m.config.LogConfig),
 	}
 	if publicIngressEnabled {
 		spec.ExtraHosts = []string{"host.docker.internal:host-gateway"}
@@ -587,6 +591,20 @@ func dirOf(path string) string {
 	return "."
 }
 
+func cloneLogConfig(cfg *engine.LogConfig) *engine.LogConfig {
+	if cfg == nil {
+		return nil
+	}
+	cloned := &engine.LogConfig{Driver: cfg.Driver}
+	if len(cfg.Options) > 0 {
+		cloned.Options = make(map[string]string, len(cfg.Options))
+		for key, value := range cfg.Options {
+			cloned.Options[key] = value
+		}
+	}
+	return cloned
+}
+
 func containsMount(mounts []string, dir string) bool {
 	needle := fmt.Sprintf("%s:%s:ro", dir, dir)
 	for _, mount := range mounts {
@@ -601,9 +619,11 @@ func cloneIngress(ingress *desiredstatepb.Ingress) *desiredstatepb.Ingress {
 	if ingress == nil {
 		return nil
 	}
-
-	copy := *ingress
-	return &copy
+	cloned, ok := proto.Clone(ingress).(*desiredstatepb.Ingress)
+	if !ok {
+		return nil
+	}
+	return cloned
 }
 
 func normalizedIngressMode(ingress *desiredstatepb.Ingress) string {

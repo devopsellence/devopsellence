@@ -123,6 +123,7 @@ func TestEnsureCreatesEnvoyWithDefaults(t *testing.T) {
 		Port:           8000,
 		ClusterName:    "devopsellence_web",
 		RestartPolicy:  "unless-stopped",
+		LogConfig:      &engine.LogConfig{Driver: "json-file", Options: map[string]string{"max-size": "10m", "max-file": "5"}},
 		StartupTimeout: 2 * time.Second,
 	}, logger)
 
@@ -144,6 +145,12 @@ func TestEnsureCreatesEnvoyWithDefaults(t *testing.T) {
 	}
 	if eng.createdSpec.Restart == nil || eng.createdSpec.Restart.Name != "unless-stopped" {
 		t.Fatalf("unexpected restart policy: %+v", eng.createdSpec.Restart)
+	}
+	if eng.createdSpec.Labels[engine.LabelManaged] != "true" || eng.createdSpec.Labels[engine.LabelSystem] != "envoy" {
+		t.Fatalf("unexpected labels: %#v", eng.createdSpec.Labels)
+	}
+	if eng.createdSpec.Log == nil || eng.createdSpec.Log.Options["max-size"] != "10m" || eng.createdSpec.Log.Options["max-file"] != "5" {
+		t.Fatalf("unexpected log config: %#v", eng.createdSpec.Log)
 	}
 	if len(eng.createdSpec.Ports) != 1 {
 		t.Fatalf("expected envoy host port published, got %+v", eng.createdSpec.Ports)

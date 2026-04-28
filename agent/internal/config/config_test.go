@@ -65,6 +65,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DesiredStateOverridePath != "/tmp/desired-state-override.json" {
 		t.Fatalf("expected default desired state override path, got %s", cfg.DesiredStateOverridePath)
 	}
+	if cfg.DiskCareStatePath != "/tmp/disk-care-state.json" {
+		t.Fatalf("expected default disk care state path, got %s", cfg.DiskCareStatePath)
+	}
+	if cfg.ContainerLogMaxSize != "10m" || cfg.ContainerLogMaxFile != 5 {
+		t.Fatalf("unexpected default log retention: size=%s files=%d", cfg.ContainerLogMaxSize, cfg.ContainerLogMaxFile)
+	}
+	if cfg.ImageRetainedPreviousReleases != 10 {
+		t.Fatalf("unexpected default image retention: %d", cfg.ImageRetainedPreviousReleases)
+	}
 	if cfg.GoogleMetadataEndpoint != "http://metadata.google.internal/computeMetadata/v1" {
 		t.Fatalf("unexpected metadata endpoint default: %s", cfg.GoogleMetadataEndpoint)
 	}
@@ -115,6 +124,10 @@ func TestLoadFullConfig(t *testing.T) {
 		"--auth-state-path=/tmp/agent-auth-state.json",
 		"--desired-state-cache-path=/var/lib/devopsellence/custom-cache.json",
 		"--desired-state-override-path=/var/lib/devopsellence/custom-override.json",
+		"--disk-care-state-path=/var/lib/devopsellence/custom-disk-care.json",
+		"--container-log-max-size=25m",
+		"--container-log-max-file=3",
+		"--image-retained-previous-releases=4",
 		"--prefetch-system-images=false",
 		"--envoy-bootstrap-path=/var/lib/devopsellence/envoy/envoy.yaml",
 		"--envoy-public-http-port=18080",
@@ -142,6 +155,15 @@ func TestLoadFullConfig(t *testing.T) {
 	}
 	if cfg.DesiredStateOverridePath != "/var/lib/devopsellence/custom-override.json" {
 		t.Fatalf("unexpected desired state override path: %s", cfg.DesiredStateOverridePath)
+	}
+	if cfg.DiskCareStatePath != "/var/lib/devopsellence/custom-disk-care.json" {
+		t.Fatalf("unexpected disk care state path: %s", cfg.DiskCareStatePath)
+	}
+	if cfg.ContainerLogMaxSize != "25m" || cfg.ContainerLogMaxFile != 3 {
+		t.Fatalf("unexpected log retention: size=%s files=%d", cfg.ContainerLogMaxSize, cfg.ContainerLogMaxFile)
+	}
+	if cfg.ImageRetainedPreviousReleases != 4 {
+		t.Fatalf("unexpected image retention: %d", cfg.ImageRetainedPreviousReleases)
 	}
 	if cfg.GoogleMetadataEndpoint != "" {
 		t.Fatalf("expected metadata endpoint disabled, got %s", cfg.GoogleMetadataEndpoint)

@@ -62,7 +62,7 @@ The result is a split model where repo config is more opinionated and less expre
 ### Before
 
 ```yaml
-schema_version: 5
+schema_version: 1
 organization: acme
 project: demo
 default_environment: production
@@ -99,7 +99,7 @@ ingress:
 ### After
 
 ```yaml
-schema_version: 6
+schema_version: 1
 organization: acme
 project: demo
 default_environment: production
@@ -356,11 +356,11 @@ The desired-state proto and merge logic already model per-route service+port tar
 
 ## Migration
 
-This is a schema change and should be a clean break under `schema_version: 6`.
+This is a clean-slate config change under `schema_version: 1`; there is no compatibility promise or automatic backfill.
 
-### Automatic mapping from v5 to v6
+### Manual mapping from the previous ingress shape
 
-A straightforward migration exists for current configs:
+A straightforward edit exists for older local configs:
 
 ```yaml
 ingress:

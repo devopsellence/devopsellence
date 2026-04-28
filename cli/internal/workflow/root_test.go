@@ -378,7 +378,7 @@ func rootTestSoloWorkspace(t *testing.T) string {
 	t.Helper()
 	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
 	if err := os.WriteFile(filepath.Join(cwd, "devopsellence.yml"), []byte(strings.Join([]string{
-		"schema_version: 6",
+		"schema_version: 1",
 		"organization: solo",
 		"project: demo",
 		"default_environment: production",

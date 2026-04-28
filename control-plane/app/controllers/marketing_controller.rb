@@ -29,7 +29,6 @@ class MarketingController < ApplicationController
     def assign_public_install_command
       @cli_install_base_url = request.base_url
       @cli_install_command = "curl -fsSL #{@cli_install_base_url}/lfg.sh | bash"
-      @agent_uninstall_command = "curl -fsSL #{@cli_install_base_url}/uninstall.sh | bash -s -- --purge-runtime"
     end
 
     def assign_legal_page

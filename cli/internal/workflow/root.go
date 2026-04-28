@@ -821,6 +821,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}),
 	}
 	nodeListCommand.Flags().StringVar(&nodeListSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
+	nodeListCommand.Flags().BoolVar(&nodeListSoloOpts.All, "all", false, "List all registered solo nodes instead of only the current environment")
 	nodeAttachCommand := &cobra.Command{
 		Use:   "attach <name|id>",
 		Short: "Attach a node to the current environment (solo: name, shared: numeric id)",

@@ -275,6 +275,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     Dir.mktmpdir("devopsellence-cli-install-test") do |tmpdir|
       fixtures_dir = File.join(tmpdir, "fixtures")
       fakebin_dir = File.join(tmpdir, "fakebin")
+      safebin_dir = File.join(tmpdir, "safebin")
       effective_install_dir = install_dir == :explicit ? File.join(tmpdir, "install") : install_dir
       script_path = File.join(tmpdir, "lfg.sh")
       artifact_path = File.join(fixtures_dir, "cli-linux-amd64")
@@ -283,7 +284,53 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
       FileUtils.mkdir_p(fixtures_dir)
       FileUtils.mkdir_p(fakebin_dir)
+      FileUtils.mkdir_p(safebin_dir)
       FileUtils.mkdir_p(effective_install_dir) if effective_install_dir
+      host_path = ENV.fetch("PATH").split(File::PATH_SEPARATOR)
+      link_host_command = lambda do |name|
+        path = host_path.find { |entry| File.executable?(File.join(entry, name)) }
+        raise "Required command not found in PATH for safebin setup: #{name}" unless path
+
+        FileUtils.ln_s(File.join(path, name), File.join(safebin_dir, name))
+      end
+      %w[bash tr mktemp rm awk chmod mkdir mv cp].each(&link_host_command)
+
+      sha256sum_path = host_path.find { |entry| File.executable?(File.join(entry, "sha256sum")) }
+      shasum_path = host_path.find { |entry| File.executable?(File.join(entry, "shasum")) }
+      raise "Required checksum command not found in PATH for safebin setup: sha256sum or shasum" unless sha256sum_path || shasum_path
+
+      if sha256sum_path
+        FileUtils.ln_s(File.join(sha256sum_path, "sha256sum"), File.join(safebin_dir, "sha256sum"))
+      else
+        sha256sum_shim_path = File.join(safebin_dir, "sha256sum")
+        File.write(sha256sum_shim_path, <<~SH)
+          #!/usr/bin/env bash
+          exec shasum -a 256 "$@"
+        SH
+        FileUtils.chmod("u+x", sha256sum_shim_path)
+      end
+
+      if shasum_path
+        FileUtils.ln_s(File.join(shasum_path, "shasum"), File.join(safebin_dir, "shasum"))
+      else
+        shasum_shim_path = File.join(safebin_dir, "shasum")
+        File.write(shasum_shim_path, <<~SH)
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          if [[ "${1:-}" == "-a" ]]; then
+            algorithm="${2:-}"
+            shift 2
+            if [[ "$algorithm" != "256" ]]; then
+              echo "unsupported shasum algorithm: $algorithm" >&2
+              exit 1
+            fi
+          fi
+
+          exec sha256sum "$@"
+        SH
+        FileUtils.chmod("u+x", shasum_shim_path)
+      end
 
       File.write(artifact_path, "prerelease build\n")
       digest = Digest::SHA256.file(artifact_path).hexdigest
@@ -363,7 +410,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
       path_entries = path_entries.reject { |entry| File.executable?(File.join(entry, "npx")) } unless include_npx
 
       env = {
-        "PATH" => ([fakebin_dir] + path_entries).join(File::PATH_SEPARATOR),
+        "PATH" => ([fakebin_dir, safebin_dir] + path_entries).join(File::PATH_SEPARATOR),
         "HOME" => tmpdir,
         "SHELL" => ENV.fetch("SHELL", "/bin/bash"),
         "DEVOPSELLENCE_CLI_VERSION" => version,

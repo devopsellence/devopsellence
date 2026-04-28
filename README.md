@@ -148,7 +148,7 @@ In shared mode, `node create` provisions the server and runs the registration in
 `devopsellence` reads `devopsellence.yml` from the app root:
 
 ```yaml
-schema_version: 6
+schema_version: 1
 app:
   type: rails
 organization: solo

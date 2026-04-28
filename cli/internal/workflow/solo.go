@@ -57,7 +57,9 @@ type SoloSecretsDeleteOptions struct {
 	Environment string
 }
 
-type SoloNodeListOptions struct{}
+type SoloNodeListOptions struct {
+	All bool
+}
 
 type SoloNodeAttachOptions struct {
 	Node        string
@@ -722,6 +724,69 @@ func (a *App) resolveNodes(current solo.State, names []string) (map[string]confi
 		return nil, fmt.Errorf("unknown node(s): %s (available: %s)", strings.Join(unknown, ", "), strings.Join(current.NodeNames(), ", "))
 	}
 	return result, nil
+}
+
+func (a *App) currentSoloAttachment(current solo.State) (*config.ProjectConfig, string, string, []string, bool, error) {
+	discovered, cfg, err := a.optionalWorkspaceConfig()
+	if err != nil {
+		return nil, "", "", nil, false, err
+	}
+	if cfg == nil {
+		return nil, discovered.WorkspaceRoot, "", nil, false, nil
+	}
+	environmentName := soloEnvironmentName(cfg, "")
+	nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
+	if err != nil {
+		return nil, "", "", nil, true, err
+	}
+	return cfg, discovered.WorkspaceRoot, environmentName, nodeNames, true, nil
+}
+
+func soloNodeListNode(node config.Node) map[string]any {
+	item := map[string]any{
+		"host": node.Host,
+		"user": node.User,
+	}
+	if node.Port != 0 {
+		item["port"] = node.Port
+	}
+	if len(node.Labels) > 0 {
+		item["labels"] = node.Labels
+	}
+	if strings.TrimSpace(node.Provider) != "" {
+		item["provider"] = node.Provider
+	}
+	if strings.TrimSpace(node.ProviderRegion) != "" {
+		item["provider_region"] = node.ProviderRegion
+	}
+	if strings.TrimSpace(node.ProviderSize) != "" {
+		item["provider_size"] = node.ProviderSize
+	}
+	if strings.TrimSpace(node.ProviderImage) != "" {
+		item["provider_image"] = node.ProviderImage
+	}
+	if strings.TrimSpace(node.SSHKey) != "" {
+		item["ssh_key_configured"] = true
+	}
+	if strings.TrimSpace(node.ProviderServerID) != "" {
+		item["provider_server_id_configured"] = true
+	}
+	return item
+}
+
+func soloNodeListAttachments(attachments []solo.AttachmentRecord, currentWorkspaceKey, currentEnvironment string) []map[string]any {
+	items := make([]map[string]any, 0, len(attachments))
+	for _, attachment := range attachments {
+		item := map[string]any{
+			"environment": attachment.Environment,
+			"node_names":  attachment.NodeNames,
+		}
+		if attachment.WorkspaceKey == currentWorkspaceKey && attachment.Environment == currentEnvironment {
+			item["current_environment"] = true
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 type soloRepublishErrorEntry struct {
@@ -1636,25 +1701,50 @@ func soloSecretListItems(cfg *config.ProjectConfig, secrets []solo.SecretRecord,
 	return sortListedSecrets(items)
 }
 
-func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {
+func (a *App) SoloNodeList(_ context.Context, opts SoloNodeListOptions) error {
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
 	}
 	currentWorkspaceKey := ""
 	currentEnvironment := ""
-	if discovered, cfg, cfgErr := a.optionalWorkspaceConfig(); cfgErr == nil && cfg != nil {
-		currentWorkspaceKey, _ = solo.CanonicalWorkspaceKey(discovered.WorkspaceRoot)
-		currentEnvironment = soloEnvironmentName(cfg, "")
+	nodeNames := current.NodeNames()
+	scope := "global"
+	_, workspaceRoot, environmentName, attached, hasWorkspace, cfgErr := a.currentSoloAttachment(current)
+	if cfgErr != nil {
+		if !opts.All {
+			return cfgErr
+		}
+	} else if hasWorkspace {
+		workspaceKey, keyErr := solo.CanonicalWorkspaceKey(workspaceRoot)
+		if keyErr != nil {
+			if !opts.All {
+				return keyErr
+			}
+		} else {
+			currentWorkspaceKey = workspaceKey
+			currentEnvironment = environmentName
+			if !opts.All {
+				nodeNames = attached
+				scope = "current_environment"
+			}
+		}
+	} else if !opts.All && workspaceRoot != "" {
+		return errors.New("Current workspace configuration could not be determined. Run `devopsellence init --mode solo` or use `--all` to list all nodes.")
 	}
 	type nodeListItem struct {
-		Name                    string                  `json:"name"`
-		Node                    config.Node             `json:"node"`
-		Attachments             []solo.AttachmentRecord `json:"attachments,omitempty"`
-		CurrentEnvironmentBound bool                    `json:"current_environment_bound,omitempty"`
+		Name                    string           `json:"name"`
+		Node                    map[string]any   `json:"node"`
+		Attachments             []map[string]any `json:"attachments,omitempty"`
+		CurrentEnvironmentBound bool             `json:"current_environment_bound,omitempty"`
 	}
-	items := make([]nodeListItem, 0, len(current.Nodes))
-	for _, name := range current.NodeNames() {
+	items := make([]nodeListItem, 0, len(nodeNames))
+	nodes := make(map[string]map[string]any, len(nodeNames))
+	for _, name := range nodeNames {
+		node, ok := current.Nodes[name]
+		if !ok {
+			continue
+		}
 		attachments := current.AttachmentsForNode(name)
 		bound := false
 		for _, attachment := range attachments {
@@ -1663,17 +1753,20 @@ func (a *App) SoloNodeList(_ context.Context, _ SoloNodeListOptions) error {
 				break
 			}
 		}
+		listedNode := soloNodeListNode(node)
+		nodes[name] = listedNode
 		items = append(items, nodeListItem{
 			Name:                    name,
-			Node:                    current.Nodes[name],
-			Attachments:             attachments,
+			Node:                    listedNode,
+			Attachments:             soloNodeListAttachments(attachments, currentWorkspaceKey, currentEnvironment),
 			CurrentEnvironmentBound: bound,
 		})
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
 		"schema_version": outputSchemaVersion,
-		"nodes":          current.Nodes,
+		"scope":          scope,
+		"nodes":          nodes,
 		"node_items":     items,
 	})
 
@@ -1878,7 +1971,18 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 			ok = false
 		} else if diag.ExitCode != 0 {
 			entry["exit_code"] = diag.ExitCode
-			entry["error"] = diagnosticErrorMessage(diag)
+			entry["error"] = workloadLogsErrorMessage(diag)
+			if noWorkloadContainers(diag) {
+				fallback := runRemoteDiagnostic(ctx, nodes[nodeName], remoteJournalctlCommand(fmt.Sprintf("-u devopsellence-agent --no-pager -n %d", linesLimit)))
+				entry["fallback"] = "devopsellence_agent_logs"
+				entry["fallback_lines"] = splitNonFinalEmptyLines(fallback.Stdout)
+				if fallback.Err != nil {
+					entry["fallback_error"] = fallback.Err.Error()
+				} else if fallback.ExitCode != 0 {
+					entry["fallback_exit_code"] = fallback.ExitCode
+					entry["fallback_error"] = diagnosticErrorMessage(fallback)
+				}
+			}
 			ok = false
 		}
 		results = append(results, entry)
@@ -2113,6 +2217,27 @@ func diagnosticErrorMessage(diag remoteDiagnosticResult) string {
 		return message
 	}
 	return fmt.Sprintf("command exited with code %d", diag.ExitCode)
+}
+
+func noWorkloadContainers(diag remoteDiagnosticResult) bool {
+	return strings.Contains(diag.Stderr, soloNoWorkloadContainersSentinel)
+}
+
+func workloadLogsErrorMessage(diag remoteDiagnosticResult) string {
+	if !noWorkloadContainers(diag) {
+		return diagnosticErrorMessage(diag)
+	}
+	lines := []string{}
+	for _, line := range splitNonFinalEmptyLines(diag.Stderr) {
+		if strings.TrimSpace(line) == soloNoWorkloadContainersSentinel {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) > 0 {
+		return strings.Join(lines, "\n")
+	}
+	return "No workload containers found"
 }
 
 func collectRemoteText(ctx context.Context, node config.Node, command string) map[string]any {
@@ -2400,10 +2525,20 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		if err != nil {
 			return "", err
 		}
-		if len(current.Nodes) == 0 {
-			return "", errors.New("No solo nodes registered yet. Run `devopsellence node create`.")
+		if cfg == nil {
+			return "", errors.New("No config found. Run `devopsellence init --mode solo`.")
 		}
-		return fmt.Sprintf("%d node(s) registered", len(current.Nodes)), nil
+		if len(current.Nodes) == 0 {
+			return "", errors.New("No nodes registered in solo state. Run `devopsellence node create <name>`.")
+		}
+		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, soloEnvironmentName(cfg, ""))
+		if err != nil {
+			return "", err
+		}
+		if len(nodeNames) == 0 {
+			return "", errors.New("No nodes attached to the current environment. Run `devopsellence node attach <name>`.")
+		}
+		return fmt.Sprintf("%d node(s) attached to %s", len(nodeNames), soloEnvironmentName(cfg, "")), nil
 	})
 
 	ok := true
@@ -2419,15 +2554,23 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		"ok":             ok,
 		"checks":         checks,
 	}
-	if ok && len(current.Nodes) > 0 {
-		runtimeChecks, runtimeFailed, err := a.soloRuntimeDoctorChecks(ctx, SoloDoctorOptions{})
+	if ok && cfg != nil {
+		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, soloEnvironmentName(cfg, ""))
+		if err != nil {
+			return err
+		}
+		runtimeChecks, runtimeFailed, err := a.soloRuntimeDoctorChecks(ctx, SoloDoctorOptions{Nodes: nodeNames})
 		if err != nil {
 			return err
 		}
 		payload["runtime_checks"] = runtimeChecks
 		payload["ok"] = !runtimeFailed
 		if runtimeFailed {
-			payload["next_steps"] = soloDoctorNextSteps(current.Nodes)
+			nodes, err := a.resolveNodes(current, nodeNames)
+			if err != nil {
+				return err
+			}
+			payload["next_steps"] = soloDoctorNextSteps(nodes)
 		}
 		if err := a.Printer.PrintJSON(payload); err != nil {
 			return err
@@ -2681,6 +2824,7 @@ const (
 	soloDiagnoseDockerItemLimit          = 100
 	soloDiagnosePortsLineLimit           = 200
 	soloDiagnoseTruncatedMarker          = "__DEVOPSELLENCE_TRUNCATED__"
+	soloNoWorkloadContainersSentinel     = "__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__"
 	soloRemoteAgentBinaryNotFoundMessage = "devopsellence agent binary not found"
 )
 
@@ -3945,7 +4089,7 @@ if [ "$ps_status" -ne 0 ]; then
   exit "$ps_status"
 fi
 ids=$(printf '%%s\n' "$ids" | sed '/^$/d' | head -n %d)
-if [ -z "$ids" ]; then echo "No workload containers found for service %s in environment %s" >&2; exit 1; fi
+if [ -z "$ids" ]; then echo "%s" >&2; echo "No workload containers found for service %s in environment %s" >&2; exit 1; fi
 rc=0
 for id in $ids; do
   name=$($docker_cmd inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's#^/##')
@@ -3961,7 +4105,7 @@ for id in $ids; do
     rc=$logs_status
   fi
 done
-exit "$rc"`, env, service, service, env, soloWorkloadLogsContainerLimit, service, env, lines)
+exit "$rc"`, env, service, service, env, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, service, env, lines)
 }
 
 func withRemoteLineLimit(command string, limit int) string {

@@ -352,7 +352,7 @@
         <span class="terminal-bar-title">devopsellence.yml</span>
       </div>
       <div class="terminal-body">
-        <pre class="config-pre"><code>schema_version: 6
+        <pre class="config-pre"><code>schema_version: 1
 app:
   type: rails
 organization: solo
@@ -577,7 +577,7 @@ jobs:
         <span class="terminal-bar-title">devopsellence.yml</span>
       </div>
       <div class="terminal-body">
-        <pre class="config-pre"><code>schema_version: 6
+        <pre class="config-pre"><code>schema_version: 1
 
 app:
   type: rails
@@ -629,7 +629,7 @@ tasks:
     <dl class="docs-fields">
       <div class="docs-field">
         <dt><code>schema_version</code></dt>
-        <dd>Required. Currently <code>5</code>.</dd>
+        <dd>Required. Currently <code>1</code>.</dd>
       </div>
       <div class="docs-field">
         <dt><code>app.type</code></dt>
@@ -1156,7 +1156,7 @@ tasks:
   <section class="prose-section" id="cleanup">
     <h2>Cleanup &amp; uninstall</h2>
 
-    <h3>Remove a node</h3>
+    <h3>Remove a solo node</h3>
     <div class="terminal">
       <div class="terminal-bar">
         <span class="dot dot-red"></span>
@@ -1164,9 +1164,9 @@ tasks:
         <span class="dot dot-green"></span>
       </div>
       <div class="terminal-body">
-        <div class="tl"><span class="tp">$</span> devopsellence node detach 42</div>
-        <div class="tl tl-muted"># Then on the server, run the agent uninstall:</div>
-        <div class="tl"><span class="tp">$</span> <%= @agent_uninstall_command %></div>
+        <div class="tl"><span class="tp">$</span> devopsellence agent uninstall prod-1 --yes</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node detach prod-1</div>
+        <div class="tl"><span class="tp">$</span> devopsellence node remove prod-1 --yes</div>
       </div>
     </div>
 

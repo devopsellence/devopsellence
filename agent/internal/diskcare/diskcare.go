@@ -57,7 +57,8 @@ func New(engine Engine, cfg Config, logger *slog.Logger) *Manager {
 // Run records the current desired-state images, removes old managed image
 // references outside the retention window, and reports local log usage.
 func (m *Manager) Run(ctx context.Context, desired *desiredstatepb.DesiredState) (*report.DiskCareStatus, error) {
-	status := &report.DiskCareStatus{LastCleanupAt: time.Now().UTC()}
+	now := time.Now().UTC()
+	status := &report.DiskCareStatus{LastCleanupAt: &now}
 	if m == nil {
 		return status, nil
 	}
@@ -77,7 +78,6 @@ func (m *Manager) Run(ctx context.Context, desired *desiredstatepb.DesiredState)
 		return status, err
 	}
 
-	now := status.LastCleanupAt
 	current := releasesFromDesired(desired, now)
 	store.upsert(current)
 

@@ -60,7 +60,7 @@ type DiskCareStatus struct {
 	RetainedReleaseCount     int                `json:"retained_release_count,omitempty"`
 	LogMaxSize               string             `json:"log_max_size,omitempty"`
 	LogMaxFile               int                `json:"log_max_file,omitempty"`
-	LastCleanupAt            time.Time          `json:"last_cleanup_at,omitempty"`
+	LastCleanupAt            *time.Time         `json:"last_cleanup_at,omitempty"`
 	RemovedArtifacts         []DiskCareArtifact `json:"removed_artifacts,omitempty"`
 	ReclaimedBytes           int64              `json:"reclaimed_bytes,omitempty"`
 	DockerLogBytes           int64              `json:"docker_log_bytes,omitempty"`

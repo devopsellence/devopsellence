@@ -26,10 +26,14 @@ const webServiceName = "web"
 const ingressModePublic = "public"
 
 type EnvoyManager interface {
-	Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error
+	Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, workloadNetworks ...string) error
 	UpdateEDS(ctx context.Context, address string, port uint16) error
 	UpdateClusterEDS(ctx context.Context, clusterName string, address string, port uint16) error
 	WaitForRoute(ctx context.Context, path string) error
+}
+
+type EnvoyWorkloadNetworkSyncer interface {
+	SyncWorkloadNetworks(ctx context.Context, workloadNetworks ...string) error
 }
 
 type ImagePullAuthProvider interface {
@@ -83,14 +87,19 @@ func New(eng engine.Engine, opts Options) *Reconciler {
 
 func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.DesiredState) (Result, error) {
 	result := Result{}
-	if r.opts.Network != "" {
-		if err := r.engine.EnsureNetwork(ctx, r.opts.Network); err != nil {
-			return result, fmt.Errorf("ensure network: %w", err)
+	runtimeServices := desiredstate.RuntimeServices(desired)
+	workloadNetworks, err := r.ensureRuntimeNetworks(ctx, runtimeServices)
+	if err != nil {
+		return result, err
+	}
+	if len(workloadNetworks) == 0 {
+		if err := r.syncEnvoyWorkloadNetworks(ctx, workloadNetworks); err != nil {
+			return result, err
 		}
 	}
 
 	desiredByService := map[string]desiredstate.RuntimeService{}
-	for _, service := range desiredstate.RuntimeServices(desired) {
+	for _, service := range runtimeServices {
 		desiredByService[runtimeServiceKey(service.EnvironmentName, service.ServiceName)] = service
 	}
 
@@ -108,7 +117,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 	}
 
 	for serviceKey, c := range desiredByService {
-		serviceResult, err := r.reconcileService(ctx, desired.GetIngress(), desired.GetNodePeers(), c, existingByService[serviceKey])
+		serviceResult, err := r.reconcileService(ctx, desired.GetIngress(), desired.GetNodePeers(), c, existingByService[serviceKey], workloadNetworks)
 		result.Created += serviceResult.Created
 		result.Updated += serviceResult.Updated
 		result.Removed += serviceResult.Removed
@@ -133,18 +142,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 	return result, nil
 }
 
-func (r *Reconciler) RunTask(ctx context.Context, revision string, task *desiredstatepb.Task) (TaskResult, error) {
+func (r *Reconciler) RunTask(ctx context.Context, environmentName string, revision string, task *desiredstatepb.Task) (TaskResult, error) {
 	result := TaskResult{}
 	if task == nil {
 		return result, nil
 	}
-	if r.opts.Network != "" {
-		if err := r.engine.EnsureNetwork(ctx, r.opts.Network); err != nil {
-			return result, fmt.Errorf("ensure network: %w", err)
-		}
+	network, err := r.ensureEnvironmentNetwork(ctx, environmentName)
+	if err != nil {
+		return result, err
 	}
 
-	name, _, spec, err := r.specForTask(task, revision)
+	name, _, spec, err := r.specForTask(environmentName, task, revision, network)
 	if err != nil {
 		return result, err
 	}
@@ -176,7 +184,7 @@ func (r *Reconciler) RunTask(ctx context.Context, revision string, task *desired
 	return result, nil
 }
 
-func (r *Reconciler) reconcileService(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer, desired desiredstate.RuntimeService, existing []engine.ContainerState) (Result, error) {
+func (r *Reconciler) reconcileService(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer, desired desiredstate.RuntimeService, existing []engine.ContainerState, workloadNetworks []string) (Result, error) {
 	result := Result{}
 	isWeb := desired.ServiceKind == desiredstate.ServiceKindWeb
 	name, hash, spec, err := r.specForService(desired)
@@ -192,7 +200,7 @@ func (r *Reconciler) reconcileService(ctx context.Context, ingress *desiredstate
 		if r.opts.Envoy == nil {
 			return result, fmt.Errorf("envoy manager required for web service")
 		}
-		if err := r.opts.Envoy.Ensure(ctx, ingress); err != nil {
+		if err := r.opts.Envoy.Ensure(ctx, ingress, workloadNetworks...); err != nil {
 			return result, fmt.Errorf("ensure envoy: %w", err)
 		}
 		if r.opts.IngressCert != nil {
@@ -208,7 +216,7 @@ func (r *Reconciler) reconcileService(ctx context.Context, ingress *desiredstate
 				}
 			}
 		}
-		if err := r.opts.Envoy.Ensure(ctx, ingress); err != nil {
+		if err := r.opts.Envoy.Ensure(ctx, ingress, workloadNetworks...); err != nil {
 			return result, fmt.Errorf("ensure envoy: %w", err)
 		}
 	}
@@ -421,12 +429,79 @@ func containerServiceKey(c engine.ContainerState) string {
 	return runtimeServiceKey(c.Environment, c.Service)
 }
 
-func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig) string {
+func (r *Reconciler) syncEnvoyWorkloadNetworks(ctx context.Context, workloadNetworks []string) error {
+	if r.opts.Envoy == nil {
+		return nil
+	}
+	syncer, ok := r.opts.Envoy.(EnvoyWorkloadNetworkSyncer)
+	if !ok {
+		return nil
+	}
+	if err := syncer.SyncWorkloadNetworks(ctx, workloadNetworks...); err != nil {
+		return fmt.Errorf("sync envoy workload networks: %w", err)
+	}
+	return nil
+}
+
+func (r *Reconciler) ensureRuntimeNetworks(ctx context.Context, services []desiredstate.RuntimeService) ([]string, error) {
+	if r.opts.Network == "" {
+		return nil, nil
+	}
+	if err := r.engine.EnsureNetwork(ctx, r.opts.Network); err != nil {
+		return nil, fmt.Errorf("ensure network %s: %w", r.opts.Network, err)
+	}
+	seen := map[string]bool{}
+	webSeen := map[string]bool{}
+	networks := []string{}
+	for _, service := range services {
+		network, err := r.environmentNetwork(service.EnvironmentName)
+		if err != nil {
+			return nil, err
+		}
+		if network == "" {
+			continue
+		}
+		if !seen[network] {
+			if err := r.engine.EnsureNetwork(ctx, network); err != nil {
+				return nil, fmt.Errorf("ensure network %s: %w", network, err)
+			}
+			seen[network] = true
+		}
+		if service.ServiceKind == desiredstate.ServiceKindWeb && !webSeen[network] {
+			networks = append(networks, network)
+			webSeen[network] = true
+		}
+	}
+	return networks, nil
+}
+
+func (r *Reconciler) ensureEnvironmentNetwork(ctx context.Context, environmentName string) (string, error) {
+	network, err := r.environmentNetwork(environmentName)
+	if err != nil {
+		return "", err
+	}
+	if network == "" {
+		return "", nil
+	}
+	if err := r.engine.EnsureNetwork(ctx, network); err != nil {
+		return "", fmt.Errorf("ensure network %s: %w", network, err)
+	}
+	return network, nil
+}
+
+func (r *Reconciler) environmentNetwork(environmentName string) (string, error) {
+	if r.opts.Network == "" {
+		return "", nil
+	}
+	return desiredstate.EnvironmentNetworkName(r.opts.Network, environmentName)
+}
+
+func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig, network string) string {
 	logHash := engine.LogConfigHash(logConfig)
-	if logHash == "" {
+	if logHash == "" && network == "" {
 		return baseHash
 	}
-	sum := sha256.Sum256([]byte(baseHash + "\x00" + logHash))
+	sum := sha256.Sum256([]byte(baseHash + "\x00" + logHash + "\x00" + strings.TrimSpace(network)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -497,9 +572,13 @@ func (r *Reconciler) webContainerIP(ctx context.Context, name string, desired de
 		return "", fmt.Errorf("container %s not running", name)
 	}
 
-	ip := info.NetworkIP[r.opts.Network]
+	network, err := r.environmentNetwork(desired.EnvironmentName)
+	if err != nil {
+		return "", err
+	}
+	ip := info.NetworkIP[network]
 	if ip == "" {
-		return "", fmt.Errorf("container %s missing network ip on %s", name, r.opts.Network)
+		return "", fmt.Errorf("container %s missing network ip on %s", name, network)
 	}
 	return ip, nil
 }
@@ -544,9 +623,13 @@ func (r *Reconciler) waitHealthy(ctx context.Context, name string, desired desir
 			return "", fmt.Errorf("container %s not running", name)
 		}
 
-		ip := info.NetworkIP[r.opts.Network]
+		network, err := r.environmentNetwork(desired.EnvironmentName)
+		if err != nil {
+			return "", err
+		}
+		ip := info.NetworkIP[network]
 		if ip == "" {
-			lastErr = fmt.Errorf("container %s missing network ip on %s", name, r.opts.Network)
+			lastErr = fmt.Errorf("container %s missing network ip on %s", name, network)
 		} else {
 			target := probeTarget(ip, healthcheck.Port, healthcheck.Path)
 			status, probeErr := r.opts.HTTPProber.Get(ctx, target, timeout)
@@ -578,12 +661,16 @@ func (r *Reconciler) waitHealthy(ctx context.Context, name string, desired desir
 
 func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string, string, engine.ContainerSpec, error) {
 	service := runtime.Service
+	network, err := r.environmentNetwork(runtime.EnvironmentName)
+	if err != nil {
+		return "", "", engine.ContainerSpec{}, err
+	}
 	hash, err := desiredstate.HashService(service)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash service %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
 	}
 
-	hash = runtimeContainerHash(hash, r.opts.LogConfig)
+	hash = runtimeContainerHash(hash, r.opts.LogConfig, network)
 	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, err
@@ -612,13 +699,13 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		Binds:      volumeBinds(service.VolumeMounts),
 		Labels:     labels,
 		Log:        engine.CloneLogConfig(r.opts.LogConfig),
-		Network:    r.opts.Network,
+		Network:    network,
 	}
 
 	return name, hash, spec, nil
 }
 
-func (r *Reconciler) specForTask(task *desiredstatepb.Task, revision string) (string, string, engine.ContainerSpec, error) {
+func (r *Reconciler) specForTask(environmentName string, task *desiredstatepb.Task, revision string, network string) (string, string, engine.ContainerSpec, error) {
 	hash, err := desiredstate.HashTask(task)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash task %s: %w", task.GetName(), err)
@@ -642,13 +729,14 @@ func (r *Reconciler) specForTask(task *desiredstatepb.Task, revision string) (st
 		Env:        env,
 		Binds:      volumeBinds(task.VolumeMounts),
 		Labels: map[string]string{
-			engine.LabelManaged:  "true",
-			engine.LabelHash:     hash,
-			engine.LabelRevision: revision,
-			engine.LabelSystem:   task.GetName(),
+			engine.LabelManaged:     "true",
+			engine.LabelEnvironment: environmentName,
+			engine.LabelHash:        hash,
+			engine.LabelRevision:    revision,
+			engine.LabelSystem:      task.GetName(),
 		},
 		Log:     engine.CloneLogConfig(r.opts.LogConfig),
-		Network: r.opts.Network,
+		Network: network,
 	}
 
 	return name, hash, spec, nil

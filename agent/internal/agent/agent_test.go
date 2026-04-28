@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devopsellence/devopsellence/agent/internal/authority"
+	"github.com/devopsellence/devopsellence/agent/internal/desiredstate"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 	"github.com/devopsellence/devopsellence/agent/internal/engine"
 	"github.com/devopsellence/devopsellence/agent/internal/lifecycle"
@@ -156,15 +157,27 @@ func (f *fakeEngine) PullImage(ctx context.Context, image string, auth *engine.R
 
 func (f *fakeEngine) Inspect(ctx context.Context, name string) (engine.ContainerInfo, error) {
 	c := f.containers[name]
+	networkIP := map[string]string{"devopsellence": "172.18.0.10"}
+	if environmentNetwork, err := desiredstate.EnvironmentNetworkName("devopsellence", c.Environment); err == nil {
+		networkIP[environmentNetwork] = "172.19.0.10"
+	}
 	return engine.ContainerInfo{
 		Name:      c.Name,
 		Running:   c.Running,
 		Health:    "healthy",
-		NetworkIP: map[string]string{"devopsellence": "172.18.0.10"},
+		NetworkIP: networkIP,
 	}, nil
 }
 
 func (f *fakeEngine) EnsureNetwork(ctx context.Context, name string) error {
+	return nil
+}
+
+func (f *fakeEngine) ConnectNetwork(ctx context.Context, networkName string, containerName string) error {
+	return nil
+}
+
+func (f *fakeEngine) DisconnectNetwork(ctx context.Context, networkName string, containerName string) error {
 	return nil
 }
 
@@ -185,7 +198,7 @@ type fakeEnvoy struct {
 	updated bool
 }
 
-func (f *fakeEnvoy) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error {
+func (f *fakeEnvoy) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, workloadNetworks ...string) error {
 	return nil
 }
 

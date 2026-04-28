@@ -17,3 +17,19 @@ func TestContainerNameSanitizeEmpty(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestEnvironmentNetworkName(t *testing.T) {
+	name, err := EnvironmentNetworkName("devopsellence", "Shop Production")
+	if err != nil {
+		t.Fatalf("network name error: %v", err)
+	}
+	if name != "devopsellence-env-shop-production" {
+		t.Fatalf("unexpected network name: %s", name)
+	}
+}
+
+func TestEnvironmentNetworkNameSanitizeEmpty(t *testing.T) {
+	if _, err := EnvironmentNetworkName("devopsellence", "!!!"); err == nil {
+		t.Fatal("expected error")
+	}
+}

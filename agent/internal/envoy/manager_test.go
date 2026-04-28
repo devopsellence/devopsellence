@@ -27,12 +27,15 @@ type fakeEngine struct {
 	inspectInfo engine.ContainerInfo
 	inspectErr  error
 
-	createdSpec  *engine.ContainerSpec
-	removed      []string
-	createHealth string
-	imageExists  bool
-	pulledImage  string
-	pullErr      error
+	createdSpec          *engine.ContainerSpec
+	removed              []string
+	createHealth         string
+	imageExists          bool
+	pulledImage          string
+	pullErr              error
+	ensuredNetworks      []string
+	connectedNetworks    []string
+	disconnectedNetworks []string
 }
 
 func (f *fakeEngine) ListManaged(ctx context.Context) ([]engine.ContainerState, error) {
@@ -106,6 +109,22 @@ func (f *fakeEngine) Logs(_ context.Context, _ string, _ int) ([]byte, error) {
 }
 
 func (f *fakeEngine) EnsureNetwork(ctx context.Context, name string) error {
+	f.ensuredNetworks = append(f.ensuredNetworks, name)
+	return nil
+}
+
+func (f *fakeEngine) ConnectNetwork(ctx context.Context, networkName string, containerName string) error {
+	f.connectedNetworks = append(f.connectedNetworks, networkName)
+	if f.inspectInfo.NetworkIP == nil {
+		f.inspectInfo.NetworkIP = map[string]string{}
+	}
+	f.inspectInfo.NetworkIP[networkName] = "172.19.0.2"
+	return nil
+}
+
+func (f *fakeEngine) DisconnectNetwork(ctx context.Context, networkName string, containerName string) error {
+	f.disconnectedNetworks = append(f.disconnectedNetworks, networkName)
+	delete(f.inspectInfo.NetworkIP, networkName)
 	return nil
 }
 
@@ -192,6 +211,72 @@ func TestEnsureCreatesEnvoyWithDefaults(t *testing.T) {
 	}
 	if !strings.Contains(contents, "pipe:") {
 		t.Fatalf("expected pipe address in bootstrap, got %s", contents)
+	}
+}
+
+func TestEnsureConnectsEnvoyToWorkloadNetworks(t *testing.T) {
+	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  tempBootstrapPath(t),
+		Port:           8000,
+		ClusterName:    "devopsellence_web",
+		StartupTimeout: 2 * time.Second,
+	}, logger)
+
+	if err := mgr.Ensure(context.Background(), nil, "devopsellence-env-production"); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if eng.createdSpec == nil || eng.createdSpec.Network != "devopsellence" {
+		t.Fatalf("expected envoy to start on edge network, got %#v", eng.createdSpec)
+	}
+	if len(eng.connectedNetworks) != 1 || eng.connectedNetworks[0] != "devopsellence-env-production" {
+		t.Fatalf("connected networks = %#v", eng.connectedNetworks)
+	}
+}
+
+func TestEnsureDisconnectsStaleWorkloadNetworks(t *testing.T) {
+	eng := &fakeEngine{
+		imageExists: true,
+		inspectInfo: engine.ContainerInfo{
+			Name:            "devopsellence-envoy",
+			Running:         true,
+			HasHealthcheck:  true,
+			PublishHostPort: true,
+			PublishedPorts:  []engine.PortBinding{{ContainerPort: 8000, HostPort: 8000, Protocol: "tcp"}},
+			NetworkIP: map[string]string{
+				"devopsellence":                 "172.18.0.2",
+				"devopsellence-env-old":         "172.19.0.2",
+				"operator-attached-diagnostics": "172.30.0.2",
+			},
+		},
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	bootstrapPath := tempBootstrapPath(t)
+	if _, err := ensureBootstrap(bootstrapPath, "devopsellence"); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  bootstrapPath,
+		Port:           8000,
+		ClusterName:    "devopsellence_web",
+		StartupTimeout: 2 * time.Second,
+	}, logger)
+
+	if err := mgr.Ensure(context.Background(), nil, "devopsellence-env-new"); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if len(eng.connectedNetworks) != 1 || eng.connectedNetworks[0] != "devopsellence-env-new" {
+		t.Fatalf("connected networks = %#v", eng.connectedNetworks)
+	}
+	if len(eng.disconnectedNetworks) != 1 || eng.disconnectedNetworks[0] != "devopsellence-env-old" {
+		t.Fatalf("disconnected networks = %#v", eng.disconnectedNetworks)
 	}
 }
 

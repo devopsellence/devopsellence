@@ -30,6 +30,8 @@ type Engine interface {
 	PullImage(ctx context.Context, image string, auth *RegistryAuth) error
 	Inspect(ctx context.Context, name string) (ContainerInfo, error)
 	EnsureNetwork(ctx context.Context, name string) error
+	ConnectNetwork(ctx context.Context, networkName string, containerName string) error
+	DisconnectNetwork(ctx context.Context, networkName string, containerName string) error
 	// Logs returns the last tail lines of combined stdout+stderr for the
 	// named container. Pass tail=0 for all output.
 	Logs(ctx context.Context, name string, tail int) ([]byte, error)

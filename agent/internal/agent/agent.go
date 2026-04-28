@@ -249,7 +249,7 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environ
 		},
 	}, sequence)
 
-	taskResult, err := a.reconciler.RunTask(ctx, revision, task)
+	taskResult, err := a.reconciler.RunTask(ctx, environmentName, revision, task)
 	if err != nil {
 		a.reportStatus(ctx, report.Status{
 			Time:     start,

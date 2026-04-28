@@ -347,6 +347,22 @@ func (e *Engine) EnsureNetwork(ctx context.Context, name string) error {
 	return err
 }
 
+func (e *Engine) ConnectNetwork(ctx context.Context, networkName string, containerName string) error {
+	_, err := e.client.NetworkConnect(ctx, networkName, client.NetworkConnectOptions{
+		Container:      containerName,
+		EndpointConfig: &network.EndpointSettings{},
+	})
+	return err
+}
+
+func (e *Engine) DisconnectNetwork(ctx context.Context, networkName string, containerName string) error {
+	_, err := e.client.NetworkDisconnect(ctx, networkName, client.NetworkDisconnectOptions{
+		Container: containerName,
+		Force:     false,
+	})
+	return err
+}
+
 func (e *Engine) Logs(ctx context.Context, name string, tail int) ([]byte, error) {
 	tailStr := "all"
 	if tail > 0 {

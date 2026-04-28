@@ -15,6 +15,7 @@ import (
 	"log/slog"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/devopsellence/devopsellence/agent/internal/desiredstate"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
 	"github.com/devopsellence/devopsellence/agent/internal/engine"
 	"google.golang.org/protobuf/proto"
@@ -112,7 +113,7 @@ func New(engine engine.Engine, config Config, logger *slog.Logger) *Manager {
 	}
 }
 
-func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) error {
+func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, workloadNetworks ...string) error {
 	publicIngressListener, err := m.publicIngressListenerConfig(ingress)
 	if err != nil {
 		return err
@@ -152,6 +153,9 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 		if err := m.createEnvoy(ctx, ingress, desiredPorts, publicIngressListener != nil); err != nil {
 			return err
 		}
+		if err := m.syncWorkloadNetworks(ctx, workloadNetworks); err != nil {
+			return err
+		}
 		if err := m.waitReady(ctx); err != nil {
 			return err
 		}
@@ -186,6 +190,9 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 	}
 
 	if info.Running {
+		if err := m.syncWorkloadNetworks(ctx, workloadNetworks); err != nil {
+			return err
+		}
 		m.lastIngress = cloneIngress(ingress)
 		return nil
 	}
@@ -198,11 +205,70 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 	if err := m.createEnvoy(ctx, ingress, desiredPorts, publicIngressListener != nil); err != nil {
 		return err
 	}
+	if err := m.syncWorkloadNetworks(ctx, workloadNetworks); err != nil {
+		return err
+	}
 	if err := m.waitReady(ctx); err != nil {
 		return err
 	}
 	m.lastIngress = cloneIngress(ingress)
 	m.logger.Info("envoy started", "name", m.config.ContainerName, "port", m.config.Port)
+	return nil
+}
+
+// SyncWorkloadNetworks reconciles Envoy's Docker network attachments without
+// creating Envoy when it is absent. It is used to drop stale environment
+// networks after a node stops hosting web services.
+func (m *Manager) SyncWorkloadNetworks(ctx context.Context, workloadNetworks ...string) error {
+	_, err := m.engine.Inspect(ctx, m.config.ContainerName)
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect envoy networks: %w", err)
+	}
+	return m.syncWorkloadNetworks(ctx, workloadNetworks)
+}
+
+func (m *Manager) syncWorkloadNetworks(ctx context.Context, workloadNetworks []string) error {
+	desired := map[string]bool{}
+	for _, networkName := range workloadNetworks {
+		networkName = strings.TrimSpace(networkName)
+		if networkName == "" || networkName == m.config.NetworkName {
+			continue
+		}
+		desired[networkName] = true
+	}
+
+	info, err := m.engine.Inspect(ctx, m.config.ContainerName)
+	if err != nil {
+		return fmt.Errorf("inspect envoy networks: %w", err)
+	}
+	attached := info.NetworkIP
+	if attached == nil {
+		attached = map[string]string{}
+	}
+	for networkName := range desired {
+		if err := m.engine.EnsureNetwork(ctx, networkName); err != nil {
+			return fmt.Errorf("ensure workload network %s: %w", networkName, err)
+		}
+		if _, ok := attached[networkName]; ok {
+			continue
+		}
+		if err := m.engine.ConnectNetwork(ctx, networkName, m.config.ContainerName); err != nil {
+			return fmt.Errorf("connect envoy to workload network %s: %w", networkName, err)
+		}
+	}
+
+	managedPrefix := desiredstate.EnvironmentNetworkPrefix(m.config.NetworkName)
+	for networkName := range attached {
+		if networkName == m.config.NetworkName || desired[networkName] || !strings.HasPrefix(networkName, managedPrefix) {
+			continue
+		}
+		if err := m.engine.DisconnectNetwork(ctx, networkName, m.config.ContainerName); err != nil {
+			return fmt.Errorf("disconnect envoy from stale workload network %s: %w", networkName, err)
+		}
+	}
 	return nil
 }
 

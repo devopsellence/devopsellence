@@ -16,7 +16,6 @@ const (
 	stateDir    = "/var/lib/devopsellence"
 	authState   = "/var/lib/devopsellence/agent-auth-state.json"
 	statusFile  = "/var/lib/devopsellence/status.json"
-	networkName = "devopsellence"
 )
 
 func runUninstall(args []string) error {
@@ -84,8 +83,11 @@ func purgeDockerRuntime(run func(string, ...string)) error {
 		run("docker", append([]string{"rm", "-f"}, ids...)...)
 	}
 
-	fmt.Println("Removing devopsellence Docker network...")
-	run("docker", "network", "rm", networkName)
+	fmt.Println("Removing devopsellence Docker networks...")
+	networkIDs, _ := dockerOutput("docker", "network", "ls", "-q", "--filter", "label=devopsellence.managed=true")
+	if len(networkIDs) > 0 {
+		run("docker", append([]string{"network", "rm"}, networkIDs...)...)
+	}
 	return nil
 }
 

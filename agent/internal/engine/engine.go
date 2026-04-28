@@ -186,6 +186,12 @@ type ContainerInfo struct {
 	Name            string
 	Running         bool
 	Health          string
+	StateStatus     string
+	ExitCode        int
+	StateError      string
+	FinishedAt      string
+	Entrypoint      []string
+	Command         []string
 	HasHealthcheck  bool
 	PublishHostPort bool
 	PublishedPorts  []PortBinding

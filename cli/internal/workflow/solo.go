@@ -1499,7 +1499,10 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 
 	}
 
-	payload := map[string]any{"nodes": jsonResults}
+	payload := map[string]any{
+		"schema_version": outputSchemaVersion,
+		"nodes":          jsonResults,
+	}
 	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		if allSettled {
 			payload["public_urls"] = urls
@@ -3675,13 +3678,14 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"git init # if this app is not already a git checkout",
 		"git add . # include devopsellence.yml and app files",
 		"git commit -m 'initial deploy' # devopsellence deploys the current commit",
-		"devopsellence node create prod-1 --host <host> --user root --ssh-key <path>",
-		"devopsellence agent install prod-1",
-		"devopsellence node attach prod-1",
+		"devopsellence node list --all # solo node names are global on this machine",
+		"devopsellence node create <node-name> --host <host> --user root --ssh-key <path>",
+		"devopsellence agent install <node-name>",
+		"devopsellence node attach <node-name>",
 		"# or let devopsellence create a Hetzner node:",
 		"devopsellence provider login hetzner --token <token>",
 		"devopsellence provider status hetzner",
-		"devopsellence node create prod-1 --provider hetzner --install --attach",
+		"devopsellence node create <node-name> --provider hetzner --install --attach",
 		"devopsellence doctor",
 		"devopsellence deploy",
 	}

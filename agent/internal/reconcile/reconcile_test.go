@@ -1,8 +1,10 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,6 +29,7 @@ type fakeEngine struct {
 	ops          []string
 	waitExitCode int64
 	logsOutput   []byte
+	inspectInfo  map[string]engine.ContainerInfo
 }
 
 func newFakeEngine() *fakeEngine {
@@ -110,11 +113,28 @@ func (f *fakeEngine) Inspect(_ context.Context, name string) (engine.ContainerIn
 			networkIP[environmentNetwork] = "172.19.0.2"
 		}
 	}
-	return engine.ContainerInfo{
+	info := engine.ContainerInfo{
 		Name:      c.Name,
 		Running:   c.Running,
 		NetworkIP: networkIP,
-	}, nil
+	}
+	if override, ok := f.inspectInfo[name]; ok {
+		if override.Name != "" {
+			info.Name = override.Name
+		}
+		info.Running = override.Running
+		if override.NetworkIP != nil {
+			info.NetworkIP = override.NetworkIP
+		}
+		info.Health = override.Health
+		info.StateStatus = override.StateStatus
+		info.ExitCode = override.ExitCode
+		info.StateError = override.StateError
+		info.FinishedAt = override.FinishedAt
+		info.Entrypoint = override.Entrypoint
+		info.Command = override.Command
+	}
+	return info, nil
 }
 
 func (f *fakeEngine) EnsureNetwork(_ context.Context, name string) error {
@@ -447,6 +467,74 @@ func TestRunTaskTruncatesLogOutput(t *testing.T) {
 	}
 	if len(msg) > 650 {
 		t.Fatalf("expected bounded error length, got %d chars", len(msg))
+	}
+}
+
+func TestWaitHealthyIncludesContainerInspectDetailsWhenContainerExited(t *testing.T) {
+	eng := newFakeEngine()
+	eng.containers["web"] = engine.ContainerState{Name: "web", Environment: desiredstate.DefaultEnvironmentName}
+	eng.inspectInfo = map[string]engine.ContainerInfo{
+		"web": {
+			Name:        "web",
+			Running:     false,
+			StateStatus: "exited",
+			ExitCode:    127,
+			StateError:  "exec: missing command",
+			FinishedAt:  "2026-04-28T20:25:07Z",
+			NetworkIP:   map[string]string{"devopsellence-env-production": "172.19.0.2"},
+		},
+	}
+	rec := New(eng, Options{Network: "devopsellence", HTTPProber: &fakeHTTPProber{}})
+
+	_, err := rec.waitHealthy(context.Background(), "web", desiredstate.RuntimeService{
+		EnvironmentName: desiredstate.DefaultEnvironmentName,
+		ServiceName:     "web",
+		Service:         webService(3000, "/up"),
+	})
+	if err == nil {
+		t.Fatal("expected waitHealthy error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"container web not running", "status=exited", "exit_code=127", "error=exec: missing command", "finished_at=2026-04-28T20:25:07Z"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error = %q, want %q", msg, want)
+		}
+	}
+	for _, leaked := range []string{"entrypoint=", "cmd="} {
+		if strings.Contains(msg, leaked) {
+			t.Fatalf("error = %q, did not expect argv field %q", msg, leaked)
+		}
+	}
+}
+
+func TestTearDownFailedContainerLogsInspectDetailsWhenLogsAreEmpty(t *testing.T) {
+	eng := newFakeEngine()
+	eng.containers["web"] = engine.ContainerState{Name: "web", Environment: desiredstate.DefaultEnvironmentName}
+	eng.inspectInfo = map[string]engine.ContainerInfo{
+		"web": {
+			Name:        "web",
+			Running:     false,
+			StateStatus: "exited",
+			ExitCode:    1,
+			NetworkIP:   map[string]string{},
+		},
+	}
+	var logs bytes.Buffer
+	rec := New(eng, Options{
+		Network: "devopsellence",
+		Logger:  slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+
+	rec.tearDownFailedContainer("web")
+
+	output := logs.String()
+	for _, want := range []string{"no log output", "status=exited", "exit_code=1"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("log output = %q, want %q", output, want)
+		}
+	}
+	if strings.Contains(output, "cmd=") || strings.Contains(output, "entrypoint=") {
+		t.Fatalf("log output = %q, did not expect argv fields", output)
 	}
 }
 

@@ -311,6 +311,16 @@ func (e *Engine) Inspect(ctx context.Context, name string) (engine.ContainerInfo
 		NetworkIP:       map[string]string{},
 		LogPath:         res.Container.LogPath,
 	}
+	if res.Container.Config != nil {
+		info.Entrypoint = append([]string(nil), res.Container.Config.Entrypoint...)
+		info.Command = append([]string(nil), res.Container.Config.Cmd...)
+	}
+	if res.Container.State != nil {
+		info.StateStatus = string(res.Container.State.Status)
+		info.ExitCode = res.Container.State.ExitCode
+		info.StateError = res.Container.State.Error
+		info.FinishedAt = res.Container.State.FinishedAt
+	}
 	if res.Container.HostConfig != nil {
 		info.LogDriver = res.Container.HostConfig.LogConfig.Type
 		info.LogOptions = cloneStringMap(res.Container.HostConfig.LogConfig.Config)

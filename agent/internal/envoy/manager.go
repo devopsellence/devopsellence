@@ -321,7 +321,7 @@ func (m *Manager) createEnvoy(ctx context.Context, ingress *desiredstatepb.Ingre
 		Binds:   mounts,
 		Health:  m.config.Healthcheck,
 		Restart: engine.RestartPolicyFromString(m.config.RestartPolicy),
-		Log:     cloneLogConfig(m.config.LogConfig),
+		Log:     engine.CloneLogConfig(m.config.LogConfig),
 	}
 	if publicIngressEnabled {
 		spec.ExtraHosts = []string{"host.docker.internal:host-gateway"}
@@ -589,20 +589,6 @@ func dirOf(path string) string {
 		return path[:idx]
 	}
 	return "."
-}
-
-func cloneLogConfig(cfg *engine.LogConfig) *engine.LogConfig {
-	if cfg == nil {
-		return nil
-	}
-	cloned := &engine.LogConfig{Driver: cfg.Driver}
-	if len(cfg.Options) > 0 {
-		cloned.Options = make(map[string]string, len(cfg.Options))
-		for key, value := range cfg.Options {
-			cloned.Options[key] = value
-		}
-	}
-	return cloned
 }
 
 func containsMount(mounts []string, dir string) bool {

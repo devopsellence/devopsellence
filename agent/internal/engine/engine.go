@@ -59,6 +59,23 @@ type LogConfig struct {
 	Options map[string]string
 }
 
+// CloneLogConfig returns a deep copy of cfg.
+func CloneLogConfig(cfg *LogConfig) *LogConfig {
+	if cfg == nil {
+		return nil
+	}
+	cloned := *cfg
+	if len(cfg.Options) > 0 {
+		cloned.Options = make(map[string]string, len(cfg.Options))
+		for key, value := range cfg.Options {
+			cloned.Options[key] = value
+		}
+	} else {
+		cloned.Options = nil
+	}
+	return &cloned
+}
+
 type Healthcheck struct {
 	Test        []string
 	Interval    time.Duration

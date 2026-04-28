@@ -12,12 +12,13 @@ import (
 )
 
 type fakeEngine struct {
-	managed      []engine.ContainerState
-	containers   []engine.ContainerState
-	images       []engine.ImageState
-	logPaths     map[string]string
-	removed      []string
-	removeErrors map[string]error
+	managed       []engine.ContainerState
+	containers    []engine.ContainerState
+	images        []engine.ImageState
+	logPaths      map[string]string
+	removed       []string
+	removeErrors  map[string]error
+	removeResults map[string][]engine.ImageDelete
 }
 
 func (f *fakeEngine) ListManaged(context.Context) ([]engine.ContainerState, error) {
@@ -48,6 +49,9 @@ func (f *fakeEngine) RemoveImage(_ context.Context, reference string) ([]engine.
 		return nil, err
 	}
 	f.removed = append(f.removed, reference)
+	if result := f.removeResults[reference]; len(result) > 0 {
+		return result, nil
+	}
 	return []engine.ImageDelete{{Untagged: reference}}, nil
 }
 
@@ -71,9 +75,10 @@ func TestRunRemovesOnlyImagesOutsideRetentionWindow(t *testing.T) {
 			{ID: "sha256:3", RepoTags: []string{"app:rev3"}, Size: 300},
 			{ID: "sha256:envoy", RepoTags: []string{"envoy:latest"}, Size: 400},
 		},
-		containers: []engine.ContainerState{{Name: "web", Image: "app:rev3", Managed: true}},
-		managed:    []engine.ContainerState{{Name: "web", Image: "app:rev3", Managed: true}},
-		logPaths:   map[string]string{},
+		containers:    []engine.ContainerState{{Name: "web", Image: "app:rev3", Managed: true}},
+		managed:       []engine.ContainerState{{Name: "web", Image: "app:rev3", Managed: true}},
+		logPaths:      map[string]string{},
+		removeResults: map[string][]engine.ImageDelete{"app:rev1": {{Deleted: "sha256:1"}}},
 	}
 	mgr := New(eng, Config{StatePath: statePath, RetainedPreviousReleases: 1, ProtectedImages: []string{"envoy:latest"}, ContainerLogMaxSize: "10m", ContainerLogMaxFile: 5}, nil)
 	if err := mgr.saveStore(initial); err != nil {
@@ -127,6 +132,9 @@ func TestRunReportsManagedDockerLogUsage(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte("hello logs"), 0o600); err != nil {
 		t.Fatalf("write log: %v", err)
 	}
+	if err := os.WriteFile(logPath+".1", []byte("rotated"), 0o600); err != nil {
+		t.Fatalf("write rotated log: %v", err)
+	}
 	eng := &fakeEngine{
 		managed:    []engine.ContainerState{{Name: "web", Image: "app:rev1", Managed: true}},
 		containers: []engine.ContainerState{{Name: "web", Image: "app:rev1", Managed: true}},
@@ -139,7 +147,7 @@ func TestRunReportsManagedDockerLogUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if status.DockerLogBytes != int64(len("hello logs")) {
+	if status.DockerLogBytes != int64(len("hello logs")+len("rotated")) {
 		t.Fatalf("docker log bytes = %d", status.DockerLogBytes)
 	}
 	if status.LogMaxSize != "10m" || status.LogMaxFile != 5 {

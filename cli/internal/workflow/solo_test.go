@@ -1032,10 +1032,10 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	if hint.SuggestedAction.Kind != "use_temporary_dns_hostname" || hint.SuggestedAction.Provider != "sslip.io" {
 		t.Fatalf("suggested_action = %#v, want sslip.io temporary hostname", hint.SuggestedAction)
 	}
-	if got, want := hint.SuggestedAction.Hostname, "my-app-production.8.8.8.8.sslip.io"; got != want {
+	if got, want := hint.SuggestedAction.Hostname, "8.8.8.8.my-app-production.sslip.io"; got != want {
 		t.Fatalf("suggested hostname = %q, want %q", got, want)
 	}
-	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host 'my-app-production.8.8.8.8.sslip.io' --tls-mode 'auto'") {
+	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host '8.8.8.8.my-app-production.sslip.io' --tls-mode 'auto'") {
 		t.Fatalf("command = %q, want ingress set command", hint.SuggestedAction.Command)
 	}
 	if len(hint.SuggestedAction.Risks) == 0 {
@@ -1043,12 +1043,22 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	}
 }
 
+func TestTemporaryDNSHostnamePutsNodeIPBeforeSlugLabels(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "10.0.0.1", "production")
+
+	got := temporaryDNSHostname(&cfg, "8.8.8.8")
+	want := "8.8.8.8.10-0-0-1-production.sslip.io"
+	if got != want {
+		t.Fatalf("temporaryDNSHostname() = %q, want %q", got, want)
+	}
+}
+
 func TestTemporaryDNSCommandPreservesConfiguredTLSMode(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{TLS: config.IngressTLSConfig{Mode: " OFF "}}
 
-	got := temporaryDNSCommand(&cfg, "demo-production.8.8.8.8.sslip.io")
-	want := "devopsellence ingress set --host 'demo-production.8.8.8.8.sslip.io' --tls-mode 'off'"
+	got := temporaryDNSCommand(&cfg, "8.8.8.8.demo-production.sslip.io")
+	want := "devopsellence ingress set --host '8.8.8.8.demo-production.sslip.io' --tls-mode 'off'"
 	if got != want {
 		t.Fatalf("temporaryDNSCommand() = %q, want %q", got, want)
 	}
@@ -1124,7 +1134,7 @@ func TestCheckIngressBeforeDeployIncludesSSLIPHintFields(t *testing.T) {
 	if !ok || len(hints) != 1 {
 		t.Fatalf("hints = %#v, want one ingress hint", fields["hints"])
 	}
-	if got, want := hints[0].SuggestedAction.Hostname, "demo-production.8.8.8.8.sslip.io"; got != want {
+	if got, want := hints[0].SuggestedAction.Hostname, "8.8.8.8.demo-production.sslip.io"; got != want {
 		t.Fatalf("suggested hostname = %q, want %q", got, want)
 	}
 }

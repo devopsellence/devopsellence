@@ -19,20 +19,29 @@ command -v devopsellence
 
 If the command is missing, tell the user the devopsellence CLI is required and point them to the official docs. Do not run setup scripts from this skill.
 
-3. Choose the workspace mode before initializing:
-
-- Use `solo` for SSH-first single-operator workflows, existing VMs, local node state, local secrets, and direct Docker image streaming over SSH.
-- Use `shared` for browser sign-in, org/project/env context, hosted APIs, team workflows, shared encrypted secrets, and control-plane-managed nodes.
-- If the user has not picked a mode and intent is unclear, ask. Do not silently choose one.
-
-Inspect any existing mode/context when present:
+3. Choose the workspace mode before initializing. First inspect any existing mode/context:
 
 ```sh
 devopsellence mode show || true
 devopsellence context show || true
 ```
 
-4. Initialize the workspace before the first deploy. For solo:
+If a mode is already configured, use it. If no mode is configured and the user has not explicitly chosen one, do not default silently. Ask a short mode-selection question, make a recommendation, and wait for confirmation before running `devopsellence init`:
+
+> devopsellence has two workspace modes:
+>
+> - `solo`: SSH-first, single-operator, existing or provider-created VMs, local node state, local secrets, direct Docker image streaming over SSH.
+> - `shared`: hosted sign-in, org/project/env context, team workflows, shared encrypted secrets, and control-plane-managed nodes.
+>
+> Based on what you’ve told me, I recommend `<solo|shared>` because `<reason>`. Should I initialize this repo in `<solo|shared>` mode?
+
+Recommend `solo` when the user mentions their own VM/server, SSH, single-operator usage, local secrets, direct image streaming, or avoiding hosted/team workflows.
+
+Recommend `shared` when the user mentions teams, org/project/env context, browser sign-in, hosted control plane, shared encrypted secrets, managed nodes, auditability, or collaboration.
+
+If intent is still ambiguous, ask whether they are deploying SSH-first to their own VM as one operator or want the hosted/team workflow.
+
+4. Initialize the workspace before the first deploy only after mode confirmation. For solo:
 
 ```sh
 devopsellence init --mode solo

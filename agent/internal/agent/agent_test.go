@@ -493,17 +493,19 @@ func TestEnvironmentTasksAreSatisfiedPerEnvironment(t *testing.T) {
 }
 
 func TestSettledReportSuppressionAllowsCoarseDiskCareUpdates(t *testing.T) {
+	baseCleanup := time.Date(2026, 4, 28, 12, 15, 0, 0, time.UTC)
 	base := report.Status{
 		Phase: report.PhaseSettled,
 		DiskCare: &report.DiskCareStatus{
-			LastCleanupAt:  time.Date(2026, 4, 28, 12, 15, 0, 0, time.UTC),
+			LastCleanupAt:  &baseCleanup,
 			DockerLogBytes: 5 * 1024 * 1024,
 		},
 	}
 
+	laterCleanupSameBucket := time.Date(2026, 4, 28, 12, 55, 0, 0, time.UTC)
 	laterSameBucket := base
 	laterSameBucket.DiskCare = &report.DiskCareStatus{
-		LastCleanupAt:  time.Date(2026, 4, 28, 12, 55, 0, 0, time.UTC),
+		LastCleanupAt:  &laterCleanupSameBucket,
 		DockerLogBytes: 9 * 1024 * 1024,
 	}
 	if !newReportFingerprint(1, base).suppresses(newReportFingerprint(1, laterSameBucket)) {
@@ -519,9 +521,10 @@ func TestSettledReportSuppressionAllowsCoarseDiskCareUpdates(t *testing.T) {
 		t.Fatal("expected new Docker log usage bucket to be reported")
 	}
 
+	cleanupNextHour := time.Date(2026, 4, 28, 13, 0, 0, 0, time.UTC)
 	newCleanupHour := base
 	newCleanupHour.DiskCare = &report.DiskCareStatus{
-		LastCleanupAt:  time.Date(2026, 4, 28, 13, 0, 0, 0, time.UTC),
+		LastCleanupAt:  &cleanupNextHour,
 		DockerLogBytes: base.DiskCare.DockerLogBytes,
 	}
 	if newReportFingerprint(1, base).suppresses(newReportFingerprint(1, newCleanupHour)) {

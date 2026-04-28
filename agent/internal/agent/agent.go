@@ -374,7 +374,7 @@ func fingerprintDiskCare(status *report.DiskCareStatus) string {
 	builder.WriteByte(0)
 	builder.WriteString(fmt.Sprintf("%d", status.ReclaimedBytes))
 	builder.WriteByte(0)
-	if !status.LastCleanupAt.IsZero() {
+	if status.LastCleanupAt != nil && !status.LastCleanupAt.IsZero() {
 		builder.WriteString(status.LastCleanupAt.UTC().Truncate(time.Hour).Format(time.RFC3339))
 	}
 	builder.WriteByte(0)

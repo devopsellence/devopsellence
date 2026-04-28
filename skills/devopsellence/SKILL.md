@@ -91,7 +91,8 @@ The devopsellence CLI is agent-primary. Treat stdout as the machine-readable con
 - Bounded commands emit one JSON document on stdout.
 - Long-running commands emit newline-delimited JSON events on stdout.
 - Do not scrape human prose from stderr unless diagnosing a CLI/runtime failure.
-- Every payload includes `schema_version`; check it before relying on fields.
+- Streaming event envelopes include `schema_version`; bounded JSON results usually include it but some legacy command results may omit it.
+- When `schema_version` is present, check it before relying on command-specific fields.
 - For schema version 1, streaming events use a common envelope:
   - `event`: `started`, `progress`, `result`, or `error`
   - `operation`: stable operation name when available
@@ -100,7 +101,7 @@ The devopsellence CLI is agent-primary. Treat stdout as the machine-readable con
 - Structured errors use `error.code`, `error.message`, and `error.exit_code`.
 - Command-specific fields are top-level. Tolerate unknown fields, but do not assume undocumented fields are stable.
 - Prefer explaining failures from structured `code`, `message`, evidence fields, and suggested next actions when present.
-- If `schema_version` is missing or unsupported, do not make high-risk decisions from command-specific fields; summarize the raw structured output and ask for updated docs or skill guidance.
+- If `schema_version` is unsupported, do not make high-risk decisions from command-specific fields; summarize the raw structured output and ask for updated docs or skill guidance. If `schema_version` is missing from a bounded result, treat common fields cautiously and avoid assuming undocumented command-specific fields are stable.
 - Keep secret values out of logs and chat output.
 
 ## Secrets

@@ -4025,7 +4025,7 @@ func (e ingressDNSReadinessError) ErrorFields() map[string]any {
 const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
 
 func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.Node, skip bool) error {
-	if skip || cfg == nil || cfg.Ingress == nil || cfg.Ingress.TLS.Mode != "auto" {
+	if skip || cfg == nil || cfg.Ingress == nil || !strings.EqualFold(strings.TrimSpace(cfg.Ingress.TLS.Mode), "auto") {
 		return nil
 	}
 	report, err := ingressDNSReport(ctx, cfg, nodes)

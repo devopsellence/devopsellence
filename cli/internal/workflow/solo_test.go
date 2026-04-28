@@ -1079,6 +1079,25 @@ func TestTemporaryDNSIPv4AcceptsOnlyPubliclyRoutableAddresses(t *testing.T) {
 	}
 }
 
+func TestCheckIngressBeforeDeployTreatsAutoTLSModeCaseInsensitively(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: " AUTO "},
+	}
+
+	err := (&App{}).checkIngressBeforeDeploy(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "8.8.8.8", User: "root", Labels: []string{config.DefaultWebRole}},
+	}, false)
+	if err == nil {
+		t.Fatal("checkIngressBeforeDeploy() error = nil, want DNS readiness failure")
+	}
+	if !strings.Contains(err.Error(), "no ingress hostnames configured") {
+		t.Fatalf("error = %q, want DNS readiness check to run", err.Error())
+	}
+}
+
 func TestCheckIngressBeforeDeployIncludesSSLIPHintFields(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{

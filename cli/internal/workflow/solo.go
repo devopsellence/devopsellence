@@ -2057,10 +2057,12 @@ func (a *App) SoloNodeList(_ context.Context, opts SoloNodeListOptions) error {
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
-		"schema_version": outputSchemaVersion,
-		"scope":          scope,
-		"nodes":          nodes,
-		"node_items":     items,
+		"schema_version":  outputSchemaVersion,
+		"scope":           scope,
+		"nodes":           nodes,
+		"node_items":      items,
+		"solo_state_path": soloStorePath(a.SoloState),
+		"state_home_env":  "DEVOPSELLENCE_STATE_HOME",
 	})
 
 }
@@ -3691,6 +3693,8 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"workspace_root":   discovered.WorkspaceRoot,
 		"project_slug":     discovered.ProjectSlug,
 		"runtime_contract": soloInitRuntimeContract(*cfg, discovered, created),
+		"solo_state_path":  soloStorePath(a.SoloState),
+		"state_home_env":   "DEVOPSELLENCE_STATE_HOME",
 		"config": map[string]any{
 			"path":           configPath,
 			"created":        created,

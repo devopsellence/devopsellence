@@ -29,7 +29,7 @@ curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 
 The installer writes to `~/.local/bin` by default. If that directory is not already on your `PATH`, it prints the shell command to add it.
 
-devopsellence is agent-first. The installer prints the agent skill command; to install the CLI and skill together:
+devopsellence is agent-first. The installer can also install the matching version of the devopsellence agent skill into `~/.agents/skills/devopsellence`:
 
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
@@ -86,7 +86,7 @@ devopsellence node create prod-1 --provider hetzner --install --attach
 devopsellence doctor
 ```
 
-For provider-created solo nodes, `devopsellence node create` can generate a workspace-scoped SSH keypair under `$XDG_STATE_HOME/devopsellence/solo/keys/` (default: `~/.local/state/devopsellence/solo/keys/`) and reuse it for later node creation from the same workspace.
+For provider-created solo nodes, `devopsellence node create` can generate a workspace-scoped SSH keypair under the devopsellence state home (`$DEVOPSELLENCE_STATE_HOME`, then `$XDG_STATE_HOME`, then `~/.local/state`) and reuse it for later node creation from the same workspace.
 
 Deploy over SSH:
 
@@ -126,7 +126,7 @@ devopsellence node remove prod-1 --yes
 
 `agent uninstall --yes` stops and disables `devopsellence-agent`, removes devopsellence-managed containers, removes the `devopsellence-envoy` container and `devopsellence` Docker network, deletes agent state, and removes `/usr/local/bin/devopsellence-agent`. Use `--keep-workloads` only when you intentionally want to stop the agent without cleaning remote runtime resources.
 
-Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest desired environment snapshots live in `$XDG_STATE_HOME/devopsellence/solo/state.json` (default: `~/.local/state/devopsellence/solo/state.json` when `XDG_STATE_HOME` is unset). Generated solo SSH keys stay local under `$XDG_STATE_HOME/devopsellence/solo/keys/`.
+Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest desired environment snapshots live in `$DEVOPSELLENCE_STATE_HOME/devopsellence/solo/state.json`, then `$XDG_STATE_HOME/devopsellence/solo/state.json`, and default to `~/.local/state/devopsellence/solo/state.json` when neither env var is set. Generated solo SSH keys stay local under the same state home. Use `DEVOPSELLENCE_STATE_HOME` for run-scoped AI-agent/operator sessions that must not see ambient local node state.
 
 ## Shared mode
 

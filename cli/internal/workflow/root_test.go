@@ -87,6 +87,8 @@ func TestInitModeFlagPersistsWorkspaceModeAndWritesConfig(t *testing.T) {
 
 func TestModeCommandDefaultsToShow(t *testing.T) {
 	var stdout bytes.Buffer
+	stateHome := t.TempDir()
+	t.Setenv("DEVOPSELLENCE_STATE_HOME", stateHome)
 	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
 	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
 	cmd.SetOut(&stdout)
@@ -99,6 +101,15 @@ func TestModeCommandDefaultsToShow(t *testing.T) {
 	payload := decodeJSONOutput(t, &stdout)
 	if payload["mode"] != "solo" || payload["set"] != true {
 		t.Fatalf("payload = %#v, want current solo mode", payload)
+	}
+	if payload["workspace_state_path"] != filepath.Join(stateHome, "devopsellence", "workspace.json") {
+		t.Fatalf("workspace_state_path = %#v, want state home path", payload["workspace_state_path"])
+	}
+	if payload["solo_state_path"] != filepath.Join(stateHome, "devopsellence", "solo", "state.json") {
+		t.Fatalf("solo_state_path = %#v, want state home path", payload["solo_state_path"])
+	}
+	if payload["state_home_env"] != "DEVOPSELLENCE_STATE_HOME" {
+		t.Fatalf("state_home_env = %#v, want DEVOPSELLENCE_STATE_HOME", payload["state_home_env"])
 	}
 }
 

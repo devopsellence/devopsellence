@@ -1427,6 +1427,12 @@ func TestSoloNodeListDefaultsToCurrentEnvironmentAndRedactsPrivateFields(t *test
 	if payload["scope"] != "current_environment" {
 		t.Fatalf("scope = %v, want current_environment", payload["scope"])
 	}
+	if payload["solo_state_path"] != soloState.Path {
+		t.Fatalf("solo_state_path = %#v, want %q", payload["solo_state_path"], soloState.Path)
+	}
+	if payload["state_home_env"] != "DEVOPSELLENCE_STATE_HOME" {
+		t.Fatalf("state_home_env = %#v, want DEVOPSELLENCE_STATE_HOME", payload["state_home_env"])
+	}
 	nodes := jsonMapFromAny(t, payload["nodes"])
 	if _, ok := nodes["node-b"]; ok {
 		t.Fatalf("nodes = %#v, want node-b omitted", nodes)

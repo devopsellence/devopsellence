@@ -9,6 +9,7 @@ import (
 
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/solo"
+	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
@@ -43,6 +44,20 @@ func (a *App) modeWorkspaceKey() string {
 		return path
 	}
 	return a.Cwd
+}
+
+func storePath(store *state.Store) string {
+	if store == nil {
+		return ""
+	}
+	return store.Path
+}
+
+func soloStorePath(store *solo.StateStore) string {
+	if store == nil {
+		return ""
+	}
+	return store.Path
 }
 
 func (a *App) savedMode() (Mode, bool, error) {
@@ -193,9 +208,13 @@ func (a *App) ModeShow() error {
 	}
 
 	payload := map[string]any{
-		"schema_version": outputSchemaVersion,
-		"workspace_key":  a.modeWorkspaceKey(),
-		"set":            ok,
+		"schema_version":          outputSchemaVersion,
+		"workspace_key":           a.modeWorkspaceKey(),
+		"set":                     ok,
+		"workspace_state_path":    storePath(a.WorkspaceState),
+		"solo_state_path":         soloStorePath(a.SoloState),
+		"state_home_env":          "DEVOPSELLENCE_STATE_HOME",
+		"state_home_fallback_env": "XDG_STATE_HOME",
 	}
 	if ok {
 		payload["mode"] = string(mode)
@@ -216,9 +235,13 @@ func (a *App) ContextShow() error {
 		return ExitError{Code: 1, Err: modeErr}
 	}
 	result := map[string]any{
-		"schema_version": outputSchemaVersion,
-		"workspace_root": discovered.WorkspaceRoot,
-		"mode_set":       ok,
+		"schema_version":          outputSchemaVersion,
+		"workspace_root":          discovered.WorkspaceRoot,
+		"mode_set":                ok,
+		"workspace_state_path":    storePath(a.WorkspaceState),
+		"solo_state_path":         soloStorePath(a.SoloState),
+		"state_home_env":          "DEVOPSELLENCE_STATE_HOME",
+		"state_home_fallback_env": "XDG_STATE_HOME",
 	}
 	if ok {
 		result["mode"] = string(mode)

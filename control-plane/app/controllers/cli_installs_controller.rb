@@ -30,6 +30,8 @@ class CliInstallsController < ActionController::Base
       CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
       INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"
+      AGENT_SKILLS_DIR="${DEVOPSELLENCE_AGENT_SKILLS_DIR:-}"
+      AGENT_SKILL_ARCHIVE_URL="${DEVOPSELLENCE_AGENT_SKILL_ARCHIVE_URL:-}"
       TARGET_NAME="devopsellence"
 
       while [[ $# -gt 0 ]]; do
@@ -118,7 +120,9 @@ class CliInstallsController < ActionController::Base
       ARTIFACT_NAME="cli-$OS-$ARCH"
       TMP_BIN="$(mktemp)"
       TMP_SUMS="$(mktemp)"
-      cleanup() { rm -f "$TMP_BIN" "$TMP_SUMS"; }
+      TMP_SKILL_ARCHIVE="$(mktemp)"
+      TMP_SKILL_DIR="$(mktemp -d)"
+      cleanup() { rm -f "$TMP_BIN" "$TMP_SUMS" "$TMP_SKILL_ARCHIVE"; rm -rf "$TMP_SKILL_DIR"; }
       trap cleanup EXIT
 
       checksum_value() {
@@ -151,6 +155,46 @@ class CliInstallsController < ActionController::Base
           echo "checksum mismatch for downloaded CLI" >&2
           exit 1
         fi
+      }
+
+      install_agent_skill() {
+        local skills_dir skill_dest archive_url
+
+        skills_dir="$AGENT_SKILLS_DIR"
+        if [[ -z "$skills_dir" ]]; then
+          skills_dir="$HOME/.agents/skills"
+        fi
+        skill_dest="$skills_dir/devopsellence"
+        archive_url="$AGENT_SKILL_ARCHIVE_URL"
+        if [[ -z "$archive_url" ]]; then
+          archive_url="https://codeload.github.com/devopsellence/devopsellence/tar.gz/refs/tags/$CLI_VERSION"
+        fi
+
+        if ! command -v tar >/dev/null 2>&1; then
+          echo "devopsellence CLI installed, but agent skill install failed: tar was not found" >&2
+          exit 1
+        fi
+
+        echo "installing devopsellence agent skill..."
+        curl -fsSL "$archive_url" -o "$TMP_SKILL_ARCHIVE"
+        tar -xzf "$TMP_SKILL_ARCHIVE" -C "$TMP_SKILL_DIR"
+
+        shopt -s nullglob
+        local skill_sources=("$TMP_SKILL_DIR"/*/skills/devopsellence)
+        shopt -u nullglob
+        if [[ "${#skill_sources[@]}" -ne 1 || ! -f "${skill_sources[0]}/SKILL.md" ]]; then
+          echo "devopsellence CLI installed, but agent skill install failed: missing skills/devopsellence/SKILL.md in tag $CLI_VERSION" >&2
+          exit 1
+        fi
+
+        mkdir -p "$skills_dir"
+        rm -rf "$skill_dest"
+        cp -R "${skill_sources[0]}" "$skill_dest"
+
+        echo "devopsellence agent skill installed"
+        echo "  version: $CLI_VERSION"
+        echo "  source: https://github.com/devopsellence/devopsellence/tree/$CLI_VERSION/skills/devopsellence"
+        echo "  path: $skill_dest"
       }
 
       echo "downloading devopsellence CLI..."
@@ -208,20 +252,10 @@ class CliInstallsController < ActionController::Base
 
       case "$INSTALL_AGENT_SKILL" in
         1|true|TRUE|yes|YES)
-          if command -v npx >/dev/null 2>&1; then
-            echo "installing devopsellence agent skill..."
-            npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes
-          else
-            echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
-            echo "Install the skill later with:" >&2
-            echo "  npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes" >&2
-            exit 1
-          fi
+          install_agent_skill
           ;;
         *)
-          echo "agent skill available:"
-          echo "  npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes"
-          echo "or install CLI + skill together with:"
+          echo "agent skill available; install CLI + skill together with:"
           echo "  curl -fsSL \"$INSTALL_SCRIPT_URL?version=$CLI_VERSION\" | bash -s -- --install-agent-skill"
           ;;
       esac

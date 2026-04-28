@@ -433,19 +433,13 @@ func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig) string {
 }
 
 func isPersistentSystemContainer(c engine.ContainerState, protectedNames []string) bool {
-	if strings.TrimSpace(c.System) != "envoy" {
-		return false
-	}
 	name := strings.TrimSpace(c.Name)
-	if len(protectedNames) == 0 {
-		return name == "devopsellence-envoy"
-	}
 	for _, protected := range protectedNames {
 		if name == strings.TrimSpace(protected) {
 			return true
 		}
 	}
-	return false
+	return len(protectedNames) == 0 && strings.TrimSpace(c.System) == "envoy" && name == "devopsellence-envoy"
 }
 
 // tearDownFailedContainer stops a container that failed to become healthy,

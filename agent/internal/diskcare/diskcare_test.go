@@ -140,8 +140,12 @@ func TestRunIgnoresCorruptState(t *testing.T) {
 	}
 	mgr := New(eng, Config{StatePath: statePath, RetainedPreviousReleases: 10}, nil)
 
-	if _, err := mgr.Run(context.Background(), desiredState("rev-1", "app:rev1")); err != nil {
+	status, err := mgr.Run(context.Background(), desiredState("rev-1", "app:rev1"))
+	if err != nil {
 		t.Fatalf("run with corrupt state: %v", err)
+	}
+	if status.LastError == "" {
+		t.Fatal("expected corrupt state warning in status")
 	}
 	data, err := os.ReadFile(statePath)
 	if err != nil {
@@ -154,6 +158,9 @@ func TestRunIgnoresCorruptState(t *testing.T) {
 
 func TestSaveStoreUsesPrivateDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
 	mgr := New(nil, Config{StatePath: filepath.Join(dir, "disk-care-state.json")}, nil)
 	if err := mgr.saveStore(&store{}); err != nil {
 		t.Fatalf("save store: %v", err)

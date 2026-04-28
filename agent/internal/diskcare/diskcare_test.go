@@ -210,13 +210,25 @@ func TestRetainedReleaseKeysNormalizesEnvironmentNames(t *testing.T) {
 		{Environment: "production ", Revision: "rev-1", Images: []string{"app:rev1"}, LastSeenAt: older},
 		{Environment: "production", Revision: "rev-2", Images: []string{"app:rev2"}, LastSeenAt: newer},
 	}
+	current := []releaseRecord{{Environment: " production ", Revision: "rev-2", Images: []string{"app:rev2"}, LastSeenAt: newer}}
 
-	retained := retainedReleaseKeys(releases, nil, 1)
+	retained := retainedReleaseKeys(releases, current, 1)
 	if _, ok := retained[releaseKey("production", "rev-2")]; !ok {
 		t.Fatal("expected newest production release to be retained")
 	}
 	if _, ok := retained[releaseKey("production", "rev-1")]; ok {
 		t.Fatal("expected older whitespace-variant production release to fall outside retention")
+	}
+}
+
+func TestRetainedReleaseKeysDropsDeletedEnvironments(t *testing.T) {
+	releases := []releaseRecord{
+		{Environment: "deleted", Revision: "rev-1", Images: []string{"app:rev1"}, LastSeenAt: time.Now()},
+	}
+
+	retained := retainedReleaseKeys(releases, nil, 1)
+	if len(retained) != 0 {
+		t.Fatalf("retained = %#v, want none for deleted environments", retained)
 	}
 }
 

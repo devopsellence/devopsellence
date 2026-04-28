@@ -32,6 +32,10 @@ type EnvoyManager interface {
 	WaitForRoute(ctx context.Context, path string) error
 }
 
+type EnvoyWorkloadNetworkSyncer interface {
+	SyncWorkloadNetworks(ctx context.Context, workloadNetworks ...string) error
+}
+
 type ImagePullAuthProvider interface {
 	AuthForImage(ctx context.Context, image string) (*engine.RegistryAuth, error)
 }
@@ -87,6 +91,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 	workloadNetworks, err := r.ensureRuntimeNetworks(ctx, runtimeServices)
 	if err != nil {
 		return result, err
+	}
+	if len(workloadNetworks) == 0 {
+		if err := r.syncEnvoyWorkloadNetworks(ctx, workloadNetworks); err != nil {
+			return result, err
+		}
 	}
 
 	desiredByService := map[string]desiredstate.RuntimeService{}
@@ -418,6 +427,20 @@ func runtimeServiceKey(environmentName, serviceName string) string {
 
 func containerServiceKey(c engine.ContainerState) string {
 	return runtimeServiceKey(c.Environment, c.Service)
+}
+
+func (r *Reconciler) syncEnvoyWorkloadNetworks(ctx context.Context, workloadNetworks []string) error {
+	if r.opts.Envoy == nil {
+		return nil
+	}
+	syncer, ok := r.opts.Envoy.(EnvoyWorkloadNetworkSyncer)
+	if !ok {
+		return nil
+	}
+	if err := syncer.SyncWorkloadNetworks(ctx, workloadNetworks...); err != nil {
+		return fmt.Errorf("sync envoy workload networks: %w", err)
+	}
+	return nil
 }
 
 func (r *Reconciler) ensureRuntimeNetworks(ctx context.Context, services []desiredstate.RuntimeService) ([]string, error) {

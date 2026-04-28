@@ -146,11 +146,19 @@ type fakeEnvoyManager struct {
 	waitErr            error
 	ingress            *desiredstatepb.Ingress
 	workloadNetworks   []string
+	syncCalls          int
+	syncNetworks       []string
 }
 
 func (f *fakeEnvoyManager) Ensure(_ context.Context, ingress *desiredstatepb.Ingress, workloadNetworks ...string) error {
 	f.ingress = ingress
 	f.workloadNetworks = append([]string(nil), workloadNetworks...)
+	return nil
+}
+
+func (f *fakeEnvoyManager) SyncWorkloadNetworks(_ context.Context, workloadNetworks ...string) error {
+	f.syncCalls++
+	f.syncNetworks = append([]string(nil), workloadNetworks...)
 	return nil
 }
 
@@ -282,6 +290,23 @@ func TestReconcileKeepsSameServiceNameInDifferentEnvironmentsSeparate(t *testing
 	}
 	if !networks["devopsellence-env-blog-prod"] || !networks["devopsellence-env-docs-prod"] || networks["devopsellence"] {
 		t.Fatalf("unexpected container networks: %#v", networks)
+	}
+}
+
+func TestReconcileSyncsEnvoyNetworksWhenNoWebServicesRemain(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	envoyManager := &fakeEnvoyManager{}
+	rec := New(eng, Options{Network: "devopsellence", StopTimeout: 10 * time.Second, WebPort: 3000, Envoy: envoyManager})
+
+	if _, err := rec.Reconcile(context.Background(), desiredState(workerService("worker", nil))); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if envoyManager.syncCalls != 1 {
+		t.Fatalf("expected envoy network sync, got %d", envoyManager.syncCalls)
+	}
+	if len(envoyManager.syncNetworks) != 0 {
+		t.Fatalf("expected empty desired envoy workload networks, got %#v", envoyManager.syncNetworks)
 	}
 }
 

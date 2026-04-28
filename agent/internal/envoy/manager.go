@@ -216,6 +216,20 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, w
 	return nil
 }
 
+// SyncWorkloadNetworks reconciles Envoy's Docker network attachments without
+// creating Envoy when it is absent. It is used to drop stale environment
+// networks after a node stops hosting web services.
+func (m *Manager) SyncWorkloadNetworks(ctx context.Context, workloadNetworks ...string) error {
+	_, err := m.engine.Inspect(ctx, m.config.ContainerName)
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect envoy networks: %w", err)
+	}
+	return m.syncWorkloadNetworks(ctx, workloadNetworks)
+}
+
 func (m *Manager) syncWorkloadNetworks(ctx context.Context, workloadNetworks []string) error {
 	desired := map[string]bool{}
 	for _, networkName := range workloadNetworks {

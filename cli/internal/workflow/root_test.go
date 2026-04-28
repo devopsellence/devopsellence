@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -411,10 +412,118 @@ func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, snippet := range []string{"register", "create", "attach", "detach", "remove", "logs"} {
+	for _, snippet := range []string{"register", "create", "attach", "detach", "remove", "logs", "exec"} {
 		if !strings.Contains(stdout.String(), snippet) {
 			t.Fatalf("help output = %q, want %q command", stdout.String(), snippet)
 		}
+	}
+}
+
+func TestExecReturnsStructuredUnsupportedInSharedMode(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestWorkspaceWithMode(t, ModeShared)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"exec", "web", "--", "bin/rails", "runner", "puts Rails.env"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unsupported error")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want ExitError", err, err)
+	}
+	var unsupported UnsupportedOperationError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("error = %T %v, want UnsupportedOperationError", err, err)
+	}
+	fields := unsupported.ErrorFields()
+	if fields["kind"] != "unsupported" || fields["mode"] != "shared" {
+		t.Fatalf("fields = %#v, want shared unsupported", fields)
+	}
+}
+
+func TestNodeExecReturnsStructuredUnsupportedInSharedMode(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestWorkspaceWithMode(t, ModeShared)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"node", "exec", "web", "--", "bin/rails", "runner", "puts Rails.env"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unsupported error")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want ExitError", err, err)
+	}
+	var unsupported UnsupportedOperationError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("error = %T %v, want UnsupportedOperationError", err, err)
+	}
+	fields := unsupported.ErrorFields()
+	if fields["kind"] != "unsupported" || fields["mode"] != "shared" {
+		t.Fatalf("fields = %#v, want shared unsupported", fields)
+	}
+}
+
+func TestUnsupportedOperationErrorUsesFallbackOperation(t *testing.T) {
+	err := UnsupportedOperationError{Mode: " shared ", Reason: " not here "}
+	if got, want := err.Error(), "operation is not supported in shared mode: not here"; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+	fields := err.ErrorFields()
+	if fields["operation"] != "operation" || fields["mode"] != "shared" || fields["reason"] != "not here" {
+		t.Fatalf("ErrorFields() = %#v, want normalized fallback operation fields", fields)
+	}
+
+	err = UnsupportedOperationError{Operation: " exec ", Mode: " shared "}
+	if got, want := err.Error(), "exec is not supported in shared mode"; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestExecReturnsMissingCommandAfterSeparator(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, rootTestSoloWorkspace(t))
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"exec", "web", "--"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing command")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %T %v, want ExitError code 2", err, err)
+	}
+	if !strings.Contains(err.Error(), "missing command after --") {
+		t.Fatalf("error = %v, want missing command after --", err)
+	}
+}
+
+func TestNodeExecReturnsMissingCommandAfterSeparator(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, rootTestSoloWorkspace(t))
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"node", "exec", "node-a", "--"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing command")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %T %v, want ExitError code 2", err, err)
+	}
+	if !strings.Contains(err.Error(), "missing command after --") {
+		t.Fatalf("error = %v, want missing command after --", err)
 	}
 }
 

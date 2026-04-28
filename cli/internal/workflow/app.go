@@ -59,6 +59,56 @@ func (e ExitError) Unwrap() error {
 	return e.Err
 }
 
+type UnsupportedOperationError struct {
+	Operation      string
+	Mode           string
+	SupportedModes []string
+	Reason         string
+}
+
+func (e UnsupportedOperationError) Error() string {
+	reason := strings.TrimSpace(e.Reason)
+	mode := strings.TrimSpace(e.Mode)
+	if mode == "" {
+		if reason == "" {
+			return "operation is not supported"
+		}
+		return reason
+	}
+	operation := strings.TrimSpace(e.Operation)
+	if operation == "" {
+		operation = "operation"
+	}
+	if reason == "" {
+		return fmt.Sprintf("%s is not supported in %s mode", operation, mode)
+	}
+	return fmt.Sprintf("%s is not supported in %s mode: %s", operation, mode, reason)
+}
+
+func (e UnsupportedOperationError) ErrorFields() map[string]any {
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		reason = "operation is not supported"
+	}
+	mode := strings.TrimSpace(e.Mode)
+	fields := map[string]any{
+		"kind":   "unsupported",
+		"reason": reason,
+	}
+	if mode != "" {
+		operation := strings.TrimSpace(e.Operation)
+		if operation == "" {
+			operation = "operation"
+		}
+		fields["operation"] = operation
+		fields["mode"] = mode
+	}
+	if len(e.SupportedModes) > 0 {
+		fields["supported_modes"] = e.SupportedModes
+	}
+	return fields
+}
+
 type App struct {
 	In                  io.Reader
 	Printer             output.Printer

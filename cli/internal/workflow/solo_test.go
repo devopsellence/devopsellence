@@ -28,6 +28,14 @@ import (
 	corerelease "github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/release"
 )
 
+type errorWriter struct{}
+
+func (errorWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+const testSoloExecExitMarker = soloExecExitMarkerPrefix + "0123456789abcdef0123456789abcdef__"
+
 func TestSoloImageTagSlugifiesProjectName(t *testing.T) {
 	got := soloImageTag("ShopApp", "abc1234")
 	if got != "shop-app:abc1234" {
@@ -1415,6 +1423,248 @@ func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
 	lines := jsonArrayFromMap(t, node, "lines")
 	if len(lines) < 3 || lines[1] != "app line one" {
 		t.Fatalf("lines = %#v, want workload logs", lines)
+	}
+}
+
+func TestSoloExecRunsCommandInServiceContainer(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled","environments":[{"name":"production","services":[{"name":"web","state":"starting","container":"svc-production-web-abc"}]}]}` + "\n"}})
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	err := app.SoloExec(context.Background(), SoloExecOptions{ServiceName: "web", Command: []string{"bin/rails", "runner", "puts Rails.env"}})
+	if err != nil {
+		t.Fatalf("SoloExec() error = %v", err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	if len(events) != 4 {
+		t.Fatalf("events = %#v, want started/stdout/stderr/finished", events)
+	}
+	if events[0]["event"] != "started" || events[0]["operation"] != "devopsellence exec" || events[0]["target"] != "service" || events[0]["container"] != "svc-production-web-abc" {
+		t.Fatalf("started event = %#v", events[0])
+	}
+	var sawStdout, sawStderr bool
+	for _, event := range events {
+		if event["event"] == "output" && event["stream"] == "stdout" && event["message"] == "service stdout" {
+			sawStdout = true
+		}
+		if event["event"] == "output" && event["stream"] == "stderr" && event["message"] == "service stderr" {
+			sawStderr = true
+		}
+	}
+	if !sawStdout || !sawStderr {
+		t.Fatalf("events = %#v, want stdout and stderr output events", events)
+	}
+	if events[3]["event"] != "result" || events[3]["exit_code"] != float64(0) || events[3]["ok"] != true {
+		t.Fatalf("finished event = %#v", events[3])
+	}
+}
+
+func TestSoloExecPreservesRemoteExitCodeInErrorEvent(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root"},
+	}}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeExec(context.Background(), SoloNodeExecOptions{Node: "node-a", Command: []string{"missing-command"}})
+	if err == nil {
+		t.Fatal("SoloNodeExec() error = nil, want remote failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 127 {
+		t.Fatalf("error = %#v, want ExitError code 127", err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	last := events[len(events)-1]
+	if last["event"] != "error" || last["ok"] != false {
+		t.Fatalf("last event = %#v, want error", last)
+	}
+	errorPayload := jsonMapFromAny(t, last["error"])
+	if errorPayload["exit_code"] != float64(127) {
+		t.Fatalf("error payload = %#v, want remote exit 127", errorPayload)
+	}
+}
+
+func TestSoloExecRequiresNodeWhenServiceHasMultipleContainers(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	status := `{"revision":"abc","phase":"settled","environments":[{"name":"production","services":[{"name":"web","state":"running","container":"svc-production-web-abc"}]}]}` + "\n"
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: status}, {stdout: status}})
+	current := solo.State{}
+	for _, nodeName := range []string{"node-a", "node-b"} {
+		if err := current.SetNode(nodeName, config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := current.AttachNode(cwd, "production", nodeName); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	err := app.SoloExec(context.Background(), SoloExecOptions{ServiceName: "web", Command: []string{"true"}})
+	if err == nil || !strings.Contains(err.Error(), "select a single node with --node <node>") {
+		t.Fatalf("SoloExec() error = %v, want single-node guidance", err)
+	}
+}
+
+func TestSoloNodeExecRunsSSHCommand(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root"},
+	}}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeExec(context.Background(), SoloNodeExecOptions{Node: "node-a", Command: []string{"uptime"}})
+	if err != nil {
+		t.Fatalf("SoloNodeExec() error = %v", err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	if len(events) != 3 {
+		t.Fatalf("events = %#v, want started/output/finished", events)
+	}
+	if events[0]["event"] != "started" || events[0]["operation"] != "devopsellence node exec" || events[0]["target"] != "node" {
+		t.Fatalf("started event = %#v", events[0])
+	}
+	if events[1]["stream"] != "stdout" || events[1]["message"] != "node stdout" {
+		t.Fatalf("output event = %#v", events[1])
+	}
+	if events[2]["exit_code"] != float64(0) {
+		t.Fatalf("finished event = %#v", events[2])
+	}
+}
+
+func TestSoloExecEventWriterSuppressesOnlyWrapperStderrNewline(t *testing.T) {
+	var stdout bytes.Buffer
+	exitCode := -1
+	target := soloExecTarget{Kind: "node", Node: "node-a", Command: []string{"sh", "-c", "printf '\\n' >&2"}}
+	writer := &soloExecEventWriter{
+		stream:     output.New(&stdout, io.Discard).Stream("devopsellence node exec"),
+		target:     target,
+		streamName: "stderr",
+		exitCode:   &exitCode,
+		exitMarker: testSoloExecExitMarker,
+	}
+
+	if _, err := writer.Write([]byte("\n\n" + testSoloExecExitMarker + "0\n")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	if len(events) != 1 || events[0]["stream"] != "stderr" || events[0]["message"] != "" {
+		t.Fatalf("events = %#v, want one blank stderr line", events)
+	}
+}
+
+func TestSoloExecEventWriterReturnsProcessedBytesOnStreamError(t *testing.T) {
+	exitCode := -1
+	writer := &soloExecEventWriter{
+		stream:     output.New(errorWriter{}, io.Discard).Stream("devopsellence node exec"),
+		target:     soloExecTarget{Kind: "node", Node: "node-a", Command: []string{"uptime"}},
+		streamName: "stdout",
+		exitCode:   &exitCode,
+		exitMarker: testSoloExecExitMarker,
+	}
+
+	n, err := writer.Write([]byte("abc\nnext"))
+	if err == nil {
+		t.Fatal("Write() error = nil, want stream write error")
+	}
+	if n != 3 {
+		t.Fatalf("Write() n = %d, want 3", n)
+	}
+}
+
+func TestSoloExecEventWriterRequiresExactExitMarker(t *testing.T) {
+	var stdout bytes.Buffer
+	exitCode := -1
+	writer := &soloExecEventWriter{
+		stream:     output.New(&stdout, io.Discard).Stream("devopsellence node exec"),
+		target:     soloExecTarget{Kind: "node", Node: "node-a", Command: []string{"echo"}},
+		streamName: "stderr",
+		exitCode:   &exitCode,
+		exitMarker: testSoloExecExitMarker,
+	}
+
+	input := testSoloExecExitMarker + "0 trailing text\n" + testSoloExecExitMarker + "7\n"
+	if _, err := writer.Write([]byte(input)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if exitCode != 7 {
+		t.Fatalf("exit code = %d, want 7", exitCode)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	if len(events) != 1 || events[0]["message"] != testSoloExecExitMarker+"0 trailing text" {
+		t.Fatalf("events = %#v, want non-exact marker emitted as stderr", events)
+	}
+}
+
+func TestSoloExecEventWriterDoesNotEmitBlankLineAfterTruncation(t *testing.T) {
+	var stdout bytes.Buffer
+	exitCode := -1
+	writer := &soloExecEventWriter{
+		stream:     output.New(&stdout, io.Discard).Stream("devopsellence node exec"),
+		target:     soloExecTarget{Kind: "node", Node: "node-a", Command: []string{"yes"}},
+		streamName: "stdout",
+		exitCode:   &exitCode,
+		exitMarker: testSoloExecExitMarker,
+	}
+
+	line := strings.Repeat("x", soloExecMaxLineBytes+8) + "\n"
+	if _, err := writer.Write([]byte(line)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	output := stdout.String()
+	if strings.Count(output, "\n") != 1 {
+		t.Fatalf("output line count = %d, want one truncated output event", strings.Count(output, "\n"))
+	}
+	for _, snippet := range []string{`"event":"output"`, `"stream":"stdout"`, `"truncated":true`} {
+		if !strings.Contains(output, snippet) {
+			t.Fatalf("output = %q, want %q", output, snippet)
+		}
+	}
+}
+
+func TestRemoteDockerExecCommandReportsMissingCommand(t *testing.T) {
+	command := remoteDockerExecCommand("svc-production-web-abc", nil)
+	for _, snippet := range []string{"missing command after --", "exit 2"} {
+		if !strings.Contains(command, snippet) {
+			t.Fatalf("command = %q, want %q", command, snippet)
+		}
 	}
 }
 
@@ -3349,6 +3599,29 @@ fi
 
 if [[ "$command" == *"docker image inspect"* ]]; then
   printf 'present\n'
+  exit 0
+fi
+
+exec_marker=""
+if [[ "$command" =~ (__DEVOPSELLENCE_EXEC_EXIT_CODE__[0-9a-f]+__) ]]; then
+  exec_marker="${BASH_REMATCH[1]}"
+fi
+
+if [[ -n "$exec_marker" && "$command" == *"svc-production-web-abc"* ]]; then
+  printf 'service stdout\n'
+  printf 'service stderr\n%s0\n' "$exec_marker" >&2
+  exit 0
+fi
+
+if [[ -n "$exec_marker" && "$command" == *"'uptime'"* ]]; then
+  printf 'node stdout\n'
+  printf '%s0\n' "$exec_marker" >&2
+  exit 0
+fi
+
+if [[ -n "$exec_marker" && "$command" == *"'missing-command'"* ]]; then
+  printf 'missing-command: command not found\n' >&2
+  printf '%s127\n' "$exec_marker" >&2
   exit 0
 fi
 

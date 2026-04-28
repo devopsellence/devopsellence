@@ -943,8 +943,16 @@ tasks:
         <dd>Show recent Docker workload logs from attached solo nodes. Pass <code>--node</code> to target a specific node.</dd>
       </div>
       <div class="docs-field">
+        <dt><code>devopsellence exec &lt;service&gt; -- &lt;command&gt;</code></dt>
+        <dd>Run a command in a solo service container when it is in an active state such as <code>running</code>, <code>starting</code>, or <code>unhealthy</code>. Pass <code>--node</code> when the service is running on more than one node.</dd>
+      </div>
+      <div class="docs-field">
         <dt><code>devopsellence node logs &lt;name&gt;</code></dt>
         <dd>Show <code>devopsellence-agent</code> journal logs from a solo node.</dd>
+      </div>
+      <div class="docs-field">
+        <dt><code>devopsellence node exec &lt;name&gt; -- &lt;command&gt;</code></dt>
+        <dd>Run a command on a solo node over SSH.</dd>
       </div>
       <div class="docs-field">
         <dt><code>devopsellence doctor</code></dt>

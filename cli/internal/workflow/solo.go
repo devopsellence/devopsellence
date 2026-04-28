@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/devopsellence/cli/internal/api"
 	"github.com/devopsellence/cli/internal/discovery"
+	"github.com/devopsellence/cli/internal/output"
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/solo/providers"
 	cliversion "github.com/devopsellence/cli/internal/version"
@@ -96,6 +98,17 @@ type SoloWorkloadLogsOptions struct {
 	ServiceName string
 	Nodes       []string
 	Lines       int
+}
+
+type SoloExecOptions struct {
+	ServiceName string
+	Nodes       []string
+	Command     []string
+}
+
+type SoloNodeExecOptions struct {
+	Node    string
+	Command []string
 }
 
 type SoloNodeDiagnoseOptions struct {
@@ -185,8 +198,9 @@ type soloNodeStatusEnvironment struct {
 }
 
 type soloNodeStatusService struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	Container string `json:"container"`
 }
 
 type soloNodeStatusResult struct {
@@ -2280,6 +2294,382 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("workload logs failed")}}
 	}
 	return nil
+}
+
+func (a *App) SoloNodeExec(ctx context.Context, opts SoloNodeExecOptions) error {
+	command, err := remoteUserCommand(opts.Command)
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	node, ok := current.Nodes[opts.Node]
+	if !ok {
+		return fmt.Errorf("node %q not found", opts.Node)
+	}
+	target := soloExecTarget{
+		Kind:    "node",
+		Node:    opts.Node,
+		Command: append([]string(nil), opts.Command...),
+	}
+	return a.runSoloExecCommand(ctx, node, target, command)
+}
+
+func (a *App) SoloExec(ctx context.Context, opts SoloExecOptions) error {
+	serviceName := strings.TrimSpace(opts.ServiceName)
+	if serviceName == "" {
+		return ExitError{Code: 2, Err: errors.New("service name is required")}
+	}
+	if _, err := remoteUserCommand(opts.Command); err != nil {
+		return err
+	}
+	nodes, cfg, err := a.soloStatusSelection(SoloStatusOptions{Nodes: opts.Nodes})
+	if err != nil {
+		return err
+	}
+	if len(nodes) == 0 {
+		return fmt.Errorf("no nodes selected; attach a node or pass --node")
+	}
+	if cfg == nil {
+		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
+	}
+	if _, ok := cfg.Services[serviceName]; !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
+	}
+	environmentName := soloEnvironmentName(cfg, "")
+	candidates := []soloExecTarget{}
+	for _, nodeName := range sortedNodeNames(nodes) {
+		result, err := readNodeStatus(ctx, nodes[nodeName])
+		if err != nil {
+			return fmt.Errorf("[%s] read status: %w", nodeName, err)
+		}
+		if result.Missing {
+			continue
+		}
+		container := statusServiceContainer(result.Status, environmentName, serviceName)
+		if container == "" {
+			continue
+		}
+		candidates = append(candidates, soloExecTarget{
+			Kind:        "service",
+			Node:        nodeName,
+			Environment: environmentName,
+			Service:     serviceName,
+			Container:   container,
+			Command:     append([]string(nil), opts.Command...),
+		})
+	}
+	if len(candidates) == 0 {
+		return fmt.Errorf("no active container found for service %q in environment %s", serviceName, environmentName)
+	}
+	if len(candidates) > 1 {
+		names := make([]string, 0, len(candidates))
+		for _, candidate := range candidates {
+			names = append(names, candidate.Node)
+		}
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q is running on multiple nodes (%s); select a single node with --node <node>", serviceName, strings.Join(names, ", "))}
+	}
+	target := candidates[0]
+	return a.runSoloExecCommand(ctx, nodes[target.Node], target, remoteDockerExecCommand(target.Container, opts.Command))
+}
+
+type soloExecTarget struct {
+	Kind        string
+	Node        string
+	Environment string
+	Service     string
+	Container   string
+	Command     []string
+}
+
+const (
+	soloExecExitMarkerPrefix = "__DEVOPSELLENCE_EXEC_EXIT_CODE__"
+	// Keep raw messages well below 1 MiB. NDJSON encoding can expand control
+	// characters up to six bytes each before consumers scan the line.
+	soloExecMaxLineBytes = 128 * 1024
+)
+
+func (a *App) runSoloExecCommand(ctx context.Context, node config.Node, target soloExecTarget, command string) error {
+	operation := soloExecOperation(target.Kind)
+	stream := a.Printer.Stream(operation)
+	if err := a.printSoloExecEvent(stream, output.EventStarted, target, nil); err != nil {
+		return err
+	}
+
+	exitCode := -1
+	exitMarker, err := newSoloExecExitMarker()
+	if err != nil {
+		if renderErr := a.printSoloExecError(operation, target, 1, err); renderErr != nil {
+			return renderErr
+		}
+		return ExitError{Code: 1, Err: RenderedError{Err: err}}
+	}
+	stdout := &soloExecEventWriter{stream: stream, target: target, streamName: "stdout", exitCode: &exitCode, exitMarker: exitMarker}
+	stderr := &soloExecEventWriter{stream: stream, target: target, streamName: "stderr", exitCode: &exitCode, exitMarker: exitMarker}
+	err = solo.RunSSHInteractive(ctx, node, remoteExecWrapper(command, exitMarker), stdout, stderr)
+	if flushErr := stdout.Flush(); flushErr != nil && err == nil {
+		err = flushErr
+	}
+	if flushErr := stderr.Flush(); flushErr != nil && err == nil {
+		err = flushErr
+	}
+	if stdout.Err() != nil && err == nil {
+		err = stdout.Err()
+	}
+	if stderr.Err() != nil && err == nil {
+		err = stderr.Err()
+	}
+	if err != nil {
+		if renderErr := a.printSoloExecError(operation, target, 1, err); renderErr != nil {
+			return renderErr
+		}
+		return ExitError{Code: 1, Err: RenderedError{Err: err}}
+	}
+	if exitCode < 0 {
+		err := errors.New("exec did not report a remote exit code")
+		if renderErr := a.printSoloExecError(operation, target, 1, err); renderErr != nil {
+			return renderErr
+		}
+		return ExitError{Code: 1, Err: RenderedError{Err: err}}
+	}
+	if exitCode != 0 {
+		processCode := exitCode
+		if processCode < 1 || processCode > 255 {
+			processCode = 1
+		}
+		message := fmt.Sprintf("exec failed with exit code %d", exitCode)
+		if err := a.printSoloExecError(operation, target, exitCode, errors.New(message)); err != nil {
+			return err
+		}
+		return ExitError{Code: processCode, Err: RenderedError{Err: fmt.Errorf("exec failed with exit code %d", exitCode)}}
+	}
+	fields := soloExecFields(target)
+	fields["exit_code"] = exitCode
+	return stream.Result(fields)
+}
+
+func soloExecOperation(kind string) string {
+	if kind == "node" {
+		return "devopsellence node exec"
+	}
+	return "devopsellence exec"
+}
+
+func (a *App) printSoloExecEvent(stream output.Stream, event string, target soloExecTarget, fields map[string]any) error {
+	payload := soloExecFields(target)
+	for key, value := range fields {
+		payload[key] = value
+	}
+	return stream.Event(event, payload)
+}
+
+func (a *App) printSoloExecError(operation string, target soloExecTarget, exitCode int, err error) error {
+	return a.Printer.PrintErrorEvent(operation, output.ErrorPayload{
+		Code:     "command_failed",
+		Message:  err.Error(),
+		ExitCode: exitCode,
+		Fields:   output.Fields(soloExecFields(target)),
+	})
+}
+
+type soloExecEventWriter struct {
+	stream     output.Stream
+	target     soloExecTarget
+	streamName string
+	exitCode   *int
+	exitMarker string
+	buf        bytes.Buffer
+	dropping   bool
+	err        error
+	emptyLines int
+}
+
+func (w *soloExecEventWriter) Write(p []byte) (int, error) {
+	written := 0
+	for _, b := range p {
+		if b == '\n' {
+			if w.dropping {
+				w.dropping = false
+				written++
+				continue
+			}
+			if err := w.flushLine(false); err != nil {
+				w.err = err
+				return written, err
+			}
+			w.dropping = false
+			written++
+			continue
+		}
+		if w.dropping {
+			written++
+			continue
+		}
+		if w.buf.Len() >= soloExecMaxLineBytes {
+			if err := w.flushLine(true); err != nil {
+				w.err = err
+				return written, err
+			}
+			w.dropping = true
+			written++
+			continue
+		}
+		_ = w.buf.WriteByte(b)
+		written++
+	}
+	return len(p), nil
+}
+
+func (w *soloExecEventWriter) Flush() error {
+	if w.dropping {
+		w.buf.Reset()
+		w.dropping = false
+		return nil
+	}
+	if w.emptyLines > 0 {
+		if err := w.flushEmptyLines(w.emptyLines); err != nil {
+			w.err = err
+			return err
+		}
+		w.emptyLines = 0
+	}
+	if w.buf.Len() == 0 {
+		return nil
+	}
+	return w.flushLine(false)
+}
+
+func (w *soloExecEventWriter) Err() error {
+	return w.err
+}
+
+func (w *soloExecEventWriter) flushLine(truncated bool) error {
+	line := w.buf.String()
+	w.buf.Reset()
+	if w.streamName == "stderr" {
+		code, isExitMarker, err := parseSoloExecExitCodeLine(line, w.exitMarker)
+		if err != nil {
+			return err
+		}
+		if isExitMarker {
+			if w.emptyLines > 1 {
+				if err := w.flushEmptyLines(w.emptyLines - 1); err != nil {
+					return err
+				}
+			}
+			w.emptyLines = 0
+			*w.exitCode = code
+			return nil
+		}
+	}
+	if w.streamName == "stderr" && line == "" && !truncated {
+		w.emptyLines++
+		return nil
+	}
+	if w.emptyLines > 0 {
+		if err := w.flushEmptyLines(w.emptyLines); err != nil {
+			return err
+		}
+		w.emptyLines = 0
+	}
+	return w.emitLine(line, truncated)
+}
+
+func (w *soloExecEventWriter) flushEmptyLines(count int) error {
+	for i := 0; i < count; i++ {
+		if err := w.emitLine("", false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *soloExecEventWriter) emitLine(line string, truncated bool) error {
+	fields := map[string]any{
+		"stream":  w.streamName,
+		"message": line,
+	}
+	if truncated {
+		fields["truncated"] = true
+	}
+	payload := soloExecFields(w.target)
+	for key, value := range fields {
+		payload[key] = value
+	}
+	return w.stream.Event("output", payload)
+}
+
+func parseSoloExecExitCodeLine(line, marker string) (int, bool, error) {
+	normalized := strings.TrimSuffix(line, "\r")
+	if !strings.HasPrefix(normalized, marker) {
+		return 0, false, nil
+	}
+	rawCode := strings.TrimPrefix(normalized, marker)
+	if rawCode == "" {
+		return 0, false, nil
+	}
+	for _, ch := range rawCode {
+		if ch < '0' || ch > '9' {
+			return 0, false, nil
+		}
+	}
+	code, err := strconv.Atoi(rawCode)
+	if err != nil {
+		return 0, true, fmt.Errorf("parse remote exec exit code: %w", err)
+	}
+	return code, true, nil
+}
+
+func newSoloExecExitMarker() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("generate exec marker nonce: %w", err)
+	}
+	return soloExecExitMarkerPrefix + hex.EncodeToString(nonce[:]) + "__", nil
+}
+
+func soloExecFields(target soloExecTarget) map[string]any {
+	payload := map[string]any{
+		"target":  target.Kind,
+		"node":    target.Node,
+		"command": target.Command,
+	}
+	if target.Environment != "" {
+		payload["environment"] = target.Environment
+	}
+	if target.Service != "" {
+		payload["service"] = target.Service
+	}
+	if target.Container != "" {
+		payload["container"] = target.Container
+	}
+	return payload
+}
+
+func statusServiceContainer(status soloNodeStatus, environmentName, serviceName string) string {
+	for _, environment := range status.Environments {
+		if strings.TrimSpace(environment.Name) != environmentName {
+			continue
+		}
+		for _, service := range environment.Services {
+			if strings.TrimSpace(service.Name) != serviceName {
+				continue
+			}
+			container := strings.TrimSpace(service.Container)
+			if container == "" {
+				return ""
+			}
+			switch strings.TrimSpace(service.State) {
+			case "running", "starting", "unhealthy":
+				return container
+			default:
+				return ""
+			}
+		}
+	}
+	return ""
 }
 
 func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions) error {
@@ -4554,7 +4944,38 @@ for id in $ids; do
     rc=$logs_status
   fi
 done
-exit "$rc"`, env, service, service, env, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, service, env, lines)
+	exit "$rc"`, env, service, service, env, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, service, env, lines)
+}
+
+func remoteUserCommand(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", ExitError{Code: 2, Err: errors.New("missing command after --")}
+	}
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " "), nil
+}
+
+func remoteDockerExecCommand(container string, args []string) string {
+	command, err := remoteUserCommand(args)
+	if err != nil {
+		return fmt.Sprintf("echo %s >&2; exit %d", shellQuote(err.Error()), remoteCommandExitCode(err))
+	}
+	return fmt.Sprintf("if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd=\"sudo -n docker\"; else echo 'Docker is not reachable' >&2; exit 1; fi\nexec $docker_cmd exec %s %s", shellQuote(container), command)
+}
+
+func remoteCommandExitCode(err error) int {
+	var exitErr ExitError
+	if errors.As(err, &exitErr) && exitErr.Code != 0 {
+		return exitErr.Code
+	}
+	return 1
+}
+
+func remoteExecWrapper(command, exitMarker string) string {
+	return fmt.Sprintf("(%s); rc=$?; printf '\\n%s%%s\\n' \"$rc\" >&2; exit 0", command, exitMarker)
 }
 
 func withRemoteLineLimit(command string, limit int) string {

@@ -776,9 +776,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var nodeDiagnoseOpts NodeDiagnoseOptions
 	var soloNodeDiagnoseOpts SoloNodeDiagnoseOptions
 	var nodeLogsOpts SoloLogsOptions
+	var nodeExecOpts SoloNodeExecOptions
 	var nodeLabels string
 	var nodeAttachEnvironment string
 	var workloadLogsOpts SoloWorkloadLogsOptions
+	var workloadExecOpts SoloExecOptions
 	nodeCommand := &cobra.Command{
 		Use:   "node",
 		Short: "Manage nodes for the selected workspace mode",
@@ -972,7 +974,29 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	nodeLogsCommand.Flags().IntVar(&nodeLogsOpts.Lines, "lines", soloLogsDefaultLines, fmt.Sprintf("Number of recent log lines to return, 1-%d", soloLogsMaxLines))
-	nodeCommand.AddCommand(nodeRegisterCommand, nodeCreateCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand)
+	nodeExecCommand := &cobra.Command{
+		Use:   "exec <name> -- <command>",
+		Short: "Run a command on a solo node over SSH",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nodeExecOpts.Node = args[0]
+			if len(args) < 2 {
+				return ExitError{Code: 2, Err: errors.New("missing command after --")}
+			}
+			nodeExecOpts.Command = append([]string(nil), args[1:]...)
+			return runByMode(func(ctx context.Context) error {
+				return app.SoloNodeExec(ctx, nodeExecOpts)
+			}, func(ctx context.Context) error {
+				return ExitError{Code: 2, Err: UnsupportedOperationError{
+					Operation:      "node exec",
+					Mode:           string(ModeShared),
+					SupportedModes: []string{string(ModeSolo)},
+					Reason:         "shared node exec requires an exec tunnel",
+				}}
+			})(cmd, args)
+		},
+	}
+	nodeCommand.AddCommand(nodeRegisterCommand, nodeCreateCommand, nodeListCommand, nodeAttachCommand, nodeDetachCommand, nodeRemoveCommand, nodeLabelCommand, nodeDiagnoseCommand, nodeLogsCommand, nodeExecCommand)
 	root.AddCommand(nodeCommand)
 
 	logsCommand := &cobra.Command{
@@ -995,6 +1019,31 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	logsCommand.Flags().StringSliceVar(&workloadLogsOpts.Nodes, "node", nil, "Solo node name to read logs from (repeatable or comma-separated)")
 	logsCommand.Flags().IntVar(&workloadLogsOpts.Lines, "lines", soloLogsDefaultLines, fmt.Sprintf("Number of recent log lines to return, 1-%d", soloLogsMaxLines))
 	root.AddCommand(logsCommand)
+
+	execCommand := &cobra.Command{
+		Use:   "exec <service> -- <command>",
+		Short: "Run a command in a workload service container",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workloadExecOpts.ServiceName = args[0]
+			if len(args) < 2 {
+				return ExitError{Code: 2, Err: errors.New("missing command after --")}
+			}
+			workloadExecOpts.Command = append([]string(nil), args[1:]...)
+			return runByMode(func(ctx context.Context) error {
+				return app.SoloExec(ctx, workloadExecOpts)
+			}, func(ctx context.Context) error {
+				return ExitError{Code: 2, Err: UnsupportedOperationError{
+					Operation:      "exec",
+					Mode:           string(ModeShared),
+					SupportedModes: []string{string(ModeSolo)},
+					Reason:         "shared service exec requires an exec tunnel",
+				}}
+			})(cmd, args)
+		},
+	}
+	execCommand.Flags().StringSliceVar(&workloadExecOpts.Nodes, "node", nil, "Solo node name to run exec on (repeatable or comma-separated)")
+	root.AddCommand(execCommand)
 
 	var agentInstallOpts SoloAgentInstallOptions
 	var agentUninstallOpts SoloAgentUninstallOptions

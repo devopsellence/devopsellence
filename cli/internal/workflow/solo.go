@@ -4164,7 +4164,8 @@ func temporaryDNSHostname(cfg *config.ProjectConfig, ip string) string {
 	if len(labels) == 0 {
 		labels = append(labels, "app")
 	}
-	return strings.TrimSpace(ip) + "." + strings.Join(labels, "-") + ".sslip.io"
+	encodedIP := strings.ReplaceAll(strings.TrimSpace(ip), ".", "-")
+	return encodedIP + "." + strings.Join(labels, "-") + ".sslip.io"
 }
 
 func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string) string {

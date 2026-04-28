@@ -409,19 +409,24 @@ func (s *store) dropRemovedImages(removed map[string]struct{}, retainedKeys map[
 }
 
 func retainedReleaseKeys(releases []releaseRecord, current []releaseRecord, keepPerEnvironment int) map[string]struct{} {
-	if keepPerEnvironment < 1 {
-		keepPerEnvironment = 1
+	if keepPerEnvironment < 0 {
+		keepPerEnvironment = 0
 	}
 	retained := map[string]struct{}{}
+	currentEnvironments := map[string]struct{}{}
 	for _, release := range current {
 		retained[releaseKey(release.Environment, release.Revision)] = struct{}{}
+		currentEnvironments[strings.TrimSpace(release.Environment)] = struct{}{}
 	}
 	byEnvironment := map[string][]releaseRecord{}
 	for _, release := range releases {
 		environment := strings.TrimSpace(release.Environment)
 		byEnvironment[environment] = append(byEnvironment[environment], release)
 	}
-	for _, envReleases := range byEnvironment {
+	for environment, envReleases := range byEnvironment {
+		if _, ok := currentEnvironments[environment]; !ok {
+			continue
+		}
 		sort.SliceStable(envReleases, func(i, j int) bool {
 			return envReleases[i].LastSeenAt.After(envReleases[j].LastSeenAt)
 		})

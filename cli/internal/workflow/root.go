@@ -829,6 +829,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			"Create or register a node for the selected workspace mode.",
 			"Solo --host nodes must be reachable over SSH with the selected key. devopsellence stores SSH host keys in its own state directory and uses StrictHostKeyChecking=accept-new, so first contact does not write to ~/.ssh/known_hosts.",
 			"The solo agent install can install Docker on supported Ubuntu VMs when Docker is missing; otherwise install Docker yourself or make the SSH user able to run docker via passwordless sudo.",
+			"If SSH validation fails as root, retry with the image default user such as ubuntu, debian, or ec2-user, and verify passwordless sudo with `ssh <user>@<host> sudo -n true` before installing the agent.",
 		}, "\n"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

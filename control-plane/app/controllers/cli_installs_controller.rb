@@ -153,6 +153,14 @@ class CliInstallsController < ActionController::Base
         fi
       }
 
+      json_string() {
+        local value="$1"
+        value="${value//\\\\/\\\\\\\\}"
+        value="${value//\\"/\\\\\\"}"
+        value="${value//$'\\n'/\\\\n}"
+        printf '"%s"' "$value"
+      }
+
       echo "downloading devopsellence CLI..."
       curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BIN"
       curl -fsSL "$CHECKSUM_URL" -o "$TMP_SUMS"
@@ -211,6 +219,9 @@ class CliInstallsController < ActionController::Base
           if command -v npx >/dev/null 2>&1; then
             echo "installing devopsellence agent skill..."
             npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes
+            printf '{"schema_version":1,"event":"result","operation":"devopsellence install","cli_installed":true,"cli_path":'
+            json_string "$INSTALL_DIR/$TARGET_NAME"
+            printf ',"agent_skill_requested":true,"agent_skill_installed":true,"agent_skill":"devopsellence"}\\n'
           else
             echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
             echo "Install the skill later with:" >&2

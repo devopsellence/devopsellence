@@ -357,6 +357,8 @@ func fingerprintTask(task *report.TaskStatus) string {
 	return builder.String()
 }
 
+const dockerLogBytesFingerprintBucket = 10 * 1024 * 1024
+
 func fingerprintDiskCare(status *report.DiskCareStatus) string {
 	if status == nil {
 		return ""
@@ -371,6 +373,12 @@ func fingerprintDiskCare(status *report.DiskCareStatus) string {
 	builder.WriteString(fmt.Sprintf("%d", status.LogMaxFile))
 	builder.WriteByte(0)
 	builder.WriteString(fmt.Sprintf("%d", status.ReclaimedBytes))
+	builder.WriteByte(0)
+	if !status.LastCleanupAt.IsZero() {
+		builder.WriteString(status.LastCleanupAt.UTC().Truncate(time.Hour).Format(time.RFC3339))
+	}
+	builder.WriteByte(0)
+	builder.WriteString(fmt.Sprintf("%d", status.DockerLogBytes/dockerLogBytesFingerprintBucket))
 	builder.WriteByte(0)
 	builder.WriteString(status.LastError)
 	builder.WriteByte(0)

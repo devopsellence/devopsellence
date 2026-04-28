@@ -54,6 +54,14 @@ func (f *fakeEngine) EnsureNetwork(ctx context.Context, name string) error {
 	return nil
 }
 
+func (f *fakeEngine) ConnectNetwork(ctx context.Context, networkName string, containerName string) error {
+	return nil
+}
+
+func (f *fakeEngine) DisconnectNetwork(ctx context.Context, networkName string, containerName string) error {
+	return nil
+}
+
 func (f *fakeEngine) Logs(ctx context.Context, name string, tail int) ([]byte, error) {
 	return f.logs[name], nil
 }

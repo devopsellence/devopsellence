@@ -23,6 +23,7 @@ type fakeEngine struct {
 	pulled       []string
 	inspectCalls int
 	networkIP    map[string]string
+	networks     []string
 	ops          []string
 	waitExitCode int64
 	logsOutput   []byte
@@ -101,11 +102,14 @@ func (f *fakeEngine) PullImage(_ context.Context, image string, _ *engine.Regist
 
 func (f *fakeEngine) Inspect(_ context.Context, name string) (engine.ContainerInfo, error) {
 	f.inspectCalls++
+	c := f.containers[name]
 	networkIP := f.networkIP
 	if networkIP == nil {
 		networkIP = map[string]string{"devopsellence": "172.18.0.2"}
+		if environmentNetwork, err := desiredstate.EnvironmentNetworkName("devopsellence", c.Environment); err == nil {
+			networkIP[environmentNetwork] = "172.19.0.2"
+		}
 	}
-	c := f.containers[name]
 	return engine.ContainerInfo{
 		Name:      c.Name,
 		Running:   c.Running,
@@ -113,7 +117,16 @@ func (f *fakeEngine) Inspect(_ context.Context, name string) (engine.ContainerIn
 	}, nil
 }
 
-func (f *fakeEngine) EnsureNetwork(context.Context, string) error {
+func (f *fakeEngine) EnsureNetwork(_ context.Context, name string) error {
+	f.networks = append(f.networks, name)
+	return nil
+}
+
+func (f *fakeEngine) ConnectNetwork(context.Context, string, string) error {
+	return nil
+}
+
+func (f *fakeEngine) DisconnectNetwork(context.Context, string, string) error {
 	return nil
 }
 
@@ -132,10 +145,12 @@ type fakeEnvoyManager struct {
 	waitPath           string
 	waitErr            error
 	ingress            *desiredstatepb.Ingress
+	workloadNetworks   []string
 }
 
-func (f *fakeEnvoyManager) Ensure(_ context.Context, ingress *desiredstatepb.Ingress) error {
+func (f *fakeEnvoyManager) Ensure(_ context.Context, ingress *desiredstatepb.Ingress, workloadNetworks ...string) error {
 	f.ingress = ingress
+	f.workloadNetworks = append([]string(nil), workloadNetworks...)
 	return nil
 }
 
@@ -257,11 +272,16 @@ func TestReconcileKeepsSameServiceNameInDifferentEnvironmentsSeparate(t *testing
 		t.Fatalf("expected created=2 got %d", result.Created)
 	}
 	seen := map[string]bool{}
+	networks := map[string]bool{}
 	for _, spec := range eng.created {
 		seen[spec.Labels[engine.LabelEnvironment]+"/"+spec.Labels[engine.LabelService]] = true
+		networks[spec.Network] = true
 	}
 	if !seen["blog-prod/worker"] || !seen["docs-prod/worker"] {
 		t.Fatalf("unexpected services: %#v", seen)
+	}
+	if !networks["devopsellence-env-blog-prod"] || !networks["devopsellence-env-docs-prod"] || networks["devopsellence"] {
+		t.Fatalf("unexpected container networks: %#v", networks)
 	}
 }
 
@@ -288,6 +308,9 @@ func TestReconcileWebUsesDesiredPortWhenPresent(t *testing.T) {
 	}
 	if envoyManager.waitPath != "/up" {
 		t.Fatalf("expected envoy wait path /up, got %q", envoyManager.waitPath)
+	}
+	if !reflect.DeepEqual(envoyManager.workloadNetworks, []string{"devopsellence-env-production"}) {
+		t.Fatalf("unexpected envoy workload networks: %#v", envoyManager.workloadNetworks)
 	}
 }
 
@@ -386,7 +409,7 @@ func TestRunTaskTruncatesLogOutput(t *testing.T) {
 	eng.logsOutput = []byte(strings.Repeat("x", 700))
 
 	rec := New(eng, Options{Network: "devopsellence"})
-	_, err := rec.RunTask(context.Background(), "rev-1", &desiredstatepb.Task{
+	_, err := rec.RunTask(context.Background(), desiredstate.DefaultEnvironmentName, "rev-1", &desiredstatepb.Task{
 		Name:  "init",
 		Image: "busybox",
 	})
@@ -596,7 +619,7 @@ func TestReconcileWebUnhealthyDoesNotUpdateEDS(t *testing.T) {
 func TestReconcileWebUpdateCutsOverBeforeRemovingOldContainer(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["httpbin"] = true
-	eng.networkIP = map[string]string{"devopsellence": "172.18.0.20"}
+	eng.networkIP = map[string]string{"devopsellence": "172.18.0.20", "devopsellence-env-production": "172.19.0.20"}
 
 	old := webService(80, "/up")
 	old.Env = map[string]string{"VERSION": "old"}

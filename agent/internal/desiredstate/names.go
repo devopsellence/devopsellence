@@ -1,6 +1,8 @@
 package desiredstate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
@@ -50,6 +52,39 @@ func ServiceContainerName(environmentName, serviceName, revision, hash string) (
 		return "", fmt.Errorf("container name too long")
 	}
 	return name, nil
+}
+
+func EnvironmentNetworkPrefix(baseNetworkName string) string {
+	base := sanitize(baseNetworkName)
+	if base == "" {
+		base = "devopsellence"
+	}
+	return base + "-env-"
+}
+
+func EnvironmentNetworkName(baseNetworkName, environmentName string) (string, error) {
+	env := sanitize(environmentName)
+	if env == "" {
+		return "", fmt.Errorf("environment name sanitizes to empty")
+	}
+	name := EnvironmentNetworkPrefix(baseNetworkName) + env
+	if len(name) <= 255 {
+		return name, nil
+	}
+	sum := sha256.Sum256([]byte(environmentName))
+	suffix := hex.EncodeToString(sum[:4])
+	maxEnvLen := 255 - len(EnvironmentNetworkPrefix(baseNetworkName)) - len(suffix) - 1
+	if maxEnvLen <= 0 {
+		return "", fmt.Errorf("environment network name too long")
+	}
+	if len(env) > maxEnvLen {
+		env = env[:maxEnvLen]
+		env = strings.Trim(env, "-.")
+	}
+	if env == "" {
+		return "", fmt.Errorf("environment name sanitizes to empty")
+	}
+	return EnvironmentNetworkPrefix(baseNetworkName) + env + "-" + suffix, nil
 }
 
 func sanitize(input string) string {

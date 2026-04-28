@@ -102,34 +102,20 @@ case ":$PATH:" in
     ;;
 esac
 
-install_agent_skill_from_checkout() {
-  local skills_dir skill_dest source_dir
+install_agent_skill() {
+  local skill_args=()
 
-  skills_dir="$AGENT_SKILLS_DIR"
-  if [[ -z "$skills_dir" ]]; then
-    skills_dir="$HOME/.agents/skills"
-  fi
-  skill_dest="$skills_dir/devopsellence"
-  source_dir="$ROOT_DIR/skills/devopsellence"
-
-  if [[ ! -f "$source_dir/SKILL.md" ]]; then
-    echo "devopsellence CLI installed, but agent skill install failed: missing $source_dir/SKILL.md" >&2
-    exit 1
+  if [[ -n "$AGENT_SKILLS_DIR" ]]; then
+    skill_args+=(--dir "$AGENT_SKILLS_DIR")
   fi
 
   echo "installing devopsellence agent skill..."
-  mkdir -p "$skills_dir"
-  rm -rf "$skill_dest"
-  cp -R "$source_dir" "$skill_dest"
-  echo "devopsellence agent skill installed"
-  echo "  version: local-head ($COMMIT)"
-  echo "  source: $source_dir"
-  echo "  path: $skill_dest"
+  "$INSTALL_DIR/$TARGET_NAME" skill install "${skill_args[@]}"
 }
 
 case "$INSTALL_AGENT_SKILL" in
   1|true|TRUE|yes|YES)
-    install_agent_skill_from_checkout
+    install_agent_skill
     ;;
   *)
     echo "agent skill available; rerun installer with DEVOPSELLENCE_INSTALL_AGENT_SKILL=1"

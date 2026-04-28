@@ -40,6 +40,31 @@ func TestRootVersionCommand(t *testing.T) {
 	}
 }
 
+func TestRootSkillInstallWritesBundledSkill(t *testing.T) {
+	var stdout bytes.Buffer
+	skillsDir := t.TempDir()
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install", "--dir", skillsDir})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["skill"] != "devopsellence" || payload["source"] != "embedded" {
+		t.Fatalf("payload = %#v, want embedded devopsellence skill", payload)
+	}
+	path := filepath.Join(skillsDir, "devopsellence", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if !strings.Contains(string(data), "# devopsellence") {
+		t.Fatalf("SKILL.md = %q, want devopsellence skill", string(data))
+	}
+}
+
 func TestRootModeFlagIsNotGlobal(t *testing.T) {
 	t.Parallel()
 

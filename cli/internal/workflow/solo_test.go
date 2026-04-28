@@ -1045,7 +1045,7 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 
 func TestTemporaryDNSCommandPreservesConfiguredTLSMode(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
-	cfg.Ingress = &config.IngressConfig{TLS: config.IngressTLSConfig{Mode: "off"}}
+	cfg.Ingress = &config.IngressConfig{TLS: config.IngressTLSConfig{Mode: " OFF "}}
 
 	got := temporaryDNSCommand(&cfg, "demo-production.8.8.8.8.sslip.io")
 	want := "devopsellence ingress set --host 'demo-production.8.8.8.8.sslip.io' --tls-mode 'off'"

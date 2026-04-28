@@ -4170,7 +4170,7 @@ func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string) string {
 
 func temporaryDNSTLSMode(cfg *config.ProjectConfig) string {
 	if cfg != nil && cfg.Ingress != nil {
-		mode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
+		mode := strings.ToLower(strings.TrimSpace(cfg.Ingress.TLS.Mode))
 		switch mode {
 		case "auto", "manual", "off":
 			return mode

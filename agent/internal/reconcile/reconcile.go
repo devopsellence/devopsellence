@@ -45,16 +45,17 @@ type HTTPProber interface {
 }
 
 type Options struct {
-	Network       string
-	StopTimeout   time.Duration
-	DrainDelay    time.Duration
-	WebPort       uint16
-	LogConfig     *engine.LogConfig
-	Envoy         EnvoyManager
-	ImagePullAuth ImagePullAuthProvider
-	IngressCert   IngressCertManager
-	HTTPProber    HTTPProber
-	Logger        *slog.Logger
+	Network                    string
+	StopTimeout                time.Duration
+	DrainDelay                 time.Duration
+	WebPort                    uint16
+	LogConfig                  *engine.LogConfig
+	PersistentSystemContainers []string
+	Envoy                      EnvoyManager
+	ImagePullAuth              ImagePullAuthProvider
+	IngressCert                IngressCertManager
+	HTTPProber                 HTTPProber
+	Logger                     *slog.Logger
 }
 
 type Reconciler struct {
@@ -120,7 +121,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		if _, ok := desiredByService[containerServiceKey(c)]; ok {
 			continue
 		}
-		if c.Name == "" || isPersistentSystemContainer(c) {
+		if c.Name == "" || isPersistentSystemContainer(c, r.opts.PersistentSystemContainers) {
 			continue
 		}
 		if err := r.stopAndRemove(ctx, c); err != nil {
@@ -420,8 +421,20 @@ func containerServiceKey(c engine.ContainerState) string {
 	return runtimeServiceKey(c.Environment, c.Service)
 }
 
-func isPersistentSystemContainer(c engine.ContainerState) bool {
-	return strings.TrimSpace(c.System) == "envoy"
+func isPersistentSystemContainer(c engine.ContainerState, protectedNames []string) bool {
+	if strings.TrimSpace(c.System) != "envoy" {
+		return false
+	}
+	name := strings.TrimSpace(c.Name)
+	if len(protectedNames) == 0 {
+		return name == "devopsellence-envoy"
+	}
+	for _, protected := range protectedNames {
+		if name == strings.TrimSpace(protected) {
+			return true
+		}
+	}
+	return false
 }
 
 // tearDownFailedContainer stops a container that failed to become healthy,

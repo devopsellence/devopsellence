@@ -1005,6 +1005,75 @@ func TestIngressCheckDoesNotWaitForMissingConcreteHostnames(t *testing.T) {
 	}
 }
 
+func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "My App", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "auto"},
+	}
+
+	report, err := ingressDNSReport(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OK {
+		t.Fatalf("OK = true, want hostname configuration guidance")
+	}
+	if len(report.Hints) != 1 {
+		t.Fatalf("hints = %#v, want one sslip.io hint", report.Hints)
+	}
+	hint := report.Hints[0]
+	if hint.Code != "solo_ingress_no_hostname" || hint.Severity != "suggestion" {
+		t.Fatalf("hint = %#v, want no-hostname suggestion", hint)
+	}
+	if hint.SuggestedAction.Kind != "use_temporary_dns_hostname" || hint.SuggestedAction.Provider != "sslip.io" {
+		t.Fatalf("suggested_action = %#v, want sslip.io temporary hostname", hint.SuggestedAction)
+	}
+	if got, want := hint.SuggestedAction.Hostname, "my-app-production.203.0.113.10.sslip.io"; got != want {
+		t.Fatalf("suggested hostname = %q, want %q", got, want)
+	}
+	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host my-app-production.203.0.113.10.sslip.io --tls-mode auto") {
+		t.Fatalf("command = %q, want ingress set command", hint.SuggestedAction.Command)
+	}
+	if len(hint.SuggestedAction.Risks) == 0 {
+		t.Fatalf("risks = %#v, want explicit caveats", hint.SuggestedAction.Risks)
+	}
+}
+
+func TestCheckIngressBeforeDeployIncludesSSLIPHintFields(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "auto"},
+	}
+
+	err := (&App{}).checkIngressBeforeDeploy(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+	}, false)
+	if err == nil {
+		t.Fatal("checkIngressBeforeDeploy() error = nil, want missing hostname failure")
+	}
+	var structured StructuredError
+	if !errors.As(err, &structured) {
+		t.Fatalf("error = %#v, want structured error", err)
+	}
+	fields := structured.ErrorFields()
+	if fields["kind"] != "ingress_dns_not_ready" {
+		t.Fatalf("kind = %v, want ingress_dns_not_ready", fields["kind"])
+	}
+	hints, ok := fields["hints"].([]ingressHint)
+	if !ok || len(hints) != 1 {
+		t.Fatalf("hints = %#v, want one ingress hint", fields["hints"])
+	}
+	if got, want := hints[0].SuggestedAction.Hostname, "demo-production.203.0.113.10.sslip.io"; got != want {
+		t.Fatalf("suggested hostname = %q, want %q", got, want)
+	}
+}
+
 func TestIngressDNSReportBootstrapWildcardHostPromptsForRealHostnames(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{

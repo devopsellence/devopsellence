@@ -3968,6 +3968,7 @@ type ingressDNSReportResult struct {
 	PublicURLs    []string               `json:"public_urls,omitempty"`
 	ExpectedIPs   []string               `json:"expected_ips"`
 	Hosts         []ingressDNSHostResult `json:"hosts"`
+	Hints         []ingressHint          `json:"hints,omitempty"`
 	NextSteps     []string               `json:"next_steps,omitempty"`
 }
 
@@ -3977,6 +3978,48 @@ type ingressDNSHostResult struct {
 	Resolved []string `json:"resolved,omitempty"`
 	Missing  []string `json:"missing,omitempty"`
 	Error    string   `json:"error,omitempty"`
+}
+
+type ingressHint struct {
+	Code            string            `json:"code"`
+	Severity        string            `json:"severity"`
+	Message         string            `json:"message"`
+	SuggestedAction ingressHintAction `json:"suggested_action"`
+}
+
+type ingressHintAction struct {
+	Kind     string   `json:"kind"`
+	Provider string   `json:"provider"`
+	Hostname string   `json:"hostname"`
+	Command  string   `json:"command"`
+	Risks    []string `json:"risks"`
+}
+
+type ingressDNSReadinessError struct {
+	report  ingressDNSReportResult
+	message string
+}
+
+func (e ingressDNSReadinessError) Error() string {
+	return e.message
+}
+
+func (e ingressDNSReadinessError) ErrorFields() map[string]any {
+	fields := map[string]any{
+		"kind":         "ingress_dns_not_ready",
+		"ok":           e.report.OK,
+		"expected_ips": e.report.ExpectedIPs,
+	}
+	if len(e.report.Hosts) > 0 {
+		fields["hosts"] = e.report.Hosts
+	}
+	if len(e.report.Hints) > 0 {
+		fields["hints"] = e.report.Hints
+	}
+	if len(e.report.NextSteps) > 0 {
+		fields["next_steps"] = e.report.NextSteps
+	}
+	return fields
 }
 
 const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
@@ -3994,10 +4037,12 @@ func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectC
 	}
 	reportErr := ingressDNSReportError(report)
 	if len(report.Hosts) == 0 {
-		return fmt.Errorf("%w; configure ingress hostnames or pass --skip-dns-check", reportErr)
+		message := fmt.Sprintf("%s; configure ingress hostnames or pass --skip-dns-check", reportErr)
+		return ingressDNSReadinessError{report: report, message: message}
 	}
 
-	return fmt.Errorf("%w; update DNS or pass --skip-dns-check", reportErr)
+	message := fmt.Sprintf("%s; update DNS or pass --skip-dns-check", reportErr)
+	return ingressDNSReadinessError{report: report, message: message}
 }
 
 func ingressDNSReportRetryable(report ingressDNSReportResult) bool {
@@ -4026,6 +4071,7 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 	}
 	if len(hosts) == 0 {
 		report.OK = false
+		report.Hints = temporaryDNSHints(cfg, expected)
 		report.NextSteps = []string{"devopsellence status", "devopsellence ingress set --host <hostname> --service <service>", "devopsellence ingress check --wait 5m"}
 		return report, nil
 	}
@@ -4073,6 +4119,57 @@ func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Node) []st
 	}
 	sort.Strings(ips)
 	return ips
+}
+
+func temporaryDNSHints(cfg *config.ProjectConfig, expectedIPs []string) []ingressHint {
+	hints := []ingressHint{}
+	for _, ip := range expectedIPs {
+		if !isTemporaryDNSIPv4(ip) {
+			continue
+		}
+		hostname := temporaryDNSHostname(cfg, ip)
+		hints = append(hints, ingressHint{
+			Code:     "solo_ingress_no_hostname",
+			Severity: "suggestion",
+			Message:  "No concrete ingress hostname is configured. For day-0 HTTPS, an operator agent can use a temporary sslip.io hostname that points at this node IP.",
+			SuggestedAction: ingressHintAction{
+				Kind:     "use_temporary_dns_hostname",
+				Provider: "sslip.io",
+				Hostname: hostname,
+				Command:  "devopsellence ingress set --host " + hostname + " --tls-mode auto",
+				Risks: []string{
+					"third_party_dns_dependency",
+					"breaks_if_public_ip_changes",
+					"not_recommended_as_long_term_production_domain",
+				},
+			},
+		})
+	}
+	return hints
+}
+
+func temporaryDNSHostname(cfg *config.ProjectConfig, ip string) string {
+	labels := []string{}
+	if cfg != nil {
+		if project := discovery.Slugify(cfg.Project); project != "" {
+			labels = append(labels, project)
+		}
+		if environment := discovery.Slugify(soloEnvironmentName(cfg, "")); environment != "" {
+			labels = append(labels, environment)
+		}
+	}
+	if len(labels) == 0 {
+		labels = append(labels, "app")
+	}
+	return strings.Join(labels, "-") + "." + strings.TrimSpace(ip) + ".sslip.io"
+}
+
+func isTemporaryDNSIPv4(value string) bool {
+	ip := net.ParseIP(strings.TrimSpace(value))
+	if ip == nil || ip.To4() == nil {
+		return false
+	}
+	return !ip.IsUnspecified() && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast()
 }
 
 func normalizeIngressHosts(values []string) []string {

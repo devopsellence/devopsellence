@@ -4131,12 +4131,12 @@ func temporaryDNSHints(cfg *config.ProjectConfig, expectedIPs []string) []ingres
 		hints = append(hints, ingressHint{
 			Code:     "solo_ingress_no_hostname",
 			Severity: "suggestion",
-			Message:  "No concrete ingress hostname is configured. For day-0 HTTPS, an operator agent can use a temporary sslip.io hostname that points at this node IP.",
+			Message:  "No concrete ingress hostname is configured. For day-0 ingress, an operator agent can use a temporary sslip.io hostname that points at this node IP.",
 			SuggestedAction: ingressHintAction{
 				Kind:     "use_temporary_dns_hostname",
 				Provider: "sslip.io",
 				Hostname: hostname,
-				Command:  "devopsellence ingress set --host " + hostname + " --tls-mode auto",
+				Command:  temporaryDNSCommand(cfg, hostname),
 				Risks: []string{
 					"third_party_dns_dependency",
 					"breaks_if_public_ip_changes",
@@ -4162,6 +4162,21 @@ func temporaryDNSHostname(cfg *config.ProjectConfig, ip string) string {
 		labels = append(labels, "app")
 	}
 	return strings.Join(labels, "-") + "." + strings.TrimSpace(ip) + ".sslip.io"
+}
+
+func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string) string {
+	return "devopsellence ingress set --host " + hostname + " --tls-mode " + temporaryDNSTLSMode(cfg)
+}
+
+func temporaryDNSTLSMode(cfg *config.ProjectConfig) string {
+	if cfg != nil && cfg.Ingress != nil {
+		mode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
+		switch mode {
+		case "auto", "manual", "off":
+			return mode
+		}
+	}
+	return "auto"
 }
 
 func isTemporaryDNSIPv4(value string) bool {

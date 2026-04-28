@@ -1043,6 +1043,17 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	}
 }
 
+func TestTemporaryDNSCommandPreservesConfiguredTLSMode(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{TLS: config.IngressTLSConfig{Mode: "off"}}
+
+	got := temporaryDNSCommand(&cfg, "demo-production.8.8.8.8.sslip.io")
+	want := "devopsellence ingress set --host demo-production.8.8.8.8.sslip.io --tls-mode off"
+	if got != want {
+		t.Fatalf("temporaryDNSCommand() = %q, want %q", got, want)
+	}
+}
+
 func TestTemporaryDNSIPv4AcceptsOnlyPubliclyRoutableAddresses(t *testing.T) {
 	tests := map[string]bool{
 		"8.8.8.8":         true,

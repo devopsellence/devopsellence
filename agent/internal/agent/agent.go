@@ -326,7 +326,10 @@ func (f *reportFingerprint) suppresses(other *reportFingerprint) bool {
 		return false
 	}
 	if f.phase == report.PhaseSettled {
-		return true
+		if f.diskCareHash == "" && other.diskCareHash == "" {
+			return true
+		}
+		return f.diskCareHash == other.diskCareHash
 	}
 	return f.revision == other.revision &&
 		f.message == other.message &&
@@ -368,8 +371,6 @@ func fingerprintDiskCare(status *report.DiskCareStatus) string {
 	builder.WriteString(fmt.Sprintf("%d", status.LogMaxFile))
 	builder.WriteByte(0)
 	builder.WriteString(fmt.Sprintf("%d", status.ReclaimedBytes))
-	builder.WriteByte(0)
-	builder.WriteString(fmt.Sprintf("%d", status.DockerLogBytes))
 	builder.WriteByte(0)
 	builder.WriteString(status.LastError)
 	builder.WriteByte(0)

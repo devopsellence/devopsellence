@@ -2,6 +2,10 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -57,6 +61,45 @@ type ContainerSpec struct {
 type LogConfig struct {
 	Driver  string
 	Options map[string]string
+}
+
+// LogConfigHash returns a stable hash fragment for cfg.
+func LogConfigHash(cfg *LogConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(strings.TrimSpace(cfg.Driver))
+	builder.WriteByte(0)
+	keys := make([]string, 0, len(cfg.Options))
+	for key := range cfg.Options {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		builder.WriteString(strings.TrimSpace(key))
+		builder.WriteByte(0)
+		builder.WriteString(strings.TrimSpace(cfg.Options[key]))
+		builder.WriteByte(0)
+	}
+	sum := sha256.Sum256([]byte(builder.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// LogConfigMatches reports whether an inspected Docker log config matches cfg.
+func LogConfigMatches(driver string, options map[string]string, cfg *LogConfig) bool {
+	if cfg == nil {
+		return true
+	}
+	if strings.TrimSpace(driver) != strings.TrimSpace(cfg.Driver) {
+		return false
+	}
+	for key, value := range cfg.Options {
+		if strings.TrimSpace(options[key]) != strings.TrimSpace(value) {
+			return false
+		}
+	}
+	return true
 }
 
 // CloneLogConfig returns a deep copy of cfg.

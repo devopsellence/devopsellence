@@ -710,6 +710,51 @@ func TestReconcileAppliesLogConfigToRuntimeContainers(t *testing.T) {
 	}
 }
 
+func TestReconcileRecreatesRuntimeContainerWhenLogConfigChanges(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	service := workerService("worker", nil)
+	oldHash, err := desiredstate.HashService(service)
+	if err != nil {
+		t.Fatalf("hash service: %v", err)
+	}
+	oldName, err := desiredstate.ServiceContainerName("production", "worker", "rev-1", oldHash)
+	if err != nil {
+		t.Fatalf("container name: %v", err)
+	}
+	eng.containers[oldName] = engine.ContainerState{
+		Name:        oldName,
+		Image:       "busybox",
+		Running:     true,
+		Managed:     true,
+		Hash:        oldHash,
+		Environment: "production",
+		Service:     "worker",
+		ServiceKind: "worker",
+	}
+
+	rec := New(eng, Options{
+		Network: "devopsellence",
+		LogConfig: &engine.LogConfig{Driver: "json-file", Options: map[string]string{
+			"max-size": "10m",
+			"max-file": "5",
+		}},
+	})
+	result, err := rec.Reconcile(context.Background(), desiredState(service))
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Updated != 1 || result.Removed != 1 {
+		t.Fatalf("result = %#v, want updated=1 removed=1", result)
+	}
+	if !containsString(eng.removed, oldName) {
+		t.Fatalf("expected old container removed; removed=%#v", eng.removed)
+	}
+	if len(eng.created) != 1 || eng.created[0].Name == oldName {
+		t.Fatalf("expected replacement container with log-config hash, created=%#v", eng.created)
+	}
+}
+
 func TestReconcileDoesNotRemoveManagedSystemContainers(t *testing.T) {
 	eng := newFakeEngine()
 	eng.containers["devopsellence-envoy"] = engine.ContainerState{

@@ -682,12 +682,6 @@ func containerInspectSummary(info engine.ContainerInfo) string {
 	if finishedAt := strings.TrimSpace(info.FinishedAt); finishedAt != "" {
 		parts = append(parts, "finished_at="+finishedAt)
 	}
-	if len(info.Entrypoint) > 0 {
-		parts = append(parts, "entrypoint="+strings.Join(info.Entrypoint, " "))
-	}
-	if len(info.Command) > 0 {
-		parts = append(parts, "cmd="+strings.Join(info.Command, " "))
-	}
 	if len(parts) == 0 {
 		if info.Running {
 			return "running=true"

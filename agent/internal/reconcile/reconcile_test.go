@@ -481,8 +481,6 @@ func TestWaitHealthyIncludesContainerInspectDetailsWhenContainerExited(t *testin
 			ExitCode:    127,
 			StateError:  "exec: missing command",
 			FinishedAt:  "2026-04-28T20:25:07Z",
-			Entrypoint:  []string{"/bin/sh"},
-			Command:     []string{"-c", "missing"},
 			NetworkIP:   map[string]string{"devopsellence-env-production": "172.19.0.2"},
 		},
 	}
@@ -497,9 +495,14 @@ func TestWaitHealthyIncludesContainerInspectDetailsWhenContainerExited(t *testin
 		t.Fatal("expected waitHealthy error")
 	}
 	msg := err.Error()
-	for _, want := range []string{"container web not running", "status=exited", "exit_code=127", "error=exec: missing command", "finished_at=2026-04-28T20:25:07Z", "entrypoint=/bin/sh", "cmd=-c missing"} {
+	for _, want := range []string{"container web not running", "status=exited", "exit_code=127", "error=exec: missing command", "finished_at=2026-04-28T20:25:07Z"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error = %q, want %q", msg, want)
+		}
+	}
+	for _, leaked := range []string{"entrypoint=", "cmd="} {
+		if strings.Contains(msg, leaked) {
+			t.Fatalf("error = %q, did not expect argv field %q", msg, leaked)
 		}
 	}
 }
@@ -513,7 +516,6 @@ func TestTearDownFailedContainerLogsInspectDetailsWhenLogsAreEmpty(t *testing.T)
 			Running:     false,
 			StateStatus: "exited",
 			ExitCode:    1,
-			Command:     []string{"python", "server.py"},
 			NetworkIP:   map[string]string{},
 		},
 	}
@@ -526,10 +528,13 @@ func TestTearDownFailedContainerLogsInspectDetailsWhenLogsAreEmpty(t *testing.T)
 	rec.tearDownFailedContainer("web")
 
 	output := logs.String()
-	for _, want := range []string{"no log output", "status=exited", "exit_code=1", "cmd=python server.py"} {
+	for _, want := range []string{"no log output", "status=exited", "exit_code=1"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("log output = %q, want %q", output, want)
 		}
+	}
+	if strings.Contains(output, "cmd=") || strings.Contains(output, "entrypoint=") {
+		t.Fatalf("log output = %q, did not expect argv fields", output)
 	}
 }
 

@@ -21,17 +21,17 @@ func (structuredTestError) ErrorFields() map[string]any {
 }
 
 func TestWriteErrorIncludesStructuredFields(t *testing.T) {
-	originalStderr := os.Stderr
+	originalStdout := os.Stdout
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		os.Stderr = originalStderr
+		os.Stdout = originalStdout
 		_ = reader.Close()
 		_ = writer.Close()
 	})
-	os.Stderr = writer
+	os.Stdout = writer
 
 	writeError("devopsellence deploy", 1, structuredTestError{})
 	if err := writer.Close(); err != nil {

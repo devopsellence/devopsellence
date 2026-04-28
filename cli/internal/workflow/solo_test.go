@@ -585,16 +585,23 @@ func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := decodeJSONOutput(t, &stdout)
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["event"] != "result" || payload["ok"] != true {
+		t.Fatalf("result event = %#v, want successful result", payload)
+	}
 	if payload["provider"] != providerHetzner || payload["provider_server_id"] != "srv-1" || payload["provider_region"] != "ash" || payload["provider_size"] != "cpx11" || payload["provider_image"] != providers.DefaultHetznerImage {
 		t.Fatalf("payload = %#v, want provider metadata", payload)
 	}
 	if fakeProvider.createInput.Image != providers.DefaultHetznerImage {
 		t.Fatalf("CreateServer image = %q, want normalized default image", fakeProvider.createInput.Image)
 	}
-	progress := stderr.String()
+	progress := stdout.String()
 	if !strings.Contains(progress, "Creating hetzner server") || !strings.Contains(progress, "Server srv-1 ready at 203.0.113.20") {
 		t.Fatalf("progress = %q, want provider create/ready events", progress)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want no command-contract output", stderr.String())
 	}
 }
 
@@ -1809,7 +1816,11 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	if got := readFakeSSHStatusCount(t, statusCountPath); got != 3 {
 		t.Fatalf("status poll count = %d, want 3", got)
 	}
-	payload := decodeJSONOutput(t, &stdout)
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["event"] != "result" || payload["ok"] != true {
+		t.Fatalf("result event = %#v, want successful result", payload)
+	}
 	if payload["environment"] != "production" || payload["workload_revision"] == "" || payload["phase"] != "settled" {
 		t.Fatalf("payload = %#v, want settled deploy JSON", payload)
 	}

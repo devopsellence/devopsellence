@@ -21,11 +21,11 @@ func TestNewSoloInstallReporterCapturesInstallNoiseAndEmitsStructuredProgress(t 
 	}
 	reporter.Close()
 
-	if got := out.String(); got != "" {
-		t.Fatalf("reporter stdout = %q, want no final output", got)
+	if got := out.String(); !bytes.Contains([]byte(got), []byte(`"event":"progress"`)) || !bytes.Contains([]byte(got), []byte(`"node":"prod-2"`)) {
+		t.Fatalf("progress stdout = %q, want structured progress event", got)
 	}
-	if got := errOut.String(); !bytes.Contains([]byte(got), []byte(`"event":"progress"`)) || !bytes.Contains([]byte(got), []byte(`"node":"prod-2"`)) {
-		t.Fatalf("progress stderr = %q, want structured progress event", got)
+	if got := errOut.String(); got != "" {
+		t.Fatalf("progress stderr = %q, want no command-contract output", got)
 	}
 	if got := reporter.CapturedStdout(); got != "progress: downloading agent binary\nplain log\npartial" {
 		t.Fatalf("captured stdout = %q", got)

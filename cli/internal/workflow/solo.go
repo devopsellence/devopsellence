@@ -334,6 +334,10 @@ func expandSoloSSHKeyPath(path string) (string, error) {
 }
 
 func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
+	stream := a.Printer.Stream("devopsellence deploy")
+	if err := stream.Event("started", map[string]any{}); err != nil {
+		return err
+	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -416,7 +420,6 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	}
 
 	payload := map[string]any{
-		"schema_version":          outputSchemaVersion,
 		"workload_revision":       shortSHA,
 		"desired_state_revisions": desiredStateRevisions,
 		"image":                   imageTag,
@@ -430,7 +433,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	} else {
 		payload["next_steps"] = append([]string{"devopsellence status"}, soloNodeLogNextSteps(nodes)...)
 	}
-	return a.Printer.PrintJSON(payload)
+	return stream.Result(payload)
 
 }
 
@@ -2366,7 +2369,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		return err
 	}
 
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "action": "installed"})
+	return a.Printer.PrintResultEvent("devopsellence agent install", map[string]any{"node": opts.Node, "action": "installed"})
 
 }
 
@@ -2395,7 +2398,7 @@ func (a *App) SoloAgentUninstall(ctx context.Context, opts SoloAgentUninstallOpt
 	if err := solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), stdout, stderr); err != nil {
 		return sshInteractiveError("failed to run uninstall script over SSH", err, stdout.String(), stderr.String())
 	}
-	return a.Printer.PrintJSON(map[string]any{
+	return a.Printer.PrintResultEvent("devopsellence agent uninstall", map[string]any{
 		"node":              opts.Node,
 		"action":            "uninstalled",
 		"workloads_removed": !opts.KeepWorkloads,
@@ -2620,9 +2623,8 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	var node config.Node
 	var labels []string
 	result := map[string]any{
-		"schema_version": outputSchemaVersion,
-		"node":           nodeName,
-		"config_path":    a.ConfigStore.PathFor(workspaceRoot),
+		"node":        nodeName,
+		"config_path": a.ConfigStore.PathFor(workspaceRoot),
 	}
 	if hasHost {
 		node, labels, err = existingSSHNodeFromCreateOptions(opts)
@@ -2695,7 +2697,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	result["labels"] = labels
 	result["agent_installed"] = installed
 	result["attached"] = attached
-	return a.Printer.PrintJSON(result)
+	return a.Printer.PrintResultEvent("devopsellence node create", result)
 
 }
 
@@ -2923,7 +2925,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 			payload["known_hosts_error"] = knownHostsErr.Error()
 			payload["warnings"] = []string{"manual SSH node forgotten locally, but SSH known_hosts cleanup failed"}
 		}
-		return a.Printer.PrintJSON(payload)
+		return a.Printer.PrintResultEvent("devopsellence node remove", payload)
 
 	}
 	if provider == "" || providerServerID == "" {
@@ -2962,7 +2964,7 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 		payload["known_hosts_error"] = knownHostsErr.Error()
 		payload["warnings"] = []string{"provider node deleted and local state removed, but SSH known_hosts cleanup failed"}
 	}
-	return a.Printer.PrintJSON(payload)
+	return a.Printer.PrintResultEvent("devopsellence node remove", payload)
 
 }
 

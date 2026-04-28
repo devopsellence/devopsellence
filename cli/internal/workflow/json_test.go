@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"testing"
@@ -31,4 +32,35 @@ func jsonMapFromAny(t *testing.T, value any) map[string]any {
 		t.Fatalf("value = %#v, want object", value)
 	}
 	return item
+}
+
+func decodeNDJSONOutput(t *testing.T, output *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var events []map[string]any
+	scanner := bufio.NewScanner(bytes.NewReader(output.Bytes()))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatalf("output line is not valid JSON: %v\n%s", err, line)
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Fatalf("output has no NDJSON events")
+	}
+	return events
+}
+
+func lastNDJSONEvent(t *testing.T, output *bytes.Buffer) map[string]any {
+	t.Helper()
+	events := decodeNDJSONOutput(t, output)
+	return events[len(events)-1]
 }

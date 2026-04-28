@@ -424,7 +424,7 @@ Prefer a clean schema-versioned break over compatibility shims that keep the old
 
 ## Suggested rollout
 
-1. Land schema and validation changes behind schema version 6.
+1. Land schema and validation changes under schema version 1.
 2. Update desired-state generation and node agent validation.
 3. Update setup/init templates and README examples.
 4. Add migration/docs notes for old `ingress.service` + `kind` configs.

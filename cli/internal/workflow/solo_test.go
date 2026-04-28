@@ -1035,7 +1035,7 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	if got, want := hint.SuggestedAction.Hostname, "8.8.8.8.sslip.io"; got != want {
 		t.Fatalf("suggested hostname = %q, want %q", got, want)
 	}
-	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host '8.8.8.8.sslip.io' --tls-mode 'auto'") {
+	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --service 'web' --host '8.8.8.8.sslip.io' --tls-mode 'auto'") {
 		t.Fatalf("command = %q, want ingress set command", hint.SuggestedAction.Command)
 	}
 	if len(hint.SuggestedAction.Risks) == 0 {

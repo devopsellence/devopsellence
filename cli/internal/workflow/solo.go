@@ -4160,7 +4160,16 @@ func temporaryDNSHostname(_ *config.ProjectConfig, ip string) string {
 }
 
 func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string) string {
-	return "devopsellence ingress set --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
+	return "devopsellence ingress set --service " + shellQuote(temporaryDNSIngressService(cfg)) + " --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
+}
+
+func temporaryDNSIngressService(cfg *config.ProjectConfig) string {
+	if cfg != nil {
+		if serviceName, ok := cfg.PrimaryWebServiceName(); ok && strings.TrimSpace(serviceName) != "" {
+			return strings.TrimSpace(serviceName)
+		}
+	}
+	return "<service>"
 }
 
 func temporaryDNSTLSMode(cfg *config.ProjectConfig) string {

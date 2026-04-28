@@ -126,6 +126,47 @@ func TestRunProtectsImagesUsedByAnyContainer(t *testing.T) {
 	}
 }
 
+func TestRunIgnoresCorruptState(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "disk-care-state.json")
+	if err := os.WriteFile(statePath, []byte("{"), 0o600); err != nil {
+		t.Fatalf("write corrupt state: %v", err)
+	}
+	eng := &fakeEngine{
+		containers: []engine.ContainerState{{Name: "web", Image: "app:rev1", Managed: true}},
+		managed:    []engine.ContainerState{{Name: "web", Image: "app:rev1", Managed: true}},
+		images:     []engine.ImageState{{ID: "sha256:1", RepoTags: []string{"app:rev1"}, Size: 100}},
+		logPaths:   map[string]string{},
+	}
+	mgr := New(eng, Config{StatePath: statePath, RetainedPreviousReleases: 10}, nil)
+
+	if _, err := mgr.Run(context.Background(), desiredState("rev-1", "app:rev1")); err != nil {
+		t.Fatalf("run with corrupt state: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read rewritten state: %v", err)
+	}
+	if string(data) == "{" {
+		t.Fatal("expected corrupt state to be replaced")
+	}
+}
+
+func TestSaveStoreUsesPrivateDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	mgr := New(nil, Config{StatePath: filepath.Join(dir, "disk-care-state.json")}, nil)
+	if err := mgr.saveStore(&store{}); err != nil {
+		t.Fatalf("save store: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat state dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("state dir mode = %o, want 700", got)
+	}
+}
+
 func TestRunReportsManagedDockerLogUsage(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "container-json.log")

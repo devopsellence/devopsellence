@@ -370,8 +370,6 @@ func fingerprintDiskCare(status *report.DiskCareStatus) string {
 	builder.WriteByte(0)
 	builder.WriteString(fmt.Sprintf("%d", status.LogMaxFile))
 	builder.WriteByte(0)
-	builder.WriteString(status.LastCleanupAt.UTC().Truncate(time.Hour).Format(time.RFC3339))
-	builder.WriteByte(0)
 	builder.WriteString(fmt.Sprintf("%d", status.ReclaimedBytes))
 	builder.WriteByte(0)
 	builder.WriteString(fmt.Sprintf("%d", status.DockerLogBytes))

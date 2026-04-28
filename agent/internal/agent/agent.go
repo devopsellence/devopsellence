@@ -24,6 +24,10 @@ type Agent struct {
 	reconciler             *reconcile.Reconciler
 	diagnoser              Diagnoser
 	diskCare               DiskCare
+	diskCareMinInterval    time.Duration
+	lastDiskCareAt         time.Time
+	lastDiskCareSequence   int64
+	lastDiskCareStatus     *report.DiskCareStatus
 	interval               time.Duration
 	logger                 *slog.Logger
 	metrics                *observability.Metrics
@@ -41,15 +45,18 @@ type DiskCare interface {
 	Run(ctx context.Context, desired *desiredstatepb.DesiredState) (*report.DiskCareStatus, error)
 }
 
+const defaultDiskCareMinInterval = 5 * time.Minute
+
 func New(authority authority.Authority, reconciler *reconcile.Reconciler, reporter report.Reporter, interval time.Duration, logger *slog.Logger, metrics *observability.Metrics, taskStore *lifecycle.Store) *Agent {
 	return &Agent{
-		authority:  authority,
-		reconciler: reconciler,
-		reporter:   reporter,
-		interval:   interval,
-		logger:     logger,
-		metrics:    metrics,
-		taskStore:  taskStore,
+		authority:           authority,
+		reconciler:          reconciler,
+		reporter:            reporter,
+		interval:            interval,
+		diskCareMinInterval: defaultDiskCareMinInterval,
+		logger:              logger,
+		metrics:             metrics,
+		taskStore:           taskStore,
 	}
 }
 
@@ -144,7 +151,7 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	a.metrics.ContainersUpdated.Add(float64(result.Updated))
 	a.metrics.ContainersRemoved.Add(float64(result.Removed))
 
-	diskCareStatus := a.runDiskCare(ctx, desired)
+	diskCareStatus := a.runDiskCare(ctx, desired, fetched.Sequence)
 
 	summary, environments, err := a.reconciler.CurrentStatus(ctx, desired)
 	if err != nil {
@@ -179,9 +186,13 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	return nil
 }
 
-func (a *Agent) runDiskCare(ctx context.Context, desired *desiredstatepb.DesiredState) *report.DiskCareStatus {
+func (a *Agent) runDiskCare(ctx context.Context, desired *desiredstatepb.DesiredState, sequence int64) *report.DiskCareStatus {
 	if a.diskCare == nil {
 		return nil
+	}
+	now := time.Now()
+	if a.lastDiskCareStatus != nil && sequence == a.lastDiskCareSequence && a.diskCareMinInterval > 0 && now.Sub(a.lastDiskCareAt) < a.diskCareMinInterval {
+		return a.lastDiskCareStatus
 	}
 	status, err := a.diskCare.Run(ctx, desired)
 	if err != nil {
@@ -191,6 +202,11 @@ func (a *Agent) runDiskCare(ctx context.Context, desired *desiredstatepb.Desired
 		} else if status.LastError == "" {
 			status.LastError = err.Error()
 		}
+	}
+	if status != nil {
+		a.lastDiskCareAt = now
+		a.lastDiskCareSequence = sequence
+		a.lastDiskCareStatus = status
 	}
 	return status
 }

@@ -23,7 +23,6 @@ const defaultRetainedPreviousReleases = 10
 
 // Engine is the Docker-facing surface used by automatic disk care.
 type Engine interface {
-	ListManaged(ctx context.Context) ([]engine.ContainerState, error)
 	ListContainers(ctx context.Context) ([]engine.ContainerState, error)
 	ListImages(ctx context.Context) ([]engine.ImageState, error)
 	ImageExists(ctx context.Context, image string) (bool, error)
@@ -82,12 +81,6 @@ func (m *Manager) Run(ctx context.Context, desired *desiredstatepb.DesiredState)
 	current := releasesFromDesired(desired, now)
 	store.upsert(current)
 
-	managed, err := m.engine.ListManaged(ctx)
-	if err != nil {
-		err = fmt.Errorf("list managed containers: %w", err)
-		status.LastError = err.Error()
-		return status, err
-	}
 	allContainers, err := m.engine.ListContainers(ctx)
 	if err != nil {
 		err = fmt.Errorf("list containers: %w", err)
@@ -101,6 +94,7 @@ func (m *Manager) Run(ctx context.Context, desired *desiredstatepb.DesiredState)
 		return status, err
 	}
 
+	managed := managedContainers(allContainers)
 	imageSizes := imageSizeIndex(images)
 	imageRefs := imageRefSet(images)
 	protectedImages := stringSet(m.cfg.ProtectedImages)
@@ -523,6 +517,16 @@ func sizeForImage(image string, sizes map[string]int64) int64 {
 		return size
 	}
 	return 0
+}
+
+func managedContainers(containers []engine.ContainerState) []engine.ContainerState {
+	managed := make([]engine.ContainerState, 0, len(containers))
+	for _, container := range containers {
+		if container.Managed {
+			managed = append(managed, container)
+		}
+	}
+	return managed
 }
 
 func usedContainerImages(containers []engine.ContainerState) map[string]struct{} {

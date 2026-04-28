@@ -755,7 +755,7 @@ func TestReconcileRecreatesRuntimeContainerWhenLogConfigChanges(t *testing.T) {
 	}
 }
 
-func TestReconcileDoesNotRemoveManagedSystemContainers(t *testing.T) {
+func TestReconcileOnlyProtectsPersistentEnvoyContainer(t *testing.T) {
 	eng := newFakeEngine()
 	eng.containers["devopsellence-envoy"] = engine.ContainerState{
 		Name:    "devopsellence-envoy",

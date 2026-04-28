@@ -621,7 +621,7 @@ func cloneIngress(ingress *desiredstatepb.Ingress) *desiredstatepb.Ingress {
 	}
 	cloned, ok := proto.Clone(ingress).(*desiredstatepb.Ingress)
 	if !ok {
-		return nil
+		return ingress
 	}
 	return cloned
 }

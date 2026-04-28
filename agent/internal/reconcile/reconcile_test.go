@@ -719,6 +719,13 @@ func TestReconcileDoesNotRemoveManagedSystemContainers(t *testing.T) {
 		Managed: true,
 		System:  "envoy",
 	}
+	eng.containers["release-task"] = engine.ContainerState{
+		Name:    "release-task",
+		Image:   "busybox",
+		Running: false,
+		Managed: true,
+		System:  "release",
+	}
 	eng.images["busybox"] = true
 	rec := New(eng, Options{Network: "devopsellence"})
 	if _, err := rec.Reconcile(context.Background(), desiredState(workerService("worker", nil))); err != nil {
@@ -729,6 +736,18 @@ func TestReconcileDoesNotRemoveManagedSystemContainers(t *testing.T) {
 			t.Fatalf("envoy should not be removed; removed=%#v", eng.removed)
 		}
 	}
+	if !containsString(eng.removed, "release-task") {
+		t.Fatalf("expected orphaned task container to be removed; removed=%#v", eng.removed)
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func desiredState(services ...*desiredstatepb.Service) *desiredstatepb.DesiredState {

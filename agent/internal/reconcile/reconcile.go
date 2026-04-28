@@ -120,7 +120,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		if _, ok := desiredByService[containerServiceKey(c)]; ok {
 			continue
 		}
-		if c.Name == "" || c.Service == "" {
+		if c.Name == "" || isPersistentSystemContainer(c) {
 			continue
 		}
 		if err := r.stopAndRemove(ctx, c); err != nil {
@@ -418,6 +418,10 @@ func runtimeServiceKey(environmentName, serviceName string) string {
 
 func containerServiceKey(c engine.ContainerState) string {
 	return runtimeServiceKey(c.Environment, c.Service)
+}
+
+func isPersistentSystemContainer(c engine.ContainerState) bool {
+	return strings.TrimSpace(c.System) == "envoy"
 }
 
 // tearDownFailedContainer stops a container that failed to become healthy,

@@ -57,13 +57,14 @@ func New(engine Engine, cfg Config, logger *slog.Logger) *Manager {
 // Run records the current desired-state images, removes old managed image
 // references outside the retention window, and reports local log usage.
 func (m *Manager) Run(ctx context.Context, desired *desiredstatepb.DesiredState) (*report.DiskCareStatus, error) {
-	status := &report.DiskCareStatus{
-		RetainedPreviousReleases: m.cfg.RetainedPreviousReleases,
-		LogMaxSize:               m.cfg.ContainerLogMaxSize,
-		LogMaxFile:               m.cfg.ContainerLogMaxFile,
-		LastCleanupAt:            time.Now().UTC(),
+	status := &report.DiskCareStatus{LastCleanupAt: time.Now().UTC()}
+	if m == nil {
+		return status, nil
 	}
-	if m == nil || m.engine == nil || desired == nil {
+	status.RetainedPreviousReleases = m.cfg.RetainedPreviousReleases
+	status.LogMaxSize = m.cfg.ContainerLogMaxSize
+	status.LogMaxFile = m.cfg.ContainerLogMaxFile
+	if m.engine == nil || desired == nil {
 		return status, nil
 	}
 

@@ -1126,6 +1126,57 @@ func TestWaitForRouteReconnectsWorkloadNetworksAfterRestart(t *testing.T) {
 	}
 }
 
+func TestWaitForRouteReappliesSnapshotAfterRestart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "stale endpoint", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	host, portString, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split host/port: %v", err)
+	}
+	port, err := strconv.Atoi(portString)
+	if err != nil {
+		t.Fatalf("atoi port: %v", err)
+	}
+
+	eng := &fakeEngine{
+		inspectInfo: engine.ContainerInfo{
+			Name:            "devopsellence-envoy",
+			Running:         true,
+			HasHealthcheck:  true,
+			Health:          "healthy",
+			PublishHostPort: false,
+			NetworkIP:       map[string]string{"devopsellence": host},
+		},
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  tempBootstrapPath(t),
+		Port:           uint16(port),
+		ClusterName:    "devopsellence_web",
+		HTTPClient:     server.Client(),
+		RouteTimeout:   20 * time.Millisecond,
+		RouteInterval:  10 * time.Millisecond,
+		StartupTimeout: time.Second,
+	}, logger)
+
+	if err := mgr.UpdateClusterEDS(context.Background(), "devopsellence_production_web_http", "172.19.0.3", 3000); err != nil {
+		t.Fatalf("update eds: %v", err)
+	}
+	versionBeforeRestart := mgr.snapshotVersion.Load()
+	if err := mgr.WaitForRoute(context.Background(), "/up"); err == nil {
+		t.Fatal("expected route probe to fail after restart")
+	}
+	if got := mgr.snapshotVersion.Load(); got <= versionBeforeRestart {
+		t.Fatalf("snapshot version = %d, want > %d after restart reapplies current snapshot", got, versionBeforeRestart)
+	}
+}
+
 func TestWaitForRouteRestartsAndIncludesBody(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

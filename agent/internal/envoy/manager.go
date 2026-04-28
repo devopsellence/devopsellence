@@ -491,6 +491,9 @@ func (m *Manager) restart(ctx context.Context) error {
 	if err := m.syncWorkloadNetworks(ctx, m.lastWorkloadNetworks); err != nil {
 		return err
 	}
+	if err := m.applySnapshot(publicIngressListener); err != nil {
+		return err
+	}
 	if err := m.waitReady(ctx); err != nil {
 		return err
 	}

@@ -149,8 +149,6 @@ In shared mode, `node create` provisions the server and runs the registration in
 
 ```yaml
 schema_version: 1
-app:
-  type: rails
 organization: solo
 project: myapp
 default_environment: production

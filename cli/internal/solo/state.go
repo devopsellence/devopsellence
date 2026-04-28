@@ -184,7 +184,6 @@ func buildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 		Revision:      strings.TrimSpace(revision),
 		Image:         strings.TrimSpace(imageTag),
 		Metadata: desiredstate.SnapshotMetadata{
-			AppType:    strings.TrimSpace(cfg.App.Type),
 			ConfigPath: strings.TrimSpace(configPath),
 			Project:    strings.TrimSpace(cfg.Project),
 			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),

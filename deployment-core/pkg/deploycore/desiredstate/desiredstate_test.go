@@ -17,8 +17,8 @@ func boolPtr(value bool) *bool {
 func baseProject() *config.ProjectConfig {
 	cfg := config.DefaultProjectConfig("solo", "myapp", config.DefaultEnvironment)
 	cfg.Services["web"] = config.ServiceConfig{
-		Command: []string{"rails", "server"},
-		Env:     map[string]string{"RAILS_ENV": "production"},
+		Command: []string{"./bin/server"},
+		Env:     map[string]string{"APP_ENV": "production"},
 		SecretRefs: []config.SecretRef{
 			{Name: "DATABASE_URL", Secret: "projects/x/secrets/db"},
 		},
@@ -57,7 +57,7 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 	if web.Name != "web" || web.Kind != "web" || web.Image != "myapp:abc1234" {
 		t.Fatalf("web service = %#v", web)
 	}
-	if web.Env["RAILS_ENV"] != "production" || web.Env["DATABASE_URL"] != "postgres://localhost/mydb" {
+	if web.Env["APP_ENV"] != "production" || web.Env["DATABASE_URL"] != "postgres://localhost/mydb" {
 		t.Fatalf("env = %#v", web.Env)
 	}
 	if web.Healthcheck == nil || web.Healthcheck.Path != "/up" {
@@ -66,7 +66,7 @@ func TestBuildDesiredState_WebOnly(t *testing.T) {
 	if len(web.Ports) != 1 || web.Ports[0].Name != "http" || web.Ports[0].Port != 3000 {
 		t.Fatalf("ports = %#v", web.Ports)
 	}
-	if got, want := web.Entrypoint, []string{"rails", "server"}; !reflect.DeepEqual(got, want) {
+	if got, want := web.Entrypoint, []string{"./bin/server"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("entrypoint = %#v, want %#v", got, want)
 	}
 }
@@ -109,7 +109,7 @@ func TestBuildDesiredState_WithNamedWorkerAndReleaseTask(t *testing.T) {
 		Command: []string{"sidekiq"},
 		Env:     map[string]string{"QUEUE": "default"},
 	}
-	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"rails", "db:migrate"}}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"./bin/migrate"}}
 
 	data, err := BuildDesiredState(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"})
 	if err != nil {
@@ -176,7 +176,7 @@ func TestBuildDesiredStateForLabelsFiltersServicesByKindLabel(t *testing.T) {
 	cfg.Services["jobs"] = config.ServiceConfig{
 		Command: []string{"sidekiq"},
 	}
-	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"rails", "db:migrate"}}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"./bin/migrate"}}
 
 	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWorkerRole}, false)
 	if err != nil {
@@ -197,7 +197,7 @@ func TestBuildDesiredStateForLabelsFiltersServicesByKindLabel(t *testing.T) {
 
 func TestBuildDesiredStateForLabelsIncludesReleaseWhenSelected(t *testing.T) {
 	cfg := baseProject()
-	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"rails", "db:migrate"}}
+	cfg.Tasks.Release = &config.TaskConfig{Service: "web", Command: []string{"./bin/migrate"}}
 
 	data, err := BuildDesiredStateForLabels(cfg, "myapp:def5678", "def5678", map[string]string{"DATABASE_URL": "postgres://localhost/mydb"}, []string{config.DefaultWebRole}, true)
 	if err != nil {

@@ -26,7 +26,7 @@ Direct human UX matters only when it affects AI-agent-mediated use, for example 
 - Evaluate from the AI-agent-mediated perspective by default: the AI coding/operator agent receives a user goal, operates devopsellence, asks the user for approvals or missing facts, and reports back with evidence.
 - Do not score direct human terminal ergonomics as the primary product experience unless the user explicitly asks for human-direct QA.
 - Prefer fresh temp apps and fresh state.
-- For ordinary solo-mode node tests, prefer `zirk` VMs when available. Use `zirk health`, `zirk flavors`, `zirk create <run-scoped-name> --flavor <flavor>`, `zirk show <run-scoped-name>`, and `zirk exec <run-scoped-name> ...` as setup evidence.
+- For ordinary solo-mode node tests, prefer `zirk` VMs when available. Use `zirk health`, `zirk flavors`, `zirk create --flavor <flavor> <run-scoped-name>`, `zirk show <run-scoped-name>`, and `zirk exec <run-scoped-name> ...` as setup evidence. For cleanup of a running VM, use `zirk delete --force <run-scoped-name>`.
 - Use run-scoped names for external resources, for example `dogfood-<timestamp>` or the run slug. Do not use generic production-like names unless the scenario specifically requires testing that name.
 - Start with a blind pass unless the user explicitly asks for code review first.
 - During blind pass, use only context an external AI coding/operator agent could use: public website docs, README/docs that match the target version when available, installed CLI help, API/JSON output, web UI state when unavoidable, generated errors, logs surfaced by the product, and ordinary tools exposed to the operator.

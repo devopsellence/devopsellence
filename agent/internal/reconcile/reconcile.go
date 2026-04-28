@@ -537,6 +537,15 @@ func (r *Reconciler) tearDownFailedContainer(name string) {
 			"container", name,
 			"output", lines,
 		)
+	} else if info, inspectErr := r.engine.Inspect(ctx, name); inspectErr == nil {
+		logger := r.opts.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Warn("web container failed health checks — no log output; inspect details",
+			"container", name,
+			"state", containerInspectSummary(info),
+		)
 	}
 
 	_ = r.engine.Remove(ctx, name)
@@ -569,7 +578,7 @@ func (r *Reconciler) webContainerIP(ctx context.Context, name string, desired de
 		return "", fmt.Errorf("inspect container %s: %w", name, err)
 	}
 	if !info.Running {
-		return "", fmt.Errorf("container %s not running", name)
+		return "", fmt.Errorf("container %s not running (%s)", name, containerInspectSummary(info))
 	}
 
 	network, err := r.environmentNetwork(desired.EnvironmentName)
@@ -620,7 +629,7 @@ func (r *Reconciler) waitHealthy(ctx context.Context, name string, desired desir
 			return "", fmt.Errorf("inspect container %s: %w", name, err)
 		}
 		if !info.Running {
-			return "", fmt.Errorf("container %s not running", name)
+			return "", fmt.Errorf("container %s not running (%s)", name, containerInspectSummary(info))
 		}
 
 		network, err := r.environmentNetwork(desired.EnvironmentName)
@@ -657,6 +666,35 @@ func (r *Reconciler) waitHealthy(ctx context.Context, name string, desired desir
 		lastErr = fmt.Errorf("healthcheck failed for %s", name)
 	}
 	return "", lastErr
+}
+
+func containerInspectSummary(info engine.ContainerInfo) string {
+	parts := []string{}
+	if status := strings.TrimSpace(info.StateStatus); status != "" {
+		parts = append(parts, "status="+status)
+	}
+	if !info.Running {
+		parts = append(parts, fmt.Sprintf("exit_code=%d", info.ExitCode))
+	}
+	if stateErr := strings.TrimSpace(info.StateError); stateErr != "" {
+		parts = append(parts, "error="+stateErr)
+	}
+	if finishedAt := strings.TrimSpace(info.FinishedAt); finishedAt != "" {
+		parts = append(parts, "finished_at="+finishedAt)
+	}
+	if len(info.Entrypoint) > 0 {
+		parts = append(parts, "entrypoint="+strings.Join(info.Entrypoint, " "))
+	}
+	if len(info.Command) > 0 {
+		parts = append(parts, "cmd="+strings.Join(info.Command, " "))
+	}
+	if len(parts) == 0 {
+		if info.Running {
+			return "running=true"
+		}
+		return "running=false"
+	}
+	return strings.Join(parts, " ")
 }
 
 func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string, string, engine.ContainerSpec, error) {

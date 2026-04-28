@@ -763,6 +763,9 @@ func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
+	if payload["schema_version"] != float64(outputSchemaVersion) {
+		t.Fatalf("schema_version = %#v, want %d", payload["schema_version"], outputSchemaVersion)
+	}
 	urls := jsonArrayFromMap(t, payload, "public_urls")
 	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
 		t.Fatalf("public_urls = %#v, want web node URL only", urls)
@@ -814,6 +817,9 @@ func TestSoloStatusUsesConfiguredPublicURLsWhenNodeIsNotSettled(t *testing.T) {
 		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
+	if payload["schema_version"] != float64(outputSchemaVersion) {
+		t.Fatalf("schema_version = %#v, want %d", payload["schema_version"], outputSchemaVersion)
+	}
 	if _, ok := payload["public_urls"]; ok {
 		t.Fatalf("payload = %#v, did not expect public_urls while node is errored", payload)
 	}
@@ -1391,6 +1397,9 @@ func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 		t.Fatalf("exit error = %#v, want RenderedError", exitErr.Err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
+	if payload["schema_version"] != float64(outputSchemaVersion) {
+		t.Fatalf("schema_version = %#v, want %d", payload["schema_version"], outputSchemaVersion)
+	}
 	nodes := jsonArrayFromMap(t, payload, "nodes")
 	node := jsonMapFromAny(t, nodes[0])
 	if node["node"] != "node-a" || !strings.Contains(stringValueAny(node["error"]), "ssh root@203.0.113.10:") {
@@ -3479,7 +3488,10 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 		steps = append(steps, stringValueAny(value))
 	}
 	nextSteps := strings.Join(steps, "\n")
-	if !strings.Contains(nextSteps, "devopsellence node create prod-1 --provider hetzner --install --attach") {
+	if !strings.Contains(nextSteps, "devopsellence node list # solo node names are global on this machine") {
+		t.Fatalf("next_steps = %q, want node-list collision guidance", nextSteps)
+	}
+	if !strings.Contains(nextSteps, "devopsellence node create <node-name> --provider hetzner --install --attach") {
 		t.Fatalf("next_steps = %q, want provider-created node path", nextSteps)
 	}
 	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])

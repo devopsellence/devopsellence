@@ -246,7 +246,10 @@ func (m *Manager) loadStore() (*store, error) {
 	}
 	var s store
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("parse disk care state: %w", err)
+		if m.logger != nil {
+			m.logger.Warn("ignoring corrupt disk care state", "path", m.cfg.StatePath, "error", err)
+		}
+		return &store{}, nil
 	}
 	return &s, nil
 }
@@ -255,7 +258,8 @@ func (m *Manager) saveStore(s *store) error {
 	if strings.TrimSpace(m.cfg.StatePath) == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(m.cfg.StatePath), 0o755); err != nil {
+	dir := filepath.Dir(m.cfg.StatePath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create disk care state dir: %w", err)
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
@@ -263,10 +267,33 @@ func (m *Manager) saveStore(s *store) error {
 		return fmt.Errorf("marshal disk care state: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(m.cfg.StatePath, data, 0o600); err != nil {
+	if err := writeFileAtomic(m.cfg.StatePath, data, 0o600); err != nil {
 		return fmt.Errorf("write disk care state: %w", err)
 	}
 	return nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func releasesFromDesired(state *desiredstatepb.DesiredState, now time.Time) []releaseRecord {

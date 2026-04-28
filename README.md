@@ -68,6 +68,7 @@ Existing SSH node prerequisites:
 - devopsellence stores SSH host keys in its own state directory and uses OpenSSH `StrictHostKeyChecking=accept-new`, so first contact does not write to your global `~/.ssh/known_hosts`;
 - Docker must be reachable by the SSH user, or the SSH user must have passwordless sudo for Docker. On supported Ubuntu VMs, `devopsellence agent install` can install Docker when it is missing;
 - `agent install` writes `/usr/local/bin/devopsellence-agent`, creates a `devopsellence-agent` systemd service, and uses `/var/lib/devopsellence` for node state by default.
+- The agent bounds disk growth for devopsellence-managed runtime artifacts: new managed containers get Docker log rotation by default, and old app image versions are expired automatically while retaining the current release and recent rollback candidates. This does not replace centralized logging or clean up user-owned Docker resources.
 
 If remote checks fail, start with:
 

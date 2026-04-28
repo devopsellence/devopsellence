@@ -496,12 +496,12 @@ func (r *Reconciler) environmentNetwork(environmentName string) (string, error) 
 	return desiredstate.EnvironmentNetworkName(r.opts.Network, environmentName)
 }
 
-func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig) string {
+func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig, network string) string {
 	logHash := engine.LogConfigHash(logConfig)
-	if logHash == "" {
+	if logHash == "" && network == "" {
 		return baseHash
 	}
-	sum := sha256.Sum256([]byte(baseHash + "\x00" + logHash))
+	sum := sha256.Sum256([]byte(baseHash + "\x00" + logHash + "\x00" + strings.TrimSpace(network)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -670,7 +670,7 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash service %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
 	}
 
-	hash = runtimeContainerHash(hash, r.opts.LogConfig)
+	hash = runtimeContainerHash(hash, r.opts.LogConfig, network)
 	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, err

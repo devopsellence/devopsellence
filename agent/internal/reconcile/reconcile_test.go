@@ -479,6 +479,7 @@ func TestReconcileRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
+	hash = runtimeContainerHash(hash, nil, "devopsellence-env-production")
 	name, err := desiredstate.ServiceContainerName("production", "worker", "rev-1", hash)
 	if err != nil {
 		t.Fatalf("name: %v", err)
@@ -755,6 +756,45 @@ func TestReconcileAppliesLogConfigToRuntimeContainers(t *testing.T) {
 	}
 	if eng.created[0].Log == nil || eng.created[0].Log.Options["max-size"] != "10m" || eng.created[0].Log.Options["max-file"] != "5" {
 		t.Fatalf("unexpected log config: %#v", eng.created[0].Log)
+	}
+}
+
+func TestReconcileRecreatesRuntimeContainerWhenNetworkChanges(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	service := workerService("worker", nil)
+	oldHash, err := desiredstate.HashService(service)
+	if err != nil {
+		t.Fatalf("hash service: %v", err)
+	}
+	oldName, err := desiredstate.ServiceContainerName("production", "worker", "rev-1", oldHash)
+	if err != nil {
+		t.Fatalf("container name: %v", err)
+	}
+	eng.containers[oldName] = engine.ContainerState{
+		Name:        oldName,
+		Image:       "busybox",
+		Running:     true,
+		Managed:     true,
+		Hash:        oldHash,
+		Environment: "production",
+		Service:     "worker",
+		ServiceKind: "worker",
+	}
+
+	rec := New(eng, Options{Network: "devopsellence"})
+	result, err := rec.Reconcile(context.Background(), desiredState(service))
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Updated != 1 || result.Removed != 1 {
+		t.Fatalf("result = %#v, want updated=1 removed=1", result)
+	}
+	if !containsString(eng.removed, oldName) {
+		t.Fatalf("expected old container removed; removed=%#v", eng.removed)
+	}
+	if len(eng.created) != 1 || eng.created[0].Name == oldName || eng.created[0].Network != "devopsellence-env-production" {
+		t.Fatalf("expected replacement container on environment network, created=%#v", eng.created)
 	}
 }
 

@@ -68,7 +68,10 @@ func (m *Manager) Run(ctx context.Context, desired *desiredstatepb.DesiredState)
 		return status, nil
 	}
 
-	store, err := m.loadStore()
+	store, loadWarning, err := m.loadStore()
+	if loadWarning != "" {
+		status.LastError = loadWarning
+	}
 	if err != nil {
 		status.LastError = err.Error()
 		return status, err
@@ -230,28 +233,29 @@ type releaseRecord struct {
 	LastSeenAt  time.Time `json:"last_seen_at"`
 }
 
-func (m *Manager) loadStore() (*store, error) {
+func (m *Manager) loadStore() (*store, string, error) {
 	if strings.TrimSpace(m.cfg.StatePath) == "" {
-		return &store{}, nil
+		return &store{}, "", nil
 	}
 	data, err := os.ReadFile(m.cfg.StatePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &store{}, nil
+			return &store{}, "", nil
 		}
-		return nil, fmt.Errorf("read disk care state: %w", err)
+		return nil, "", fmt.Errorf("read disk care state: %w", err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return &store{}, nil
+		return &store{}, "", nil
 	}
 	var s store
 	if err := json.Unmarshal(data, &s); err != nil {
+		warning := fmt.Sprintf("ignored corrupt disk care state: %v", err)
 		if m.logger != nil {
 			m.logger.Warn("ignoring corrupt disk care state", "path", m.cfg.StatePath, "error", err)
 		}
-		return &store{}, nil
+		return &store{}, warning, nil
 	}
-	return &s, nil
+	return &s, "", nil
 }
 
 func (m *Manager) saveStore(s *store) error {
@@ -261,6 +265,9 @@ func (m *Manager) saveStore(s *store) error {
 	dir := filepath.Dir(m.cfg.StatePath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create disk care state dir: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("set disk care state dir permissions: %w", err)
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

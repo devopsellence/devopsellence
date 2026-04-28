@@ -4176,7 +4176,39 @@ func isTemporaryDNSIPv4(value string) bool {
 	if !ip4.IsGlobalUnicast() || ip4.Equal(net.IPv4bcast) {
 		return false
 	}
-	return !ip4.IsUnspecified() && !ip4.IsLoopback() && !ip4.IsPrivate() && !ip4.IsLinkLocalUnicast()
+	return !isSpecialUseIPv4(ip4)
+}
+
+func isSpecialUseIPv4(ip net.IP) bool {
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return true
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return true
+	}
+	switch {
+	case ip4[0] == 0:
+		return true
+	case ip4[0] == 100 && ip4[1]&0xc0 == 64:
+		return true
+	case ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 0:
+		return true
+	case ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 2:
+		return true
+	case ip4[0] == 192 && ip4[1] == 88 && ip4[2] == 99:
+		return true
+	case ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19):
+		return true
+	case ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100:
+		return true
+	case ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113:
+		return true
+	case ip4[0] >= 240:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeIngressHosts(values []string) []string {

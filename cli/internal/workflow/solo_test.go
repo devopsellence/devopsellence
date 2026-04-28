@@ -1014,7 +1014,7 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	}
 
 	report, err := ingressDNSReport(context.Background(), &cfg, map[string]config.Node{
-		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		"node-a": {Host: "8.8.8.8", User: "root", Labels: []string{config.DefaultWebRole}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1032,10 +1032,10 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	if hint.SuggestedAction.Kind != "use_temporary_dns_hostname" || hint.SuggestedAction.Provider != "sslip.io" {
 		t.Fatalf("suggested_action = %#v, want sslip.io temporary hostname", hint.SuggestedAction)
 	}
-	if got, want := hint.SuggestedAction.Hostname, "my-app-production.203.0.113.10.sslip.io"; got != want {
+	if got, want := hint.SuggestedAction.Hostname, "my-app-production.8.8.8.8.sslip.io"; got != want {
 		t.Fatalf("suggested hostname = %q, want %q", got, want)
 	}
-	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host my-app-production.203.0.113.10.sslip.io --tls-mode auto") {
+	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host my-app-production.8.8.8.8.sslip.io --tls-mode auto") {
 		t.Fatalf("command = %q, want ingress set command", hint.SuggestedAction.Command)
 	}
 	if len(hint.SuggestedAction.Risks) == 0 {
@@ -1043,12 +1043,18 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	}
 }
 
-func TestTemporaryDNSIPv4RejectsNonPublicAddresses(t *testing.T) {
+func TestTemporaryDNSIPv4AcceptsOnlyPubliclyRoutableAddresses(t *testing.T) {
 	tests := map[string]bool{
-		"203.0.113.10":    true,
+		"8.8.8.8":         true,
+		"0.1.2.3":         false,
 		"10.0.0.1":        false,
+		"100.64.0.1":      false,
 		"127.0.0.1":       false,
 		"169.254.1.1":     false,
+		"192.0.2.10":      false,
+		"198.18.0.1":      false,
+		"198.51.100.10":   false,
+		"203.0.113.10":    false,
 		"224.0.0.1":       false,
 		"255.255.255.255": false,
 		"2001:db8::1":     false,
@@ -1071,7 +1077,7 @@ func TestCheckIngressBeforeDeployIncludesSSLIPHintFields(t *testing.T) {
 	}
 
 	err := (&App{}).checkIngressBeforeDeploy(context.Background(), &cfg, map[string]config.Node{
-		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		"node-a": {Host: "8.8.8.8", User: "root", Labels: []string{config.DefaultWebRole}},
 	}, false)
 	if err == nil {
 		t.Fatal("checkIngressBeforeDeploy() error = nil, want missing hostname failure")
@@ -1088,7 +1094,7 @@ func TestCheckIngressBeforeDeployIncludesSSLIPHintFields(t *testing.T) {
 	if !ok || len(hints) != 1 {
 		t.Fatalf("hints = %#v, want one ingress hint", fields["hints"])
 	}
-	if got, want := hints[0].SuggestedAction.Hostname, "demo-production.203.0.113.10.sslip.io"; got != want {
+	if got, want := hints[0].SuggestedAction.Hostname, "demo-production.8.8.8.8.sslip.io"; got != want {
 		t.Fatalf("suggested hostname = %q, want %q", got, want)
 	}
 }

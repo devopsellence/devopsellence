@@ -59,6 +59,10 @@ func (f *fakeEngine) CreateAndStart(ctx context.Context, spec engine.ContainerSp
 		PublishedPorts:  append([]engine.PortBinding(nil), spec.Ports...),
 		NetworkIP:       map[string]string{spec.Network: networkIP},
 	}
+	if spec.Log != nil {
+		f.inspectInfo.LogDriver = spec.Log.Driver
+		f.inspectInfo.LogOptions = appendMap(spec.Log.Options)
+	}
 	return nil
 }
 
@@ -103,6 +107,17 @@ func (f *fakeEngine) Logs(_ context.Context, _ string, _ int) ([]byte, error) {
 
 func (f *fakeEngine) EnsureNetwork(ctx context.Context, name string) error {
 	return nil
+}
+
+func appendMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func tempBootstrapPath(t *testing.T) string {
@@ -378,6 +393,45 @@ func TestEnsureRestartsRunningEnvoyWhenBootstrapChanges(t *testing.T) {
 	}
 	if eng.createdSpec == nil {
 		t.Fatal("expected CreateAndStart to be called after bootstrap change")
+	}
+}
+
+func TestEnsureRestartsRunningEnvoyWhenLogConfigChanges(t *testing.T) {
+	eng := &fakeEngine{
+		imageExists: true,
+		inspectInfo: engine.ContainerInfo{
+			Name:            "devopsellence-envoy",
+			Running:         true,
+			Health:          "healthy",
+			HasHealthcheck:  true,
+			PublishHostPort: true,
+			NetworkIP:       map[string]string{"devopsellence": "172.18.0.2"},
+			LogDriver:       "json-file",
+			LogOptions:      map[string]string{"max-size": "100m", "max-file": "1"},
+		},
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	bootstrapPath := tempBootstrapPath(t)
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  bootstrapPath,
+		Port:           8000,
+		ClusterName:    "devopsellence_web",
+		RestartPolicy:  "unless-stopped",
+		LogConfig:      &engine.LogConfig{Driver: "json-file", Options: map[string]string{"max-size": "10m", "max-file": "5"}},
+		StartupTimeout: 2 * time.Second,
+	}, logger)
+
+	if err := mgr.Ensure(context.Background(), nil); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if len(eng.removed) == 0 {
+		t.Fatal("expected running envoy to be recreated when log config changes")
+	}
+	if eng.createdSpec == nil || eng.createdSpec.Log == nil || eng.createdSpec.Log.Options["max-size"] != "10m" {
+		t.Fatalf("expected recreated envoy with new log config, got %#v", eng.createdSpec)
 	}
 }
 

@@ -172,6 +172,12 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress) e
 		}
 		info.Running = false
 	}
+	if info.Running && !engine.LogConfigMatches(info.LogDriver, info.LogOptions, m.config.LogConfig) {
+		if err := m.engine.Remove(ctx, m.config.ContainerName); err != nil {
+			return fmt.Errorf("remove envoy (log config changed): %w", err)
+		}
+		info.Running = false
+	}
 	if info.Running && bootstrapChanged {
 		if err := m.engine.Remove(ctx, m.config.ContainerName); err != nil {
 			return fmt.Errorf("remove envoy (bootstrap changed): %w", err)

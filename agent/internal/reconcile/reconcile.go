@@ -3,6 +3,8 @@ package reconcile
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -421,6 +423,15 @@ func containerServiceKey(c engine.ContainerState) string {
 	return runtimeServiceKey(c.Environment, c.Service)
 }
 
+func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig) string {
+	logHash := engine.LogConfigHash(logConfig)
+	if logHash == "" {
+		return baseHash
+	}
+	sum := sha256.Sum256([]byte(baseHash + "\x00" + logHash))
+	return hex.EncodeToString(sum[:])
+}
+
 func isPersistentSystemContainer(c engine.ContainerState, protectedNames []string) bool {
 	if strings.TrimSpace(c.System) != "envoy" {
 		return false
@@ -577,6 +588,7 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash service %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
 	}
 
+	hash = runtimeContainerHash(hash, r.opts.LogConfig)
 	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, err

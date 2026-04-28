@@ -788,6 +788,225 @@ func TestSoloStatusPublicURLsUseHTTPSForManualTLS(t *testing.T) {
 	}
 }
 
+func TestIngressDNSReportIncludesPublicURLsAndReadyNextSteps(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"127.0.0.1"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "auto"},
+	}
+
+	report, err := ingressDNSReport(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.OK {
+		t.Fatalf("OK = false, report = %#v", report)
+	}
+	if !reflect.DeepEqual(report.PublicURLs, []string{"https://127.0.0.1/"}) {
+		t.Fatalf("public_urls = %#v, want HTTPS loopback URL", report.PublicURLs)
+	}
+	if len(report.NextSteps) != 2 || report.NextSteps[0] != "devopsellence status" || report.NextSteps[1] != "curl https://127.0.0.1/" {
+		t.Fatalf("next_steps = %#v, want status and curl", report.NextSteps)
+	}
+}
+
+func TestIngressCheckReturnsRenderedErrorAfterPrintingDNSReport(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"192.0.2.55"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "192.0.2.55", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	err := app.IngressCheck(context.Background(), IngressCheckOptions{})
+	if err == nil {
+		t.Fatal("IngressCheck() error = nil, want DNS readiness failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	var renderedErr RenderedError
+	if !errors.As(exitErr.Err, &renderedErr) {
+		t.Fatalf("exit error = %#v, want RenderedError", exitErr.Err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %v, want false", payload["ok"])
+	}
+}
+
+func TestCheckIngressBeforeDeployDistinguishesMissingConcreteHostnames(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "auto"},
+	}
+
+	app := &App{}
+	err := app.checkIngressBeforeDeploy(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+	}, false)
+	if err == nil {
+		t.Fatal("checkIngressBeforeDeploy() error = nil, want missing hostname failure")
+	}
+	if !strings.Contains(err.Error(), "no ingress hostnames configured") || !strings.Contains(err.Error(), "configure ingress hostnames") {
+		t.Fatalf("error = %q, want missing-hostname guidance", err.Error())
+	}
+	if strings.Contains(err.Error(), "update DNS") {
+		t.Fatalf("error = %q, did not expect DNS mismatch guidance", err.Error())
+	}
+}
+
+func TestIngressCheckDoesNotWaitForMissingConcreteHostnames(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "*", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	err := app.IngressCheck(ctx, IngressCheckOptions{Wait: time.Hour})
+	if err == nil {
+		t.Fatal("IngressCheck() error = nil, want missing hostname failure")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("IngressCheck() error = %v, want immediate non-retryable failure", err)
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 || !strings.Contains(exitErr.Err.Error(), "no ingress hostnames configured") {
+		t.Fatalf("error = %#v, want no-hostname ExitError", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %v, want false", payload["ok"])
+	}
+}
+
+func TestIngressDNSReportBootstrapWildcardHostPromptsForRealHostnames(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "auto"},
+	}
+
+	report, err := ingressDNSReport(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OK {
+		t.Fatalf("OK = true, want hostname configuration guidance")
+	}
+	if len(report.PublicURLs) != 0 {
+		t.Fatalf("public_urls = %#v, want wildcard bootstrap host filtered out", report.PublicURLs)
+	}
+	if len(report.Hosts) != 0 {
+		t.Fatalf("hosts = %#v, want no DNS lookup for wildcard bootstrap host", report.Hosts)
+	}
+	if len(report.NextSteps) != 3 || report.NextSteps[0] != "devopsellence status" || !strings.Contains(report.NextSteps[1], "ingress set") {
+		t.Fatalf("next_steps = %#v, want status first and hostname guidance", report.NextSteps)
+	}
+	for _, step := range report.NextSteps {
+		if strings.Contains(step, "*") {
+			t.Fatalf("next_steps = %#v, want wildcard host omitted", report.NextSteps)
+		}
+	}
+}
+
+func TestIngressDNSReportIncludesRepairNextStepsWhenDNSIsNotReady(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"192.0.2.55"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "off"},
+	}
+
+	report, err := ingressDNSReport(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OK {
+		t.Fatalf("OK = true, want DNS mismatch failure")
+	}
+	if !reflect.DeepEqual(report.PublicURLs, []string{"http://192.0.2.55/"}) {
+		t.Fatalf("public_urls = %#v, want configured endpoint URL", report.PublicURLs)
+	}
+	if len(report.NextSteps) != 3 || report.NextSteps[0] != "devopsellence status" || report.NextSteps[1] != "update DNS records to point at expected_ips" {
+		t.Fatalf("next_steps = %#v, want status first and repair guidance", report.NextSteps)
+	}
+}
+
 func TestSoloStatusNodesWithoutAttachmentsReturnsEmptySet(t *testing.T) {
 	t.Parallel()
 

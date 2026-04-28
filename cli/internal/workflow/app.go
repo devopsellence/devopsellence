@@ -216,12 +216,6 @@ type EnvironmentUseOptions struct {
 	Name         string
 }
 
-type EnvironmentOpenOptions struct {
-	Organization string
-	Project      string
-	Environment  string
-}
-
 type EnvironmentIngressOptions struct {
 	Organization    string
 	Project         string
@@ -2139,35 +2133,6 @@ func (a *App) EnvironmentUse(ctx context.Context, opts EnvironmentUseOptions) er
 		"environment":         environment,
 		"workspace_key":       a.modeWorkspaceKey(),
 		"default_environment": cfg.DefaultEnvironment,
-	})
-
-}
-
-func (a *App) EnvironmentOpen(ctx context.Context, opts EnvironmentOpenOptions) error {
-	tokens, err := a.ensureAuth(ctx, false)
-	if err != nil {
-		return err
-	}
-	workspace, err := a.resolveWorkspace(ctx, tokens.AccessToken, opts.Organization, opts.Project, opts.Environment, false)
-	if err != nil {
-		return err
-	}
-	status, err := a.API.EnvironmentStatus(ctx, tokens.AccessToken, workspace.Environment.ID)
-	if err != nil {
-		return wrapError(err)
-	}
-	publicURL := nestedString(status, "ingress", "public_url")
-	if strings.TrimSpace(publicURL) == "" {
-		return ExitError{Code: 1, Err: errors.New("environment has no public URL")}
-	}
-
-	return a.Printer.PrintJSON(map[string]any{
-		"schema_version": outputSchemaVersion,
-		"ok":             true,
-		"url":            publicURL,
-		"organization":   workspace.Organization,
-		"project":        workspace.Project,
-		"environment":    workspace.Environment,
 	})
 
 }

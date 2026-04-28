@@ -1078,7 +1078,7 @@ func TestTemporaryDNSCommandPreservesConfiguredTLSMode(t *testing.T) {
 	cfg.Ingress = &config.IngressConfig{TLS: config.IngressTLSConfig{Mode: " OFF "}}
 
 	got := temporaryDNSCommand(&cfg, "8.8.8.8.sslip.io")
-	want := "devopsellence ingress set --host '8.8.8.8.sslip.io' --tls-mode 'off'"
+	want := "devopsellence ingress set --service 'web' --host '8.8.8.8.sslip.io' --tls-mode 'off'"
 	if got != want {
 		t.Fatalf("temporaryDNSCommand() = %q, want %q", got, want)
 	}

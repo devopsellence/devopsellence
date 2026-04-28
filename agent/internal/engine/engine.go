@@ -94,12 +94,28 @@ func LogConfigMatches(driver string, options map[string]string, cfg *LogConfig) 
 	if strings.TrimSpace(driver) != strings.TrimSpace(cfg.Driver) {
 		return false
 	}
-	for key, value := range cfg.Options {
-		if strings.TrimSpace(options[key]) != strings.TrimSpace(value) {
+	actual := normalizeLogOptions(options)
+	expected := normalizeLogOptions(cfg.Options)
+	if len(actual) != len(expected) {
+		return false
+	}
+	for key, value := range expected {
+		if actual[key] != value {
 			return false
 		}
 	}
 	return true
+}
+
+func normalizeLogOptions(options map[string]string) map[string]string {
+	if len(options) == 0 {
+		return nil
+	}
+	normalized := make(map[string]string, len(options))
+	for key, value := range options {
+		normalized[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return normalized
 }
 
 // CloneLogConfig returns a deep copy of cfg.

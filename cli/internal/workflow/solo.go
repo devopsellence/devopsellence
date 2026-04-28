@@ -4165,7 +4165,7 @@ func temporaryDNSHostname(cfg *config.ProjectConfig, ip string) string {
 }
 
 func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string) string {
-	return "devopsellence ingress set --host " + hostname + " --tls-mode " + temporaryDNSTLSMode(cfg)
+	return "devopsellence ingress set --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
 }
 
 func temporaryDNSTLSMode(cfg *config.ProjectConfig) string {

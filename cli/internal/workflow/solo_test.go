@@ -1035,7 +1035,7 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	if got, want := hint.SuggestedAction.Hostname, "my-app-production.8.8.8.8.sslip.io"; got != want {
 		t.Fatalf("suggested hostname = %q, want %q", got, want)
 	}
-	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host my-app-production.8.8.8.8.sslip.io --tls-mode auto") {
+	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host 'my-app-production.8.8.8.8.sslip.io' --tls-mode 'auto'") {
 		t.Fatalf("command = %q, want ingress set command", hint.SuggestedAction.Command)
 	}
 	if len(hint.SuggestedAction.Risks) == 0 {
@@ -1048,7 +1048,7 @@ func TestTemporaryDNSCommandPreservesConfiguredTLSMode(t *testing.T) {
 	cfg.Ingress = &config.IngressConfig{TLS: config.IngressTLSConfig{Mode: "off"}}
 
 	got := temporaryDNSCommand(&cfg, "demo-production.8.8.8.8.sslip.io")
-	want := "devopsellence ingress set --host demo-production.8.8.8.8.sslip.io --tls-mode off"
+	want := "devopsellence ingress set --host 'demo-production.8.8.8.8.sslip.io' --tls-mode 'off'"
 	if got != want {
 		t.Fatalf("temporaryDNSCommand() = %q, want %q", got, want)
 	}

@@ -203,6 +203,46 @@ func TestRunReportsManagedDockerLogUsage(t *testing.T) {
 	}
 }
 
+func TestRetainedReleaseKeysNormalizesEnvironmentNames(t *testing.T) {
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
+	releases := []releaseRecord{
+		{Environment: "production ", Revision: "rev-1", Images: []string{"app:rev1"}, LastSeenAt: older},
+		{Environment: "production", Revision: "rev-2", Images: []string{"app:rev2"}, LastSeenAt: newer},
+	}
+
+	retained := retainedReleaseKeys(releases, nil, 1)
+	if _, ok := retained[releaseKey("production", "rev-2")]; !ok {
+		t.Fatal("expected newest production release to be retained")
+	}
+	if _, ok := retained[releaseKey("production", "rev-1")]; ok {
+		t.Fatal("expected older whitespace-variant production release to fall outside retention")
+	}
+}
+
+func TestStoreNormalizeCanonicalizesPersistedReleaseRecords(t *testing.T) {
+	now := time.Now()
+	s := &store{Releases: []releaseRecord{
+		{Environment: " production ", Revision: " rev-1", Images: []string{" app:rev1 ", "app:rev1"}, LastSeenAt: now.Add(-time.Minute)},
+		{Environment: "production", Revision: "rev-1", Images: []string{"app:rev1b"}, LastSeenAt: now},
+	}}
+
+	s.normalize()
+	if len(s.Releases) != 1 {
+		t.Fatalf("releases = %#v, want one normalized record", s.Releases)
+	}
+	got := s.Releases[0]
+	if got.Environment != "production" || got.Revision != "rev-1" {
+		t.Fatalf("normalized release = %#v", got)
+	}
+	if len(got.Images) != 2 || got.Images[0] != "app:rev1" || got.Images[1] != "app:rev1b" {
+		t.Fatalf("normalized images = %#v", got.Images)
+	}
+	if !got.LastSeenAt.Equal(now) {
+		t.Fatalf("last seen = %v, want %v", got.LastSeenAt, now)
+	}
+}
+
 func desiredState(revision string, image string) *desiredstatepb.DesiredState {
 	return &desiredstatepb.DesiredState{
 		SchemaVersion: 2,

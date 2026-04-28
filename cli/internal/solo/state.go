@@ -13,6 +13,7 @@ import (
 	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
+	corerelease "github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/release"
 )
 
 const soloStateSchemaVersion = 1
@@ -26,6 +27,9 @@ type State struct {
 	Nodes         map[string]config.Node                 `json:"nodes,omitempty"`
 	Attachments   map[string]AttachmentRecord            `json:"attachments,omitempty"`
 	Snapshots     map[string]desiredstate.DeploySnapshot `json:"snapshots,omitempty"`
+	Releases      map[string]corerelease.Release         `json:"releases,omitempty"`
+	Current       map[string]string                      `json:"current_releases,omitempty"`
+	Deployments   map[string]corerelease.Deployment      `json:"deployments,omitempty"`
 	Secrets       map[string]SecretRecord                `json:"secrets,omitempty"`
 }
 
@@ -278,6 +282,9 @@ func newState() State {
 		Nodes:         map[string]config.Node{},
 		Attachments:   map[string]AttachmentRecord{},
 		Snapshots:     map[string]desiredstate.DeploySnapshot{},
+		Releases:      map[string]corerelease.Release{},
+		Current:       map[string]string{},
+		Deployments:   map[string]corerelease.Deployment{},
 		Secrets:       map[string]SecretRecord{},
 	}
 }
@@ -294,6 +301,15 @@ func (s *State) ensureDefaults() {
 	}
 	if s.Snapshots == nil {
 		s.Snapshots = map[string]desiredstate.DeploySnapshot{}
+	}
+	if s.Releases == nil {
+		s.Releases = map[string]corerelease.Release{}
+	}
+	if s.Current == nil {
+		s.Current = map[string]string{}
+	}
+	if s.Deployments == nil {
+		s.Deployments = map[string]corerelease.Deployment{}
 	}
 	if s.Secrets == nil {
 		s.Secrets = map[string]SecretRecord{}
@@ -352,6 +368,128 @@ func normalizeState(current State) (State, error) {
 		normalizedSnapshots[normalizedKey] = snapshot
 	}
 	current.Snapshots = normalizedSnapshots
+
+	releaseIDs := make([]string, 0, len(current.Releases))
+	for id := range current.Releases {
+		releaseIDs = append(releaseIDs, id)
+	}
+	sort.Strings(releaseIDs)
+	normalizedReleases := make(map[string]corerelease.Release, len(current.Releases))
+	for _, id := range releaseIDs {
+		release := current.Releases[id]
+		release.ID = strings.TrimSpace(firstNonEmpty(release.ID, id))
+		release.EnvironmentID = strings.TrimSpace(release.EnvironmentID)
+		release.Revision = strings.TrimSpace(release.Revision)
+		release.CreatedAt = strings.TrimSpace(release.CreatedAt)
+		if release.ID == "" {
+			return State{}, fmt.Errorf("release %q id is required", id)
+		}
+		if release.EnvironmentID == "" {
+			return State{}, fmt.Errorf("release %q environment_id is required", id)
+		}
+		if release.Revision == "" {
+			return State{}, fmt.Errorf("release %q revision is required", id)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, release.CreatedAt); err != nil {
+			return State{}, fmt.Errorf("release %q has invalid created_at: %w", id, err)
+		}
+		normalizedKey, snapshot, err := normalizeSnapshotRecord(release.EnvironmentID, release.Snapshot)
+		if err != nil {
+			return State{}, fmt.Errorf("release %q snapshot is invalid: %w", id, err)
+		}
+		release.EnvironmentID = normalizedKey
+		release.Snapshot = snapshot
+		release.Snapshot.Revision = release.Revision
+		if _, exists := normalizedReleases[release.ID]; exists {
+			return State{}, fmt.Errorf("duplicate release id %q after normalization", release.ID)
+		}
+		normalizedReleases[release.ID] = release
+	}
+	current.Releases = normalizedReleases
+
+	currentKeys := make([]string, 0, len(current.Current))
+	for key := range current.Current {
+		currentKeys = append(currentKeys, key)
+	}
+	sort.Strings(currentKeys)
+	normalizedCurrent := make(map[string]string, len(current.Current))
+	for _, key := range currentKeys {
+		_, workspaceKey, err := normalizeWorkspaceIdentity(key, "", "")
+		if err != nil {
+			return State{}, fmt.Errorf("normalize current release %q: %w", key, err)
+		}
+		_, keyEnvironment := splitEnvironmentStateKey(key)
+		environment := defaultEnvironmentName(keyEnvironment)
+		releaseID := strings.TrimSpace(current.Current[key])
+		if releaseID == "" {
+			continue
+		}
+		normalizedKey := workspaceKey + "\n" + environment
+		release, ok := current.Releases[releaseID]
+		if !ok {
+			return State{}, fmt.Errorf("current release %q references missing release %q", key, releaseID)
+		}
+		if release.EnvironmentID != normalizedKey {
+			return State{}, fmt.Errorf("current release %q references release %q for different workspace/environment %q", key, releaseID, release.EnvironmentID)
+		}
+		if existingReleaseID, exists := normalizedCurrent[normalizedKey]; exists {
+			if existingReleaseID != releaseID {
+				return State{}, fmt.Errorf("duplicate current release for workspace/environment %q after normalization", normalizedKey)
+			}
+			continue
+		}
+		normalizedCurrent[normalizedKey] = releaseID
+	}
+	current.Current = normalizedCurrent
+
+	deploymentIDs := make([]string, 0, len(current.Deployments))
+	for id := range current.Deployments {
+		deploymentIDs = append(deploymentIDs, id)
+	}
+	sort.Strings(deploymentIDs)
+	normalizedDeployments := make(map[string]corerelease.Deployment, len(current.Deployments))
+	for _, id := range deploymentIDs {
+		deployment := current.Deployments[id]
+		deployment.ID = strings.TrimSpace(firstNonEmpty(deployment.ID, id))
+		deployment.EnvironmentID = strings.TrimSpace(deployment.EnvironmentID)
+		deployment.ReleaseID = strings.TrimSpace(deployment.ReleaseID)
+		deployment.Kind = strings.TrimSpace(deployment.Kind)
+		deployment.Status = strings.TrimSpace(deployment.Status)
+		if deployment.ID == "" {
+			return State{}, fmt.Errorf("deployment %q id is required", id)
+		}
+		if deployment.EnvironmentID == "" {
+			return State{}, fmt.Errorf("deployment %q environment_id is required", id)
+		}
+		if deployment.ReleaseID == "" {
+			return State{}, fmt.Errorf("deployment %q release_id is required", id)
+		}
+		release, ok := current.Releases[deployment.ReleaseID]
+		if !ok {
+			return State{}, fmt.Errorf("deployment %q references missing release %q", id, deployment.ReleaseID)
+		}
+		if release.EnvironmentID != deployment.EnvironmentID {
+			return State{}, fmt.Errorf("deployment %q references release %q for different workspace/environment %q", id, deployment.ReleaseID, release.EnvironmentID)
+		}
+		switch deployment.Kind {
+		case corerelease.DeploymentKindDeploy, corerelease.DeploymentKindRollback, corerelease.DeploymentKindRepublish:
+		default:
+			return State{}, fmt.Errorf("deployment %q has unsupported kind %q", id, deployment.Kind)
+		}
+		switch deployment.Status {
+		case corerelease.DeploymentStatusPending, corerelease.DeploymentStatusRunning, corerelease.DeploymentStatusSettled, corerelease.DeploymentStatusFailed:
+		default:
+			return State{}, fmt.Errorf("deployment %q has unsupported status %q", id, deployment.Status)
+		}
+		if deployment.Sequence <= 0 {
+			return State{}, fmt.Errorf("deployment %q sequence must be greater than zero", id)
+		}
+		if _, exists := normalizedDeployments[deployment.ID]; exists {
+			return State{}, fmt.Errorf("duplicate deployment id %q after normalization", deployment.ID)
+		}
+		normalizedDeployments[deployment.ID] = deployment
+	}
+	current.Deployments = normalizedDeployments
 
 	secretKeys := make([]string, 0, len(current.Secrets))
 	for key := range current.Secrets {
@@ -559,6 +697,86 @@ func (s *State) SaveSnapshot(snapshot desiredstate.DeploySnapshot) (string, erro
 	snapshot.WorkspaceKey, _ = splitEnvironmentStateKey(key)
 	s.Snapshots[key] = snapshot
 	return key, nil
+}
+
+func (s *State) SaveRelease(release corerelease.Release) (string, error) {
+	s.ensureDefaults()
+	if strings.TrimSpace(release.ID) == "" {
+		return "", errors.New("release id is required")
+	}
+	if strings.TrimSpace(release.Revision) == "" {
+		return "", errors.New("release revision is required")
+	}
+	if strings.TrimSpace(release.Snapshot.WorkspaceRoot) == "" {
+		return "", errors.New("release snapshot workspace_root is required")
+	}
+	if strings.TrimSpace(release.Snapshot.Environment) == "" {
+		return "", errors.New("release snapshot environment is required")
+	}
+	key, err := EnvironmentStateKey(release.Snapshot.WorkspaceRoot, release.Snapshot.Environment)
+	if err != nil {
+		return "", err
+	}
+	release.EnvironmentID = key
+	release.Snapshot.WorkspaceKey, _ = splitEnvironmentStateKey(key)
+	release.Snapshot.Environment = defaultEnvironmentName(release.Snapshot.Environment)
+	release.Snapshot.Revision = release.Revision
+	s.Releases[release.ID] = release
+	s.Current[key] = release.ID
+	s.Snapshots[key] = release.Snapshot
+	return key, nil
+}
+
+func (s *State) CurrentRelease(workspaceRoot, environment string) (string, corerelease.Release, bool, error) {
+	s.ensureDefaults()
+	key, err := EnvironmentStateKey(workspaceRoot, environment)
+	if err != nil {
+		return "", corerelease.Release{}, false, err
+	}
+	releaseID := strings.TrimSpace(s.Current[key])
+	if releaseID == "" {
+		return key, corerelease.Release{}, false, nil
+	}
+	release, ok := s.Releases[releaseID]
+	return key, release, ok, nil
+}
+
+func (s *State) ReleaseHistory(workspaceRoot, environment string) ([]corerelease.Release, error) {
+	s.ensureDefaults()
+	key, err := EnvironmentStateKey(workspaceRoot, environment)
+	if err != nil {
+		return nil, err
+	}
+	releases := []corerelease.Release{}
+	for _, release := range s.Releases {
+		if release.EnvironmentID == key {
+			releases = append(releases, release)
+		}
+	}
+	createdAtByID := make(map[string]time.Time, len(releases))
+	for _, release := range releases {
+		createdAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(release.CreatedAt))
+		if err != nil {
+			return nil, fmt.Errorf("release %q has invalid created_at: %w", release.ID, err)
+		}
+		createdAtByID[release.ID] = createdAt
+	}
+	sort.SliceStable(releases, func(i, j int) bool {
+		if !createdAtByID[releases[i].ID].Equal(createdAtByID[releases[j].ID]) {
+			return createdAtByID[releases[i].ID].After(createdAtByID[releases[j].ID])
+		}
+		return releases[i].ID > releases[j].ID
+	})
+	return releases, nil
+}
+
+func (s *State) SaveDeployment(deployment corerelease.Deployment) error {
+	s.ensureDefaults()
+	if strings.TrimSpace(deployment.ID) == "" {
+		return errors.New("deployment id is required")
+	}
+	s.Deployments[deployment.ID] = deployment
+	return nil
 }
 
 func (s *State) AttachNode(workspaceRoot, environment, nodeName string) (AttachmentRecord, bool, error) {

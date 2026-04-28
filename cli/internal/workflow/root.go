@@ -613,6 +613,40 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	statusCommand.Flags().StringVar(&statusSharedOpts.Environment, "env", "", "Environment name override (shared mode)")
 	root.AddCommand(statusCommand)
 
+	var releaseListOpts SoloReleaseListOptions
+	var releaseRollbackOpts SoloReleaseRollbackOptions
+	releaseCommand := &cobra.Command{
+		Use:   "release",
+		Short: "Manage release history for the selected workspace mode",
+	}
+	releaseListCommand := &cobra.Command{
+		Use:   "list",
+		Short: "List release history",
+		RunE: runByMode(func(ctx context.Context) error {
+			return app.SoloReleaseList(ctx, releaseListOpts)
+		}, func(ctx context.Context) error {
+			return ExitError{Code: 2, Err: errors.New("release list is not wired for shared mode yet")}
+		}),
+	}
+	releaseListCommand.Flags().IntVar(&releaseListOpts.Limit, "limit", 20, "Maximum releases to return (0 for full history)")
+	releaseRollbackCommand := &cobra.Command{
+		Use:   "rollback [revision-or-release-id]",
+		Short: "Republish a previous release",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				releaseRollbackOpts.Selector = strings.TrimSpace(args[0])
+			}
+			return runByMode(func(ctx context.Context) error {
+				return app.SoloReleaseRollback(ctx, releaseRollbackOpts)
+			}, func(ctx context.Context) error {
+				return ExitError{Code: 2, Err: errors.New("release rollback is not wired for shared mode yet")}
+			})(cmd, args)
+		},
+	}
+	releaseCommand.AddCommand(releaseListCommand, releaseRollbackCommand)
+	root.AddCommand(releaseCommand)
+
 	root.AddCommand(&cobra.Command{
 		Use:   "doctor",
 		Short: "Check the current workspace and runtime prerequisites",

@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,15 +27,30 @@ import (
 	cliversion "github.com/devopsellence/cli/internal/version"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
+	corerelease "github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/release"
+	"github.com/oklog/ulid/v2"
 )
 
 type SoloDeployOptions struct {
 	SkipDNSCheck bool
 }
 
+type SoloReleaseListOptions struct {
+	Limit int
+}
+
+type SoloReleaseRollbackOptions struct {
+	Selector string
+}
+
 type SoloStatusOptions struct {
 	Nodes []string
 }
+
+var (
+	soloULIDMu      sync.Mutex
+	soloULIDEntropy = ulid.Monotonic(rand.Reader, 0)
+)
 
 type SoloSecretsSetOptions struct {
 	Key         string
@@ -393,7 +409,46 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if _, err := current.SaveSnapshot(solo.RedactDeploySnapshotSecrets(snapshot, cfg)); err != nil {
+	redactedSnapshot := solo.RedactDeploySnapshotSecrets(snapshot, cfg)
+	environmentID, err := solo.EnvironmentStateKey(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	releaseID := soloReleaseID(shortSHA, now)
+	release, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
+		ID:            releaseID,
+		EnvironmentID: environmentID,
+		Revision:      shortSHA,
+		Snapshot:      redactedSnapshot,
+		Image:         corerelease.ImageRef{Reference: imageTag},
+		TargetNodeIDs: attachedNodeNames,
+		CreatedAt:     now,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := current.SaveRelease(release); err != nil {
+		return err
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            soloDeploymentID(corerelease.DeploymentKindDeploy, shortSHA, now),
+		EnvironmentID: release.EnvironmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      nextSoloDeploymentSequence(current, release.EnvironmentID),
+		TargetNodeIDs: attachedNodeNames,
+		CreatedAt:     now,
+	})
+	if err != nil {
+		return err
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	deployment.StatusMessage = "publishing desired state"
+	if err := current.SaveDeployment(deployment); err != nil {
 		return err
 	}
 	// Persist desired local state first so follow-up republish operations can
@@ -403,23 +458,42 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	}
 	desiredStateRevisions, err := a.republishNodes(ctx, current, attachedNodeNames)
 	if err != nil {
+		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
+			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
+		}
 		return err
 	}
 	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions); err != nil {
+		resultErr := err
 		var rolloutErr *soloRolloutError
 		if errors.As(err, &rolloutErr) {
 			rolloutErr.Healthchecks = soloDeployHealthcheckDetails(cfg)
-			return ExitError{Code: 1, Err: rolloutErr}
+			resultErr = ExitError{Code: 1, Err: rolloutErr}
 		}
 		var timeoutErr *soloRolloutTimeoutError
 		if errors.As(err, &timeoutErr) {
 			timeoutErr.Healthchecks = soloDeployHealthcheckDetails(cfg)
-			return ExitError{Code: 1, Err: timeoutErr}
+			resultErr = ExitError{Code: 1, Err: timeoutErr}
 		}
+		if persistErr := a.persistSoloDeploymentRolloutFailure(current, deployment, desiredStateRevisions, resultErr); persistErr != nil {
+			return errors.Join(resultErr, fmt.Errorf("persist deployment failure: %w", persistErr))
+		}
+		return resultErr
+	}
+	deployment.Status = corerelease.DeploymentStatusSettled
+	deployment.StatusMessage = "release settled"
+	deployment.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	deployment.PublicationResult = soloDeploymentPublicationResult(desiredStateRevisions, nil)
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 
 	payload := map[string]any{
+		"release_id":              release.ID,
+		"deployment_id":           deployment.ID,
 		"workload_revision":       shortSHA,
 		"desired_state_revisions": desiredStateRevisions,
 		"image":                   imageTag,
@@ -910,10 +984,10 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 					return
 				}
 			}
-			publication, err := desiredstate.PlanNodePublication(desiredstate.NodePublicationInput{
+			publication, err := corerelease.PlanPublication(corerelease.PublicationPlanInput{
 				NodeName:     name,
-				CurrentNode:  node,
-				Snapshots:    inputs.snapshots,
+				Node:         node,
+				Releases:     publicationReleasesFromSnapshots(inputs.snapshots),
 				ReleaseNodes: inputs.releaseNodes,
 				NodePeers:    inputs.peers,
 			})
@@ -928,13 +1002,8 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 				appendSoloRepublishError(&mu, &errs, name, "write desired state", err)
 				return
 			}
-			revision, err := desiredStateRevision(desiredStateJSON)
-			if err != nil {
-				appendSoloRepublishError(&mu, &errs, name, "parse desired state revision", err)
-				return
-			}
 			mu.Lock()
-			revisions[name] = revision
+			revisions[name] = publication.Revision
 			mu.Unlock()
 		}(nodeName, node, inputs)
 	}
@@ -1183,6 +1252,26 @@ func snapshotNeedsImageOnNode(snapshot desiredstate.DeploySnapshot, node config.
 	return snapshot.ReleaseTask != nil && runReleaseTask
 }
 
+func publicationReleasesFromSnapshots(snapshots []desiredstate.DeploySnapshot) []corerelease.Release {
+	releases := make([]corerelease.Release, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		workspaceKey := strings.TrimSpace(snapshot.WorkspaceKey)
+		environment := strings.TrimSpace(snapshot.Environment)
+		if environment == "" {
+			environment = config.DefaultEnvironment
+		}
+		snapshot.WorkspaceKey = workspaceKey
+		snapshot.Environment = environment
+		releases = append(releases, corerelease.Release{
+			ID:       workspaceKey + "\n" + environment,
+			Revision: strings.TrimSpace(snapshot.Revision),
+			Snapshot: snapshot,
+			Image:    corerelease.ImageRef{Reference: strings.TrimSpace(snapshot.Image)},
+		})
+	}
+	return releases
+}
+
 func desiredStateRevision(data []byte) (string, error) {
 	var payload struct {
 		Revision string `json:"revision"`
@@ -1264,9 +1353,15 @@ func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]desireds
 
 	for _, key := range current.AttachmentKeysForNode(nodeName) {
 		attachment := current.Attachments[key]
-		snapshot, ok := current.Snapshots[key]
+		releaseID := strings.TrimSpace(current.Current[key])
+		release, ok := current.Releases[releaseID]
+		snapshot := release.Snapshot
 		if !ok {
-			continue
+			var snapshotOK bool
+			snapshot, snapshotOK = current.Snapshots[key]
+			if !snapshotOK {
+				continue
+			}
 		}
 		snapshots = append(snapshots, snapshot)
 		if image := strings.TrimSpace(snapshot.Image); image != "" && !imageSet[image] {
@@ -1305,6 +1400,15 @@ func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]desireds
 	}
 	sort.Strings(images)
 	return snapshots, releaseNodes, peers, images, nil
+}
+
+func soloAttachmentHasReleaseState(current solo.State, attachment solo.AttachmentRecord) bool {
+	key := attachment.WorkspaceKey + "\n" + attachment.Environment
+	if strings.TrimSpace(current.Current[key]) != "" {
+		return true
+	}
+	_, ok := current.Snapshots[key]
+	return ok
 }
 
 func releaseNodeForSnapshot(snapshot desiredstate.DeploySnapshot, attachment solo.AttachmentRecord, nodes map[string]config.Node) (string, error) {
@@ -1397,6 +1501,160 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status failed for %d node(s)", readErrors)}}
 	}
 	return nil
+}
+
+func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) error {
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	environmentName := soloEnvironmentName(cfg, "")
+	environmentID, currentRelease, hasCurrent, err := current.CurrentRelease(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	releases, err := current.ReleaseHistory(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	limit := opts.Limit
+	if limit > 0 && len(releases) > limit {
+		releases = releases[:limit]
+	}
+	items := make([]map[string]any, 0, len(releases))
+	for _, release := range releases {
+		items = append(items, map[string]any{
+			"id":            release.ID,
+			"revision":      release.Revision,
+			"config_digest": release.ConfigDigest,
+			"image":         release.Image.Reference,
+			"created_at":    release.CreatedAt,
+			"current":       hasCurrent && release.ID == currentRelease.ID,
+			"target_nodes":  release.TargetNodeIDs,
+		})
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"environment":    environmentName,
+		"environment_id": environmentID,
+		"current_release_id": func() string {
+			if hasCurrent {
+				return currentRelease.ID
+			}
+			return ""
+		}(),
+		"releases": items,
+	})
+}
+
+func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackOptions) error {
+	stream := a.Printer.Stream("devopsellence release rollback")
+	if err := stream.Event("started", map[string]any{}); err != nil {
+		return err
+	}
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	environmentName := soloEnvironmentName(cfg, "")
+	attachedNodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	if len(attachedNodeNames) == 0 {
+		return fmt.Errorf("no nodes attached to %s; run `devopsellence node attach <name>`", environmentName)
+	}
+	environmentID, currentRelease, hasCurrent, err := current.CurrentRelease(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	if !hasCurrent {
+		return fmt.Errorf("no current release for %s; run `devopsellence deploy` first", environmentName)
+	}
+	releases, err := current.ReleaseHistory(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	selected, err := corerelease.SelectRollbackRelease(releases, currentRelease.ID, opts.Selector)
+	if err != nil {
+		return err
+	}
+	rollbackTargetNodeNames, err := soloRollbackTargetNodeNames(attachedNodeNames, selected)
+	if err != nil {
+		return err
+	}
+	nodes, err := a.resolveNodes(current, rollbackTargetNodeNames)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            soloDeploymentID(corerelease.DeploymentKindRollback, selected.Revision, now),
+		EnvironmentID: environmentID,
+		ReleaseID:     selected.ID,
+		Kind:          corerelease.DeploymentKindRollback,
+		Sequence:      nextSoloDeploymentSequence(current, environmentID),
+		TargetNodeIDs: rollbackTargetNodeNames,
+		CreatedAt:     now,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := current.SaveRelease(selected); err != nil {
+		return err
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	deployment.StatusMessage = "publishing desired state"
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	desiredStateRevisions, err := a.republishNodes(ctx, current, rollbackTargetNodeNames)
+	if err != nil {
+		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
+			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
+		}
+		return err
+	}
+	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions); err != nil {
+		if persistErr := a.persistSoloDeploymentRolloutFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
+			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
+		}
+		return err
+	}
+	deployment.Status = corerelease.DeploymentStatusSettled
+	deployment.StatusMessage = "rollback settled"
+	deployment.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	deployment.PublicationResult = soloDeploymentPublicationResult(desiredStateRevisions, nil)
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	return stream.Result(map[string]any{
+		"release_id":              selected.ID,
+		"deployment_id":           deployment.ID,
+		"rolled_back_from":        currentRelease.ID,
+		"workload_revision":       selected.Revision,
+		"desired_state_revisions": desiredStateRevisions,
+		"environment":             environmentName,
+		"nodes":                   sortedNodeNames(nodes),
+		"phase":                   "settled",
+	})
 }
 
 func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
@@ -1792,7 +2050,7 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, ok := current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment]; ok {
+	if soloAttachmentHasReleaseState(current, attachment) {
 		if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
 			return err
 		}
@@ -2686,7 +2944,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	}
 
 	if attached {
-		if _, ok := current.Snapshots[attachment.WorkspaceKey+"\n"+attachment.Environment]; ok {
+		if soloAttachmentHasReleaseState(current, attachment) {
 			if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
 				return err
 			}
@@ -3958,6 +4216,155 @@ func dockerBuildArgs(contextPath, dockerfile, tag string, platforms []string) ([
 
 func soloImageTag(project, revision string) string {
 	return fmt.Sprintf("%s:%s", discovery.Slugify(project), revision)
+}
+
+func soloReleaseID(revision string, now time.Time) string {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		revision = "unknown"
+	}
+	return fmt.Sprintf("rel_%s_%s", sanitizeSoloIDPart(revision), soloULID(now))
+}
+
+func soloDeploymentID(kind, revision string, now time.Time) string {
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		kind = corerelease.DeploymentKindDeploy
+	}
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		revision = "unknown"
+	}
+	return fmt.Sprintf("dep_%s_%s_%s", sanitizeSoloIDPart(kind), sanitizeSoloIDPart(revision), soloULID(now))
+}
+
+func soloULID(now time.Time) string {
+	soloULIDMu.Lock()
+	defer soloULIDMu.Unlock()
+	id, err := ulid.New(ulid.Timestamp(now.UTC()), soloULIDEntropy)
+	if err != nil {
+		return ulid.Make().String()
+	}
+	return id.String()
+}
+
+func sanitizeSoloIDPart(value string) string {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
+}
+
+func nextSoloDeploymentSequence(current solo.State, environmentID string) int {
+	sequence := 0
+	for _, deployment := range current.Deployments {
+		if deployment.EnvironmentID == environmentID && deployment.Sequence > sequence {
+			sequence = deployment.Sequence
+		}
+	}
+	return sequence + 1
+}
+
+func soloDeploymentPublicationResult(revisions map[string]string, publishErr error) *corerelease.DeploymentPublicationResult {
+	result := &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+	}
+	if publishErr != nil {
+		result.Status = corerelease.PublicationStatusFailed
+		result.ErrorMessage = publishErr.Error()
+	}
+	for _, nodeName := range sortedMapKeys(revisions) {
+		result.NodeResults = append(result.NodeResults, corerelease.DesiredStatePublication{
+			NodeName: nodeName,
+			Revision: revisions[nodeName],
+			Status:   corerelease.PublicationStatusWritten,
+		})
+	}
+	return result
+}
+
+func (a *App) persistSoloDeploymentFailure(current solo.State, deployment corerelease.Deployment, revisions map[string]string, failure error) error {
+	deployment.Status = corerelease.DeploymentStatusFailed
+	deployment.StatusMessage = "deployment failed"
+	deployment.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	deployment.PublicationResult = soloDeploymentPublicationResult(revisions, failure)
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	return a.writeSoloState(current)
+}
+
+func (a *App) persistSoloDeploymentRolloutFailure(current solo.State, deployment corerelease.Deployment, revisions map[string]string, failure error) error {
+	deployment.Status = corerelease.DeploymentStatusFailed
+	deployment.StatusMessage = "rollout failed: " + failure.Error()
+	deployment.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	deployment.PublicationResult = soloDeploymentPublicationResult(revisions, nil)
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	return a.writeSoloState(current)
+}
+
+func soloRollbackTargetNodeNames(attachedNodeNames []string, release corerelease.Release) ([]string, error) {
+	normalizedAttached := make([]string, 0, len(attachedNodeNames))
+	attached := make(map[string]bool, len(attachedNodeNames))
+	for _, nodeName := range attachedNodeNames {
+		nodeName = strings.TrimSpace(nodeName)
+		if nodeName != "" && !attached[nodeName] {
+			normalizedAttached = append(normalizedAttached, nodeName)
+			attached[nodeName] = true
+		}
+	}
+	normalizedTargets := make([]string, 0, len(release.TargetNodeIDs))
+	targeted := make(map[string]bool, len(release.TargetNodeIDs))
+	for _, nodeName := range release.TargetNodeIDs {
+		nodeName = strings.TrimSpace(nodeName)
+		if nodeName != "" && !targeted[nodeName] {
+			normalizedTargets = append(normalizedTargets, nodeName)
+			targeted[nodeName] = true
+		}
+	}
+	if len(normalizedTargets) == 0 {
+		if len(normalizedAttached) == 0 {
+			return nil, fmt.Errorf("selected rollback release %s does not target any currently attached nodes", release.Revision)
+		}
+		return normalizedAttached, nil
+	}
+	targets := make([]string, 0, len(normalizedTargets))
+	for _, nodeName := range normalizedTargets {
+		if attached[nodeName] {
+			targets = append(targets, nodeName)
+		}
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("selected rollback release %s does not target any currently attached nodes", release.Revision)
+	}
+	return targets, nil
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // transferImage pipes `docker save | gzip` through ssh to `gunzip | docker load`.

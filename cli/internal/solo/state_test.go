@@ -9,6 +9,7 @@ import (
 
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
+	corerelease "github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/release"
 )
 
 func TestCanonicalWorkspaceKeyResolvesSymlinks(t *testing.T) {
@@ -154,6 +155,160 @@ func TestStateStoreReadNormalizesLegacySnapshots(t *testing.T) {
 	}
 	if snapshot.Environment != "production" {
 		t.Fatalf("environment = %q, want production", snapshot.Environment)
+	}
+}
+
+func TestStateStoreReadRejectsDuplicateNormalizedReleaseIDs(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "solo-state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "releases": {
+    " rel-1 ": {
+      "environment_id": "/workspace/demo\nproduction",
+      "revision": "aaa1111",
+      "created_at": "2026-04-28T12:00:00Z"
+    },
+    "rel-1": {
+      "environment_id": "/workspace/demo\nproduction",
+      "revision": "bbb2222",
+      "created_at": "2026-04-28T12:01:00Z"
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewStateStore(path).Read()
+	if err == nil || !strings.Contains(err.Error(), "duplicate release id") {
+		t.Fatalf("Read() error = %v, want duplicate release id", err)
+	}
+}
+
+func TestStateStoreReadNormalizesReleaseSnapshots(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "solo-state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "releases": {
+    "rel-1": {
+      "environment_id": "/workspace/demo\nproduction",
+      "revision": "aaa1111",
+      "created_at": "2026-04-28T12:00:00Z",
+      "snapshot": {}
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := NewStateStore(path).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := loaded.Releases["rel-1"]
+	if release.Snapshot.WorkspaceKey != "/workspace/demo" || release.Snapshot.Environment != "production" || release.Snapshot.Revision != "aaa1111" {
+		t.Fatalf("release snapshot = %#v, want normalized workspace/environment/revision", release.Snapshot)
+	}
+}
+
+func TestStateStoreReadRejectsInvalidReleaseCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "solo-state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "releases": {
+    "rel-1": {
+      "environment_id": "/workspace/demo\nproduction",
+      "revision": "aaa1111",
+      "created_at": "not-a-time",
+      "snapshot": {}
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewStateStore(path).Read()
+	if err == nil || !strings.Contains(err.Error(), "invalid created_at") {
+		t.Fatalf("Read() error = %v, want invalid created_at", err)
+	}
+}
+
+func TestStateStoreReadRejectsDuplicateNormalizedDeploymentIDs(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "solo-state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "releases": {
+    "rel-1": {
+      "environment_id": "/workspace/demo\nproduction",
+      "revision": "aaa1111",
+      "created_at": "2026-04-28T12:00:00Z",
+      "snapshot": {}
+    }
+  },
+  "deployments": {
+    " dep-1 ": {
+      "environment_id": "/workspace/demo\nproduction",
+      "release_id": "rel-1",
+      "kind": "deploy",
+      "sequence": 1,
+      "status": "settled"
+    },
+    "dep-1": {
+      "id": "dep-1",
+      "environment_id": "/workspace/demo\nproduction",
+      "release_id": "rel-1",
+      "kind": "deploy",
+      "sequence": 2,
+      "status": "settled"
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewStateStore(path).Read()
+	if err == nil || !strings.Contains(err.Error(), "duplicate deployment id") {
+		t.Fatalf("Read() error = %v, want duplicate deployment id", err)
+	}
+}
+
+func TestStateStoreReadRejectsDeploymentForDifferentReleaseEnvironment(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "solo-state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "releases": {
+    "rel-1": {
+      "environment_id": "/workspace/demo\nstaging",
+      "revision": "aaa1111",
+      "created_at": "2026-04-28T12:00:00Z",
+      "snapshot": {}
+    }
+  },
+  "deployments": {
+    "dep-1": {
+      "environment_id": "/workspace/demo\nproduction",
+      "release_id": "rel-1",
+      "kind": "deploy",
+      "sequence": 1,
+      "status": "settled"
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewStateStore(path).Read()
+	if err == nil || !strings.Contains(err.Error(), "different workspace/environment") {
+		t.Fatalf("Read() error = %v, want deployment environment validation", err)
 	}
 }
 
@@ -367,6 +522,148 @@ func TestSaveSnapshotPersistsWorkspaceEnvironmentIdentity(t *testing.T) {
 		if snapshot.Metadata.ConfigPath != "/workspace/demo/devopsellence.yml" {
 			t.Fatalf("config path = %q", snapshot.Metadata.ConfigPath)
 		}
+	}
+}
+
+func TestSaveReleasePersistsCurrentReleaseAndHistory(t *testing.T) {
+	t.Parallel()
+
+	current := newState()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	snapshot, err := BuildDeploySnapshot(&cfg, "/workspace/demo", "/workspace/demo/devopsellence.yml", "demo:abc1234", "abc1234", map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
+		ID:            "rel-1",
+		EnvironmentID: "/workspace/demo\nproduction",
+		Revision:      "abc1234",
+		Snapshot:      snapshot,
+		Image:         corerelease.ImageRef{Reference: "demo:abc1234"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := current.SaveRelease(release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentKey, currentRelease, ok, err := current.CurrentRelease("/workspace/demo", "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || currentKey != key || currentRelease.ID != "rel-1" {
+		t.Fatalf("current release key=%q ok=%v release=%#v", currentKey, ok, currentRelease)
+	}
+	history, err := current.ReleaseHistory("/workspace/demo", "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].ID != "rel-1" {
+		t.Fatalf("history = %#v", history)
+	}
+}
+
+func TestReleaseHistoryOrdersTimestampTiesDeterministically(t *testing.T) {
+	t.Parallel()
+
+	current := newState()
+	key := "/workspace/demo\nproduction"
+	current.Releases = map[string]corerelease.Release{
+		"rel-a": {ID: "rel-a", EnvironmentID: key, Revision: "aaa1111", CreatedAt: "2026-04-28T12:00:00Z"},
+		"rel-c": {ID: "rel-c", EnvironmentID: key, Revision: "ccc3333", CreatedAt: "2026-04-28T08:01:00-04:00"},
+		"rel-b": {ID: "rel-b", EnvironmentID: key, Revision: "bbb2222", CreatedAt: "2026-04-28T12:00:00Z"},
+	}
+
+	history, err := current.ReleaseHistory("/workspace/demo", "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("history = %#v, want 3 releases", history)
+	}
+	got := []string{history[0].ID, history[1].ID, history[2].ID}
+	if !reflect.DeepEqual(got, []string{"rel-c", "rel-b", "rel-a"}) {
+		t.Fatalf("history order = %#v, want deterministic created_at/id order", got)
+	}
+}
+
+func TestNormalizeStateRejectsDuplicateCurrentReleaseKeys(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	key := workspaceRoot + "\nproduction"
+	current := newState()
+	current.Releases = map[string]corerelease.Release{
+		"rel-1": {ID: "rel-1", EnvironmentID: key, Revision: "aaa1111", CreatedAt: "2026-04-28T12:00:00Z"},
+		"rel-2": {ID: "rel-2", EnvironmentID: key, Revision: "bbb2222", CreatedAt: "2026-04-28T12:01:00Z"},
+	}
+	current.Current = map[string]string{
+		" " + workspaceRoot + " \nproduction": "rel-1",
+		workspaceRoot + "\nproduction":        "rel-2",
+	}
+
+	_, err := normalizeState(current)
+	if err == nil || !strings.Contains(err.Error(), "duplicate current release") {
+		t.Fatalf("normalizeState() error = %v, want duplicate current release", err)
+	}
+}
+
+func TestNormalizeStateRejectsCurrentReleaseFromDifferentEnvironment(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	productionKey := workspaceRoot + "\nproduction"
+	stagingKey := workspaceRoot + "\nstaging"
+	current := newState()
+	current.Releases = map[string]corerelease.Release{
+		"rel-1": {ID: "rel-1", EnvironmentID: stagingKey, Revision: "aaa1111", CreatedAt: "2026-04-28T12:00:00Z"},
+	}
+	current.Current = map[string]string{
+		productionKey: "rel-1",
+	}
+
+	_, err := normalizeState(current)
+	if err == nil || !strings.Contains(err.Error(), "different workspace/environment") {
+		t.Fatalf("normalizeState() error = %v, want different environment", err)
+	}
+}
+
+func TestSaveReleaseRejectsIncompleteRelease(t *testing.T) {
+	t.Parallel()
+
+	current := newState()
+	_, err := current.SaveRelease(corerelease.Release{
+		ID: "rel-1",
+		Snapshot: desiredstate.DeploySnapshot{
+			WorkspaceRoot: "/workspace/demo",
+			Environment:   "production",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "release revision is required") {
+		t.Fatalf("SaveRelease() error = %v, want revision validation", err)
+	}
+
+	_, err = current.SaveRelease(corerelease.Release{
+		ID:       "rel-1",
+		Revision: "abc1234",
+		Snapshot: desiredstate.DeploySnapshot{
+			Environment: "production",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "workspace_root is required") {
+		t.Fatalf("SaveRelease() error = %v, want workspace validation", err)
+	}
+
+	_, err = current.SaveRelease(corerelease.Release{
+		ID:       "rel-1",
+		Revision: "abc1234",
+		Snapshot: desiredstate.DeploySnapshot{
+			WorkspaceRoot: "/workspace/demo",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "environment is required") {
+		t.Fatalf("SaveRelease() error = %v, want environment validation", err)
 	}
 }
 

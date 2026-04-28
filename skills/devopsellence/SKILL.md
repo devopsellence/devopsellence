@@ -75,6 +75,25 @@ devopsellence deploy --image docker.io/example/app@sha256:...
 devopsellence status
 ```
 
+## CLI output contract
+
+The devopsellence CLI is agent-primary. Treat stdout as the machine-readable contract.
+
+- Bounded commands emit one JSON document on stdout.
+- Long-running commands emit newline-delimited JSON events on stdout.
+- Do not scrape human prose from stderr unless diagnosing a CLI/runtime failure.
+- Every payload includes `schema_version`; check it before relying on fields.
+- For schema version 1, streaming events use a common envelope:
+  - `event`: `started`, `progress`, `result`, or `error`
+  - `operation`: stable operation name when available
+  - final success events include `ok: true`
+  - final failure events include `ok: false` and `error`
+- Structured errors use `error.code`, `error.message`, and `error.exit_code`.
+- Command-specific fields are top-level. Tolerate unknown fields, but do not assume undocumented fields are stable.
+- Prefer explaining failures from structured `code`, `message`, evidence fields, and suggested next actions when present.
+- If `schema_version` is missing or unsupported, do not make high-risk decisions from command-specific fields; summarize the raw structured output and ask for updated docs or skill guidance.
+- Keep secret values out of logs and chat output.
+
 ## Secrets
 
 Prefer stdin over literal secret values in prompts or shell history:

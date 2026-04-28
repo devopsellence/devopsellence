@@ -19,20 +19,29 @@ command -v devopsellence
 
 If the command is missing, tell the user the devopsellence CLI is required and point them to the official docs. Do not run setup scripts from this skill.
 
-3. Choose the workspace mode before initializing:
-
-- Use `solo` for SSH-first single-operator workflows, existing VMs, local node state, local secrets, and direct Docker image streaming over SSH.
-- Use `shared` for browser sign-in, org/project/env context, hosted APIs, team workflows, shared encrypted secrets, and control-plane-managed nodes.
-- If the user has not picked a mode and intent is unclear, ask. Do not silently choose one.
-
-Inspect any existing mode/context when present:
+3. Choose the workspace mode before initializing. First inspect any existing mode/context:
 
 ```sh
 devopsellence mode show || true
 devopsellence context show || true
 ```
 
-4. Initialize the workspace before the first deploy. For solo:
+If a mode is already configured, use it. If no mode is configured and the user has not explicitly chosen one, do not default silently. Ask a short mode-selection question, make a recommendation, and wait for confirmation before running `devopsellence init`:
+
+> devopsellence has two workspace modes:
+>
+> - `solo`: SSH-first, single-operator, existing or provider-created VMs, local node state, local secrets, direct Docker image streaming over SSH.
+> - `shared`: hosted sign-in, org/project/env context, team workflows, shared encrypted secrets, and control-plane-managed nodes.
+>
+> Based on what you’ve told me, I recommend `<solo|shared>` because `<reason>`. Should I initialize this repo in `<solo|shared>` mode?
+
+Recommend `solo` when the user mentions their own VM/server, SSH, single-operator usage, local secrets, direct image streaming, or avoiding hosted/team workflows.
+
+Recommend `shared` when the user mentions teams, org/project/env context, browser sign-in, hosted control plane, shared encrypted secrets, managed nodes, auditability, or collaboration.
+
+If intent is still ambiguous, ask whether they are deploying SSH-first to their own VM as one operator or want the hosted/team workflow.
+
+4. Initialize the workspace before the first deploy only after mode confirmation. For solo:
 
 ```sh
 devopsellence init --mode solo
@@ -74,6 +83,27 @@ devopsellence deploy --image docker.io/example/app@sha256:...
 ```sh
 devopsellence status
 ```
+
+## CLI output contract
+
+The devopsellence CLI is agent-primary. Treat stdout as the primary machine-readable contract.
+
+- Bounded successful commands emit one JSON document on stdout.
+- Long-running commands typically emit newline-delimited JSON events on stdout.
+- Some commands may also emit optional structured progress or diagnostic events on stderr, for example during auth flows. Treat stderr events as supplemental rather than the primary contract, and do not scrape human prose from stderr unless diagnosing a CLI/runtime failure.
+- On command failure, stdout uses a structured `event: "error"` envelope with `ok: false` and `error` details even for otherwise bounded commands.
+- Streaming event envelopes always include `schema_version`; bounded JSON results often include it, but some legacy bounded results may omit it.
+- When `schema_version` is present, check it before relying on command-specific fields; if it is missing from a bounded result, be tolerant and treat command-specific fields cautiously.
+- For schema version 1, streaming events use a common envelope:
+  - `event`: `started`, `progress`, `result`, or `error`
+  - `operation`: stable operation name when available
+  - final success events include `ok: true`
+  - final failure events include `ok: false` and `error`
+- Structured errors use `error.code`, `error.message`, and `error.exit_code`.
+- Command-specific fields are top-level. Tolerate unknown fields, but do not assume undocumented fields are stable.
+- Prefer explaining failures from structured `code`, `message`, evidence fields, and suggested next actions when present.
+- If `schema_version` is unsupported, do not make high-risk decisions from command-specific fields; summarize the raw structured output and ask for updated docs or skill guidance. If `schema_version` is missing from a bounded result, treat common fields cautiously and avoid assuming undocumented command-specific fields are stable.
+- Keep secret values out of logs and chat output.
 
 ## Secrets
 

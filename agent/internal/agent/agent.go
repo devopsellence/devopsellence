@@ -326,10 +326,7 @@ func (f *reportFingerprint) suppresses(other *reportFingerprint) bool {
 		return false
 	}
 	if f.phase == report.PhaseSettled {
-		if f.diskCareHash == "" && other.diskCareHash == "" {
-			return true
-		}
-		return f.diskCareHash == other.diskCareHash
+		return true
 	}
 	return f.revision == other.revision &&
 		f.message == other.message &&

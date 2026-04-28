@@ -86,13 +86,14 @@ devopsellence status
 
 ## CLI output contract
 
-The devopsellence CLI is agent-primary. Treat stdout as the machine-readable contract.
+The devopsellence CLI is agent-primary. Treat stdout as the primary machine-readable contract.
 
-- Bounded commands emit one JSON document on stdout.
-- Long-running commands emit newline-delimited JSON events on stdout.
-- Do not scrape human prose from stderr unless diagnosing a CLI/runtime failure.
-- Streaming event envelopes include `schema_version`; bounded JSON results usually include it but some legacy command results may omit it.
-- When `schema_version` is present, check it before relying on command-specific fields.
+- Bounded successful commands emit one JSON document on stdout.
+- Long-running commands typically emit newline-delimited JSON events on stdout.
+- Some commands may also emit optional structured progress or diagnostic events on stderr, for example during auth flows. Treat stderr events as supplemental rather than the primary contract, and do not scrape human prose from stderr unless diagnosing a CLI/runtime failure.
+- On command failure, stdout uses a structured `event: "error"` envelope with `ok: false` and `error` details even for otherwise bounded commands.
+- Streaming event envelopes always include `schema_version`; bounded JSON results often include it, but some legacy bounded results may omit it.
+- When `schema_version` is present, check it before relying on command-specific fields; if it is missing from a bounded result, be tolerant and treat command-specific fields cautiously.
 - For schema version 1, streaming events use a common envelope:
   - `event`: `started`, `progress`, `result`, or `error`
   - `operation`: stable operation name when available

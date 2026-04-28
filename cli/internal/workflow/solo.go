@@ -3678,7 +3678,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"git init # if this app is not already a git checkout",
 		"git add . # include devopsellence.yml and app files",
 		"git commit -m 'initial deploy' # devopsellence deploys the current commit",
-		"devopsellence node list # solo node names are global on this machine",
+		"devopsellence node list --all # solo node names are global on this machine",
 		"devopsellence node create <node-name> --host <host> --user root --ssh-key <path>",
 		"devopsellence agent install <node-name>",
 		"devopsellence node attach <node-name>",

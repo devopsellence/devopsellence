@@ -3488,7 +3488,7 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 		steps = append(steps, stringValueAny(value))
 	}
 	nextSteps := strings.Join(steps, "\n")
-	if !strings.Contains(nextSteps, "devopsellence node list # solo node names are global on this machine") {
+	if !strings.Contains(nextSteps, "devopsellence node list --all # solo node names are global on this machine") {
 		t.Fatalf("next_steps = %q, want node-list collision guidance", nextSteps)
 	}
 	if !strings.Contains(nextSteps, "devopsellence node create <node-name> --provider hetzner --install --attach") {

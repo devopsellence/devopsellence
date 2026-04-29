@@ -765,6 +765,9 @@ func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
 	if !strings.Contains(err.Error(), "node create could not validate SSH") || !strings.Contains(err.Error(), "Permission denied") {
 		t.Fatalf("error = %v, want SSH validation context", err)
 	}
+	if !strings.Contains(err.Error(), "try the image default user") || !strings.Contains(err.Error(), "sudo -n true") {
+		t.Fatalf("error = %v, want non-root SSH recovery guidance", err)
+	}
 	loaded, err := soloState.Read()
 	if err != nil {
 		t.Fatal(err)

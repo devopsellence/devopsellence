@@ -134,6 +134,9 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
     assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
     assert_includes stdout, "installing devopsellence agent skill"
+    assert_includes stdout, '"operation":"devopsellence install"'
+    assert_includes stdout, '"agent_skill_installed":true'
+    assert_includes stdout, '"agent_skill":"devopsellence"'
     assert_equal "prerelease build\n", installed_cli
     assert_equal [ "--yes", "skills", "add", "devopsellence/devopsellence", "--skill", "devopsellence", "-g", "--yes" ], skill_args
   end

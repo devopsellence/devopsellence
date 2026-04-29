@@ -3765,7 +3765,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 			return err
 		}
 		if err := validateSoloNodeSSH(ctx, node); err != nil {
-			return fmt.Errorf("node create could not validate SSH for %s@%s:%d; fix --host/--user/--ssh-key or SSH access, then retry: %w", node.User, node.Host, node.Port, err)
+			return fmt.Errorf("node create could not validate SSH for %s@%s:%d; fix --host/--user/--ssh-key or SSH access, then retry. If root login is disabled, try the image default user such as ubuntu, debian, or ec2-user and verify passwordless sudo with `ssh <user>@<host> sudo -n true`: %w", node.User, node.Host, node.Port, err)
 		}
 		result["source"] = "existing_ssh"
 		result["ssh_checked"] = true

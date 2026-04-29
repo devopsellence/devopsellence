@@ -38,6 +38,14 @@ TMP_BIN="$(mktemp "$BUILD_DIR/devopsellence.XXXXXX")"
 cleanup() { rm -f "$TMP_BIN"; }
 trap cleanup EXIT
 
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  printf '"%s"' "$value"
+}
+
 COMMIT="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
 BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 MODULE_PATH="github.com/devopsellence/cli/internal/version"
@@ -106,6 +114,11 @@ case "$INSTALL_AGENT_SKILL" in
     if command -v npx >/dev/null 2>&1; then
       echo "installing devopsellence agent skill..."
       npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes
+      printf '{"schema_version":1,"event":"result","operation":"devopsellence release-local","cli_installed":true,"cli_path":'
+      json_string "$INSTALL_DIR/$TARGET_NAME"
+      printf ',"commit":'
+      json_string "$COMMIT"
+      printf ',"agent_skill_requested":true,"agent_skill_installed":true,"agent_skill":"devopsellence"}\n'
     else
       echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
       echo "Install the skill later with:" >&2

@@ -6179,7 +6179,8 @@ env_candidates=%s
 service=%s
 ids=""
 selected_env=""
-for env in $env_candidates; do
+while IFS= read -r env || [ -n "$env" ]; do
+  [ -n "$env" ] || continue
   candidate_ids=$($docker_cmd ps -a -q --filter label=devopsellence.managed=true --filter "label=devopsellence.environment=$env" --filter "label=devopsellence.service=$service" 2>&1)
   ps_status=$?
   if [ "$ps_status" -ne 0 ]; then
@@ -6195,7 +6196,9 @@ for env in $env_candidates; do
     selected_env="$env"
     break
   fi
-done
+done <<__DEVOPSELLENCE_ENV_CANDIDATES__
+$env_candidates
+__DEVOPSELLENCE_ENV_CANDIDATES__
 if [ -z "$ids" ]; then echo "%s" >&2; echo "No workload containers found for service $service in environments %s" >&2; exit 1; fi
 rc=0
 for id in $ids; do

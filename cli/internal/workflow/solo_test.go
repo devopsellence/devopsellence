@@ -2542,10 +2542,60 @@ func TestSoloWorkloadLogsRequiresWorkspaceConfig(t *testing.T) {
 
 func TestRemoteDockerLogsCommandPreservesPerContainerFailure(t *testing.T) {
 	command := remoteDockerLogsCommand([]string{"demo-production-abc123", "production"}, "web", 20)
-	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`, `demo-production-abc123`, `production`} {
+	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`, `while IFS= read -r env`, `demo-production-abc123`, `production`} {
 		if !strings.Contains(command, snippet) {
 			t.Fatalf("command = %q, want %q", command, snippet)
 		}
+	}
+	if strings.Contains(command, `for env in $env_candidates`) {
+		t.Fatalf("command = %q, should not iterate env candidates with shell word-splitting", command)
+	}
+}
+
+func TestRemoteDockerLogsCommandHandlesEnvironmentCandidateWithWhitespace(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "docker"), `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  info)
+    exit 0
+    ;;
+  ps)
+    saw_env=0
+    saw_service=0
+    for arg in "$@"; do
+      if [[ "$arg" == "label=devopsellence.environment=prod us" ]]; then
+        saw_env=1
+      fi
+      if [[ "$arg" == "label=devopsellence.service=web" ]]; then
+        saw_service=1
+      fi
+    done
+    if [[ "$saw_env" == "1" && "$saw_service" == "1" ]]; then
+      printf 'container-1\n'
+    fi
+    exit 0
+    ;;
+  inspect)
+    printf '/svc-prod-us\n'
+    exit 0
+    ;;
+  logs)
+    printf 'log line for spaced env\n'
+    exit 0
+    ;;
+esac
+printf 'unexpected docker command: %s\n' "$*" >&2
+exit 1
+`)
+	cmd := exec.Command("sh", "-c", remoteDockerLogsCommand([]string{"prod us", "production"}, "web", 20))
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("remote docker logs command failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "==> svc-prod-us <==") || !strings.Contains(string(out), "log line for spaced env") {
+		t.Fatalf("output = %q, want logs for whitespace environment candidate", out)
 	}
 }
 

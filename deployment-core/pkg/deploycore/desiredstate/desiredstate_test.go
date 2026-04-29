@@ -464,7 +464,7 @@ func TestPlanNodePublicationWrapsAggregatedDesiredState(t *testing.T) {
 	}
 }
 
-func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
+func TestMergeIngressForNodeRejectsDuplicateHostPathAcrossTargets(t *testing.T) {
 	t.Parallel()
 
 	snapshots := []DeploySnapshot{
@@ -475,7 +475,7 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 				TLS:   IngressTLSJSON{Mode: "auto"},
 				Hosts: []string{"app.example.com"},
 				Routes: []IngressRouteJSON{{
-					Match:  IngressMatchJSON{Hostname: "app.example.com"},
+					Match:  IngressMatchJSON{Hostname: "app.example.com", PathPrefix: "/"},
 					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "metrics"},
 				}},
 			},
@@ -489,8 +489,8 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 				TLS:   IngressTLSJSON{Mode: "auto"},
 				Hosts: []string{"app.example.com"},
 				Routes: []IngressRouteJSON{{
-					Match:  IngressMatchJSON{Hostname: "app.example.com"},
-					Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+					Match:  IngressMatchJSON{Hostname: "app.example.com", PathPrefix: "/"},
+					Target: IngressTargetJSON{Environment: "staging", Service: "web", Port: "http"},
 				}},
 			},
 			IngressService:     "web",
@@ -498,15 +498,9 @@ func TestMergeIngressForNodeSortsRoutesByPortWhenMatchFieldsTie(t *testing.T) {
 		},
 	}
 
-	merged, err := mergeIngressForNode([]string{config.DefaultWebRole}, snapshots, aggregatedEnvironmentNames(snapshots))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if merged == nil || len(merged.Routes) != 2 {
-		t.Fatalf("routes = %#v", merged)
-	}
-	if merged.Routes[0].Target.Port != "http" || merged.Routes[1].Target.Port != "metrics" {
-		t.Fatalf("route order = %#v", merged.Routes)
+	_, err := mergeIngressForNode([]string{config.DefaultWebRole}, snapshots, aggregatedEnvironmentNames(snapshots))
+	if err == nil || !strings.Contains(err.Error(), "duplicate route") {
+		t.Fatalf("mergeIngressForNode() error = %v, want duplicate route", err)
 	}
 }
 

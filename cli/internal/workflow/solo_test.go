@@ -866,6 +866,53 @@ func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	}
 }
 
+func TestSoloStatusUsesResolvedEnvironmentOverlay(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"prod.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "prod.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {Ingress: &config.IngressConfigOverlay{
+			Hosts: []string{"staging.example.com"},
+			Rules: []config.IngressRuleConfig{{
+				Match:  config.IngressMatchConfig{Host: "staging.example.com", PathPrefix: "/"},
+				Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+			}},
+		}},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"rev","phase":"settled","summary":{"environments":1,"services":1}}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if len(urls) != 1 || urls[0] != "http://staging.example.com/" {
+		t.Fatalf("public_urls = %#v, want staging host only", urls)
+	}
+}
+
 func TestSoloStatusUsesConfiguredPublicURLsWhenNodeIsNotSettled(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -1683,6 +1730,72 @@ func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
 	}
 }
 
+func TestSoloWorkloadLogsUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *testing.T) {
+	commandPath := filepath.Join(t.TempDir(), "workload-command")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_COMMAND", commandPath)
+	installFakeSoloCommands(t, nil)
+	workspaceRoot := t.TempDir()
+	otherRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(otherRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceKey, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := solo.EnvironmentStateKey(otherRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots = map[string]desiredstate.DeploySnapshot{
+		workspaceKey: {WorkspaceRoot: workspaceRoot, WorkspaceKey: strings.Split(workspaceKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "demo"}},
+		otherKey:     {WorkspaceRoot: otherRoot, WorkspaceKey: strings.Split(otherKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "api"}},
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{ServiceName: "web", Nodes: []string{"node-a"}, Lines: 20}); err != nil {
+		t.Fatalf("SoloWorkloadLogs() error = %v", err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandBytes, err := os.ReadFile(commandPath)
+	if err != nil {
+		t.Fatalf("read workload command: %v", err)
+	}
+	command := string(commandBytes)
+	if !strings.Contains(command, "label=devopsellence.environment='"+runtimeEnvironment+"'") {
+		t.Fatalf("workload logs command = %q, want runtime environment %q", command, runtimeEnvironment)
+	}
+	if strings.Contains(command, "label=devopsellence.environment=production") || strings.Contains(command, "label=devopsellence.environment='production'") {
+		t.Fatalf("workload logs command = %q, should not filter by logical production", command)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	if node["runtime_environment"] != runtimeEnvironment {
+		t.Fatalf("node payload = %#v, want runtime environment %q", node, runtimeEnvironment)
+	}
+}
+
 func TestSoloExecRunsCommandInServiceContainer(t *testing.T) {
 	cwd := rootTestSoloWorkspace(t)
 	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled","environments":[{"name":"production","services":[{"name":"web","state":"starting","container":"svc-production-web-abc"}]}]}` + "\n"}})
@@ -1724,6 +1837,53 @@ func TestSoloExecRunsCommandInServiceContainer(t *testing.T) {
 	}
 	if events[3]["event"] != "result" || events[3]["exit_code"] != float64(0) || events[3]["ok"] != true {
 		t.Fatalf("finished event = %#v", events[3])
+	}
+}
+
+func TestSoloExecUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	otherRoot := t.TempDir()
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(otherRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceKey, err := solo.EnvironmentStateKey(cwd, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := solo.EnvironmentStateKey(otherRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots = map[string]desiredstate.DeploySnapshot{
+		workspaceKey: {WorkspaceRoot: cwd, WorkspaceKey: strings.Split(workspaceKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "demo"}},
+		otherKey:     {WorkspaceRoot: otherRoot, WorkspaceKey: strings.Split(otherKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "api"}},
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, cwd, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := fmt.Sprintf(`{"revision":"abc","phase":"settled","environments":[{"name":%q,"services":[{"name":"web","state":"running","container":"svc-production-web-abc"}]},{"name":"production","services":[{"name":"web","state":"running","container":"wrong-container"}]}]}`+"\n", runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: status}})
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	err = app.SoloExec(context.Background(), SoloExecOptions{ServiceName: "web", Nodes: []string{"node-a"}, Command: []string{"bin/rails", "runner", "puts Rails.env"}})
+	if err != nil {
+		t.Fatalf("SoloExec() error = %v", err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	if len(events) == 0 || events[0]["container"] != "svc-production-web-abc" || events[0]["environment"] != runtimeEnvironment {
+		t.Fatalf("started event = %#v, want co-hosted runtime env %q container", events[0], runtimeEnvironment)
 	}
 }
 
@@ -2654,6 +2814,90 @@ func TestSoloSupportBundleWritesRedactedEvidence(t *testing.T) {
 	}
 }
 
+func TestSoloSecretsCommandsUseCurrentSoloEnvironment(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloSecretsSet(context.Background(), SoloSecretsSetOptions{Key: "DOGFOOD_SECRET", Value: "staging-secret", ServiceName: "web", Store: solo.SecretStorePlaintext}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if got := payload["environment"]; got != "staging" {
+		t.Fatalf("set environment = %v, want staging", got)
+	}
+
+	current, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	productionSecrets, err := current.ListSecrets(workspaceRoot, "production", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(productionSecrets) != 0 {
+		t.Fatalf("production secrets = %#v, want none", productionSecrets)
+	}
+	stagingSecrets, err := current.ListSecrets(workspaceRoot, "staging", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stagingSecrets) != 1 || stagingSecrets[0].Name != "DOGFOOD_SECRET" || stagingSecrets[0].Store != solo.SecretStorePlaintext {
+		t.Fatalf("staging secrets = %#v, want DOGFOOD_SECRET", stagingSecrets)
+	}
+
+	stdout.Reset()
+	if err := app.SoloSecretsList(context.Background(), SoloSecretsListOptions{ServiceName: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	payload = decodeJSONOutput(t, &stdout)
+	if got := payload["environment"]; got != "staging" {
+		t.Fatalf("list environment = %v, want staging", got)
+	}
+	items, ok := payload["secrets"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("listed secrets = %#v, want one staging secret", payload["secrets"])
+	}
+	listed, ok := items[0].(map[string]any)
+	if !ok || listed["name"] != "DOGFOOD_SECRET" || listed["stored"] != true {
+		t.Fatalf("listed secret = %#v, want stored DOGFOOD_SECRET", items[0])
+	}
+
+	stdout.Reset()
+	if err := app.SoloSecretsDelete(context.Background(), SoloSecretsDeleteOptions{Key: "DOGFOOD_SECRET", ServiceName: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	payload = decodeJSONOutput(t, &stdout)
+	if got := payload["environment"]; got != "staging" {
+		t.Fatalf("delete environment = %v, want staging", got)
+	}
+	current, err = soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingSecrets, err = current.ListSecrets(workspaceRoot, "staging", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stagingSecrets) != 0 {
+		t.Fatalf("staging secrets after delete = %#v, want none", stagingSecrets)
+	}
+}
+
 func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -2709,6 +2953,59 @@ func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	}
 	if payload["release_id"] != nil || payload["deployment_id"] != nil || payload["desired_state_revisions"] != nil {
 		t.Fatalf("payload = %#v, dry-run must not create release/deployment/publication revisions", payload)
+	}
+}
+
+func TestSoloDeployDryRunUsesResolvedEnvironmentOverlay(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"prod.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "prod.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {
+			Ingress: &config.IngressConfigOverlay{
+				Hosts: []string{"staging.example.com"},
+				Rules: []config.IngressRuleConfig{{
+					Match:  config.IngressMatchConfig{Host: "staging.example.com", PathPrefix: "/"},
+					Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+				}},
+			},
+		},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Git: git.Client{}, Cwd: workspaceRoot}
+	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["environment"] != "staging" {
+		t.Fatalf("payload = %#v, want staging environment", payload)
+	}
+	urls := jsonArrayFromMap(t, payload, "configured_public_urls")
+	if len(urls) != 1 || urls[0] != "http://staging.example.com/" {
+		t.Fatalf("configured_public_urls = %#v, want staging host only", urls)
 	}
 }
 
@@ -2856,6 +3153,37 @@ func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
 	}
 }
 
+func TestSoloReleaseListUsesCurrentSoloEnvironment(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowStateForEnvironment(workspaceRoot, "staging")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseList(context.Background(), SoloReleaseListOptions{Limit: 1}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment"] != "staging" {
+		t.Fatalf("environment = %#v, want staging", payload["environment"])
+	}
+	if environmentID, ok := payload["environment_id"].(string); !ok || !strings.Contains(environmentID, "#staging") {
+		t.Fatalf("environment_id = %#v, want staging identifier", payload["environment_id"])
+	}
+	if payload["current_release_id"] != "rel-2" {
+		t.Fatalf("current_release_id = %#v, want staging current release rel-2", payload["current_release_id"])
+	}
+}
+
 func TestSoloReleaseListEnvironmentIDUsesCanonicalWorkspaceKey(t *testing.T) {
 	realWorkspace := filepath.Join(t.TempDir(), "real")
 	if err := os.Mkdir(realWorkspace, 0o755); err != nil {
@@ -2933,6 +3261,43 @@ func TestSoloReleaseRollbackDryRunPlansWithoutSideEffects(t *testing.T) {
 	}
 }
 
+func TestSoloReleaseRollbackDryRunUsesCurrentSoloEnvironment(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowStateForEnvironment(workspaceRoot, "staging")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(soloState.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(soloState.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("solo state changed during staging rollback dry-run")
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["environment"] != "staging" || payload["release_id"] != "rel-1" || payload["rolled_back_from"] != "rel-2" {
+		t.Fatalf("payload = %#v, want staging rollback from rel-2 to rel-1", payload)
+	}
+}
+
 func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -2989,6 +3354,47 @@ func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 	}
 	if deployment.Status != corerelease.DeploymentStatusSettled || !reflect.DeepEqual(deployment.TargetNodeIDs, []string{"node-a"}) {
 		t.Fatalf("deployment = %#v, want settled target node-a", deployment)
+	}
+}
+
+func TestSoloReleaseRollbackRepublishFailureDoesNotSwitchCurrentRelease(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	oldRelease := current.Releases["rel-1"]
+	oldRelease.Snapshot.Ingress = &desiredstate.IngressJSON{
+		TLS:   desiredstate.IngressTLSJSON{Mode: "auto"},
+		Hosts: []string{"app.example.com"},
+		Routes: []desiredstate.IngressRouteJSON{
+			{Match: desiredstate.IngressMatchJSON{Hostname: "app.example.com", PathPrefix: "/"}, Target: desiredstate.IngressTargetJSON{Environment: "production", Service: "web", Port: "http"}},
+			{Match: desiredstate.IngressMatchJSON{Hostname: "app.example.com", PathPrefix: "/"}, Target: desiredstate.IngressTargetJSON{Environment: "production", Service: "web", Port: "metrics"}},
+		},
+	}
+	current.Releases["rel-1"] = oldRelease
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Git: git.Client{}, Cwd: workspaceRoot}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111"})
+	if err == nil {
+		t.Fatal("expected republish failure")
+	}
+	updatedState, readErr := soloState.Read()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	key := workspaceRoot + "\nproduction"
+	if updatedState.Current[key] != "rel-2" {
+		t.Fatalf("current release = %q, want rel-2 preserved after republish failure", updatedState.Current[key])
+	}
+	if updatedState.Snapshots[key].Revision != "bbb2222" {
+		t.Fatalf("snapshot revision = %q, want current snapshot preserved", updatedState.Snapshots[key].Revision)
 	}
 }
 
@@ -3060,11 +3466,15 @@ func TestSoloRollbackTargetNodeNamesDefaultsEmptyTargetsToAttachedNodes(t *testi
 }
 
 func soloReleaseWorkflowState(workspaceRoot string) solo.State {
-	key := workspaceRoot + "\nproduction"
+	return soloReleaseWorkflowStateForEnvironment(workspaceRoot, "production")
+}
+
+func soloReleaseWorkflowStateForEnvironment(workspaceRoot, environment string) solo.State {
+	key := workspaceRoot + "\n" + environment
 	oldSnapshot := desiredstate.DeploySnapshot{
 		WorkspaceRoot: workspaceRoot,
 		WorkspaceKey:  workspaceRoot,
-		Environment:   "production",
+		Environment:   environment,
 		Revision:      "aaa1111",
 		Image:         "demo:aaa1111",
 		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:aaa1111"}},
@@ -3072,7 +3482,7 @@ func soloReleaseWorkflowState(workspaceRoot string) solo.State {
 	currentSnapshot := desiredstate.DeploySnapshot{
 		WorkspaceRoot: workspaceRoot,
 		WorkspaceKey:  workspaceRoot,
-		Environment:   "production",
+		Environment:   environment,
 		Revision:      "bbb2222",
 		Image:         "demo:bbb2222",
 		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:bbb2222"}},
@@ -3087,7 +3497,7 @@ func soloReleaseWorkflowState(workspaceRoot string) solo.State {
 			key: {
 				WorkspaceRoot: workspaceRoot,
 				WorkspaceKey:  workspaceRoot,
-				Environment:   "production",
+				Environment:   environment,
 				NodeNames:     []string{"node-a", "node-b", "node-c"},
 			},
 		},
@@ -3215,6 +3625,31 @@ func TestWaitForSoloRolloutIgnoresMissingAndStaleStatusUntilExpectedRevisionSett
 	}
 	if got := readFakeSSHStatusCount(t, statusCountPath); got != 4 {
 		t.Fatalf("status poll count = %d, want 4", got)
+	}
+}
+
+func TestWaitForSoloRolloutIgnoresExpectedRevisionStatusOlderThanPublishStart(t *testing.T) {
+	statusCountPath := installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: `{"time":"2026-04-29T08:28:51Z","revision":"expected-revision","phase":"settled"}` + "\n"},
+		{stdout: `{"time":"2026-04-29T08:29:40Z","revision":"expected-revision","phase":"settled"}` + "\n"},
+	})
+
+	app := &App{
+		Printer:            output.New(io.Discard, io.Discard),
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      time.Second,
+	}
+	minStatusTime := time.Date(2026, 4, 29, 8, 29, 0, 0, time.UTC)
+	err := app.waitForSoloRollout(context.Background(), map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
+	}, map[string]string{
+		"node-a": "expected-revision",
+	}, minStatusTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFakeSSHStatusCount(t, statusCountPath); got != 2 {
+		t.Fatalf("status poll count = %d, want stale same-revision status ignored before fresh status", got)
 	}
 }
 
@@ -4152,6 +4587,9 @@ if [[ "$command" == *" logs --tail "* && -n "${DEVOPSELLENCE_FAKE_SSH_WORKLOAD_L
 fi
 
 if [[ "$command" == *" logs --tail "* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_COMMAND:-}" ]]; then
+    printf '%s' "$command" >"$DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_COMMAND"
+  fi
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n==> svc-production-web <==\napp line one\napp line two\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi

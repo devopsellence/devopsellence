@@ -2092,6 +2092,9 @@ func (a *App) EnvironmentCreate(ctx context.Context, opts EnvironmentCreateOptio
 	if strings.TrimSpace(opts.Name) == "" {
 		return ExitError{Code: 2, Err: errors.New("environment name required: env create <name>")}
 	}
+	if mode, err := a.ResolveMode(); err == nil && mode == ModeSolo {
+		return a.soloEnvironmentCreate(opts)
+	}
 	ingressStrategy, err := normalizeIngressStrategy(opts.IngressStrategy)
 	if err != nil {
 		return ExitError{Code: 2, Err: err}
@@ -2151,6 +2154,9 @@ func (a *App) EnvironmentIngress(ctx context.Context, opts EnvironmentIngressOpt
 func (a *App) EnvironmentUse(ctx context.Context, opts EnvironmentUseOptions) error {
 	if strings.TrimSpace(opts.Name) == "" {
 		return ExitError{Code: 2, Err: errors.New("environment name required: env use <name>")}
+	}
+	if mode, err := a.ResolveMode(); err == nil && mode == ModeSolo {
+		return a.soloEnvironmentUse(opts)
 	}
 	_, cfg, err := a.requiredWorkspaceConfig()
 	if err != nil {

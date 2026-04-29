@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -201,6 +202,7 @@ type IngressCheckOptions struct {
 }
 
 type soloNodeStatus struct {
+	Time         string                      `json:"time,omitempty"`
 	Phase        string                      `json:"phase"`
 	Revision     string                      `json:"revision"`
 	Error        string                      `json:"error,omitempty"`
@@ -383,7 +385,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err := stream.Event("started", map[string]any{}); err != nil {
 		return err
 	}
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return err
 	}
@@ -391,7 +393,6 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, "")
 	attachedNodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return err
@@ -512,6 +513,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
+	rolloutStart := time.Now().UTC().Add(-2 * time.Second)
 	desiredStateRevisions, err := a.republishNodes(ctx, current, attachedNodeNames)
 	if err != nil {
 		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
@@ -519,7 +521,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		}
 		return err
 	}
-	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions); err != nil {
+	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, rolloutStart); err != nil {
 		resultErr := err
 		var rolloutErr *soloRolloutError
 		if errors.As(err, &rolloutErr) {
@@ -749,7 +751,7 @@ func soloDeployHealthcheckDetails(cfg *config.ProjectConfig) []map[string]any {
 	return details
 }
 
-func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string) error {
+func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string, minStatusTime ...time.Time) error {
 	timeout := a.DeployTimeout
 	if timeout <= 0 {
 		timeout = defaultDeployProgressTimeout
@@ -757,6 +759,10 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 	pollInterval := a.DeployPollInterval
 	if pollInterval <= 0 {
 		pollInterval = defaultDeployProgressPollInterval
+	}
+	freshAfter := time.Time{}
+	if len(minStatusTime) > 0 {
+		freshAfter = minStatusTime[0]
 	}
 
 	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -791,6 +797,9 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 			case strings.TrimSpace(result.Status.Revision) != expectedRevision:
 				pendingCount++
 				details = append(details, fmt.Sprintf("%s=revision:%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Revision), "none")))
+			case !soloNodeStatusFreshEnough(result.Status, freshAfter):
+				pendingCount++
+				details = append(details, fmt.Sprintf("%s=status_time:%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Time), "none")))
 			default:
 				switch strings.TrimSpace(result.Status.Phase) {
 				case "settled":
@@ -825,6 +834,21 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 		case <-timer.C:
 		}
 	}
+}
+
+func soloNodeStatusFreshEnough(status soloNodeStatus, minStatusTime time.Time) bool {
+	if minStatusTime.IsZero() {
+		return true
+	}
+	observed := strings.TrimSpace(status.Time)
+	if observed == "" {
+		return true
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, observed)
+	if err != nil {
+		return true
+	}
+	return !parsed.Before(minStatusTime)
 }
 
 func (a *App) readSoloState() (solo.State, error) {
@@ -1611,7 +1635,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 }
 
 func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) error {
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return err
 	}
@@ -1619,7 +1643,6 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, "")
 	_, currentRelease, hasCurrent, err := current.CurrentRelease(workspaceRoot, environmentName)
 	if err != nil {
 		return err
@@ -1667,7 +1690,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err := stream.Event("started", map[string]any{}); err != nil {
 		return err
 	}
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return err
 	}
@@ -1675,7 +1698,6 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, "")
 	attachedNodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return err
@@ -1739,9 +1761,6 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
-	if _, err := current.SaveRelease(selected); err != nil {
-		return err
-	}
 	if err := current.SaveDeployment(deployment); err != nil {
 		return err
 	}
@@ -1753,14 +1772,29 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	desiredStateRevisions, err := a.republishNodes(ctx, current, rollbackTargetNodeNames)
+
+	publishState := cloneSoloState(current)
+	if _, err := publishState.SaveRelease(selected); err != nil {
+		return err
+	}
+	rolloutStart := time.Now().UTC().Add(-2 * time.Second)
+	desiredStateRevisions, err := a.republishNodes(ctx, publishState, rollbackTargetNodeNames)
 	if err != nil {
 		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
 			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
 		}
 		return err
 	}
-	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions); err != nil {
+	if _, err := current.SaveRelease(selected); err != nil {
+		return err
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, rolloutStart); err != nil {
 		if persistErr := a.persistSoloDeploymentRolloutFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
 			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
 		}
@@ -1910,12 +1944,16 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return err
+	}
 	serviceName := strings.TrimSpace(opts.ServiceName)
 	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
-	service, ok := cfg.Services[serviceName]
+	service, ok := resolved.Services[serviceName]
 	if !ok {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
@@ -2085,7 +2123,11 @@ func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) er
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return err
+	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -2094,7 +2136,7 @@ func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) er
 	if err != nil {
 		return err
 	}
-	items := soloSecretListItems(cfg, secrets, opts.ServiceName)
+	items := soloSecretListItems(&resolved, secrets, opts.ServiceName)
 
 	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "environment": environmentName, "secrets": items})
 
@@ -2326,12 +2368,16 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return err
+	}
 	serviceName := strings.TrimSpace(opts.ServiceName)
 	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
-	if _, ok := cfg.Services[serviceName]; !ok {
+	if _, ok := resolved.Services[serviceName]; !ok {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
 	current, err := a.readSoloState()
@@ -2400,15 +2446,28 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
 	}
 	environmentName := soloEnvironmentName(cfg, "")
+	workspaceRoot, err := a.soloCurrentWorkspaceRoot()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
 	results := make([]map[string]any, 0, len(nodes))
 	ok := true
 	for _, nodeName := range sortedNodeNames(nodes) {
-		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(environmentName, serviceName, linesLimit))
+		runtimeEnvironmentName, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, nodeName)
+		if err != nil {
+			return err
+		}
+		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(runtimeEnvironmentName, serviceName, linesLimit))
 		entry := map[string]any{
-			"node":    nodeName,
-			"service": serviceName,
-			"ok":      diag.Err == nil && diag.ExitCode == 0,
-			"lines":   splitNonFinalEmptyLines(diag.Stdout),
+			"node":                nodeName,
+			"service":             serviceName,
+			"runtime_environment": runtimeEnvironmentName,
+			"ok":                  diag.Err == nil && diag.ExitCode == 0,
+			"lines":               splitNonFinalEmptyLines(diag.Stdout),
 		}
 		if diag.Err != nil {
 			entry["error"] = diag.Err.Error()
@@ -2490,6 +2549,14 @@ func (a *App) SoloExec(ctx context.Context, opts SoloExecOptions) error {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
 	environmentName := soloEnvironmentName(cfg, "")
+	workspaceRoot, err := a.soloCurrentWorkspaceRoot()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
 	candidates := []soloExecTarget{}
 	for _, nodeName := range sortedNodeNames(nodes) {
 		result, err := readNodeStatus(ctx, nodes[nodeName])
@@ -2499,14 +2566,18 @@ func (a *App) SoloExec(ctx context.Context, opts SoloExecOptions) error {
 		if result.Missing {
 			continue
 		}
-		container := statusServiceContainer(result.Status, environmentName, serviceName)
+		runtimeEnvironmentName, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, nodeName)
+		if err != nil {
+			return err
+		}
+		container := statusServiceContainer(result.Status, runtimeEnvironmentName, serviceName)
 		if container == "" {
 			continue
 		}
 		candidates = append(candidates, soloExecTarget{
 			Kind:        "service",
 			Node:        nodeName,
-			Environment: environmentName,
+			Environment: runtimeEnvironmentName,
 			Service:     serviceName,
 			Container:   container,
 			Command:     append([]string(nil), opts.Command...),
@@ -4137,7 +4208,7 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 }
 
 func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return err
 	}
@@ -4145,7 +4216,7 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 	if err != nil {
 		return err
 	}
-	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
+	nodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return err
 	}
@@ -4203,6 +4274,66 @@ func (a *App) loadSoloProjectConfig() (*config.ProjectConfig, string, error) {
 	return cfg, workspaceRoot, nil
 }
 
+func (a *App) loadResolvedSoloProjectConfig(explicitEnvironment string) (*config.ProjectConfig, string, string, error) {
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return nil, "", "", err
+	}
+	selectedEnvironment := a.effectiveEnvironment(explicitEnvironment, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, selectedEnvironment)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return &resolved, workspaceRoot, selectedEnvironment, nil
+}
+
+func cloneSoloState(current solo.State) solo.State {
+	cloned := current
+	if current.Nodes != nil {
+		cloned.Nodes = make(map[string]config.Node, len(current.Nodes))
+		for key, value := range current.Nodes {
+			cloned.Nodes[key] = value
+		}
+	}
+	if current.Attachments != nil {
+		cloned.Attachments = make(map[string]solo.AttachmentRecord, len(current.Attachments))
+		for key, value := range current.Attachments {
+			cloned.Attachments[key] = value
+		}
+	}
+	if current.Snapshots != nil {
+		cloned.Snapshots = make(map[string]desiredstate.DeploySnapshot, len(current.Snapshots))
+		for key, value := range current.Snapshots {
+			cloned.Snapshots[key] = value
+		}
+	}
+	if current.Releases != nil {
+		cloned.Releases = make(map[string]corerelease.Release, len(current.Releases))
+		for key, value := range current.Releases {
+			cloned.Releases[key] = value
+		}
+	}
+	if current.Current != nil {
+		cloned.Current = make(map[string]string, len(current.Current))
+		for key, value := range current.Current {
+			cloned.Current[key] = value
+		}
+	}
+	if current.Deployments != nil {
+		cloned.Deployments = make(map[string]corerelease.Deployment, len(current.Deployments))
+		for key, value := range current.Deployments {
+			cloned.Deployments[key] = value
+		}
+	}
+	if current.Secrets != nil {
+		cloned.Secrets = make(map[string]solo.SecretRecord, len(current.Secrets))
+		for key, value := range current.Secrets {
+			cloned.Secrets[key] = value
+		}
+	}
+	return cloned
+}
+
 func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 	if strings.TrimSpace(override) != "" {
 		return strings.TrimSpace(override)
@@ -4213,12 +4344,161 @@ func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 	return strings.TrimSpace(cfg.DefaultEnvironment)
 }
 
+func (a *App) soloCurrentWorkspaceRoot() (string, error) {
+	discovered, err := discovery.Discover(a.Cwd)
+	if err != nil {
+		return "", err
+	}
+	return discovered.WorkspaceRoot, nil
+}
+
+func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logicalEnvironment, nodeName string) (string, error) {
+	logicalEnvironment = strings.TrimSpace(logicalEnvironment)
+	if logicalEnvironment == "" {
+		logicalEnvironment = config.DefaultEnvironment
+	}
+	currentKey, err := solo.EnvironmentStateKey(workspaceRoot, logicalEnvironment)
+	if err != nil {
+		return "", err
+	}
+	currentSnapshot, ok := current.Snapshots[currentKey]
+	if !ok {
+		return logicalEnvironment, nil
+	}
+	base := defaultSoloSnapshotEnvironment(currentSnapshot, logicalEnvironment)
+	duplicates := 0
+	for key, attachment := range current.Attachments {
+		if !stringSliceContains(attachment.NodeNames, nodeName) {
+			continue
+		}
+		snapshot, ok := current.Snapshots[key]
+		if !ok {
+			continue
+		}
+		if defaultSoloSnapshotEnvironment(snapshot, attachment.Environment) == base {
+			duplicates++
+		}
+	}
+	if duplicates <= 1 {
+		return base, nil
+	}
+	return uniqueSoloRuntimeEnvironmentName(currentSnapshot, base), nil
+}
+
+func defaultSoloSnapshotEnvironment(snapshot desiredstate.DeploySnapshot, fallback string) string {
+	if value := strings.TrimSpace(snapshot.Environment); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(fallback); value != "" {
+		return value
+	}
+	return config.DefaultEnvironment
+}
+
+func stringSliceContains(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueSoloRuntimeEnvironmentName(snapshot desiredstate.DeploySnapshot, base string) string {
+	hashSource := strings.TrimSpace(snapshot.WorkspaceKey)
+	if hashSource == "" {
+		hashSource = strings.TrimSpace(snapshot.WorkspaceRoot)
+	}
+	sum := sha256.Sum256([]byte(hashSource))
+	suffix := hex.EncodeToString(sum[:4])
+	project := soloRuntimeEnvironmentToken(snapshot.Metadata.Project)
+	if project == "" {
+		return base + "-" + suffix
+	}
+	return project + "-" + base + "-" + suffix
+}
+
+func soloRuntimeEnvironmentToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 func soloDisplayEnvironmentID(workspaceRoot, environment string) (string, error) {
 	key, err := solo.EnvironmentStateKey(workspaceRoot, environment)
 	if err != nil {
 		return "", err
 	}
 	return strings.Replace(key, "\n", "#", 1), nil
+}
+
+func (a *App) soloEnvironmentCreate(opts EnvironmentCreateOptions) error {
+	environmentName := strings.TrimSpace(opts.Name)
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	created := false
+	if environmentName != soloEnvironmentName(cfg, "") {
+		if cfg.Environments == nil {
+			cfg.Environments = map[string]config.EnvironmentOverlay{}
+		}
+		if _, ok := cfg.Environments[environmentName]; !ok {
+			cfg.Environments[environmentName] = config.EnvironmentOverlay{}
+			if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
+				return err
+			}
+			created = true
+		}
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"mode":           string(ModeSolo),
+		"environment":    map[string]any{"name": environmentName},
+		"created":        created,
+		"config_path":    a.ConfigStore.PathFor(workspaceRoot),
+	})
+}
+
+func (a *App) soloEnvironmentUse(opts EnvironmentUseOptions) error {
+	environmentName := strings.TrimSpace(opts.Name)
+	cfg, _, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	if environmentName != soloEnvironmentName(cfg, "") {
+		if _, ok := cfg.Environments[environmentName]; !ok {
+			return ExitError{Code: 2, Err: fmt.Errorf("environment %q is not defined in devopsellence.yml; run `devopsellence context env create %s` or add environments.%s", environmentName, environmentName, environmentName)}
+		}
+	}
+	if err := a.SetEnvironment(environmentName); err != nil {
+		return wrapError(err)
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version":      outputSchemaVersion,
+		"ok":                  true,
+		"mode":                string(ModeSolo),
+		"environment":         map[string]any{"name": environmentName},
+		"workspace_key":       a.modeWorkspaceKey(),
+		"default_environment": cfg.DefaultEnvironment,
+	})
 }
 
 func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.Node, error) {
@@ -4239,14 +4519,16 @@ func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Nod
 		_, cfg, cfgErr := a.optionalWorkspaceConfig()
 		if cfgErr != nil {
 			cfg = nil
+		} else if resolved, _, _, resolveErr := a.loadResolvedSoloProjectConfig(""); resolveErr == nil {
+			cfg = resolved
 		}
 		return nodes, cfg, nil
 	}
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return nil, nil, err
 	}
-	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
+	nodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return nil, nil, err
 	}

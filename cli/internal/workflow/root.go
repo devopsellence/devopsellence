@@ -552,6 +552,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}),
 	}
 	deployCommand.Flags().BoolVar(&deploySoloOpts.SkipDNSCheck, "skip-dns-check", false, "Skip ingress DNS readiness check before deploy (solo mode)")
+	deployCommand.Flags().BoolVar(&deploySoloOpts.DryRun, "dry-run", false, "Plan solo deploy without building, publishing, SSHing, or mutating state")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Organization, "org", os.Getenv("DEVOPSELLENCE_ORGANIZATION"), "Organization name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Project, "project", os.Getenv("DEVOPSELLENCE_PROJECT"), "Project name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Image, "image", "", "Deploy an existing digest ref instead of building locally (shared mode)")
@@ -644,6 +645,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
+	releaseRollbackCommand.Flags().BoolVar(&releaseRollbackOpts.DryRun, "dry-run", false, "Plan solo rollback without publishing, SSHing, or mutating state")
 	releaseCommand.AddCommand(releaseListCommand, releaseRollbackCommand)
 	root.AddCommand(releaseCommand)
 

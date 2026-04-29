@@ -35,6 +35,7 @@ import (
 
 type SoloDeployOptions struct {
 	SkipDNSCheck bool
+	DryRun       bool
 }
 
 type SoloReleaseListOptions struct {
@@ -43,6 +44,7 @@ type SoloReleaseListOptions struct {
 
 type SoloReleaseRollbackOptions struct {
 	Selector string
+	DryRun   bool
 }
 
 type SoloStatusOptions struct {
@@ -413,6 +415,33 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		shortSHA = shortSHA[:7]
 	}
 	imageTag := soloImageTag(cfg.Project, shortSHA)
+
+	if opts.DryRun {
+		payload := map[string]any{
+			"action":            "deploy",
+			"dry_run":           true,
+			"workload_revision": shortSHA,
+			"image":             imageTag,
+			"environment":       environmentName,
+			"nodes":             sortedNodeNames(nodes),
+			"phase":             "planned",
+			"side_effects": map[string]bool{
+				"build":       false,
+				"ssh":         false,
+				"publish":     false,
+				"state_write": false,
+			},
+			"next_steps": []string{"devopsellence deploy"},
+		}
+		if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+			payload["configured_public_urls"] = urls
+			if len(soloReadyPublicURLs(cfg, nodes)) == 0 {
+				payload["public_url_status"] = soloPublicURLStatus(cfg)
+				payload["warnings"] = []string{soloPublicURLWarning(cfg)}
+			}
+		}
+		return stream.Result(payload)
+	}
 
 	buildCtx := filepath.Join(workspaceRoot, cfg.Build.Context)
 	dockerfile := filepath.Join(workspaceRoot, cfg.Build.Dockerfile)
@@ -1672,6 +1701,26 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	nodes, err := a.resolveNodes(current, rollbackTargetNodeNames)
 	if err != nil {
 		return err
+	}
+	if opts.DryRun {
+		return stream.Result(map[string]any{
+			"action":            "rollback",
+			"dry_run":           true,
+			"release_id":        selected.ID,
+			"rolled_back_from":  currentRelease.ID,
+			"workload_revision": selected.Revision,
+			"environment":       environmentName,
+			"nodes":             sortedNodeNames(nodes),
+			"phase":             "planned",
+			"selected_image":    selected.Image.Reference,
+			"selector":          opts.Selector,
+			"side_effects": map[string]bool{
+				"ssh":         false,
+				"publish":     false,
+				"state_write": false,
+			},
+			"next_steps": []string{"devopsellence release rollback " + selected.ID},
+		})
 	}
 	now := time.Now().UTC()
 	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{

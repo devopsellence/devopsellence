@@ -2590,6 +2590,64 @@ func TestNodeLabelRemovePersistsLabelsBeforeRepublishError(t *testing.T) {
 	}
 }
 
+func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "*", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(soloState.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Git: git.Client{}, Cwd: workspaceRoot}
+	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(soloState.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("solo state changed during dry-run")
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["phase"] != "planned" || payload["action"] != "deploy" || payload["dry_run"] != true {
+		t.Fatalf("payload = %#v, want deploy dry-run plan", payload)
+	}
+	if payload["release_id"] != nil || payload["deployment_id"] != nil || payload["desired_state_revisions"] != nil {
+		t.Fatalf("payload = %#v, dry-run must not create release/deployment/publication revisions", payload)
+	}
+}
+
 func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
@@ -2767,6 +2825,47 @@ func TestSoloReleaseListEnvironmentIDUsesCanonicalWorkspaceKey(t *testing.T) {
 	want := realWorkspace + "#production"
 	if payload["environment_id"] != want {
 		t.Fatalf("environment_id = %#v, want canonical %q", payload["environment_id"], want)
+	}
+}
+
+func TestSoloReleaseRollbackDryRunPlansWithoutSideEffects(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(soloState.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(soloState.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("solo state changed during rollback dry-run")
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["phase"] != "planned" || payload["action"] != "rollback" || payload["dry_run"] != true {
+		t.Fatalf("payload = %#v, want rollback dry-run plan", payload)
+	}
+	if payload["release_id"] != "rel-1" || payload["rolled_back_from"] != "rel-2" {
+		t.Fatalf("payload = %#v, want selected rollback release", payload)
+	}
+	if payload["deployment_id"] != nil || payload["desired_state_revisions"] != nil {
+		t.Fatalf("payload = %#v, dry-run must not create deployment/publication revisions", payload)
 	}
 }
 

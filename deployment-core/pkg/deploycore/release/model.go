@@ -202,6 +202,9 @@ func NewDeployment(input DeploymentCreateInput) (Deployment, error) {
 func SelectRollbackRelease(releases []Release, currentReleaseID, selector string) (Release, error) {
 	currentReleaseID = strings.TrimSpace(currentReleaseID)
 	selector = strings.TrimSpace(selector)
+	if strings.EqualFold(selector, "previous") {
+		selector = ""
+	}
 	candidates := append([]Release(nil), releases...)
 
 	if selector == "" {

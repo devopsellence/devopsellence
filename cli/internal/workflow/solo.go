@@ -2735,6 +2735,9 @@ func (a *App) SoloExec(ctx context.Context, opts SoloExecOptions) error {
 		if err != nil {
 			return err
 		}
+		if len(nodeNames) == 0 {
+			return fmt.Errorf("no nodes selected for environment %s; attach a node or pass --node", environmentName)
+		}
 	}
 	nodes, err := a.resolveNodes(current, nodeNames)
 	if err != nil {
@@ -4520,6 +4523,9 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 		nodeNames, err = current.AttachedNodeNames(workspaceRoot, environmentName)
 		if err != nil {
 			return err
+		}
+		if len(nodeNames) == 0 {
+			return fmt.Errorf("no nodes selected for environment %s; attach a node or pass --node", environmentName)
 		}
 	}
 	nodes, err := a.resolveNodes(current, nodeNames)

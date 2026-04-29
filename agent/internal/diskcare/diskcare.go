@@ -413,20 +413,20 @@ func retainedReleaseKeys(releases []releaseRecord, current []releaseRecord, keep
 		keepPerEnvironment = 0
 	}
 	retained := map[string]struct{}{}
-	currentEnvironments := map[string]struct{}{}
 	for _, release := range current {
 		retained[releaseKey(release.Environment, release.Revision)] = struct{}{}
-		currentEnvironments[strings.TrimSpace(release.Environment)] = struct{}{}
 	}
 	byEnvironment := map[string][]releaseRecord{}
 	for _, release := range releases {
 		environment := strings.TrimSpace(release.Environment)
 		byEnvironment[environment] = append(byEnvironment[environment], release)
 	}
-	for environment, envReleases := range byEnvironment {
-		if _, ok := currentEnvironments[environment]; !ok {
-			continue
-		}
+	for _, envReleases := range byEnvironment {
+		// Retain the newest local releases even when an environment is absent
+		// from the current desired state. A solo detach publishes an empty
+		// desired state to clear containers; pruning the image immediately makes
+		// a later reattach + same-revision deploy race with cleanup and fail
+		// before the CLI has a chance to republish that exact image.
 		sort.SliceStable(envReleases, func(i, j int) bool {
 			return envReleases[i].LastSeenAt.After(envReleases[j].LastSeenAt)
 		})

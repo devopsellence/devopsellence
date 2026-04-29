@@ -4155,6 +4155,26 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 }
 
 func redactSoloStateForSupport(current solo.State) solo.State {
+	data, err := json.Marshal(current)
+	if err == nil {
+		var clone solo.State
+		if err := json.Unmarshal(data, &clone); err == nil {
+			current = clone
+		}
+	}
+	for key, node := range current.Nodes {
+		if strings.TrimSpace(node.SSHKey) != "" {
+			node.SSHKey = "[REDACTED]"
+		}
+		current.Nodes[key] = node
+	}
+	for key, snapshot := range current.Snapshots {
+		current.Snapshots[key] = redactDeploySnapshotForSupport(snapshot)
+	}
+	for key, release := range current.Releases {
+		release.Snapshot = redactDeploySnapshotForSupport(release.Snapshot)
+		current.Releases[key] = release
+	}
 	for key, record := range current.Secrets {
 		record.Value = "[REDACTED]"
 		if strings.TrimSpace(record.Reference) != "" {
@@ -4163,6 +4183,16 @@ func redactSoloStateForSupport(current solo.State) solo.State {
 		current.Secrets[key] = record
 	}
 	return current
+}
+
+func redactDeploySnapshotForSupport(snapshot desiredstate.DeploySnapshot) desiredstate.DeploySnapshot {
+	for i := range snapshot.Services {
+		snapshot.Services[i].Env = redactStringMapValues(snapshot.Services[i].Env)
+	}
+	if snapshot.ReleaseTask != nil {
+		snapshot.ReleaseTask.Env = redactStringMapValues(snapshot.ReleaseTask.Env)
+	}
+	return snapshot
 }
 
 func redactProjectConfigForSupport(cfg *config.ProjectConfig) *config.ProjectConfig {

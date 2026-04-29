@@ -2848,13 +2848,47 @@ func TestSoloSupportBundleWritesRedactedEvidence(t *testing.T) {
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
 		Nodes: map[string]config.Node{
-			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}},
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, SSHKey: "-----BEGIN OPENSSH PRIVATE KEY-----private-key-material", Labels: []string{config.DefaultWebRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+		Releases:    map[string]corerelease.Release{},
 		Secrets:     map[string]solo.SecretRecord{},
 	}
 	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
 		t.Fatal(err)
+	}
+	stateKey, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceRoot,
+		Environment:   "production",
+		Revision:      "abc1234",
+		Image:         "demo:abc1234",
+		Services: []desiredstate.ServiceJSON{{
+			Name:  config.DefaultWebServiceName,
+			Image: "demo:abc1234",
+			Env: map[string]string{
+				"APP_REVISION":        "snapshot-inline-value",
+				"SNAPSHOT_SECRET_ENV": "snapshot-secret-value",
+			},
+		}},
+		ReleaseTask: &desiredstate.TaskJSON{
+			Name:  "release",
+			Image: "demo:abc1234",
+			Env:   map[string]string{"RELEASE_INLINE": "snapshot-release-value"},
+		},
+	}
+	current.Snapshots[stateKey] = snapshot
+	current.Releases["rel-abc1234"] = corerelease.Release{
+		ID:            "rel-abc1234",
+		EnvironmentID: stateKey,
+		Revision:      "abc1234",
+		Snapshot:      snapshot,
+		Image:         corerelease.ImageRef{Reference: "demo:abc1234"},
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if _, err := current.SetSecret(workspaceRoot, "production", config.DefaultWebServiceName, "DEMO_SECRET", solo.SecretMaterial{Store: solo.SecretStorePlaintext, Value: "super-secret-value"}); err != nil {
 		t.Fatal(err)
@@ -2877,7 +2911,18 @@ func TestSoloSupportBundleWritesRedactedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, forbidden := range []string{"super-secret-value", "op://vault/item/field", "inline-config-secret", "op://config/item/field", "release-config-secret", "staging-config-secret"} {
+	for _, forbidden := range []string{
+		"super-secret-value",
+		"op://vault/item/field",
+		"inline-config-secret",
+		"op://config/item/field",
+		"release-config-secret",
+		"staging-config-secret",
+		"-----BEGIN OPENSSH PRIVATE KEY-----private-key-material",
+		"snapshot-inline-value",
+		"snapshot-secret-value",
+		"snapshot-release-value",
+	} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("support bundle leaked %q: %s", forbidden, text)
 		}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dogfood Solo"
+  short_description: "Solo-mode devopsellence dogfood and release-readiness runs"
+  default_prompt: "Dogfood devopsellence solo mode from the perspective of an AI coding/operator agent: validate official artifacts when release-readiness matters, probe TLS/ACME, co-hosted projects/environments, secrets, rollback, diagnostics, restart/reboot recovery, cleanup, and write an evidence-backed report with blockers and ratchet follow-ups."

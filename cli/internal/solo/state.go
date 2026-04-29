@@ -108,10 +108,52 @@ func (s *StateStore) Write(current State) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(s.Path, data, 0o600); err != nil {
+	if err := writeFileAtomicPrivate(s.Path, data); err != nil {
 		return err
 	}
-	return os.Chmod(s.Path, 0o600)
+	return nil
+}
+
+func writeFileAtomicPrivate(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func (s *StateStore) Update(fn func(*State) error) error {

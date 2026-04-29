@@ -2901,6 +2901,57 @@ func TestSoloSupportBundleWritesRedactedEvidence(t *testing.T) {
 	}
 }
 
+func TestSoloSupportBundleUsesActiveEnvironmentForAttachedNodes(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-prod":    {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}},
+			"node-staging": {Host: "203.0.113.11", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-prod"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-staging"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	outPath := filepath.Join(t.TempDir(), "bundle.json")
+	app := &App{Printer: output.New(io.Discard, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloSupportBundle(context.Background(), SoloSupportBundleOptions{Output: outPath}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		t.Fatalf("parse support bundle: %v\n%s", err, string(data))
+	}
+	if got := bundle["environment"]; got != "staging" {
+		t.Fatalf("environment = %v, want staging", got)
+	}
+	attached, ok := bundle["attached_nodes"].([]any)
+	if !ok || len(attached) != 1 || attached[0] != "node-staging" {
+		t.Fatalf("attached_nodes = %#v, want staging node only", bundle["attached_nodes"])
+	}
+}
+
 func TestSoloSecretsCommandsUseCurrentSoloEnvironment(t *testing.T) {
 	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
 
@@ -3717,7 +3768,10 @@ func TestSoloDeployRolloutFailureIncludesHealthcheckContext(t *testing.T) {
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
 	}
-	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"__REVISION__","phase":"error","error":"healthcheck failed"}` + "\n"}})
+	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: soloStatusMissingSentinel + "\n"},
+		{stdout: `{"revision":"__REVISION__","phase":"error","error":"healthcheck failed"}` + "\n"},
+	})
 
 	var stdout bytes.Buffer
 	app := &App{
@@ -3792,7 +3846,7 @@ func TestWaitForSoloRolloutIgnoresMissingAndStaleStatusUntilExpectedRevisionSett
 	}
 }
 
-func TestWaitForSoloRolloutIgnoresExpectedRevisionStatusOlderThanPublishStart(t *testing.T) {
+func TestWaitForSoloRolloutIgnoresExpectedRevisionStatusUntilRemoteStatusTimeAdvances(t *testing.T) {
 	statusCountPath := installFakeSoloCommands(t, []fakeSSHResponse{
 		{stdout: `{"time":"2026-04-29T08:28:51Z","revision":"expected-revision","phase":"settled"}` + "\n"},
 		{stdout: `{"time":"2026-04-29T08:29:40Z","revision":"expected-revision","phase":"settled"}` + "\n"},
@@ -3803,12 +3857,11 @@ func TestWaitForSoloRolloutIgnoresExpectedRevisionStatusOlderThanPublishStart(t 
 		DeployPollInterval: 5 * time.Millisecond,
 		DeployTimeout:      time.Second,
 	}
-	minStatusTime := time.Date(2026, 4, 29, 8, 29, 0, 0, time.UTC)
 	err := app.waitForSoloRollout(context.Background(), map[string]config.Node{
 		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
 	}, map[string]string{
 		"node-a": "expected-revision",
-	}, minStatusTime)
+	}, map[string]string{"node-a": "2026-04-29T08:28:51Z"})
 	if err != nil {
 		t.Fatal(err)
 	}

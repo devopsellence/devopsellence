@@ -513,7 +513,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	rolloutStart := time.Now().UTC().Add(-2 * time.Second)
+	statusBaselines := a.soloNodeStatusTimes(ctx, nodes)
 	desiredStateRevisions, err := a.republishNodes(ctx, current, attachedNodeNames)
 	if err != nil {
 		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
@@ -521,7 +521,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		}
 		return err
 	}
-	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, rolloutStart); err != nil {
+	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, statusBaselines); err != nil {
 		resultErr := err
 		var rolloutErr *soloRolloutError
 		if errors.As(err, &rolloutErr) {
@@ -751,7 +751,7 @@ func soloDeployHealthcheckDetails(cfg *config.ProjectConfig) []map[string]any {
 	return details
 }
 
-func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string, minStatusTime ...time.Time) error {
+func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string, previousStatusTimes ...map[string]string) error {
 	timeout := a.DeployTimeout
 	if timeout <= 0 {
 		timeout = defaultDeployProgressTimeout
@@ -760,9 +760,9 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 	if pollInterval <= 0 {
 		pollInterval = defaultDeployProgressPollInterval
 	}
-	freshAfter := time.Time{}
-	if len(minStatusTime) > 0 {
-		freshAfter = minStatusTime[0]
+	statusBaselines := map[string]string{}
+	if len(previousStatusTimes) > 0 && previousStatusTimes[0] != nil {
+		statusBaselines = previousStatusTimes[0]
 	}
 
 	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -797,7 +797,7 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 			case strings.TrimSpace(result.Status.Revision) != expectedRevision:
 				pendingCount++
 				details = append(details, fmt.Sprintf("%s=revision:%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Revision), "none")))
-			case !soloNodeStatusFreshEnough(result.Status, freshAfter):
+			case !soloNodeStatusAdvancedAfter(result.Status, statusBaselines[name]):
 				pendingCount++
 				details = append(details, fmt.Sprintf("%s=status_time:%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Time), "none")))
 			default:
@@ -836,19 +836,38 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 	}
 }
 
-func soloNodeStatusFreshEnough(status soloNodeStatus, minStatusTime time.Time) bool {
-	if minStatusTime.IsZero() {
+func (a *App) soloNodeStatusTimes(ctx context.Context, nodes map[string]config.Node) map[string]string {
+	baselines := map[string]string{}
+	for _, name := range sortedNodeNames(nodes) {
+		result, err := readNodeStatus(ctx, nodes[name])
+		if err != nil || result.Missing {
+			continue
+		}
+		if observed := strings.TrimSpace(result.Status.Time); observed != "" {
+			baselines[name] = observed
+		}
+	}
+	return baselines
+}
+
+func soloNodeStatusAdvancedAfter(status soloNodeStatus, previousStatusTime string) bool {
+	previousStatusTime = strings.TrimSpace(previousStatusTime)
+	if previousStatusTime == "" {
 		return true
 	}
 	observed := strings.TrimSpace(status.Time)
 	if observed == "" {
 		return true
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, observed)
+	parsedObserved, err := time.Parse(time.RFC3339Nano, observed)
 	if err != nil {
 		return true
 	}
-	return !parsed.Before(minStatusTime)
+	parsedPrevious, err := time.Parse(time.RFC3339Nano, previousStatusTime)
+	if err != nil {
+		return true
+	}
+	return parsedObserved.After(parsedPrevious)
 }
 
 func (a *App) readSoloState() (solo.State, error) {
@@ -1831,7 +1850,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if _, err := publishState.SaveRelease(selected); err != nil {
 		return err
 	}
-	rolloutStart := time.Now().UTC().Add(-2 * time.Second)
+	statusBaselines := a.soloNodeStatusTimes(ctx, nodes)
 	desiredStateRevisions, err := a.republishNodes(ctx, publishState, rollbackTargetNodeNames)
 	if err != nil {
 		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
@@ -1848,7 +1867,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, rolloutStart); err != nil {
+	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, statusBaselines); err != nil {
 		if persistErr := a.persistSoloDeploymentRolloutFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
 			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
 		}
@@ -4084,7 +4103,7 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 	environmentName := ""
 	attachedNodes := []string{}
 	if cfg != nil {
-		environmentName = soloEnvironmentName(cfg, "")
+		environmentName = a.effectiveEnvironment("", cfg)
 		attachedNodes, _ = current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
 	}
 	bundle := map[string]any{

@@ -1962,6 +1962,42 @@ func TestSoloExecUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *testing.T
 	}
 }
 
+func TestSoloRuntimeEnvironmentNameStaysProjectScopedAfterPeerDetach(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	otherRoot := t.TempDir()
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceKey, err := solo.EnvironmentStateKey(cwd, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := solo.EnvironmentStateKey(otherRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots = map[string]desiredstate.DeploySnapshot{
+		workspaceKey: {WorkspaceRoot: cwd, WorkspaceKey: strings.Split(workspaceKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "demo"}},
+		// The peer was detached, so its attachment is gone, but historical solo
+		// state may still retain its snapshot. CLI lookups must still match the
+		// project-scoped runtime name that aggregated desired-state publishes for
+		// the surviving project.
+		otherKey: {WorkspaceRoot: otherRoot, WorkspaceKey: strings.Split(otherKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "api"}},
+	}
+
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, cwd, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeEnvironment == "production" || !strings.HasPrefix(runtimeEnvironment, "demo-production-") {
+		t.Fatalf("runtime environment = %q, want stable project-scoped name after peer detach", runtimeEnvironment)
+	}
+}
+
 func TestRootExecEnvSelectsAttachedEnvironment(t *testing.T) {
 	cwd := rootTestSoloWorkspace(t)
 	cfg, err := config.LoadFromRoot(cwd)

@@ -4823,7 +4823,7 @@ func (a *App) soloCurrentWorkspaceRoot() (string, error) {
 	return discovered.WorkspaceRoot, nil
 }
 
-func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logicalEnvironment, nodeName string) (string, error) {
+func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logicalEnvironment, _ string) (string, error) {
 	logicalEnvironment = strings.TrimSpace(logicalEnvironment)
 	if logicalEnvironment == "" {
 		logicalEnvironment = config.DefaultEnvironment
@@ -4837,22 +4837,10 @@ func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logica
 		return logicalEnvironment, nil
 	}
 	base := defaultSoloSnapshotEnvironment(currentSnapshot, logicalEnvironment)
-	duplicates := 0
-	for key, attachment := range current.Attachments {
-		if !stringSliceContains(attachment.NodeNames, nodeName) {
-			continue
-		}
-		snapshot, ok := current.Snapshots[key]
-		if !ok {
-			continue
-		}
-		if defaultSoloSnapshotEnvironment(snapshot, attachment.Environment) == base {
-			duplicates++
-		}
-	}
-	if duplicates <= 1 {
-		return base, nil
-	}
+	// Keep CLI lookups aligned with deployment-core's aggregated desired-state
+	// naming. Once a snapshot exists, solo runtime environment names are always
+	// project-scoped/stable, even if a co-hosted peer with the same logical
+	// environment has detached.
 	return uniqueSoloRuntimeEnvironmentName(currentSnapshot, base), nil
 }
 
@@ -4864,16 +4852,6 @@ func defaultSoloSnapshotEnvironment(snapshot desiredstate.DeploySnapshot, fallba
 		return value
 	}
 	return config.DefaultEnvironment
-}
-
-func stringSliceContains(values []string, target string) bool {
-	target = strings.TrimSpace(target)
-	for _, value := range values {
-		if strings.TrimSpace(value) == target {
-			return true
-		}
-	}
-	return false
 }
 
 func uniqueSoloRuntimeEnvironmentName(snapshot desiredstate.DeploySnapshot, base string) string {

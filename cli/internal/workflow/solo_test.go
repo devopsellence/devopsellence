@@ -2079,9 +2079,43 @@ func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T)
 			t.Fatalf("script = %q, want %q", string(script), snippet)
 		}
 	}
+	if strings.Contains(string(script), "systemctl restart devopsellence-agent || true") {
+		t.Fatalf("script = %q, want restart failures to be propagated", string(script))
+	}
 	payload := decodeJSONOutput(t, &stdout)
 	if intValueAny(payload["schema_version"]) != outputSchemaVersion {
 		t.Fatalf("output = %#v, want JSON payload", payload)
+	}
+}
+
+func TestSoloIngressCertInstallFailsWhenAgentRestartFails(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_RESTART_FAIL", "1")
+	installFakeSoloCommands(t, nil)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	err := app.SoloIngressCertInstall(context.Background(), SoloIngressCertInstallOptions{CertFile: certFile, KeyFile: keyFile})
+	if err == nil || !strings.Contains(err.Error(), "[node-a] install ingress cert") {
+		t.Fatalf("SoloIngressCertInstall() error = %v, want node install failure", err)
 	}
 }
 
@@ -4979,6 +5013,10 @@ if [[ "$command" == "bash -s" ]]; then
   script="$(cat)"
   if [[ -n "${DEVOPSELLENCE_FAKE_SSH_SCRIPT:-}" ]]; then
     printf '%s' "$script" >"$DEVOPSELLENCE_FAKE_SSH_SCRIPT"
+  fi
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_RESTART_FAIL:-}" && "$script" == *"systemctl restart devopsellence-agent"* && "$script" != *"systemctl restart devopsellence-agent || true"* ]]; then
+    printf 'systemctl restart devopsellence-agent failed\n' >&2
+    exit 1
   fi
   exit 0
 fi

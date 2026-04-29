@@ -4606,7 +4606,7 @@ run_root() {
 run_root install -d -m 0755 %s
 run_root install -m 0644 %s %s
 run_root install -m 0600 %s %s
-run_root systemctl restart devopsellence-agent || true
+run_root systemctl restart devopsellence-agent
 `, shellQuote(stateDir), shellQuote(remoteCert), shellQuote(certPath), shellQuote(remoteKey), shellQuote(keyPath))
 	if err := solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), io.Discard, io.Discard); err != nil {
 		return certPath, keyPath, err

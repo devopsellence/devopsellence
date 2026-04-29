@@ -221,14 +221,46 @@ func TestRetainedReleaseKeysNormalizesEnvironmentNames(t *testing.T) {
 	}
 }
 
-func TestRetainedReleaseKeysDropsDeletedEnvironments(t *testing.T) {
+func TestRetainedReleaseKeysPrunesOlderAbsentEnvironmentReleases(t *testing.T) {
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
 	releases := []releaseRecord{
-		{Environment: "deleted", Revision: "rev-1", Images: []string{"app:rev1"}, LastSeenAt: time.Now()},
+		{Environment: "deleted", Revision: "rev-1", Images: []string{"app:rev1"}, LastSeenAt: older},
+		{Environment: "deleted", Revision: "rev-2", Images: []string{"app:rev2"}, LastSeenAt: newer},
 	}
 
 	retained := retainedReleaseKeys(releases, nil, 1)
-	if len(retained) != 0 {
-		t.Fatalf("retained = %#v, want none for deleted environments", retained)
+	if _, ok := retained[releaseKey("deleted", "rev-2")]; !ok {
+		t.Fatal("expected newest absent-environment release to stay inside retention")
+	}
+	if _, ok := retained[releaseKey("deleted", "rev-1")]; ok {
+		t.Fatal("expected older absent-environment release to fall outside retention")
+	}
+}
+
+func TestRunRetainsDetachedEnvironmentImagesInsideRetentionWindow(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "disk-care-state.json")
+	initial := &store{Releases: []releaseRecord{
+		{Environment: "production", Revision: "rev-1", Images: []string{"app:rev1"}, LastSeenAt: time.Now().Add(-time.Minute)},
+	}}
+	eng := &fakeEngine{
+		images:        []engine.ImageState{{ID: "sha256:1", RepoTags: []string{"app:rev1"}, Size: 100}},
+		containers:    []engine.ContainerState{},
+		logPaths:      map[string]string{},
+		removeResults: map[string][]engine.ImageDelete{"app:rev1": {{Deleted: "sha256:1"}}},
+	}
+	mgr := New(eng, Config{StatePath: statePath, RetainedPreviousReleases: 1}, nil)
+	if err := mgr.saveStore(initial); err != nil {
+		t.Fatalf("save store: %v", err)
+	}
+
+	_, err := mgr.Run(context.Background(), &desiredstatepb.DesiredState{SchemaVersion: 2, Revision: "empty"})
+	if err != nil {
+		t.Fatalf("run detached state: %v", err)
+	}
+	if len(eng.removed) != 0 {
+		t.Fatalf("removed = %#v, want none; detached environments must retain recent images so reattach + same-revision deploy can recover", eng.removed)
 	}
 }
 

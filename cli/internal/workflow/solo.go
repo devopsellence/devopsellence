@@ -1038,22 +1038,58 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 }
 
 func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.State, snapshot desiredstate.DeploySnapshot) (desiredstate.DeploySnapshot, error) {
-	cfg, err := a.ConfigStore.Read(snapshot.WorkspaceRoot)
+	records, err := current.SecretRecords(snapshot.WorkspaceRoot, snapshot.Environment)
 	if err != nil {
 		return desiredstate.DeploySnapshot{}, err
 	}
-	if cfg == nil {
-		return desiredstate.DeploySnapshot{}, fmt.Errorf("missing devopsellence.yml for %s", snapshot.WorkspaceRoot)
+	local := map[string]solo.SecretRecord{}
+	for _, record := range records {
+		local[record.ServiceName+"\x00"+record.Name] = record
 	}
-	secrets, err := a.resolveSoloSecretValues(ctx, current, snapshot.WorkspaceRoot, snapshot.Environment, cfg)
-	if err != nil {
-		return desiredstate.DeploySnapshot{}, fmt.Errorf("load secrets for %s: %w", snapshot.WorkspaceRoot, err)
+	cache := map[string]string{}
+	for i := range snapshot.Services {
+		serviceName := strings.TrimSpace(snapshot.Services[i].Name)
+		for _, secretName := range snapshot.SecretRefs[serviceName] {
+			secretName = strings.TrimSpace(secretName)
+			if secretName == "" {
+				continue
+			}
+			record, ok := local[serviceName+"\x00"+secretName]
+			if !ok {
+				return desiredstate.DeploySnapshot{}, fmt.Errorf("missing local solo secret %s for service %s", secretName, serviceName)
+			}
+			value, err := a.resolveSoloSecretRecordCached(ctx, record, cache)
+			if err != nil {
+				return desiredstate.DeploySnapshot{}, fmt.Errorf("resolve secret %s for service %s: %w", secretName, serviceName, err)
+			}
+			if snapshot.Services[i].Env == nil {
+				snapshot.Services[i].Env = map[string]string{}
+			}
+			snapshot.Services[i].Env[secretName] = value
+		}
 	}
-	configPath := strings.TrimSpace(snapshot.Metadata.ConfigPath)
-	if configPath == "" {
-		configPath = a.ConfigStore.PathFor(snapshot.WorkspaceRoot)
+	if snapshot.ReleaseTask != nil {
+		serviceName := strings.TrimSpace(snapshot.ReleaseService)
+		for _, secretName := range snapshot.SecretRefs[serviceName] {
+			secretName = strings.TrimSpace(secretName)
+			if secretName == "" {
+				continue
+			}
+			record, ok := local[serviceName+"\x00"+secretName]
+			if !ok {
+				return desiredstate.DeploySnapshot{}, fmt.Errorf("missing local solo secret %s for release task service %s", secretName, serviceName)
+			}
+			value, err := a.resolveSoloSecretRecordCached(ctx, record, cache)
+			if err != nil {
+				return desiredstate.DeploySnapshot{}, fmt.Errorf("resolve secret %s for release task service %s: %w", secretName, serviceName, err)
+			}
+			if snapshot.ReleaseTask.Env == nil {
+				snapshot.ReleaseTask.Env = map[string]string{}
+			}
+			snapshot.ReleaseTask.Env[secretName] = value
+		}
 	}
-	return solo.BuildDeploySnapshotWithScopedSecrets(cfg, snapshot.WorkspaceRoot, configPath, snapshot.Image, snapshot.Revision, secrets)
+	return snapshot, nil
 }
 
 func (a *App) resolveSoloSecretValues(ctx context.Context, current solo.State, workspaceRoot, environment string, cfg *config.ProjectConfig) (solo.ScopedSecrets, error) {
@@ -1267,6 +1303,9 @@ func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.S
 }
 
 func snapshotNeedsImageOnNode(snapshot desiredstate.DeploySnapshot, node config.Node, runReleaseTask bool) bool {
+	if strings.TrimSpace(snapshot.Image) != "" && len(snapshot.Services) == 0 && snapshot.ReleaseTask == nil {
+		return true
+	}
 	for _, service := range snapshot.Services {
 		if soloNodeCanRunKind(node, service.Kind) {
 			return true

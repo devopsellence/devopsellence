@@ -191,6 +191,16 @@ func buildDeploySnapshot(cfg *config.ProjectConfig, workspaceRoot, configPath, i
 	}
 	for _, serviceName := range cfg.ServiceNames() {
 		service := cfg.Services[serviceName]
+		for _, ref := range service.SecretRefs {
+			name := strings.TrimSpace(ref.Name)
+			if name == "" {
+				continue
+			}
+			if snapshot.SecretRefs == nil {
+				snapshot.SecretRefs = map[string][]string{}
+			}
+			snapshot.SecretRefs[serviceName] = append(snapshot.SecretRefs[serviceName], name)
+		}
 		rendered, err := desiredstate.BuildService(serviceName, service, imageTag, secretsForService(serviceName))
 		if err != nil {
 			return desiredstate.DeploySnapshot{}, fmt.Errorf("build service %s: %w", serviceName, err)

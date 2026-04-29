@@ -131,19 +131,20 @@ type SnapshotMetadata struct {
 }
 
 type DeploySnapshot struct {
-	WorkspaceRoot      string           `json:"workspace_root"`
-	WorkspaceKey       string           `json:"workspace_key"`
-	Environment        string           `json:"environment"`
-	Revision           string           `json:"revision"`
-	Image              string           `json:"image"`
-	Services           []ServiceJSON    `json:"services,omitempty"`
-	ReleaseTask        *TaskJSON        `json:"release_task,omitempty"`
-	ReleaseService     string           `json:"release_service,omitempty"`
-	ReleaseServiceKind string           `json:"release_service_kind,omitempty"`
-	Ingress            *IngressJSON     `json:"ingress,omitempty"`
-	IngressService     string           `json:"ingress_service,omitempty"`
-	IngressServiceKind string           `json:"ingress_service_kind,omitempty"`
-	Metadata           SnapshotMetadata `json:"metadata,omitempty"`
+	WorkspaceRoot      string              `json:"workspace_root"`
+	WorkspaceKey       string              `json:"workspace_key"`
+	Environment        string              `json:"environment"`
+	Revision           string              `json:"revision"`
+	Image              string              `json:"image"`
+	Services           []ServiceJSON       `json:"services,omitempty"`
+	ReleaseTask        *TaskJSON           `json:"release_task,omitempty"`
+	ReleaseService     string              `json:"release_service,omitempty"`
+	ReleaseServiceKind string              `json:"release_service_kind,omitempty"`
+	Ingress            *IngressJSON        `json:"ingress,omitempty"`
+	IngressService     string              `json:"ingress_service,omitempty"`
+	IngressServiceKind string              `json:"ingress_service_kind,omitempty"`
+	SecretRefs         map[string][]string `json:"secret_refs,omitempty"`
+	Metadata           SnapshotMetadata    `json:"metadata,omitempty"`
 }
 
 // BuildDesiredState produces desired-state JSON from a ProjectConfig, image tag,

@@ -87,6 +87,83 @@ func TestPublicationReleasesFromSnapshotsDefaultsEnvironment(t *testing.T) {
 	}
 }
 
+func TestResolveStoredDeploySnapshotPreservesHistoricalReleaseShape(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfgAtRelease := config.DefaultProjectConfig("acme", "demo", config.DefaultEnvironment)
+	service := cfgAtRelease.Services["web"]
+	service.Env = map[string]string{"APP_MODE": "old"}
+	service.SecretRefs = []config.SecretRef{{Name: "API_KEY", Secret: "devopsellence://plaintext/API_KEY"}}
+	service.Healthcheck = &config.HTTPHealthcheck{Path: "/old-up", Port: 3000}
+	cfgAtRelease.Services["web"] = service
+	cfgAtRelease.Ingress = &config.IngressConfig{
+		Hosts: []string{"old.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "old.example.com"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
+
+	snapshot, err := solo.BuildDeploySnapshotWithScopedSecrets(
+		&cfgAtRelease,
+		workspaceRoot,
+		filepath.Join(workspaceRoot, config.FilePath),
+		"demo:old",
+		"oldrev",
+		solo.ScopedSecrets{"web": {"API_KEY": "secret-value"}},
+	)
+	if err != nil {
+		t.Fatalf("build release snapshot: %v", err)
+	}
+	storedSnapshot := solo.RedactDeploySnapshotSecrets(snapshot, &cfgAtRelease)
+
+	cfgNow := config.DefaultProjectConfig("acme", "demo", config.DefaultEnvironment)
+	currentService := cfgNow.Services["web"]
+	currentService.Env = map[string]string{"APP_MODE": "new"}
+	currentService.Healthcheck = &config.HTTPHealthcheck{Path: "/new-up", Port: 3000}
+	cfgNow.Services["web"] = currentService
+	cfgNow.Ingress = &config.IngressConfig{
+		Hosts: []string{"new.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "new.example.com"},
+			Target: config.IngressTargetConfig{Service: "web", Port: "http"},
+		}},
+	}
+	if _, err := config.NewStore().Write(workspaceRoot, cfgNow); err != nil {
+		t.Fatalf("write current config: %v", err)
+	}
+
+	current := solo.State{}
+	record, err := current.SetSecret(workspaceRoot, config.DefaultEnvironment, "web", "API_KEY", solo.SecretMaterial{Store: solo.SecretStorePlaintext, Value: "secret-value"})
+	if err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+	if record.Value == "" {
+		t.Fatal("test secret record did not retain plaintext value")
+	}
+
+	app := &App{ConfigStore: config.NewStore()}
+	resolved, err := app.resolveStoredDeploySnapshot(context.Background(), current, storedSnapshot)
+	if err != nil {
+		t.Fatalf("resolve snapshot: %v", err)
+	}
+	if len(resolved.Services) != 1 {
+		t.Fatalf("services = %#v, want one historical service", resolved.Services)
+	}
+	resolvedService := resolved.Services[0]
+	if got := resolvedService.Env["APP_MODE"]; got != "old" {
+		t.Fatalf("APP_MODE = %q, want historical value old", got)
+	}
+	if got := resolvedService.Env["API_KEY"]; got != "secret-value" {
+		t.Fatalf("API_KEY = %q, want resolved secret value", got)
+	}
+	if resolvedService.Healthcheck == nil || resolvedService.Healthcheck.Path != "/old-up" {
+		t.Fatalf("healthcheck = %#v, want historical /old-up", resolvedService.Healthcheck)
+	}
+	if resolved.Ingress == nil || len(resolved.Ingress.Hosts) != 1 || resolved.Ingress.Hosts[0] != "old.example.com" {
+		t.Fatalf("ingress = %#v, want historical old.example.com", resolved.Ingress)
+	}
+}
+
 func TestDockerBuildArgsUsesConfiguredPlatform(t *testing.T) {
 	got, err := dockerBuildArgs("/workspace", "/workspace/Dockerfile", "shop-app:abc1234", []string{"linux/amd64"})
 	if err != nil {

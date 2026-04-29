@@ -1974,7 +1974,7 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	configUpdated, err := ensureServiceSecretRef(cfg, serviceName, soloSecretConfigRef(record))
+	configUpdated, err := ensureServiceSecretRefForEnvironment(cfg, environmentName, serviceName, soloSecretConfigRef(record))
 	if err != nil {
 		return fmt.Errorf("secret saved locally but update devopsellence.yml failed: %w", err)
 	}
@@ -2068,6 +2068,13 @@ func serviceSecretRefConflict(service config.ServiceConfig, name string) bool {
 	return true
 }
 
+func ensureServiceSecretRefForEnvironment(cfg *config.ProjectConfig, environmentName, serviceName string, ref config.SecretRef) (bool, error) {
+	if environmentServiceSecretRefsOverride(cfg, environmentName, serviceName) {
+		return ensureEnvironmentServiceSecretRef(cfg, environmentName, serviceName, ref)
+	}
+	return ensureServiceSecretRef(cfg, serviceName, ref)
+}
+
 func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref config.SecretRef) (bool, error) {
 	serviceName = strings.TrimSpace(serviceName)
 	if cfg == nil {
@@ -2077,22 +2084,65 @@ func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref c
 	if !ok {
 		return false, nil
 	}
-	for i, existing := range service.SecretRefs {
+	updated, changed, err := ensureSecretRef(service.SecretRefs, ref, serviceName, service)
+	if err != nil || !changed {
+		return changed, err
+	}
+	service.SecretRefs = updated
+	cfg.Services[serviceName] = service
+	return true, nil
+}
+
+func ensureEnvironmentServiceSecretRef(cfg *config.ProjectConfig, environmentName, serviceName string, ref config.SecretRef) (bool, error) {
+	serviceName = strings.TrimSpace(serviceName)
+	if cfg == nil {
+		return false, nil
+	}
+	environmentName = normalizedSoloEnvironmentName(environmentName, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return false, err
+	}
+	service, ok := resolved.Services[serviceName]
+	if !ok {
+		return false, nil
+	}
+	updated, changed, err := ensureSecretRef(service.SecretRefs, ref, serviceName, service)
+	if err != nil || !changed {
+		return changed, err
+	}
+	overlay := cfg.Environments[environmentName]
+	serviceOverlay := overlay.Services[serviceName]
+	serviceOverlay.SecretRefs = updated
+	overlay.Services[serviceName] = serviceOverlay
+	cfg.Environments[environmentName] = overlay
+	return true, nil
+}
+
+func ensureSecretRef(existingRefs []config.SecretRef, ref config.SecretRef, serviceName string, service config.ServiceConfig) ([]config.SecretRef, bool, error) {
+	for i, existing := range existingRefs {
 		if existing.Name == ref.Name {
 			if existing.Secret == ref.Secret {
-				return false, nil
+				return existingRefs, false, nil
 			}
-			service.SecretRefs[i] = ref
-			cfg.Services[serviceName] = service
-			return true, nil
+			updated := append([]config.SecretRef(nil), existingRefs...)
+			updated[i] = ref
+			return updated, true, nil
 		}
 	}
 	if serviceSecretRefConflict(service, ref.Name) {
-		return false, fmt.Errorf("service %q already defines %s in env; remove it before adding a secret_ref with the same name", serviceName, ref.Name)
+		return existingRefs, false, fmt.Errorf("service %q already defines %s in env; remove it before adding a secret_ref with the same name", serviceName, ref.Name)
 	}
-	service.SecretRefs = append(service.SecretRefs, ref)
-	cfg.Services[serviceName] = service
-	return true, nil
+	updated := append([]config.SecretRef(nil), existingRefs...)
+	updated = append(updated, ref)
+	return updated, true, nil
+}
+
+func removeServiceSecretRefForEnvironment(cfg *config.ProjectConfig, environmentName, serviceName, name string) bool {
+	if environmentServiceSecretRefsOverride(cfg, environmentName, serviceName) {
+		return removeEnvironmentServiceSecretRef(cfg, environmentName, serviceName, name)
+	}
+	return removeServiceSecretRef(cfg, serviceName, name)
 }
 
 func removeServiceSecretRef(cfg *config.ProjectConfig, serviceName, name string) bool {
@@ -2104,21 +2154,74 @@ func removeServiceSecretRef(cfg *config.ProjectConfig, serviceName, name string)
 	if !ok {
 		return false
 	}
-	filtered := make([]config.SecretRef, 0, len(service.SecretRefs))
-	changed := false
-	for _, existing := range service.SecretRefs {
-		if existing.Name == name {
-			changed = true
-			continue
-		}
-		filtered = append(filtered, existing)
-	}
+	filtered, changed := removeSecretRef(service.SecretRefs, name)
 	if !changed {
 		return false
 	}
 	service.SecretRefs = filtered
 	cfg.Services[serviceName] = service
 	return true
+}
+
+func removeEnvironmentServiceSecretRef(cfg *config.ProjectConfig, environmentName, serviceName, name string) bool {
+	serviceName = strings.TrimSpace(serviceName)
+	if cfg == nil {
+		return false
+	}
+	environmentName = normalizedSoloEnvironmentName(environmentName, cfg)
+	overlay, ok := cfg.Environments[environmentName]
+	if !ok || overlay.Services == nil {
+		return false
+	}
+	serviceOverlay, ok := overlay.Services[serviceName]
+	if !ok || serviceOverlay.SecretRefs == nil {
+		return false
+	}
+	filtered, changed := removeSecretRef(serviceOverlay.SecretRefs, name)
+	if !changed {
+		return false
+	}
+	serviceOverlay.SecretRefs = filtered
+	overlay.Services[serviceName] = serviceOverlay
+	cfg.Environments[environmentName] = overlay
+	return true
+}
+
+func removeSecretRef(existingRefs []config.SecretRef, name string) ([]config.SecretRef, bool) {
+	filtered := make([]config.SecretRef, 0, len(existingRefs))
+	changed := false
+	for _, existing := range existingRefs {
+		if existing.Name == name {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	return filtered, changed
+}
+
+func environmentServiceSecretRefsOverride(cfg *config.ProjectConfig, environmentName, serviceName string) bool {
+	if cfg == nil {
+		return false
+	}
+	environmentName = normalizedSoloEnvironmentName(environmentName, cfg)
+	overlay, ok := cfg.Environments[environmentName]
+	if !ok || overlay.Services == nil {
+		return false
+	}
+	serviceOverlay, ok := overlay.Services[strings.TrimSpace(serviceName)]
+	return ok && serviceOverlay.SecretRefs != nil
+}
+
+func normalizedSoloEnvironmentName(environmentName string, cfg *config.ProjectConfig) string {
+	environmentName = strings.TrimSpace(environmentName)
+	if environmentName == "" && cfg != nil {
+		environmentName = strings.TrimSpace(cfg.DefaultEnvironment)
+	}
+	if environmentName == "" {
+		environmentName = config.DefaultEnvironment
+	}
+	return environmentName
 }
 
 func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) error {
@@ -2394,7 +2497,7 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	configUpdated := removeServiceSecretRef(cfg, serviceName, opts.Key)
+	configUpdated := removeServiceSecretRefForEnvironment(cfg, environmentName, serviceName, opts.Key)
 	if configUpdated {
 		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 			return fmt.Errorf("secret deleted locally but update devopsellence.yml failed: %w", err)

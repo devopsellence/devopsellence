@@ -2936,6 +2936,83 @@ func TestSoloSecretsCommandsUseCurrentSoloEnvironment(t *testing.T) {
 	}
 }
 
+func TestSoloSecretsCommandsUpdateEnvironmentOverlaySecretRefs(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {
+			Services: map[string]config.ServiceConfigOverlay{
+				"web": {
+					SecretRefs: []config.SecretRef{{Name: "EXISTING_SECRET", Secret: "devopsellence://plaintext/EXISTING_SECRET"}},
+				},
+			},
+		},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloSecretsSet(context.Background(), SoloSecretsSetOptions{Key: "DOGFOOD_SECRET", Value: "staging-secret", ServiceName: "web", Store: solo.SecretStorePlaintext}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := config.LoadFromRoot(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingWeb := updated.Environments["staging"].Services["web"]
+	if !secretRefsContain(stagingWeb.SecretRefs, "EXISTING_SECRET") {
+		t.Fatalf("staging overlay secret refs = %#v, want existing ref preserved", stagingWeb.SecretRefs)
+	}
+	if !secretRefsContain(stagingWeb.SecretRefs, "DOGFOOD_SECRET") {
+		t.Fatalf("staging overlay secret refs = %#v, want DOGFOOD_SECRET added", stagingWeb.SecretRefs)
+	}
+	if secretRefsContain(updated.Services["web"].SecretRefs, "DOGFOOD_SECRET") {
+		t.Fatalf("top-level web secret refs = %#v, want env-overlay secret ref update only", updated.Services["web"].SecretRefs)
+	}
+	resolved, err := config.ResolveEnvironmentConfig(*updated, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !secretRefsContain(resolved.Services["web"].SecretRefs, "DOGFOOD_SECRET") {
+		t.Fatalf("resolved staging web secret refs = %#v, want DOGFOOD_SECRET available", resolved.Services["web"].SecretRefs)
+	}
+
+	stdout.Reset()
+	if err := app.SoloSecretsDelete(context.Background(), SoloSecretsDeleteOptions{Key: "DOGFOOD_SECRET", ServiceName: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err = config.LoadFromRoot(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingWeb = updated.Environments["staging"].Services["web"]
+	if secretRefsContain(stagingWeb.SecretRefs, "DOGFOOD_SECRET") {
+		t.Fatalf("staging overlay secret refs after delete = %#v, want DOGFOOD_SECRET removed", stagingWeb.SecretRefs)
+	}
+	if !secretRefsContain(stagingWeb.SecretRefs, "EXISTING_SECRET") {
+		t.Fatalf("staging overlay secret refs after delete = %#v, want existing ref preserved", stagingWeb.SecretRefs)
+	}
+}
+
+func secretRefsContain(refs []config.SecretRef, name string) bool {
+	for _, ref := range refs {
+		if ref.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")

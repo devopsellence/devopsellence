@@ -4514,12 +4514,16 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 	if err != nil {
 		return err
 	}
+	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+	if err != nil {
+		return err
+	}
+	currentKey, err := solo.EnvironmentStateKey(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
 	nodeNames := append([]string(nil), opts.Nodes...)
 	if len(nodeNames) == 0 {
-		_, workspaceRoot, environmentName, resolveErr := a.loadResolvedSoloProjectConfig("")
-		if resolveErr != nil {
-			return resolveErr
-		}
 		nodeNames, err = current.AttachedNodeNames(workspaceRoot, environmentName)
 		if err != nil {
 			return err
@@ -4535,7 +4539,7 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes selected; attach a node or pass --node")
 	}
-	if err := validateSoloManualTLSInstallSafe(current, sortedNodeNames(nodes)); err != nil {
+	if err := validateSoloManualTLSInstallSafe(current, currentKey, sortedNodeNames(nodes)); err != nil {
 		return err
 	}
 
@@ -4563,9 +4567,13 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 	})
 }
 
-func validateSoloManualTLSInstallSafe(current solo.State, nodeNames []string) error {
+func validateSoloManualTLSInstallSafe(current solo.State, currentKey string, nodeNames []string) error {
+	currentKey = strings.TrimSpace(currentKey)
 	for _, nodeName := range normalizeSoloNames(nodeNames) {
 		for _, key := range current.AttachmentKeysForNode(nodeName) {
+			if strings.TrimSpace(key) == currentKey {
+				continue
+			}
 			snapshot, ok := current.Snapshots[key]
 			if !ok {
 				releaseID := strings.TrimSpace(current.Current[key])

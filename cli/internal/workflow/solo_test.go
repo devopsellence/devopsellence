@@ -2114,6 +2114,58 @@ func TestSoloIngressCertInstallRejectsAutoTLSCohostOnSelectedNode(t *testing.T) 
 	}
 }
 
+func TestSoloIngressCertInstallAllowsCurrentEnvironmentAutoTLSMigration(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	uploadsPath := filepath.Join(t.TempDir(), "uploads")
+	scriptPath := filepath.Join(t.TempDir(), "script")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_UPLOADS", uploadsPath)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+	installFakeSoloCommands(t, nil)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	currentKey, err := solo.EnvironmentStateKey(cwd, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[currentKey] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: cwd,
+		WorkspaceKey:  strings.Split(currentKey, "\n")[0],
+		Environment:   "production",
+		Revision:      "auto1234",
+		Metadata:      desiredstate.SnapshotMetadata{Project: "demo"},
+		Ingress:       &desiredstate.IngressJSON{Mode: "public", TLS: desiredstate.IngressTLSJSON{Mode: "auto"}, Hosts: []string{"demo.example.com"}},
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	if err := app.SoloIngressCertInstall(context.Background(), SoloIngressCertInstallOptions{CertFile: certFile, KeyFile: keyFile}); err != nil {
+		t.Fatalf("SoloIngressCertInstall() error = %v, want current environment auto TLS migration allowed", err)
+	}
+	uploads, err := os.ReadFile(uploadsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(uploads), "/tmp/devopsellence-ingress-"); got != 2 {
+		t.Fatalf("uploads = %q, want cert and key uploads", uploads)
+	}
+}
+
 func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T) {
 	cwd := rootTestSoloWorkspace(t)
 	uploadsPath := filepath.Join(t.TempDir(), "uploads")

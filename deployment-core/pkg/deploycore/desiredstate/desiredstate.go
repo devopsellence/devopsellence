@@ -301,18 +301,14 @@ func buildAggregatedDesiredState(nodeName string, currentNode config.Node, snaps
 }
 
 func aggregatedEnvironmentNames(snapshots []DeploySnapshot) map[string]string {
-	counts := map[string]int{}
 	names := map[string]string{}
-	for _, snapshot := range snapshots {
-		counts[defaultEnvironmentName(snapshot.Environment)]++
-	}
 	for _, snapshot := range snapshots {
 		key := snapshotKey(snapshot)
 		base := defaultEnvironmentName(snapshot.Environment)
-		if counts[base] == 1 {
-			names[key] = base
-			continue
-		}
+		// Solo nodes can host multiple projects with the same logical environment
+		// name. Keep the runtime environment name project-scoped even after peers
+		// attach/detach so republishing one project does not rename and recreate a
+		// healthy co-hosted project's containers.
 		names[key] = uniqueAggregatedEnvironmentName(snapshot, base)
 	}
 	return names

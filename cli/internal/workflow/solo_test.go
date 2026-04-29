@@ -1857,11 +1857,11 @@ func TestSoloWorkloadLogsUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *t
 		t.Fatalf("read workload command: %v", err)
 	}
 	command := string(commandBytes)
-	if !strings.Contains(command, "label=devopsellence.environment='"+runtimeEnvironment+"'") {
+	if !strings.Contains(command, runtimeEnvironment) {
 		t.Fatalf("workload logs command = %q, want runtime environment %q", command, runtimeEnvironment)
 	}
-	if strings.Contains(command, "label=devopsellence.environment=production") || strings.Contains(command, "label=devopsellence.environment='production'") {
-		t.Fatalf("workload logs command = %q, should not filter by logical production", command)
+	if strings.Contains(command, "env_candidates") || strings.Contains(command, "__DEVOPSELLENCE_SELECTED_ENVIRONMENT__") {
+		t.Fatalf("workload logs command = %q, should target one clean-slate runtime environment without compatibility candidates", command)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	nodes := jsonArrayFromMap(t, payload, "nodes")
@@ -1962,6 +1962,72 @@ func TestSoloExecUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *testing.T
 	}
 }
 
+func TestSoloExecDoesNotFallBackToLogicalRuntimeEnvironment(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceKey, err := solo.EnvironmentStateKey(cwd, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots = map[string]desiredstate.DeploySnapshot{
+		workspaceKey: {WorkspaceRoot: cwd, WorkspaceKey: strings.Split(workspaceKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "demo"}},
+	}
+	status := `{"revision":"abc","phase":"settled","environments":[{"name":"production","services":[{"name":"web","state":"running","container":"svc-production-web-abc"}]}]}` + "\n"
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: status}})
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	err = app.SoloExec(context.Background(), SoloExecOptions{ServiceName: "web", Nodes: []string{"node-a"}, Command: []string{"bin/rails", "runner", "puts Rails.env"}})
+	if err == nil || !strings.Contains(err.Error(), `no active container found for service "web" in environment production`) {
+		t.Fatalf("SoloExec() error = %v, want clean-slate runtime environment miss", err)
+	}
+}
+
+func TestSoloRuntimeEnvironmentNameStaysProjectScopedAfterPeerDetach(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	otherRoot := t.TempDir()
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceKey, err := solo.EnvironmentStateKey(cwd, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := solo.EnvironmentStateKey(otherRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots = map[string]desiredstate.DeploySnapshot{
+		workspaceKey: {WorkspaceRoot: cwd, WorkspaceKey: strings.Split(workspaceKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "demo"}},
+		// The peer was detached, so its attachment is gone, but historical solo
+		// state may still retain its snapshot. CLI lookups must still match the
+		// project-scoped runtime name that aggregated desired-state publishes for
+		// the surviving project.
+		otherKey: {WorkspaceRoot: otherRoot, WorkspaceKey: strings.Split(otherKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "api"}},
+	}
+
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, cwd, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeEnvironment == "production" || !strings.HasPrefix(runtimeEnvironment, "demo-production-") {
+		t.Fatalf("runtime environment = %q, want stable project-scoped name after peer detach", runtimeEnvironment)
+	}
+}
+
 func TestRootExecEnvSelectsAttachedEnvironment(t *testing.T) {
 	cwd := rootTestSoloWorkspace(t)
 	cfg, err := config.LoadFromRoot(cwd)
@@ -2029,6 +2095,107 @@ func TestRootExecEnvFailsWhenSelectedEnvironmentHasNoAttachedNodes(t *testing.T)
 	}
 }
 
+func TestSoloIngressCertInstallRejectsAutoTLSCohostOnSelectedNode(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	installFakeSoloCommands(t, nil)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	otherRoot := filepath.Join(t.TempDir(), "other")
+	if err := os.MkdirAll(otherRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(otherRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := solo.EnvironmentStateKey(otherRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[otherKey] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: otherRoot,
+		WorkspaceKey:  otherRoot,
+		Environment:   "production",
+		Revision:      "auto1234",
+		Metadata:      desiredstate.SnapshotMetadata{Project: "auto-app"},
+		Ingress:       &desiredstate.IngressJSON{Mode: "public", TLS: desiredstate.IngressTLSJSON{Mode: "auto"}, Hosts: []string{"auto.example.com"}},
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	err = app.SoloIngressCertInstall(context.Background(), SoloIngressCertInstallOptions{CertFile: certFile, KeyFile: keyFile})
+	if err == nil || !strings.Contains(err.Error(), "manual TLS cert install would affect auto TLS") {
+		t.Fatalf("SoloIngressCertInstall() error = %v, want auto TLS cohost guard", err)
+	}
+}
+
+func TestSoloIngressCertInstallAllowsCurrentEnvironmentAutoTLSMigration(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	uploadsPath := filepath.Join(t.TempDir(), "uploads")
+	scriptPath := filepath.Join(t.TempDir(), "script")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_UPLOADS", uploadsPath)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+	installFakeSoloCommands(t, nil)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	currentKey, err := solo.EnvironmentStateKey(cwd, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[currentKey] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: cwd,
+		WorkspaceKey:  strings.Split(currentKey, "\n")[0],
+		Environment:   "production",
+		Revision:      "auto1234",
+		Metadata:      desiredstate.SnapshotMetadata{Project: "demo"},
+		Ingress:       &desiredstate.IngressJSON{Mode: "public", TLS: desiredstate.IngressTLSJSON{Mode: "auto"}, Hosts: []string{"demo.example.com"}},
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	if err := app.SoloIngressCertInstall(context.Background(), SoloIngressCertInstallOptions{CertFile: certFile, KeyFile: keyFile}); err != nil {
+		t.Fatalf("SoloIngressCertInstall() error = %v, want current environment auto TLS migration allowed", err)
+	}
+	uploads, err := os.ReadFile(uploadsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(uploads), "/tmp/devopsellence-ingress-"); got != 2 {
+		t.Fatalf("uploads = %q, want cert and key uploads", uploads)
+	}
+}
+
 func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T) {
 	cwd := rootTestSoloWorkspace(t)
 	uploadsPath := filepath.Join(t.TempDir(), "uploads")
@@ -2085,6 +2252,41 @@ func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T)
 	payload := decodeJSONOutput(t, &stdout)
 	if intValueAny(payload["schema_version"]) != outputSchemaVersion {
 		t.Fatalf("output = %#v, want JSON payload", payload)
+	}
+}
+
+func TestSoloIngressCertInstallWithExplicitNodeDoesNotRequireWorkspaceConfig(t *testing.T) {
+	cwd := t.TempDir()
+	uploadsPath := filepath.Join(t.TempDir(), "uploads")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_UPLOADS", uploadsPath)
+	installFakeSoloCommands(t, nil)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	if err := app.SoloIngressCertInstall(context.Background(), SoloIngressCertInstallOptions{CertFile: certFile, KeyFile: keyFile, Nodes: []string{"node-a"}}); err != nil {
+		t.Fatalf("SoloIngressCertInstall() error = %v, want explicit --node to work outside a workspace", err)
+	}
+	uploads, err := os.ReadFile(uploadsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(uploads), "/tmp/devopsellence-ingress-"); got != 2 {
+		t.Fatalf("uploads = %q, want cert and key uploads", uploads)
 	}
 }
 
@@ -2370,11 +2572,63 @@ func TestSoloWorkloadLogsRequiresWorkspaceConfig(t *testing.T) {
 }
 
 func TestRemoteDockerLogsCommandPreservesPerContainerFailure(t *testing.T) {
-	command := remoteDockerLogsCommand("production", "web", 20)
-	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`} {
+	command := remoteDockerLogsCommand("demo-production-abc123", "web", 20)
+	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`, `demo-production-abc123`} {
 		if !strings.Contains(command, snippet) {
 			t.Fatalf("command = %q, want %q", command, snippet)
 		}
+	}
+	for _, forbidden := range []string{`env_candidates`, `while IFS= read -r env`, `__DEVOPSELLENCE_SELECTED_ENVIRONMENT__`} {
+		if strings.Contains(command, forbidden) {
+			t.Fatalf("command = %q, should not contain compatibility candidate machinery %q", command, forbidden)
+		}
+	}
+}
+
+func TestRemoteDockerLogsCommandHandlesRuntimeEnvironmentWithWhitespace(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "docker"), `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  info)
+    exit 0
+    ;;
+  ps)
+    saw_env=0
+    saw_service=0
+    for arg in "$@"; do
+      if [[ "$arg" == "label=devopsellence.environment=prod us" ]]; then
+        saw_env=1
+      fi
+      if [[ "$arg" == "label=devopsellence.service=web" ]]; then
+        saw_service=1
+      fi
+    done
+    if [[ "$saw_env" == "1" && "$saw_service" == "1" ]]; then
+      printf 'container-1\n'
+    fi
+    exit 0
+    ;;
+  inspect)
+    printf '/svc-prod-us\n'
+    exit 0
+    ;;
+  logs)
+    printf 'log line for spaced env\n'
+    exit 0
+    ;;
+esac
+printf 'unexpected docker command: %s\n' "$*" >&2
+exit 1
+`)
+	cmd := exec.Command("sh", "-c", remoteDockerLogsCommand("prod us", "web", 20))
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("remote docker logs command failed: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "__DEVOPSELLENCE_SELECTED_ENVIRONMENT__") || !strings.Contains(string(out), "==> svc-prod-us <==") || !strings.Contains(string(out), "log line for spaced env") {
+		t.Fatalf("output = %q, want logs for whitespace runtime environment without compatibility marker", out)
 	}
 }
 

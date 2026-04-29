@@ -2645,12 +2645,13 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 			return err
 		}
 		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(runtimeEnvironmentName, serviceName, linesLimit))
+		lines := splitNonFinalEmptyLines(diag.Stdout)
 		entry := map[string]any{
 			"node":                nodeName,
 			"service":             serviceName,
 			"runtime_environment": runtimeEnvironmentName,
 			"ok":                  diag.Err == nil && diag.ExitCode == 0,
-			"lines":               splitNonFinalEmptyLines(diag.Stdout),
+			"lines":               lines,
 		}
 		if diag.Err != nil {
 			entry["error"] = diag.Err.Error()
@@ -4515,10 +4516,15 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 		return err
 	}
 	nodeNames := append([]string(nil), opts.Nodes...)
+	currentKey := ""
 	if len(nodeNames) == 0 {
-		_, workspaceRoot, environmentName, resolveErr := a.loadResolvedSoloProjectConfig("")
-		if resolveErr != nil {
-			return resolveErr
+		_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+		if err != nil {
+			return err
+		}
+		currentKey, err = solo.EnvironmentStateKey(workspaceRoot, environmentName)
+		if err != nil {
+			return err
 		}
 		nodeNames, err = current.AttachedNodeNames(workspaceRoot, environmentName)
 		if err != nil {
@@ -4527,6 +4533,11 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 		if len(nodeNames) == 0 {
 			return fmt.Errorf("no nodes selected for environment %s; attach a node or pass --node", environmentName)
 		}
+	} else if _, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(""); err == nil {
+		currentKey, err = solo.EnvironmentStateKey(workspaceRoot, environmentName)
+		if err != nil {
+			return err
+		}
 	}
 	nodes, err := a.resolveNodes(current, nodeNames)
 	if err != nil {
@@ -4534,6 +4545,9 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 	}
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes selected; attach a node or pass --node")
+	}
+	if err := validateSoloManualTLSInstallSafe(current, currentKey, sortedNodeNames(nodes)); err != nil {
+		return err
 	}
 
 	installed := make([]map[string]any, 0, len(nodes))
@@ -4558,6 +4572,58 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 			"curl -vk https://<hostname>/",
 		},
 	})
+}
+
+func validateSoloManualTLSInstallSafe(current solo.State, currentKey string, nodeNames []string) error {
+	currentKey = strings.TrimSpace(currentKey)
+	for _, nodeName := range normalizeSoloNames(nodeNames) {
+		for _, key := range current.AttachmentKeysForNode(nodeName) {
+			if strings.TrimSpace(key) == currentKey {
+				continue
+			}
+			snapshot, ok := current.Snapshots[key]
+			if !ok {
+				releaseID := strings.TrimSpace(current.Current[key])
+				if releaseID != "" {
+					if release, releaseOK := current.Releases[releaseID]; releaseOK {
+						snapshot = release.Snapshot
+						ok = true
+					}
+				}
+			}
+			if !ok || snapshot.Ingress == nil || normalizedSoloSnapshotIngressMode(snapshot.Ingress.Mode) != "public" {
+				continue
+			}
+			if normalizedSoloSnapshotTLSMode(snapshot.Ingress.TLS.Mode) != "auto" {
+				continue
+			}
+			project := strings.TrimSpace(snapshot.Metadata.Project)
+			if project == "" {
+				project = strings.TrimSpace(snapshot.WorkspaceRoot)
+			}
+			if project == "" {
+				project = key
+			}
+			return fmt.Errorf("manual TLS cert install would affect auto TLS environment %s on node %s; move manual TLS to a dedicated node or switch all co-hosted public ingress on that node to manual/off first", project, nodeName)
+		}
+	}
+	return nil
+}
+
+func normalizedSoloSnapshotIngressMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "public"
+	}
+	return mode
+}
+
+func normalizedSoloSnapshotTLSMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "auto"
+	}
+	return mode
 }
 
 func validateReadableFile(filePath, label string) error {
@@ -4772,7 +4838,7 @@ func (a *App) soloCurrentWorkspaceRoot() (string, error) {
 	return discovered.WorkspaceRoot, nil
 }
 
-func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logicalEnvironment, nodeName string) (string, error) {
+func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logicalEnvironment, _ string) (string, error) {
 	logicalEnvironment = strings.TrimSpace(logicalEnvironment)
 	if logicalEnvironment == "" {
 		logicalEnvironment = config.DefaultEnvironment
@@ -4786,22 +4852,6 @@ func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logica
 		return logicalEnvironment, nil
 	}
 	base := defaultSoloSnapshotEnvironment(currentSnapshot, logicalEnvironment)
-	duplicates := 0
-	for key, attachment := range current.Attachments {
-		if !stringSliceContains(attachment.NodeNames, nodeName) {
-			continue
-		}
-		snapshot, ok := current.Snapshots[key]
-		if !ok {
-			continue
-		}
-		if defaultSoloSnapshotEnvironment(snapshot, attachment.Environment) == base {
-			duplicates++
-		}
-	}
-	if duplicates <= 1 {
-		return base, nil
-	}
 	return uniqueSoloRuntimeEnvironmentName(currentSnapshot, base), nil
 }
 
@@ -4813,16 +4863,6 @@ func defaultSoloSnapshotEnvironment(snapshot desiredstate.DeploySnapshot, fallba
 		return value
 	}
 	return config.DefaultEnvironment
-}
-
-func stringSliceContains(values []string, target string) bool {
-	target = strings.TrimSpace(target)
-	for _, value := range values {
-		if strings.TrimSpace(value) == target {
-			return true
-		}
-	}
-	return false
 }
 
 func uniqueSoloRuntimeEnvironmentName(snapshot desiredstate.DeploySnapshot, base string) string {
@@ -6093,21 +6133,27 @@ func remoteDockerNetworksJSONCommand() string {
 	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker network ls --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker network ls --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
 }
 
-func remoteDockerLogsCommand(environmentName, serviceName string, lines int) string {
-	env := shellQuote(environmentName)
+func remoteDockerLogsCommand(environmentName string, serviceName string, lines int) string {
+	environmentName = strings.TrimSpace(environmentName)
+	if environmentName == "" {
+		environmentName = config.DefaultEnvironment
+	}
+	environment := shellQuote(environmentName)
 	service := shellQuote(serviceName)
 	return fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -a -q --filter label=devopsellence.managed=true --filter label=devopsellence.environment=%s --filter label=devopsellence.service=%s 2>&1)
+environment=%s
+service=%s
+ids=$($docker_cmd ps -a -q --filter label=devopsellence.managed=true --filter "label=devopsellence.environment=$environment" --filter "label=devopsellence.service=$service" 2>&1)
 ps_status=$?
 if [ "$ps_status" -ne 0 ]; then
-  echo "Failed to list workload containers for service %s in environment %s" >&2
+  echo "Failed to list workload containers for service $service in environment $environment" >&2
   if [ -n "$ids" ]; then
     printf '%%s\n' "$ids" >&2
   fi
   exit "$ps_status"
 fi
 ids=$(printf '%%s\n' "$ids" | sed '/^$/d' | head -n %d)
-if [ -z "$ids" ]; then echo "%s" >&2; echo "No workload containers found for service %s in environment %s" >&2; exit 1; fi
+if [ -z "$ids" ]; then echo "%s" >&2; echo "No workload containers found for service $service in environment $environment" >&2; exit 1; fi
 rc=0
 for id in $ids; do
   name=$($docker_cmd inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's#^/##')
@@ -6123,7 +6169,7 @@ for id in $ids; do
     rc=$logs_status
   fi
 done
-	exit "$rc"`, env, service, service, env, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, service, env, lines)
+	exit "$rc"`, environment, service, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, lines)
 }
 
 func remoteUserCommand(args []string) (string, error) {

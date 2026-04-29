@@ -620,3 +620,80 @@ func TestPlanNodePublicationNamespacesDuplicateEnvironmentNames(t *testing.T) {
 		t.Fatalf("ingress targets = %#v, want %#v", gotTargets, gotNames)
 	}
 }
+
+func TestPlanNodePublicationKeepsEnvironmentNameStableWhenCohostedPeerDetaches(t *testing.T) {
+	t.Parallel()
+
+	currentNode := config.Node{Labels: []string{config.DefaultWebRole}}
+	alpha := DeploySnapshot{
+		WorkspaceRoot: "/workspace/a",
+		WorkspaceKey:  "/workspace/a",
+		Environment:   "production",
+		Revision:      "aaa1111",
+		Metadata:      SnapshotMetadata{Project: "alpha"},
+		Services:      []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "alpha:aaa1111"}},
+		Ingress: &IngressJSON{
+			Mode:  "public",
+			TLS:   IngressTLSJSON{Mode: "auto"},
+			Hosts: []string{"a.example.com"},
+			Routes: []IngressRouteJSON{{
+				Match:  IngressMatchJSON{Hostname: "a.example.com"},
+				Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+			}},
+		},
+		IngressService:     "web",
+		IngressServiceKind: config.ServiceKindWeb,
+	}
+	bravo := DeploySnapshot{
+		WorkspaceRoot: "/workspace/b",
+		WorkspaceKey:  "/workspace/b",
+		Environment:   "production",
+		Revision:      "bbb2222",
+		Metadata:      SnapshotMetadata{Project: "bravo"},
+		Services:      []ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "bravo:bbb2222"}},
+		Ingress: &IngressJSON{
+			Mode:  "public",
+			TLS:   IngressTLSJSON{Mode: "auto"},
+			Hosts: []string{"b.example.com"},
+			Routes: []IngressRouteJSON{{
+				Match:  IngressMatchJSON{Hostname: "b.example.com"},
+				Target: IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+			}},
+		},
+		IngressService:     "web",
+		IngressServiceKind: config.ServiceKindWeb,
+	}
+
+	cohosted, err := PlanNodePublication(NodePublicationInput{NodeName: "web-a", CurrentNode: currentNode, Snapshots: []DeploySnapshot{alpha, bravo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	solo, err := PlanNodePublication(NodePublicationInput{NodeName: "web-a", CurrentNode: currentNode, Snapshots: []DeploySnapshot{alpha}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cohostedDS DesiredStateJSON
+	if err := json.Unmarshal(cohosted.DesiredStateJSON, &cohostedDS); err != nil {
+		t.Fatal(err)
+	}
+	var soloDS DesiredStateJSON
+	if err := json.Unmarshal(solo.DesiredStateJSON, &soloDS); err != nil {
+		t.Fatal(err)
+	}
+	cohostedName := ""
+	for _, env := range cohostedDS.Environments {
+		if env.Revision == "aaa1111" {
+			cohostedName = env.Name
+		}
+	}
+	if cohostedName == "" {
+		t.Fatalf("alpha environment missing from cohosted desired state: %#v", cohostedDS.Environments)
+	}
+	if len(soloDS.Environments) != 1 {
+		t.Fatalf("single-project desired state environments = %#v", soloDS.Environments)
+	}
+	if soloDS.Environments[0].Name != cohostedName {
+		t.Fatalf("environment name changed after peer detach: solo=%q cohosted=%q", soloDS.Environments[0].Name, cohostedName)
+	}
+}

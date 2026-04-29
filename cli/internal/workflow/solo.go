@@ -2645,12 +2645,18 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 			return err
 		}
 		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(runtimeEnvironmentNames, serviceName, linesLimit))
+		lines := splitNonFinalEmptyLines(diag.Stdout)
+		runtimeEnvironmentName := runtimeEnvironmentNames[0]
+		if selectedEnvironment, strippedLines := extractWorkloadLogsSelectedEnvironment(lines); selectedEnvironment != "" {
+			runtimeEnvironmentName = selectedEnvironment
+			lines = strippedLines
+		}
 		entry := map[string]any{
 			"node":                nodeName,
 			"service":             serviceName,
-			"runtime_environment": runtimeEnvironmentNames[0],
+			"runtime_environment": runtimeEnvironmentName,
 			"ok":                  diag.Err == nil && diag.ExitCode == 0,
-			"lines":               splitNonFinalEmptyLines(diag.Stdout),
+			"lines":               lines,
 		}
 		if len(runtimeEnvironmentNames) > 1 {
 			entry["runtime_environment_candidates"] = runtimeEnvironmentNames
@@ -3316,6 +3322,17 @@ func noWorkloadContainers(diag remoteDiagnosticResult) bool {
 	return strings.Contains(diag.Stderr, soloNoWorkloadContainersSentinel)
 }
 
+func extractWorkloadLogsSelectedEnvironment(lines []string) (string, []string) {
+	if len(lines) == 0 {
+		return "", lines
+	}
+	selected := strings.TrimSpace(strings.TrimPrefix(lines[0], soloWorkloadLogsSelectedEnvironmentPrefix))
+	if selected == "" || !strings.HasPrefix(lines[0], soloWorkloadLogsSelectedEnvironmentPrefix) {
+		return "", lines
+	}
+	return selected, lines[1:]
+}
+
 func workloadLogsErrorMessage(diag remoteDiagnosticResult) string {
 	if !noWorkloadContainers(diag) {
 		return diagnosticErrorMessage(diag)
@@ -3965,14 +3982,15 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 const sshOutputTailLimit = 64 * 1024
 
 const (
-	soloLogsDefaultLines                 = 100
-	soloLogsMaxLines                     = 1000
-	soloWorkloadLogsContainerLimit       = 20
-	soloDiagnoseDockerItemLimit          = 100
-	soloDiagnosePortsLineLimit           = 200
-	soloDiagnoseTruncatedMarker          = "__DEVOPSELLENCE_TRUNCATED__"
-	soloNoWorkloadContainersSentinel     = "__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__"
-	soloRemoteAgentBinaryNotFoundMessage = "devopsellence agent binary not found"
+	soloLogsDefaultLines                      = 100
+	soloLogsMaxLines                          = 1000
+	soloWorkloadLogsContainerLimit            = 20
+	soloDiagnoseDockerItemLimit               = 100
+	soloDiagnosePortsLineLimit                = 200
+	soloDiagnoseTruncatedMarker               = "__DEVOPSELLENCE_TRUNCATED__"
+	soloNoWorkloadContainersSentinel          = "__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__"
+	soloWorkloadLogsSelectedEnvironmentPrefix = "__DEVOPSELLENCE_SELECTED_ENVIRONMENT__="
+	soloRemoteAgentBinaryNotFoundMessage      = "devopsellence agent binary not found"
 )
 
 type tailBuffer struct {
@@ -4527,22 +4545,28 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 	if err != nil {
 		return err
 	}
-	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
-	if err != nil {
-		return err
-	}
-	currentKey, err := solo.EnvironmentStateKey(workspaceRoot, environmentName)
-	if err != nil {
-		return err
-	}
 	nodeNames := append([]string(nil), opts.Nodes...)
+	currentKey := ""
 	if len(nodeNames) == 0 {
+		_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+		if err != nil {
+			return err
+		}
+		currentKey, err = solo.EnvironmentStateKey(workspaceRoot, environmentName)
+		if err != nil {
+			return err
+		}
 		nodeNames, err = current.AttachedNodeNames(workspaceRoot, environmentName)
 		if err != nil {
 			return err
 		}
 		if len(nodeNames) == 0 {
 			return fmt.Errorf("no nodes selected for environment %s; attach a node or pass --node", environmentName)
+		}
+	} else if _, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(""); err == nil {
+		currentKey, err = solo.EnvironmentStateKey(workspaceRoot, environmentName)
+		if err != nil {
+			return err
 		}
 	}
 	nodes, err := a.resolveNodes(current, nodeNames)
@@ -6200,6 +6224,7 @@ done <<__DEVOPSELLENCE_ENV_CANDIDATES__
 $env_candidates
 __DEVOPSELLENCE_ENV_CANDIDATES__
 if [ -z "$ids" ]; then echo "%s" >&2; echo "No workload containers found for service $service in environments %s" >&2; exit 1; fi
+printf '%%s%%s\n' %s "$selected_env"
 rc=0
 for id in $ids; do
   name=$($docker_cmd inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's#^/##')
@@ -6215,7 +6240,7 @@ for id in $ids; do
     rc=$logs_status
   fi
 done
-	exit "$rc"`, envs, service, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, envDescription, lines)
+	exit "$rc"`, envs, service, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, envDescription, shellQuote(soloWorkloadLogsSelectedEnvironmentPrefix), lines)
 }
 
 func remoteUserCommand(args []string) (string, error) {

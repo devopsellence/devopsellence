@@ -164,6 +164,23 @@ func TestResolveStoredDeploySnapshotPreservesHistoricalReleaseShape(t *testing.T
 	}
 }
 
+func TestSoloReadyPublicURLsDoNotClaimAutoTLSBeforeHTTPSReadiness(t *testing.T) {
+	cfg := config.DefaultProjectConfig("acme", "demo", config.DefaultEnvironment)
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		TLS:   config.IngressTLSConfig{Mode: "auto"},
+	}
+	nodes := map[string]config.Node{"web-a": {Host: "203.0.113.10", Labels: []string{config.DefaultWebRole}}}
+
+	if got := soloReadyPublicURLs(&cfg, nodes); len(got) != 0 {
+		t.Fatalf("ready public URLs = %#v, want none until HTTPS readiness is verified", got)
+	}
+	configured := soloStatusPublicURLs(&cfg, nodes)
+	if len(configured) != 1 || configured[0] != "https://app.example.com/" {
+		t.Fatalf("configured public URLs = %#v, want HTTPS configured URL", configured)
+	}
+}
+
 func TestDockerBuildArgsUsesConfiguredPlatform(t *testing.T) {
 	got, err := dockerBuildArgs("/workspace", "/workspace/Dockerfile", "shop-app:abc1234", []string{"linux/amd64"})
 	if err != nil {

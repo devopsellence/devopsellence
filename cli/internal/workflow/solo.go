@@ -524,9 +524,14 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
 	}
-	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+	if urls := soloReadyPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
 		payload["next_steps"] = append([]string{"devopsellence status", "curl " + urls[0]}, soloNodeLogNextSteps(nodes)...)
+	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+		payload["configured_public_urls"] = urls
+		payload["public_url_status"] = soloPublicURLStatus(cfg)
+		payload["warnings"] = []string{soloPublicURLWarning(cfg)}
+		payload["next_steps"] = append([]string{"devopsellence status"}, soloNodeLogNextSteps(nodes)...)
 	} else {
 		payload["next_steps"] = append([]string{"devopsellence status"}, soloNodeLogNextSteps(nodes)...)
 	}
@@ -1551,13 +1556,17 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		"schema_version": outputSchemaVersion,
 		"nodes":          jsonResults,
 	}
-	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+	if urls := soloReadyPublicURLs(cfg, nodes); len(urls) > 0 {
 		if allSettled {
 			payload["public_urls"] = urls
 		} else {
 			payload["configured_public_urls"] = urls
 			payload["warnings"] = []string{"public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"}
 		}
+	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+		payload["configured_public_urls"] = urls
+		payload["public_url_status"] = soloPublicURLStatus(cfg)
+		payload["warnings"] = []string{soloPublicURLWarning(cfg)}
 	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
 		return err
@@ -1726,6 +1735,13 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	})
 }
 
+func soloReadyPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
+	if ingressRequiresTLSReadiness(cfg) {
+		return nil
+	}
+	return soloStatusPublicURLs(cfg, nodes)
+}
+
 func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
 	if cfg == nil || len(nodes) == 0 {
 		return nil
@@ -1749,6 +1765,28 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 
 func ingressConfiguredPublicURLs(cfg *config.ProjectConfig) []string {
 	return publicURLsForHosts(ingressURLScheme(cfg), concreteIngressHosts(cfg))
+}
+
+func ingressRequiresTLSReadiness(cfg *config.ProjectConfig) bool {
+	if cfg == nil || cfg.Ingress == nil {
+		return false
+	}
+	tlsMode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
+	return strings.EqualFold(tlsMode, "auto") || strings.EqualFold(tlsMode, "manual")
+}
+
+func soloPublicURLStatus(cfg *config.ProjectConfig) string {
+	if ingressRequiresTLSReadiness(cfg) {
+		return "configured_tls_pending"
+	}
+	return "configured_pending"
+}
+
+func soloPublicURLWarning(cfg *config.ProjectConfig) string {
+	if ingressRequiresTLSReadiness(cfg) {
+		return "HTTPS public URLs are configured, but TLS readiness has not been verified yet; use `devopsellence ingress check --wait 2m` before treating them as reachable"
+	}
+	return "public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"
 }
 
 func ingressURLScheme(cfg *config.ProjectConfig) string {

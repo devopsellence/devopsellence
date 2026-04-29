@@ -1100,6 +1100,7 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 }
 
 func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.State, snapshot desiredstate.DeploySnapshot) (desiredstate.DeploySnapshot, error) {
+	snapshot = cloneDeploySnapshot(snapshot)
 	records, err := current.SecretRecords(snapshot.WorkspaceRoot, snapshot.Environment)
 	if err != nil {
 		return desiredstate.DeploySnapshot{}, err
@@ -1155,6 +1156,56 @@ func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.Stat
 		}
 	}
 	return snapshot, nil
+}
+
+func cloneDeploySnapshot(snapshot desiredstate.DeploySnapshot) desiredstate.DeploySnapshot {
+	cloned := snapshot
+	if snapshot.Services != nil {
+		cloned.Services = append([]desiredstate.ServiceJSON(nil), snapshot.Services...)
+		for i := range cloned.Services {
+			cloned.Services[i].Entrypoint = append([]string(nil), snapshot.Services[i].Entrypoint...)
+			cloned.Services[i].Command = append([]string(nil), snapshot.Services[i].Command...)
+			cloned.Services[i].Env = cloneStringMap(snapshot.Services[i].Env)
+			cloned.Services[i].Ports = append([]desiredstate.ServicePortJSON(nil), snapshot.Services[i].Ports...)
+			cloned.Services[i].VolumeMounts = append([]desiredstate.VolumeMountJSON(nil), snapshot.Services[i].VolumeMounts...)
+			if snapshot.Services[i].Healthcheck != nil {
+				healthcheck := *snapshot.Services[i].Healthcheck
+				cloned.Services[i].Healthcheck = &healthcheck
+			}
+		}
+	}
+	if snapshot.ReleaseTask != nil {
+		releaseTask := *snapshot.ReleaseTask
+		releaseTask.Entrypoint = append([]string(nil), snapshot.ReleaseTask.Entrypoint...)
+		releaseTask.Command = append([]string(nil), snapshot.ReleaseTask.Command...)
+		releaseTask.Env = cloneStringMap(snapshot.ReleaseTask.Env)
+		releaseTask.VolumeMounts = append([]desiredstate.VolumeMountJSON(nil), snapshot.ReleaseTask.VolumeMounts...)
+		cloned.ReleaseTask = &releaseTask
+	}
+	if snapshot.Ingress != nil {
+		ingress := *snapshot.Ingress
+		ingress.Hosts = append([]string(nil), snapshot.Ingress.Hosts...)
+		ingress.Routes = append([]desiredstate.IngressRouteJSON(nil), snapshot.Ingress.Routes...)
+		cloned.Ingress = &ingress
+	}
+	if snapshot.SecretRefs != nil {
+		cloned.SecretRefs = make(map[string][]string, len(snapshot.SecretRefs))
+		for serviceName, refs := range snapshot.SecretRefs {
+			cloned.SecretRefs[serviceName] = append([]string(nil), refs...)
+		}
+	}
+	return cloned
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (a *App) resolveSoloSecretValues(ctx context.Context, current solo.State, workspaceRoot, environment string, cfg *config.ProjectConfig) (solo.ScopedSecrets, error) {

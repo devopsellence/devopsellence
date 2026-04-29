@@ -190,6 +190,55 @@ func TestResolveStoredDeploySnapshotRejectsLegacySnapshotWhenSecretsExist(t *tes
 	}
 }
 
+func TestResolveStoredDeploySnapshotDoesNotMutateStoredSnapshotSecrets(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	storedSnapshot := desiredstate.DeploySnapshot{
+		WorkspaceRoot:  workspaceRoot,
+		WorkspaceKey:   workspaceRoot,
+		Environment:    config.DefaultEnvironment,
+		Revision:       "oldrev",
+		Image:          "demo:old",
+		ReleaseService: "web",
+		Services: []desiredstate.ServiceJSON{{
+			Name: "web",
+			Kind: config.ServiceKindWeb,
+			Env:  map[string]string{"APP_MODE": "old"},
+		}},
+		ReleaseTask: &desiredstate.TaskJSON{
+			Name: "release",
+			Env:  map[string]string{"TASK_MODE": "old"},
+		},
+		SecretRefs: map[string][]string{"web": {"API_KEY"}},
+	}
+	current := solo.State{
+		Snapshots: map[string]desiredstate.DeploySnapshot{
+			workspaceRoot + "\n" + config.DefaultEnvironment: storedSnapshot,
+		},
+	}
+	if _, err := current.SetSecret(workspaceRoot, config.DefaultEnvironment, "web", "API_KEY", solo.SecretMaterial{Store: solo.SecretStorePlaintext, Value: "secret-value"}); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+
+	app := &App{}
+	resolved, err := app.resolveStoredDeploySnapshot(context.Background(), current, current.Snapshots[workspaceRoot+"\n"+config.DefaultEnvironment])
+	if err != nil {
+		t.Fatalf("resolve snapshot: %v", err)
+	}
+	if got := resolved.Services[0].Env["API_KEY"]; got != "secret-value" {
+		t.Fatalf("resolved service API_KEY = %q, want resolved secret", got)
+	}
+	if got := resolved.ReleaseTask.Env["API_KEY"]; got != "secret-value" {
+		t.Fatalf("resolved release task API_KEY = %q, want resolved secret", got)
+	}
+	storedAfter := current.Snapshots[workspaceRoot+"\n"+config.DefaultEnvironment]
+	if _, ok := storedAfter.Services[0].Env["API_KEY"]; ok {
+		t.Fatalf("stored service snapshot env leaked resolved secret: %#v", storedAfter.Services[0].Env)
+	}
+	if _, ok := storedAfter.ReleaseTask.Env["API_KEY"]; ok {
+		t.Fatalf("stored release task snapshot env leaked resolved secret: %#v", storedAfter.ReleaseTask.Env)
+	}
+}
+
 func TestSoloReadyPublicURLsDoNotClaimAutoTLSBeforeHTTPSReadiness(t *testing.T) {
 	cfg := config.DefaultProjectConfig("acme", "demo", config.DefaultEnvironment)
 	cfg.Ingress = &config.IngressConfig{

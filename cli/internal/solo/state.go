@@ -31,6 +31,7 @@ type State struct {
 	Current       map[string]string                      `json:"current_releases,omitempty"`
 	Deployments   map[string]corerelease.Deployment      `json:"deployments,omitempty"`
 	Secrets       map[string]SecretRecord                `json:"secrets,omitempty"`
+	IngressChecks map[string]IngressCheckRecord          `json:"ingress_checks,omitempty"`
 }
 
 type AttachmentRecord struct {
@@ -50,6 +51,16 @@ type SecretRecord struct {
 	Value         string `json:"value"`
 	Reference     string `json:"reference,omitempty"`
 	UpdatedAt     string `json:"updated_at,omitempty"`
+}
+
+type IngressCheckRecord struct {
+	WorkspaceRoot string   `json:"workspace_root,omitempty"`
+	WorkspaceKey  string   `json:"workspace_key,omitempty"`
+	Environment   string   `json:"environment,omitempty"`
+	OK            bool     `json:"ok"`
+	PublicURLs    []string `json:"public_urls,omitempty"`
+	ExpectedIPs   []string `json:"expected_ips,omitempty"`
+	CheckedAt     string   `json:"checked_at,omitempty"`
 }
 
 func DefaultStatePath() string {
@@ -337,6 +348,7 @@ func newState() State {
 		Current:       map[string]string{},
 		Deployments:   map[string]corerelease.Deployment{},
 		Secrets:       map[string]SecretRecord{},
+		IngressChecks: map[string]IngressCheckRecord{},
 	}
 }
 
@@ -364,6 +376,9 @@ func (s *State) ensureDefaults() {
 	}
 	if s.Secrets == nil {
 		s.Secrets = map[string]SecretRecord{}
+	}
+	if s.IngressChecks == nil {
+		s.IngressChecks = map[string]IngressCheckRecord{}
 	}
 }
 
@@ -557,6 +572,21 @@ func normalizeState(current State) (State, error) {
 	}
 	current.Secrets = normalizedSecrets
 
+	ingressKeys := make([]string, 0, len(current.IngressChecks))
+	for key := range current.IngressChecks {
+		ingressKeys = append(ingressKeys, key)
+	}
+	sort.Strings(ingressKeys)
+	normalizedIngressChecks := make(map[string]IngressCheckRecord, len(current.IngressChecks))
+	for _, key := range ingressKeys {
+		normalizedKey, record, err := normalizeIngressCheckRecord(key, current.IngressChecks[key])
+		if err != nil {
+			return State{}, fmt.Errorf("normalize ingress check %q: %w", key, err)
+		}
+		normalizedIngressChecks[normalizedKey] = record
+	}
+	current.IngressChecks = normalizedIngressChecks
+
 	return current, nil
 }
 
@@ -614,6 +644,21 @@ func normalizeSecretRecord(key string, secret SecretRecord) (string, SecretRecor
 	}
 	secret.Reference = reference
 	return secretKey(secret.WorkspaceKey, secret.Environment, secret.ServiceName, secret.Name), secret, nil
+}
+
+func normalizeIngressCheckRecord(key string, record IngressCheckRecord) (string, IngressCheckRecord, error) {
+	workspaceRoot, workspaceKey, err := normalizeWorkspaceIdentity(key, record.WorkspaceRoot, record.WorkspaceKey)
+	if err != nil {
+		return "", IngressCheckRecord{}, err
+	}
+	_, keyEnvironment := splitEnvironmentStateKey(key)
+	record.WorkspaceRoot = workspaceRoot
+	record.WorkspaceKey = workspaceKey
+	record.Environment = defaultEnvironmentName(firstNonEmpty(record.Environment, keyEnvironment))
+	record.PublicURLs = normalizeStringSet(record.PublicURLs)
+	record.ExpectedIPs = normalizeStringSet(record.ExpectedIPs)
+	record.CheckedAt = strings.TrimSpace(record.CheckedAt)
+	return record.WorkspaceKey + "\n" + record.Environment, record, nil
 }
 
 func normalizeWorkspaceIdentity(key, workspaceRoot, workspaceKey string) (string, string, error) {
@@ -932,6 +977,21 @@ func normalizeNodeNames(names []string) []string {
 		}
 		seen[name] = true
 		normalized = append(normalized, name)
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+func normalizeStringSet(values []string) []string {
+	seen := map[string]bool{}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		normalized = append(normalized, value)
 	}
 	sort.Strings(normalized)
 	return normalized

@@ -84,6 +84,30 @@ func TestStateStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateStorePersistsIngressCheckRecords(t *testing.T) {
+	t.Parallel()
+
+	store := NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := newState()
+	current.IngressChecks["/workspace/demo\nproduction"] = IngressCheckRecord{
+		OK:          true,
+		PublicURLs:  []string{"https://app.example.com/"},
+		ExpectedIPs: []string{"203.0.113.10"},
+		CheckedAt:   "2026-04-29T23:30:00Z",
+	}
+	if err := store.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := loaded.IngressChecks["/workspace/demo\nproduction"]
+	if !record.OK || !reflect.DeepEqual(record.PublicURLs, []string{"https://app.example.com/"}) || !reflect.DeepEqual(record.ExpectedIPs, []string{"203.0.113.10"}) {
+		t.Fatalf("ingress check record = %#v", record)
+	}
+}
+
 func TestStateStoreWriteUsesAtomicPrivateFile(t *testing.T) {
 	t.Parallel()
 

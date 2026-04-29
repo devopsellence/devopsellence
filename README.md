@@ -76,7 +76,10 @@ If remote checks fail, start with:
 devopsellence doctor
 devopsellence node diagnose prod-1
 devopsellence node logs prod-1 --lines 100
+devopsellence support bundle --output ./devopsellence-support.json
 ```
+
+`support bundle` writes a local, redacted JSON evidence file with workspace config, solo state shape, attached nodes, CLI version, and recommended follow-up commands. It redacts locally stored secret values and external secret references before writing the bundle.
 
 Or create a Hetzner-backed node from the provider:
 
@@ -91,13 +94,16 @@ For provider-created solo nodes, `devopsellence node create` can generate a work
 Deploy over SSH:
 
 ```bash
+devopsellence deploy --dry-run
 devopsellence deploy
 devopsellence status
 devopsellence logs --node prod-1 --lines 100
 devopsellence node logs prod-1 --lines 100
 ```
 
-`devopsellence status` includes `public_urls` when it can infer where the app should be reachable. `devopsellence ingress check` is the public endpoint DNS check for configured hostnames; it prints `public_urls`, DNS diagnostics, and next steps. For default solo HTTP ingress, try the node URL from `status`.
+`devopsellence status` includes `public_urls` only for URLs the CLI can honestly present as ready. When HTTPS/TLS is configured but not yet verified, deploy/status output reports `configured_public_urls` with a pending status and points you back to `devopsellence ingress check --wait ...`.
+
+`devopsellence deploy --dry-run` prints a structured plan and does not build images, SSH to nodes, publish desired state, or write solo state. `devopsellence release rollback --dry-run <release>` does the same for rollback approval. These commands are intended for agents and humans to review changes before mutating VMs.
 
 Solo deploy scope comes from the nodes attached to the current workspace/environment. Use `devopsellence node attach <name>` and `devopsellence node detach <name>` to change which nodes receive the deploy.
 
@@ -115,6 +121,8 @@ Store solo-mode deploy secrets locally:
 printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --service web --stdin
 devopsellence secret list
 ```
+
+By default, solo plaintext secrets are stored in the local solo state file with `0600` permissions and are suitable for single-operator SSH workflows, not shared team secret management. Use `--store 1password --op-ref ...` when you want devopsellence to keep only an external reference locally. Use shared mode when you need server-side encrypted team secrets.
 
 To clean up a solo experiment on an existing SSH node, first detach the node from the environment, then uninstall the agent and remove devopsellence-managed runtime resources before forgetting the node locally:
 

@@ -1857,11 +1857,11 @@ func TestSoloWorkloadLogsUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *t
 		t.Fatalf("read workload command: %v", err)
 	}
 	command := string(commandBytes)
-	if !strings.Contains(command, "label=devopsellence.environment='"+runtimeEnvironment+"'") {
+	if !strings.Contains(command, runtimeEnvironment) {
 		t.Fatalf("workload logs command = %q, want runtime environment %q", command, runtimeEnvironment)
 	}
-	if strings.Contains(command, "label=devopsellence.environment=production") || strings.Contains(command, "label=devopsellence.environment='production'") {
-		t.Fatalf("workload logs command = %q, should not filter by logical production", command)
+	if !strings.Contains(command, "production") {
+		t.Fatalf("workload logs command = %q, want legacy logical environment fallback", command)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	nodes := jsonArrayFromMap(t, payload, "nodes")
@@ -1959,6 +1959,40 @@ func TestSoloExecUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *testing.T
 	events := decodeNDJSONOutput(t, &stdout)
 	if len(events) == 0 || events[0]["container"] != "svc-production-web-abc" || events[0]["environment"] != runtimeEnvironment {
 		t.Fatalf("started event = %#v, want co-hosted runtime env %q container", events[0], runtimeEnvironment)
+	}
+}
+
+func TestSoloExecFallsBackToLogicalRuntimeEnvironmentForLegacyNode(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceKey, err := solo.EnvironmentStateKey(cwd, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots = map[string]desiredstate.DeploySnapshot{
+		workspaceKey: {WorkspaceRoot: cwd, WorkspaceKey: strings.Split(workspaceKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "demo"}},
+	}
+	status := `{"revision":"abc","phase":"settled","environments":[{"name":"production","services":[{"name":"web","state":"running","container":"svc-production-web-abc"}]}]}` + "\n"
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: status}})
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	err = app.SoloExec(context.Background(), SoloExecOptions{ServiceName: "web", Nodes: []string{"node-a"}, Command: []string{"bin/rails", "runner", "puts Rails.env"}})
+	if err != nil {
+		t.Fatalf("SoloExec() error = %v", err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	if len(events) == 0 || events[0]["container"] != "svc-production-web-abc" || events[0]["environment"] != "production" {
+		t.Fatalf("started event = %#v, want legacy logical environment container", events[0])
 	}
 }
 
@@ -2507,8 +2541,8 @@ func TestSoloWorkloadLogsRequiresWorkspaceConfig(t *testing.T) {
 }
 
 func TestRemoteDockerLogsCommandPreservesPerContainerFailure(t *testing.T) {
-	command := remoteDockerLogsCommand("production", "web", 20)
-	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`} {
+	command := remoteDockerLogsCommand([]string{"demo-production-abc123", "production"}, "web", 20)
+	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`, `demo-production-abc123`, `production`} {
 		if !strings.Contains(command, snippet) {
 			t.Fatalf("command = %q, want %q", command, snippet)
 		}

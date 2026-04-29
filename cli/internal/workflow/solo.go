@@ -2640,17 +2640,20 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 	results := make([]map[string]any, 0, len(nodes))
 	ok := true
 	for _, nodeName := range sortedNodeNames(nodes) {
-		runtimeEnvironmentName, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, nodeName)
+		runtimeEnvironmentNames, err := soloRuntimeEnvironmentNameCandidatesForNode(current, workspaceRoot, environmentName, nodeName)
 		if err != nil {
 			return err
 		}
-		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(runtimeEnvironmentName, serviceName, linesLimit))
+		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(runtimeEnvironmentNames, serviceName, linesLimit))
 		entry := map[string]any{
 			"node":                nodeName,
 			"service":             serviceName,
-			"runtime_environment": runtimeEnvironmentName,
+			"runtime_environment": runtimeEnvironmentNames[0],
 			"ok":                  diag.Err == nil && diag.ExitCode == 0,
 			"lines":               splitNonFinalEmptyLines(diag.Stdout),
+		}
+		if len(runtimeEnvironmentNames) > 1 {
+			entry["runtime_environment_candidates"] = runtimeEnvironmentNames
 		}
 		if diag.Err != nil {
 			entry["error"] = diag.Err.Error()
@@ -2755,11 +2758,11 @@ func (a *App) SoloExec(ctx context.Context, opts SoloExecOptions) error {
 		if result.Missing {
 			continue
 		}
-		runtimeEnvironmentName, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, nodeName)
+		runtimeEnvironmentNames, err := soloRuntimeEnvironmentNameCandidatesForNode(current, workspaceRoot, environmentName, nodeName)
 		if err != nil {
 			return err
 		}
-		container := statusServiceContainer(result.Status, runtimeEnvironmentName, serviceName)
+		runtimeEnvironmentName, container := statusServiceContainerForRuntimeEnvironments(result.Status, runtimeEnvironmentNames, serviceName)
 		if container == "" {
 			continue
 		}
@@ -3057,6 +3060,16 @@ func soloExecFields(target soloExecTarget) map[string]any {
 		payload["container"] = target.Container
 	}
 	return payload
+}
+
+func statusServiceContainerForRuntimeEnvironments(status soloNodeStatus, environmentNames []string, serviceName string) (string, string) {
+	for _, environmentName := range environmentNames {
+		container := statusServiceContainer(status, environmentName, serviceName)
+		if container != "" {
+			return environmentName, container
+		}
+	}
+	return "", ""
 }
 
 func statusServiceContainer(status soloNodeStatus, environmentName, serviceName string) string {
@@ -4831,25 +4844,48 @@ func (a *App) soloCurrentWorkspaceRoot() (string, error) {
 	return discovered.WorkspaceRoot, nil
 }
 
-func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logicalEnvironment, _ string) (string, error) {
+func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logicalEnvironment, nodeName string) (string, error) {
+	candidates, err := soloRuntimeEnvironmentNameCandidatesForNode(current, workspaceRoot, logicalEnvironment, nodeName)
+	if err != nil {
+		return "", err
+	}
+	return candidates[0], nil
+}
+
+func soloRuntimeEnvironmentNameCandidatesForNode(current solo.State, workspaceRoot, logicalEnvironment, _ string) ([]string, error) {
 	logicalEnvironment = strings.TrimSpace(logicalEnvironment)
 	if logicalEnvironment == "" {
 		logicalEnvironment = config.DefaultEnvironment
 	}
 	currentKey, err := solo.EnvironmentStateKey(workspaceRoot, logicalEnvironment)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	currentSnapshot, ok := current.Snapshots[currentKey]
 	if !ok {
-		return logicalEnvironment, nil
+		return []string{logicalEnvironment}, nil
 	}
 	base := defaultSoloSnapshotEnvironment(currentSnapshot, logicalEnvironment)
-	// Keep CLI lookups aligned with deployment-core's aggregated desired-state
-	// naming. Once a snapshot exists, solo runtime environment names are always
-	// project-scoped/stable, even if a co-hosted peer with the same logical
-	// environment has detached.
-	return uniqueSoloRuntimeEnvironmentName(currentSnapshot, base), nil
+	// Prefer the stable project-scoped name emitted by deployment-core for new
+	// aggregated publications, but keep the logical/base environment as a
+	// compatibility fallback for nodes last deployed before this naming change.
+	return appendUniqueNonEmptyStrings(nil, uniqueSoloRuntimeEnvironmentName(currentSnapshot, base), base, logicalEnvironment), nil
+}
+
+func appendUniqueNonEmptyStrings(values []string, candidates ...string) []string {
+	seen := map[string]bool{}
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		values = append(values, candidate)
+		seen[candidate] = true
+	}
+	return values
 }
 
 func defaultSoloSnapshotEnvironment(snapshot desiredstate.DeploySnapshot, fallback string) string {
@@ -6130,21 +6166,37 @@ func remoteDockerNetworksJSONCommand() string {
 	return withRemoteLineLimit("if docker info >/dev/null 2>&1; then docker network ls --format '{{json .}}'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then sudo -n docker network ls --format '{{json .}}'; else echo 'Docker is not reachable' >&2; exit 1; fi", soloDiagnoseDockerItemLimit)
 }
 
-func remoteDockerLogsCommand(environmentName, serviceName string, lines int) string {
-	env := shellQuote(environmentName)
+func remoteDockerLogsCommand(environmentNames []string, serviceName string, lines int) string {
+	environmentNames = appendUniqueNonEmptyStrings(nil, environmentNames...)
+	if len(environmentNames) == 0 {
+		environmentNames = []string{config.DefaultEnvironment}
+	}
+	envs := shellQuote(strings.Join(environmentNames, "\n"))
+	envDescription := shellQuote(strings.Join(environmentNames, ", "))
 	service := shellQuote(serviceName)
 	return fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -a -q --filter label=devopsellence.managed=true --filter label=devopsellence.environment=%s --filter label=devopsellence.service=%s 2>&1)
-ps_status=$?
-if [ "$ps_status" -ne 0 ]; then
-  echo "Failed to list workload containers for service %s in environment %s" >&2
-  if [ -n "$ids" ]; then
-    printf '%%s\n' "$ids" >&2
+env_candidates=%s
+service=%s
+ids=""
+selected_env=""
+for env in $env_candidates; do
+  candidate_ids=$($docker_cmd ps -a -q --filter label=devopsellence.managed=true --filter "label=devopsellence.environment=$env" --filter "label=devopsellence.service=$service" 2>&1)
+  ps_status=$?
+  if [ "$ps_status" -ne 0 ]; then
+    echo "Failed to list workload containers for service $service in environment $env" >&2
+    if [ -n "$candidate_ids" ]; then
+      printf '%%s\n' "$candidate_ids" >&2
+    fi
+    exit "$ps_status"
   fi
-  exit "$ps_status"
-fi
-ids=$(printf '%%s\n' "$ids" | sed '/^$/d' | head -n %d)
-if [ -z "$ids" ]; then echo "%s" >&2; echo "No workload containers found for service %s in environment %s" >&2; exit 1; fi
+  candidate_ids=$(printf '%%s\n' "$candidate_ids" | sed '/^$/d' | head -n %d)
+  if [ -n "$candidate_ids" ]; then
+    ids="$candidate_ids"
+    selected_env="$env"
+    break
+  fi
+done
+if [ -z "$ids" ]; then echo "%s" >&2; echo "No workload containers found for service $service in environments %s" >&2; exit 1; fi
 rc=0
 for id in $ids; do
   name=$($docker_cmd inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's#^/##')
@@ -6160,7 +6212,7 @@ for id in $ids; do
     rc=$logs_status
   fi
 done
-	exit "$rc"`, env, service, service, env, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, service, env, lines)
+	exit "$rc"`, envs, service, soloWorkloadLogsContainerLimit, soloNoWorkloadContainersSentinel, envDescription, lines)
 }
 
 func remoteUserCommand(args []string) (string, error) {

@@ -4535,6 +4535,9 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes selected; attach a node or pass --node")
 	}
+	if err := validateSoloManualTLSInstallSafe(current, sortedNodeNames(nodes)); err != nil {
+		return err
+	}
 
 	installed := make([]map[string]any, 0, len(nodes))
 	for _, nodeName := range sortedNodeNames(nodes) {
@@ -4558,6 +4561,54 @@ func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertIn
 			"curl -vk https://<hostname>/",
 		},
 	})
+}
+
+func validateSoloManualTLSInstallSafe(current solo.State, nodeNames []string) error {
+	for _, nodeName := range normalizeSoloNames(nodeNames) {
+		for _, key := range current.AttachmentKeysForNode(nodeName) {
+			snapshot, ok := current.Snapshots[key]
+			if !ok {
+				releaseID := strings.TrimSpace(current.Current[key])
+				if releaseID != "" {
+					if release, releaseOK := current.Releases[releaseID]; releaseOK {
+						snapshot = release.Snapshot
+						ok = true
+					}
+				}
+			}
+			if !ok || snapshot.Ingress == nil || normalizedSoloSnapshotIngressMode(snapshot.Ingress.Mode) != "public" {
+				continue
+			}
+			if normalizedSoloSnapshotTLSMode(snapshot.Ingress.TLS.Mode) != "auto" {
+				continue
+			}
+			project := strings.TrimSpace(snapshot.Metadata.Project)
+			if project == "" {
+				project = strings.TrimSpace(snapshot.WorkspaceRoot)
+			}
+			if project == "" {
+				project = key
+			}
+			return fmt.Errorf("manual TLS cert install would affect auto TLS environment %s on node %s; move manual TLS to a dedicated node or switch all co-hosted public ingress on that node to manual/off first", project, nodeName)
+		}
+	}
+	return nil
+}
+
+func normalizedSoloSnapshotIngressMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "public"
+	}
+	return mode
+}
+
+func normalizedSoloSnapshotTLSMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "auto"
+	}
+	return mode
 }
 
 func validateReadableFile(filePath, label string) error {

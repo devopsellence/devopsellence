@@ -2029,6 +2029,55 @@ func TestRootExecEnvFailsWhenSelectedEnvironmentHasNoAttachedNodes(t *testing.T)
 	}
 }
 
+func TestSoloIngressCertInstallRejectsAutoTLSCohostOnSelectedNode(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	installFakeSoloCommands(t, nil)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	otherRoot := filepath.Join(t.TempDir(), "other")
+	if err := os.MkdirAll(otherRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(otherRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := solo.EnvironmentStateKey(otherRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[otherKey] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: otherRoot,
+		WorkspaceKey:  otherRoot,
+		Environment:   "production",
+		Revision:      "auto1234",
+		Metadata:      desiredstate.SnapshotMetadata{Project: "auto-app"},
+		Ingress:       &desiredstate.IngressJSON{Mode: "public", TLS: desiredstate.IngressTLSJSON{Mode: "auto"}, Hosts: []string{"auto.example.com"}},
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	err = app.SoloIngressCertInstall(context.Background(), SoloIngressCertInstallOptions{CertFile: certFile, KeyFile: keyFile})
+	if err == nil || !strings.Contains(err.Error(), "manual TLS cert install would affect auto TLS") {
+		t.Fatalf("SoloIngressCertInstall() error = %v, want auto TLS cohost guard", err)
+	}
+}
+
 func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T) {
 	cwd := rootTestSoloWorkspace(t)
 	uploadsPath := filepath.Join(t.TempDir(), "uploads")

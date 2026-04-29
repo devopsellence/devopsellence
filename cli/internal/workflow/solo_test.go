@@ -1860,65 +1860,14 @@ func TestSoloWorkloadLogsUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *t
 	if !strings.Contains(command, runtimeEnvironment) {
 		t.Fatalf("workload logs command = %q, want runtime environment %q", command, runtimeEnvironment)
 	}
-	if !strings.Contains(command, "production") {
-		t.Fatalf("workload logs command = %q, want legacy logical environment fallback", command)
+	if strings.Contains(command, "env_candidates") || strings.Contains(command, "__DEVOPSELLENCE_SELECTED_ENVIRONMENT__") {
+		t.Fatalf("workload logs command = %q, should target one clean-slate runtime environment without compatibility candidates", command)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	nodes := jsonArrayFromMap(t, payload, "nodes")
 	node := jsonMapFromAny(t, nodes[0])
 	if node["runtime_environment"] != runtimeEnvironment {
 		t.Fatalf("node payload = %#v, want runtime environment %q", node, runtimeEnvironment)
-	}
-}
-
-func TestSoloWorkloadLogsReportsSelectedRuntimeEnvironmentFallback(t *testing.T) {
-	t.Setenv("DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_SELECTED_ENVIRONMENT", "production")
-	installFakeSoloCommands(t, nil)
-	workspaceRoot := t.TempDir()
-	cfg := config.DefaultProjectConfig("solo", "demo", "production")
-	if _, err := config.Write(workspaceRoot, cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	current := solo.State{}
-	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
-		t.Fatal(err)
-	}
-	workspaceKey, err := solo.EnvironmentStateKey(workspaceRoot, "production")
-	if err != nil {
-		t.Fatal(err)
-	}
-	current.Snapshots = map[string]desiredstate.DeploySnapshot{
-		workspaceKey: {WorkspaceRoot: workspaceRoot, WorkspaceKey: strings.Split(workspaceKey, "\n")[0], Environment: "production", Metadata: desiredstate.SnapshotMetadata{Project: "demo"}},
-	}
-	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
-	if err := soloState.Write(current); err != nil {
-		t.Fatal(err)
-	}
-
-	var stdout bytes.Buffer
-	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
-	if err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{ServiceName: "web", Nodes: []string{"node-a"}, Lines: 20}); err != nil {
-		t.Fatalf("SoloWorkloadLogs() error = %v", err)
-	}
-	payload := decodeJSONOutput(t, &stdout)
-	nodes := jsonArrayFromMap(t, payload, "nodes")
-	node := jsonMapFromAny(t, nodes[0])
-	if node["runtime_environment"] != "production" {
-		t.Fatalf("node payload = %#v, want selected fallback runtime environment", node)
-	}
-	candidates := jsonArrayFromMap(t, node, "runtime_environment_candidates")
-	if len(candidates) < 2 || candidates[0] == "production" {
-		t.Fatalf("runtime_environment_candidates = %#v, want project-scoped primary plus logical fallback", candidates)
-	}
-	lines := jsonArrayFromMap(t, node, "lines")
-	for _, line := range lines {
-		if strings.Contains(fmt.Sprint(line), soloWorkloadLogsSelectedEnvironmentPrefix) {
-			t.Fatalf("lines = %#v, want selected-environment marker stripped", lines)
-		}
 	}
 }
 
@@ -2013,7 +1962,7 @@ func TestSoloExecUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *testing.T
 	}
 }
 
-func TestSoloExecFallsBackToLogicalRuntimeEnvironmentForLegacyNode(t *testing.T) {
+func TestSoloExecDoesNotFallBackToLogicalRuntimeEnvironment(t *testing.T) {
 	cwd := rootTestSoloWorkspace(t)
 	current := solo.State{}
 	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
@@ -2038,12 +1987,8 @@ func TestSoloExecFallsBackToLogicalRuntimeEnvironmentForLegacyNode(t *testing.T)
 	var stdout bytes.Buffer
 	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
 	err = app.SoloExec(context.Background(), SoloExecOptions{ServiceName: "web", Nodes: []string{"node-a"}, Command: []string{"bin/rails", "runner", "puts Rails.env"}})
-	if err != nil {
-		t.Fatalf("SoloExec() error = %v", err)
-	}
-	events := decodeNDJSONOutput(t, &stdout)
-	if len(events) == 0 || events[0]["container"] != "svc-production-web-abc" || events[0]["environment"] != "production" {
-		t.Fatalf("started event = %#v, want legacy logical environment container", events[0])
+	if err == nil || !strings.Contains(err.Error(), `no active container found for service "web" in environment production`) {
+		t.Fatalf("SoloExec() error = %v, want clean-slate runtime environment miss", err)
 	}
 }
 
@@ -2627,18 +2572,20 @@ func TestSoloWorkloadLogsRequiresWorkspaceConfig(t *testing.T) {
 }
 
 func TestRemoteDockerLogsCommandPreservesPerContainerFailure(t *testing.T) {
-	command := remoteDockerLogsCommand([]string{"demo-production-abc123", "production"}, "web", 20)
-	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`, `while IFS= read -r env`, `demo-production-abc123`, `production`} {
+	command := remoteDockerLogsCommand("demo-production-abc123", "web", 20)
+	for _, snippet := range []string{`ps_status=$?`, `Failed to list workload containers`, `__DEVOPSELLENCE_NO_WORKLOAD_CONTAINERS__`, `head -n 20`, `rc=0`, `inspect_status=$?`, `logs_status=$?`, `exit "$rc"`, `demo-production-abc123`} {
 		if !strings.Contains(command, snippet) {
 			t.Fatalf("command = %q, want %q", command, snippet)
 		}
 	}
-	if strings.Contains(command, `for env in $env_candidates`) {
-		t.Fatalf("command = %q, should not iterate env candidates with shell word-splitting", command)
+	for _, forbidden := range []string{`env_candidates`, `while IFS= read -r env`, `__DEVOPSELLENCE_SELECTED_ENVIRONMENT__`} {
+		if strings.Contains(command, forbidden) {
+			t.Fatalf("command = %q, should not contain compatibility candidate machinery %q", command, forbidden)
+		}
 	}
 }
 
-func TestRemoteDockerLogsCommandHandlesEnvironmentCandidateWithWhitespace(t *testing.T) {
+func TestRemoteDockerLogsCommandHandlesRuntimeEnvironmentWithWhitespace(t *testing.T) {
 	binDir := t.TempDir()
 	writeExecutable(t, filepath.Join(binDir, "docker"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -2674,14 +2621,14 @@ esac
 printf 'unexpected docker command: %s\n' "$*" >&2
 exit 1
 `)
-	cmd := exec.Command("sh", "-c", remoteDockerLogsCommand([]string{"prod us", "production"}, "web", 20))
+	cmd := exec.Command("sh", "-c", remoteDockerLogsCommand("prod us", "web", 20))
 	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("remote docker logs command failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), soloWorkloadLogsSelectedEnvironmentPrefix+"prod us") || !strings.Contains(string(out), "==> svc-prod-us <==") || !strings.Contains(string(out), "log line for spaced env") {
-		t.Fatalf("output = %q, want selected environment marker and logs for whitespace environment candidate", out)
+	if strings.Contains(string(out), "__DEVOPSELLENCE_SELECTED_ENVIRONMENT__") || !strings.Contains(string(out), "==> svc-prod-us <==") || !strings.Contains(string(out), "log line for spaced env") {
+		t.Fatalf("output = %q, want logs for whitespace runtime environment without compatibility marker", out)
 	}
 }
 
@@ -5374,11 +5321,7 @@ if [[ "$command" == *" logs --tail "* ]]; then
   if [[ -n "${DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_COMMAND:-}" ]]; then
     printf '%s' "$command" >"$DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_COMMAND"
   fi
-  selected_env_line=""
-  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_SELECTED_ENVIRONMENT:-}" ]]; then
-    selected_env_line="__DEVOPSELLENCE_SELECTED_ENVIRONMENT__=${DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_SELECTED_ENVIRONMENT}"$'\n'
-  fi
-  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s==> svc-production-web <==\napp line one\napp line two\n__DEVOPSELLENCE_STDERR__\n' "$selected_env_line"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n==> svc-production-web <==\napp line one\napp line two\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi
 

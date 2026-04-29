@@ -1041,7 +1041,7 @@ func TestIngressDNSReportIncludesSSLIPHintForPublicIPWithoutConcreteHostnames(t 
 	if got, want := hint.SuggestedAction.Hostname, "8.8.8.8.sslip.io"; got != want {
 		t.Fatalf("suggested hostname = %q, want %q", got, want)
 	}
-	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --host '8.8.8.8.sslip.io' --tls-mode 'auto'") {
+	if !strings.Contains(hint.SuggestedAction.Command, "devopsellence ingress set --service 'web' --host '8.8.8.8.sslip.io' --tls-mode 'auto'") {
 		t.Fatalf("command = %q, want ingress set command", hint.SuggestedAction.Command)
 	}
 	if len(hint.SuggestedAction.Risks) == 0 {
@@ -1084,7 +1084,7 @@ func TestTemporaryDNSCommandPreservesConfiguredTLSMode(t *testing.T) {
 	cfg.Ingress = &config.IngressConfig{TLS: config.IngressTLSConfig{Mode: " OFF "}}
 
 	got := temporaryDNSCommand(&cfg, "8.8.8.8.sslip.io")
-	want := "devopsellence ingress set --host '8.8.8.8.sslip.io' --tls-mode 'off'"
+	want := "devopsellence ingress set --service 'web' --host '8.8.8.8.sslip.io' --tls-mode 'off'"
 	if got != want {
 		t.Fatalf("temporaryDNSCommand() = %q, want %q", got, want)
 	}
@@ -1435,6 +1435,12 @@ func TestSoloNodeListDefaultsToCurrentEnvironmentAndRedactsPrivateFields(t *test
 	payload := decodeJSONOutput(t, &stdout)
 	if payload["scope"] != "current_environment" {
 		t.Fatalf("scope = %v, want current_environment", payload["scope"])
+	}
+	if payload["solo_state_path"] != soloState.Path {
+		t.Fatalf("solo_state_path = %#v, want %q", payload["solo_state_path"], soloState.Path)
+	}
+	if payload["state_home_env"] != "DEVOPSELLENCE_STATE_HOME" {
+		t.Fatalf("state_home_env = %#v, want DEVOPSELLENCE_STATE_HOME", payload["state_home_env"])
 	}
 	nodes := jsonMapFromAny(t, payload["nodes"])
 	if _, ok := nodes["node-b"]; ok {

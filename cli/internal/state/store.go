@@ -16,7 +16,10 @@ func New(path string) *Store {
 }
 
 func DefaultPath(rel string) string {
-	base := os.Getenv("XDG_STATE_HOME")
+	base := os.Getenv("DEVOPSELLENCE_STATE_HOME")
+	if base == "" {
+		base = os.Getenv("XDG_STATE_HOME")
+	}
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {

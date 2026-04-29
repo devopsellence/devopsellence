@@ -58,6 +58,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
     assert_includes response.body, 'INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"'
     assert_includes response.body, 'INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"'
+    assert_includes response.body, 'AGENT_SKILLS_DIR="${DEVOPSELLENCE_AGENT_SKILLS_DIR:-}"'
     assert_includes response.body, "INSTALL_SCRIPT_URL='https://dev.devopsellence.com/lfg.sh'"
     assert_includes response.body, "--install-agent-skill"
     assert_includes response.body, 'INSTALL_DIR="$HOME/.local/bin"'
@@ -65,8 +66,9 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "PATH_EXPORT='export PATH=\"'\"$INSTALL_DIR\"':$PATH\"'"
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
-    assert_includes response.body, "npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes"
+    assert_includes response.body, '"$INSTALL_DIR/$TARGET_NAME" skill install'
     assert_includes response.body, 'curl -fsSL "$INSTALL_SCRIPT_URL?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
+    refute_includes response.body, "npx --yes skills add"
   end
 
   test "cli install script ignores configured public base url when choosing default download host" do
@@ -118,15 +120,15 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
     assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
     assert_includes stdout, "devopsellence CLI installed"
-    assert_equal "prerelease build\n", installed_cli
+    assert_includes installed_cli, "prerelease build"
   end
 
-  test "cli install script can install the agent skill when requested" do
+  test "cli install script can install the embedded agent skill when requested" do
     get "/lfg.sh", params: { version: "master-0053792f6aec" }
 
     assert_response :success
 
-    stdout, stderr, status, installed_cli, skill_args = run_cli_install_script(
+    stdout, stderr, status, installed_cli, installed_skill = run_cli_install_script(
       response.body,
       version: "master-0053792f6aec",
       install_agent_skill: true
@@ -134,26 +136,29 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
     assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
     assert_includes stdout, "installing devopsellence agent skill"
-    assert_equal "prerelease build\n", installed_cli
-    assert_equal [ "--yes", "skills", "add", "devopsellence/devopsellence", "--skill", "devopsellence", "-g", "--yes" ], skill_args
+    assert_includes stdout, '"action":"installed"'
+    assert_includes stdout, '"source":"embedded"'
+    assert_includes installed_cli, "prerelease build"
+    assert_equal "skill for master-0053792f6aec\n", installed_skill
   end
 
-  test "cli install script fails when requested agent skill cannot install without npx" do
+  test "cli install script installs requested agent skill without npx" do
     get "/lfg.sh", params: { version: "master-0053792f6aec" }
 
     assert_response :success
 
-    stdout, stderr, status, installed_cli, skill_args = run_cli_install_script(
+    stdout, stderr, status, installed_cli, installed_skill = run_cli_install_script(
       response.body,
       version: "master-0053792f6aec",
       install_agent_skill: true,
       include_npx: false
     )
 
-    refute_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
-    assert_includes stderr, "Agent skill install requested, but npx was not found"
-    assert_equal "prerelease build\n", installed_cli
-    assert_nil skill_args
+    assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
+    assert_includes stdout, '"action":"installed"'
+    assert_includes stdout, '"source":"embedded"'
+    assert_includes installed_cli, "prerelease build"
+    assert_equal "skill for master-0053792f6aec\n", installed_skill
   end
 
   test "cli install script defaults to user local bin on linux" do
@@ -169,7 +174,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
     assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
     assert_includes stdout, "/.local/bin/devopsellence"
-    assert_equal "prerelease build\n", installed_cli
+    assert_includes installed_cli, "prerelease build"
   end
 
   test "cli install script derives checksum url after parsing base url overrides" do
@@ -280,7 +285,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
       script_path = File.join(tmpdir, "lfg.sh")
       artifact_path = File.join(fixtures_dir, "cli-linux-amd64")
       checksums_path = File.join(fixtures_dir, "cli-SHA256SUMS")
-      skill_args_path = File.join(tmpdir, "skill-args")
+      installed_skill_path = File.join(tmpdir, ".agents", "skills", "devopsellence", "SKILL.md")
 
       FileUtils.mkdir_p(fixtures_dir)
       FileUtils.mkdir_p(fakebin_dir)
@@ -332,7 +337,33 @@ class InstallsTest < ActionDispatch::IntegrationTest
         FileUtils.chmod("u+x", shasum_shim_path)
       end
 
-      File.write(artifact_path, "prerelease build\n")
+      File.write(artifact_path, <<~SH)
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        if [[ "${1:-}" == "skill" && "${2:-}" == "install" ]]; then
+          shift 2
+          skills_dir="$HOME/.agents/skills"
+          while [[ $# -gt 0 ]]; do
+            case "$1" in
+              --dir)
+                skills_dir="$2"
+                shift 2
+                ;;
+              *)
+                echo "unexpected skill arg: $1" >&2
+                exit 1
+                ;;
+            esac
+          done
+          mkdir -p "$skills_dir/devopsellence"
+          printf 'skill for #{version}\n' > "$skills_dir/devopsellence/SKILL.md"
+          printf '{"schema_version":1,"action":"installed","skill":"devopsellence","path":"%s","version":"%s","source":"embedded"}\n' "$skills_dir/devopsellence" #{version.inspect}
+          exit 0
+        fi
+
+        printf 'prerelease build\n'
+      SH
       digest = Digest::SHA256.file(artifact_path).hexdigest
       File.write(checksums_path, "#{digest}  cli-linux-amd64\n")
       File.write(script_path, script_body)
@@ -401,7 +432,8 @@ class InstallsTest < ActionDispatch::IntegrationTest
           #!/usr/bin/env bash
           set -euo pipefail
 
-          printf '%s\\n' "$@" > #{skill_args_path.inspect}
+          echo "unexpected npx invocation" >&2
+          exit 1
         SH
         FileUtils.chmod("u+x", npx_path)
       end
@@ -422,8 +454,8 @@ class InstallsTest < ActionDispatch::IntegrationTest
       stdout, stderr, status = Open3.capture3(env, script_path)
       expected_install_dir = effective_install_dir || File.join(tmpdir, ".local", "bin")
       installed_cli = File.exist?(File.join(expected_install_dir, "devopsellence")) ? File.read(File.join(expected_install_dir, "devopsellence")) : nil
-      skill_args = File.exist?(skill_args_path) ? File.readlines(skill_args_path, chomp: true) : nil
-      [ stdout, stderr, status, installed_cli, skill_args ]
+      installed_skill = File.exist?(installed_skill_path) ? File.read(installed_skill_path) : nil
+      [ stdout, stderr, status, installed_cli, installed_skill ]
     end
   end
 end

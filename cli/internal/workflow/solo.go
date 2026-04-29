@@ -2060,10 +2060,12 @@ func (a *App) SoloNodeList(_ context.Context, opts SoloNodeListOptions) error {
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
-		"schema_version": outputSchemaVersion,
-		"scope":          scope,
-		"nodes":          nodes,
-		"node_items":     items,
+		"schema_version":  outputSchemaVersion,
+		"scope":           scope,
+		"nodes":           nodes,
+		"node_items":      items,
+		"solo_state_path": soloStorePath(a.SoloState),
+		"state_home_env":  "DEVOPSELLENCE_STATE_HOME",
 	})
 
 }
@@ -3695,6 +3697,8 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"workspace_root":   discovered.WorkspaceRoot,
 		"project_slug":     discovered.ProjectSlug,
 		"runtime_contract": soloInitRuntimeContract(*cfg, discovered, created),
+		"solo_state_path":  soloStorePath(a.SoloState),
+		"state_home_env":   "DEVOPSELLENCE_STATE_HOME",
 		"config": map[string]any{
 			"path":           configPath,
 			"created":        created,
@@ -4160,7 +4164,16 @@ func temporaryDNSHostname(_ *config.ProjectConfig, ip string) string {
 }
 
 func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string) string {
-	return "devopsellence ingress set --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
+	return "devopsellence ingress set --service " + shellQuote(temporaryDNSIngressService(cfg)) + " --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
+}
+
+func temporaryDNSIngressService(cfg *config.ProjectConfig) string {
+	if cfg != nil {
+		if serviceName, ok := cfg.PrimaryWebServiceName(); ok && strings.TrimSpace(serviceName) != "" {
+			return strings.TrimSpace(serviceName)
+		}
+	}
+	return "<service>"
 }
 
 func temporaryDNSTLSMode(cfg *config.ProjectConfig) string {

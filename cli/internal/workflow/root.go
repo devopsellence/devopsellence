@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devopsellence/cli/internal/agentskill"
 	"github.com/devopsellence/cli/internal/version"
 
 	"github.com/spf13/cobra"
@@ -142,9 +143,13 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 				return ExitError{Code: 1, Err: err}
 			}
 			return app.Printer.PrintJSON(map[string]any{
-				"schema_version": outputSchemaVersion,
-				"mode":           string(mode),
-				"workspace_key":  app.modeWorkspaceKey(),
+				"schema_version":          outputSchemaVersion,
+				"mode":                    string(mode),
+				"workspace_key":           app.modeWorkspaceKey(),
+				"workspace_state_path":    storePath(app.WorkspaceState),
+				"solo_state_path":         soloStorePath(app.SoloState),
+				"state_home_env":          "DEVOPSELLENCE_STATE_HOME",
+				"state_home_fallback_env": "XDG_STATE_HOME",
 			})
 		},
 	})
@@ -499,6 +504,30 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		RunE:  withTimeout(app.AliasLFG),
 	})
 	root.AddCommand(aliasCommand)
+
+	var skillInstallDir string
+	skillCommand := &cobra.Command{Use: "skill", Short: "Manage bundled AI agent skill"}
+	skillInstallCommand := &cobra.Command{
+		Use:   "install",
+		Short: "Install the bundled devopsellence agent skill",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			result, installErr := agentskill.Install(skillInstallDir, version.String())
+			if installErr != nil {
+				return ExitError{Code: 1, Err: installErr}
+			}
+			return app.Printer.PrintJSON(map[string]any{
+				"schema_version": outputSchemaVersion,
+				"action":         "installed",
+				"skill":          result.Name,
+				"path":           result.Path,
+				"version":        result.Version,
+				"source":         result.Source,
+			})
+		},
+	}
+	skillInstallCommand.Flags().StringVar(&skillInstallDir, "dir", "", "Parent skills directory (default ~/.agents/skills)")
+	skillCommand.AddCommand(skillInstallCommand)
+	root.AddCommand(skillCommand)
 
 	var initSharedOpts InitOptions
 	var initMode string

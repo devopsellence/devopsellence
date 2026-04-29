@@ -4576,11 +4576,11 @@ func installSoloIngressCert(ctx context.Context, node config.Node, certFile, key
 	nonce := time.Now().UnixNano()
 	remoteCert := fmt.Sprintf("/tmp/devopsellence-ingress-cert-%d.pem", nonce)
 	remoteKey := fmt.Sprintf("/tmp/devopsellence-ingress-key-%d.pem", nonce)
-	if err := uploadSoloFile(ctx, node, certFile, remoteCert); err != nil {
+	if err := uploadSoloFile(ctx, node, certFile, remoteCert, false); err != nil {
 		return certPath, keyPath, fmt.Errorf("upload cert: %w", err)
 	}
 	defer solo.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remoteCert), io.Discard, io.Discard)
-	if err := uploadSoloFile(ctx, node, keyFile, remoteKey); err != nil {
+	if err := uploadSoloFile(ctx, node, keyFile, remoteKey, true); err != nil {
 		return certPath, keyPath, fmt.Errorf("upload key: %w", err)
 	}
 	defer solo.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remoteKey), io.Discard, io.Discard)
@@ -4608,13 +4608,17 @@ run_root systemctl restart devopsellence-agent || true
 	return certPath, keyPath, nil
 }
 
-func uploadSoloFile(ctx context.Context, node config.Node, localPath, remotePath string) error {
+func uploadSoloFile(ctx context.Context, node config.Node, localPath, remotePath string, private bool) error {
 	file, err := os.Open(localPath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	return solo.RunSSHStream(ctx, node, "cat > "+shellQuote(remotePath), file)
+	command := "cat > " + shellQuote(remotePath)
+	if private {
+		command = "umask 077; " + command
+	}
+	return solo.RunSSHStream(ctx, node, command, file)
 }
 
 func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {

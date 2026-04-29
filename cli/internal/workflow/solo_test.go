@@ -2037,6 +2037,9 @@ func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T)
 	if got := strings.Count(string(uploads), "/tmp/devopsellence-ingress-"); got != 2 {
 		t.Fatalf("uploads = %q, want two ingress TLS uploads", string(uploads))
 	}
+	if !strings.Contains(string(uploads), "umask 077; cat > '/tmp/devopsellence-ingress-key-") {
+		t.Fatalf("uploads = %q, want private key upload to use restrictive umask", string(uploads))
+	}
 	script, err := os.ReadFile(scriptPath)
 	if err != nil {
 		t.Fatal(err)
@@ -4900,13 +4903,17 @@ if [[ "$command" == "true" ]]; then
   exit 0
 fi
 
-if [[ "$command" == cat\ \>* ]]; then
-  target="${command#cat > }"
+if [[ "$command" == "umask 077; cat > "* || "$command" == cat\ \>* ]]; then
+  if [[ "$command" == "umask 077; cat > "* ]]; then
+    target="${command#umask 077; cat > }"
+  else
+    target="${command#cat > }"
+  fi
   target="${target#\'}"
   target="${target%\'}"
   cat >"$target"
   if [[ -n "${DEVOPSELLENCE_FAKE_SSH_UPLOADS:-}" ]]; then
-    printf '%s\n' "$target" >>"$DEVOPSELLENCE_FAKE_SSH_UPLOADS"
+    printf '%s\n' "$command" >>"$DEVOPSELLENCE_FAKE_SSH_UPLOADS"
   fi
   exit 0
 fi

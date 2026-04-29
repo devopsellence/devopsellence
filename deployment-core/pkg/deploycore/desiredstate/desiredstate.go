@@ -131,19 +131,20 @@ type SnapshotMetadata struct {
 }
 
 type DeploySnapshot struct {
-	WorkspaceRoot      string           `json:"workspace_root"`
-	WorkspaceKey       string           `json:"workspace_key"`
-	Environment        string           `json:"environment"`
-	Revision           string           `json:"revision"`
-	Image              string           `json:"image"`
-	Services           []ServiceJSON    `json:"services,omitempty"`
-	ReleaseTask        *TaskJSON        `json:"release_task,omitempty"`
-	ReleaseService     string           `json:"release_service,omitempty"`
-	ReleaseServiceKind string           `json:"release_service_kind,omitempty"`
-	Ingress            *IngressJSON     `json:"ingress,omitempty"`
-	IngressService     string           `json:"ingress_service,omitempty"`
-	IngressServiceKind string           `json:"ingress_service_kind,omitempty"`
-	Metadata           SnapshotMetadata `json:"metadata,omitempty"`
+	WorkspaceRoot      string              `json:"workspace_root"`
+	WorkspaceKey       string              `json:"workspace_key"`
+	Environment        string              `json:"environment"`
+	Revision           string              `json:"revision"`
+	Image              string              `json:"image"`
+	Services           []ServiceJSON       `json:"services,omitempty"`
+	ReleaseTask        *TaskJSON           `json:"release_task,omitempty"`
+	ReleaseService     string              `json:"release_service,omitempty"`
+	ReleaseServiceKind string              `json:"release_service_kind,omitempty"`
+	Ingress            *IngressJSON        `json:"ingress,omitempty"`
+	IngressService     string              `json:"ingress_service,omitempty"`
+	IngressServiceKind string              `json:"ingress_service_kind,omitempty"`
+	SecretRefs         map[string][]string `json:"secret_refs,omitempty"`
+	Metadata           SnapshotMetadata    `json:"metadata,omitempty"`
 }
 
 // BuildDesiredState produces desired-state JSON from a ProjectConfig, image tag,
@@ -398,7 +399,7 @@ func buildIngress(ingress *config.IngressConfig, environmentName string) *Ingres
 func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmentNames map[string]string) (*IngressJSON, error) {
 	var merged *IngressJSON
 	hostSet := map[string]bool{}
-	routeSet := map[string]bool{}
+	routeSet := map[string]string{}
 
 	for _, snapshot := range snapshots {
 		if snapshot.Ingress == nil || !snapshotShouldScheduleIngress(labels, snapshot) {
@@ -435,11 +436,15 @@ func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmen
 			if environmentName := environmentNames[snapshotKey(snapshot)]; environmentName != "" {
 				routeCopy.Target.Environment = environmentName
 			}
-			key := routeCopy.Match.Hostname + "\n" + routeCopy.Match.PathPrefix + "\n" + routeCopy.Target.Environment + "\n" + routeCopy.Target.Service + "\n" + routeCopy.Target.Port
-			if routeSet[key] {
-				continue
+			routeKey := routeCopy.Match.Hostname + "\n" + routeCopy.Match.PathPrefix
+			if existing, ok := routeSet[routeKey]; ok {
+				currentTarget := routeCopy.Target.Environment + "\n" + routeCopy.Target.Service + "\n" + routeCopy.Target.Port
+				if existing == currentTarget {
+					continue
+				}
+				return nil, fmt.Errorf("cannot merge ingress for co-hosted environments with duplicate route: %s%s", routeCopy.Match.Hostname, routeCopy.Match.PathPrefix)
 			}
-			routeSet[key] = true
+			routeSet[routeKey] = routeCopy.Target.Environment + "\n" + routeCopy.Target.Service + "\n" + routeCopy.Target.Port
 			merged.Routes = append(merged.Routes, routeCopy)
 		}
 	}

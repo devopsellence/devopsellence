@@ -552,6 +552,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}),
 	}
 	deployCommand.Flags().BoolVar(&deploySoloOpts.SkipDNSCheck, "skip-dns-check", false, "Skip ingress DNS readiness check before deploy (solo mode)")
+	deployCommand.Flags().BoolVar(&deploySoloOpts.DryRun, "dry-run", false, "Plan solo deploy without building, publishing, SSHing, or mutating state")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Organization, "org", os.Getenv("DEVOPSELLENCE_ORGANIZATION"), "Organization name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Project, "project", os.Getenv("DEVOPSELLENCE_PROJECT"), "Project name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Image, "image", "", "Deploy an existing digest ref instead of building locally (shared mode)")
@@ -644,6 +645,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
+	releaseRollbackCommand.Flags().BoolVar(&releaseRollbackOpts.DryRun, "dry-run", false, "Plan solo rollback without publishing, SSHing, or mutating state")
 	releaseCommand.AddCommand(releaseListCommand, releaseRollbackCommand)
 	root.AddCommand(releaseCommand)
 
@@ -773,6 +775,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var nodeRemoveSharedOpts NodeDeleteOptions
 	var nodeLabelSharedOpts NodeLabelSetOptions
 	var nodeLabelSoloOpts SoloNodeLabelSetOptions
+	var nodeLabelListSoloOpts SoloNodeLabelListOptions
+	var nodeLabelRemoveSoloOpts SoloNodeLabelRemoveOptions
 	var nodeDiagnoseOpts NodeDiagnoseOptions
 	var soloNodeDiagnoseOpts SoloNodeDiagnoseOptions
 	var nodeLogsOpts SoloLogsOptions
@@ -932,8 +936,35 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	nodeLabelSetCommand.Flags().StringVar(&nodeLabels, "labels", "", "Comma-separated labels")
+	nodeLabelListCommand := &cobra.Command{
+		Use:   "list [target]",
+		Short: "List node labels",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nodeLabelListSoloOpts.Node = ""
+			if len(args) > 0 {
+				nodeLabelListSoloOpts.Node = args[0]
+			}
+			return runSoloOnly("node label list", func(ctx context.Context) error {
+				return app.SoloNodeLabelList(ctx, nodeLabelListSoloOpts)
+			})(cmd, args)
+		},
+	}
+	nodeLabelRemoveCommand := &cobra.Command{
+		Use:   "remove <target>",
+		Short: "Remove labels from a node",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nodeLabelRemoveSoloOpts.Node = args[0]
+			nodeLabelRemoveSoloOpts.Labels = nodeLabels
+			return runSoloOnly("node label remove", func(ctx context.Context) error {
+				return app.SoloNodeLabelRemove(ctx, nodeLabelRemoveSoloOpts)
+			})(cmd, args)
+		},
+	}
+	nodeLabelRemoveCommand.Flags().StringVar(&nodeLabels, "labels", "", "Comma-separated labels to remove")
 	nodeLabelCommand := &cobra.Command{Use: "label", Short: "Manage node labels"}
-	nodeLabelCommand.AddCommand(nodeLabelSetCommand)
+	nodeLabelCommand.AddCommand(nodeLabelSetCommand, nodeLabelListCommand, nodeLabelRemoveCommand)
 	nodeDiagnoseCommand := &cobra.Command{
 		Use:   "diagnose <name|id>",
 		Short: "Collect a runtime snapshot from a node",
@@ -1084,6 +1115,22 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	agentUninstallCommand.Flags().BoolVar(&agentUninstallOpts.KeepWorkloads, "keep-workloads", false, "Stop and remove the agent but leave workloads and agent state on the node")
 	agentCommand.AddCommand(agentInstallCommand, agentUninstallCommand)
 	root.AddCommand(agentCommand)
+
+	var supportBundleOpts SoloSupportBundleOptions
+	supportCommand := &cobra.Command{
+		Use:   "support",
+		Short: "Collect redacted support/debugging evidence",
+	}
+	supportBundleCommand := &cobra.Command{
+		Use:   "bundle",
+		Short: "Write a redacted solo support bundle JSON file",
+		RunE: runSoloOnly("support bundle", func(ctx context.Context) error {
+			return app.SoloSupportBundle(ctx, supportBundleOpts)
+		}),
+	}
+	supportBundleCommand.Flags().StringVar(&supportBundleOpts.Output, "output", "", "Output path for support bundle JSON")
+	supportCommand.AddCommand(supportBundleCommand)
+	root.AddCommand(supportCommand)
 
 	return root
 }

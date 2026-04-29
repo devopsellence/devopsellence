@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,7 @@ import (
 
 type SoloDeployOptions struct {
 	SkipDNSCheck bool
+	DryRun       bool
 }
 
 type SoloReleaseListOptions struct {
@@ -43,6 +45,7 @@ type SoloReleaseListOptions struct {
 
 type SoloReleaseRollbackOptions struct {
 	Selector string
+	DryRun   bool
 }
 
 type SoloStatusOptions struct {
@@ -120,6 +123,15 @@ type SoloNodeLabelSetOptions struct {
 	Labels string
 }
 
+type SoloNodeLabelListOptions struct {
+	Node string
+}
+
+type SoloNodeLabelRemoveOptions struct {
+	Node   string
+	Labels string
+}
+
 type SoloAgentInstallOptions struct {
 	Node        string
 	AgentBinary string
@@ -134,6 +146,10 @@ type SoloAgentUninstallOptions struct {
 
 type SoloDoctorOptions struct {
 	Nodes []string
+}
+
+type SoloSupportBundleOptions struct {
+	Output string
 }
 
 type SoloNodeCreateOptions struct {
@@ -186,6 +202,7 @@ type IngressCheckOptions struct {
 }
 
 type soloNodeStatus struct {
+	Time         string                      `json:"time,omitempty"`
 	Phase        string                      `json:"phase"`
 	Revision     string                      `json:"revision"`
 	Error        string                      `json:"error,omitempty"`
@@ -368,7 +385,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err := stream.Event("started", map[string]any{}); err != nil {
 		return err
 	}
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return err
 	}
@@ -376,7 +393,6 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, "")
 	attachedNodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return err
@@ -404,6 +420,33 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		shortSHA = shortSHA[:7]
 	}
 	imageTag := soloImageTag(cfg.Project, shortSHA)
+
+	if opts.DryRun {
+		payload := map[string]any{
+			"action":            "deploy",
+			"dry_run":           true,
+			"workload_revision": shortSHA,
+			"image":             imageTag,
+			"environment":       environmentName,
+			"nodes":             sortedNodeNames(nodes),
+			"phase":             "planned",
+			"side_effects": map[string]bool{
+				"build":       false,
+				"ssh":         false,
+				"publish":     false,
+				"state_write": false,
+			},
+			"next_steps": []string{"devopsellence deploy"},
+		}
+		if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+			payload["configured_public_urls"] = urls
+			if len(soloReadyPublicURLs(cfg, nodes)) == 0 {
+				payload["public_url_status"] = soloPublicURLStatus(cfg)
+				payload["warnings"] = []string{soloPublicURLWarning(cfg)}
+			}
+		}
+		return stream.Result(payload)
+	}
 
 	buildCtx := filepath.Join(workspaceRoot, cfg.Build.Context)
 	dockerfile := filepath.Join(workspaceRoot, cfg.Build.Dockerfile)
@@ -470,6 +513,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
+	statusBaselines := a.soloNodeStatusTimes(ctx, nodes)
 	desiredStateRevisions, err := a.republishNodes(ctx, current, attachedNodeNames)
 	if err != nil {
 		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
@@ -477,7 +521,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		}
 		return err
 	}
-	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions); err != nil {
+	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, statusBaselines); err != nil {
 		resultErr := err
 		var rolloutErr *soloRolloutError
 		if errors.As(err, &rolloutErr) {
@@ -515,9 +559,14 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
 	}
-	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+	if urls := soloReadyPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
 		payload["next_steps"] = append([]string{"devopsellence status", "curl " + urls[0]}, soloNodeLogNextSteps(nodes)...)
+	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+		payload["configured_public_urls"] = urls
+		payload["public_url_status"] = soloPublicURLStatus(cfg)
+		payload["warnings"] = []string{soloPublicURLWarning(cfg)}
+		payload["next_steps"] = append([]string{"devopsellence status"}, soloNodeLogNextSteps(nodes)...)
 	} else {
 		payload["next_steps"] = append([]string{"devopsellence status"}, soloNodeLogNextSteps(nodes)...)
 	}
@@ -702,7 +751,7 @@ func soloDeployHealthcheckDetails(cfg *config.ProjectConfig) []map[string]any {
 	return details
 }
 
-func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string) error {
+func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string, previousStatusTimes ...map[string]string) error {
 	timeout := a.DeployTimeout
 	if timeout <= 0 {
 		timeout = defaultDeployProgressTimeout
@@ -710,6 +759,10 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 	pollInterval := a.DeployPollInterval
 	if pollInterval <= 0 {
 		pollInterval = defaultDeployProgressPollInterval
+	}
+	statusBaselines := map[string]string{}
+	if len(previousStatusTimes) > 0 && previousStatusTimes[0] != nil {
+		statusBaselines = previousStatusTimes[0]
 	}
 
 	rolloutCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -744,6 +797,9 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 			case strings.TrimSpace(result.Status.Revision) != expectedRevision:
 				pendingCount++
 				details = append(details, fmt.Sprintf("%s=revision:%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Revision), "none")))
+			case !soloNodeStatusAdvancedAfter(result.Status, statusBaselines[name]):
+				pendingCount++
+				details = append(details, fmt.Sprintf("%s=status_time:%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Time), "none")))
 			default:
 				switch strings.TrimSpace(result.Status.Phase) {
 				case "settled":
@@ -778,6 +834,40 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 		case <-timer.C:
 		}
 	}
+}
+
+func (a *App) soloNodeStatusTimes(ctx context.Context, nodes map[string]config.Node) map[string]string {
+	baselines := map[string]string{}
+	for _, name := range sortedNodeNames(nodes) {
+		result, err := readNodeStatus(ctx, nodes[name])
+		if err != nil || result.Missing {
+			continue
+		}
+		if observed := strings.TrimSpace(result.Status.Time); observed != "" {
+			baselines[name] = observed
+		}
+	}
+	return baselines
+}
+
+func soloNodeStatusAdvancedAfter(status soloNodeStatus, previousStatusTime string) bool {
+	previousStatusTime = strings.TrimSpace(previousStatusTime)
+	if previousStatusTime == "" {
+		return true
+	}
+	observed := strings.TrimSpace(status.Time)
+	if observed == "" {
+		return true
+	}
+	parsedObserved, err := time.Parse(time.RFC3339Nano, observed)
+	if err != nil {
+		return true
+	}
+	parsedPrevious, err := time.Parse(time.RFC3339Nano, previousStatusTime)
+	if err != nil {
+		return true
+	}
+	return parsedObserved.After(parsedPrevious)
 }
 
 func (a *App) readSoloState() (solo.State, error) {
@@ -1029,22 +1119,112 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 }
 
 func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.State, snapshot desiredstate.DeploySnapshot) (desiredstate.DeploySnapshot, error) {
-	cfg, err := a.ConfigStore.Read(snapshot.WorkspaceRoot)
+	snapshot = cloneDeploySnapshot(snapshot)
+	records, err := current.SecretRecords(snapshot.WorkspaceRoot, snapshot.Environment)
 	if err != nil {
 		return desiredstate.DeploySnapshot{}, err
 	}
-	if cfg == nil {
-		return desiredstate.DeploySnapshot{}, fmt.Errorf("missing devopsellence.yml for %s", snapshot.WorkspaceRoot)
+	local := map[string]solo.SecretRecord{}
+	for _, record := range records {
+		local[record.ServiceName+"\x00"+record.Name] = record
 	}
-	secrets, err := a.resolveSoloSecretValues(ctx, current, snapshot.WorkspaceRoot, snapshot.Environment, cfg)
-	if err != nil {
-		return desiredstate.DeploySnapshot{}, fmt.Errorf("load secrets for %s: %w", snapshot.WorkspaceRoot, err)
+	if len(local) > 0 && len(snapshot.SecretRefs) == 0 {
+		return desiredstate.DeploySnapshot{}, fmt.Errorf("stored release snapshot for %s (%s) was created before secret metadata was tracked; run `devopsellence deploy` to create a fresh release before rollback or republish", snapshot.WorkspaceRoot, snapshot.Environment)
 	}
-	configPath := strings.TrimSpace(snapshot.Metadata.ConfigPath)
-	if configPath == "" {
-		configPath = a.ConfigStore.PathFor(snapshot.WorkspaceRoot)
+	cache := map[string]string{}
+	for i := range snapshot.Services {
+		serviceName := strings.TrimSpace(snapshot.Services[i].Name)
+		for _, secretName := range snapshot.SecretRefs[serviceName] {
+			secretName = strings.TrimSpace(secretName)
+			if secretName == "" {
+				continue
+			}
+			record, ok := local[serviceName+"\x00"+secretName]
+			if !ok {
+				return desiredstate.DeploySnapshot{}, fmt.Errorf("missing local solo secret %s for service %s", secretName, serviceName)
+			}
+			value, err := a.resolveSoloSecretRecordCached(ctx, record, cache)
+			if err != nil {
+				return desiredstate.DeploySnapshot{}, fmt.Errorf("resolve secret %s for service %s: %w", secretName, serviceName, err)
+			}
+			if snapshot.Services[i].Env == nil {
+				snapshot.Services[i].Env = map[string]string{}
+			}
+			snapshot.Services[i].Env[secretName] = value
+		}
 	}
-	return solo.BuildDeploySnapshotWithScopedSecrets(cfg, snapshot.WorkspaceRoot, configPath, snapshot.Image, snapshot.Revision, secrets)
+	if snapshot.ReleaseTask != nil {
+		serviceName := strings.TrimSpace(snapshot.ReleaseService)
+		for _, secretName := range snapshot.SecretRefs[serviceName] {
+			secretName = strings.TrimSpace(secretName)
+			if secretName == "" {
+				continue
+			}
+			record, ok := local[serviceName+"\x00"+secretName]
+			if !ok {
+				return desiredstate.DeploySnapshot{}, fmt.Errorf("missing local solo secret %s for release task service %s", secretName, serviceName)
+			}
+			value, err := a.resolveSoloSecretRecordCached(ctx, record, cache)
+			if err != nil {
+				return desiredstate.DeploySnapshot{}, fmt.Errorf("resolve secret %s for release task service %s: %w", secretName, serviceName, err)
+			}
+			if snapshot.ReleaseTask.Env == nil {
+				snapshot.ReleaseTask.Env = map[string]string{}
+			}
+			snapshot.ReleaseTask.Env[secretName] = value
+		}
+	}
+	return snapshot, nil
+}
+
+func cloneDeploySnapshot(snapshot desiredstate.DeploySnapshot) desiredstate.DeploySnapshot {
+	cloned := snapshot
+	if snapshot.Services != nil {
+		cloned.Services = append([]desiredstate.ServiceJSON(nil), snapshot.Services...)
+		for i := range cloned.Services {
+			cloned.Services[i].Entrypoint = append([]string(nil), snapshot.Services[i].Entrypoint...)
+			cloned.Services[i].Command = append([]string(nil), snapshot.Services[i].Command...)
+			cloned.Services[i].Env = cloneStringMap(snapshot.Services[i].Env)
+			cloned.Services[i].Ports = append([]desiredstate.ServicePortJSON(nil), snapshot.Services[i].Ports...)
+			cloned.Services[i].VolumeMounts = append([]desiredstate.VolumeMountJSON(nil), snapshot.Services[i].VolumeMounts...)
+			if snapshot.Services[i].Healthcheck != nil {
+				healthcheck := *snapshot.Services[i].Healthcheck
+				cloned.Services[i].Healthcheck = &healthcheck
+			}
+		}
+	}
+	if snapshot.ReleaseTask != nil {
+		releaseTask := *snapshot.ReleaseTask
+		releaseTask.Entrypoint = append([]string(nil), snapshot.ReleaseTask.Entrypoint...)
+		releaseTask.Command = append([]string(nil), snapshot.ReleaseTask.Command...)
+		releaseTask.Env = cloneStringMap(snapshot.ReleaseTask.Env)
+		releaseTask.VolumeMounts = append([]desiredstate.VolumeMountJSON(nil), snapshot.ReleaseTask.VolumeMounts...)
+		cloned.ReleaseTask = &releaseTask
+	}
+	if snapshot.Ingress != nil {
+		ingress := *snapshot.Ingress
+		ingress.Hosts = append([]string(nil), snapshot.Ingress.Hosts...)
+		ingress.Routes = append([]desiredstate.IngressRouteJSON(nil), snapshot.Ingress.Routes...)
+		cloned.Ingress = &ingress
+	}
+	if snapshot.SecretRefs != nil {
+		cloned.SecretRefs = make(map[string][]string, len(snapshot.SecretRefs))
+		for serviceName, refs := range snapshot.SecretRefs {
+			cloned.SecretRefs[serviceName] = append([]string(nil), refs...)
+		}
+	}
+	return cloned
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (a *App) resolveSoloSecretValues(ctx context.Context, current solo.State, workspaceRoot, environment string, cfg *config.ProjectConfig) (solo.ScopedSecrets, error) {
@@ -1258,6 +1438,9 @@ func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.S
 }
 
 func snapshotNeedsImageOnNode(snapshot desiredstate.DeploySnapshot, node config.Node, runReleaseTask bool) bool {
+	if strings.TrimSpace(snapshot.Image) != "" && len(snapshot.Services) == 0 && snapshot.ReleaseTask == nil {
+		return true
+	}
 	for _, service := range snapshot.Services {
 		if soloNodeCanRunKind(node, service.Kind) {
 			return true
@@ -1503,13 +1686,17 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		"schema_version": outputSchemaVersion,
 		"nodes":          jsonResults,
 	}
-	if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+	if urls := soloReadyPublicURLs(cfg, nodes); len(urls) > 0 {
 		if allSettled {
 			payload["public_urls"] = urls
 		} else {
 			payload["configured_public_urls"] = urls
 			payload["warnings"] = []string{"public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"}
 		}
+	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
+		payload["configured_public_urls"] = urls
+		payload["public_url_status"] = soloPublicURLStatus(cfg)
+		payload["warnings"] = []string{soloPublicURLWarning(cfg)}
 	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
 		return err
@@ -1521,7 +1708,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 }
 
 func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) error {
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return err
 	}
@@ -1529,12 +1716,15 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, "")
-	environmentID, currentRelease, hasCurrent, err := current.CurrentRelease(workspaceRoot, environmentName)
+	_, currentRelease, hasCurrent, err := current.CurrentRelease(workspaceRoot, environmentName)
 	if err != nil {
 		return err
 	}
 	releases, err := current.ReleaseHistory(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	displayEnvironmentID, err := soloDisplayEnvironmentID(workspaceRoot, environmentName)
 	if err != nil {
 		return err
 	}
@@ -1557,7 +1747,7 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 	return a.Printer.PrintJSON(map[string]any{
 		"schema_version": outputSchemaVersion,
 		"environment":    environmentName,
-		"environment_id": environmentID,
+		"environment_id": displayEnvironmentID,
 		"current_release_id": func() string {
 			if hasCurrent {
 				return currentRelease.ID
@@ -1573,7 +1763,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err := stream.Event("started", map[string]any{}); err != nil {
 		return err
 	}
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return err
 	}
@@ -1581,7 +1771,6 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, "")
 	attachedNodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return err
@@ -1612,6 +1801,26 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
+	if opts.DryRun {
+		return stream.Result(map[string]any{
+			"action":            "rollback",
+			"dry_run":           true,
+			"release_id":        selected.ID,
+			"rolled_back_from":  currentRelease.ID,
+			"workload_revision": selected.Revision,
+			"environment":       environmentName,
+			"nodes":             sortedNodeNames(nodes),
+			"phase":             "planned",
+			"selected_image":    selected.Image.Reference,
+			"selector":          opts.Selector,
+			"side_effects": map[string]bool{
+				"ssh":         false,
+				"publish":     false,
+				"state_write": false,
+			},
+			"next_steps": []string{"devopsellence release rollback " + selected.ID},
+		})
+	}
 	now := time.Now().UTC()
 	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
 		ID:            soloDeploymentID(corerelease.DeploymentKindRollback, selected.Revision, now),
@@ -1625,9 +1834,6 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
-	if _, err := current.SaveRelease(selected); err != nil {
-		return err
-	}
 	if err := current.SaveDeployment(deployment); err != nil {
 		return err
 	}
@@ -1639,14 +1845,29 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	desiredStateRevisions, err := a.republishNodes(ctx, current, rollbackTargetNodeNames)
+
+	publishState := cloneSoloState(current)
+	if _, err := publishState.SaveRelease(selected); err != nil {
+		return err
+	}
+	statusBaselines := a.soloNodeStatusTimes(ctx, nodes)
+	desiredStateRevisions, err := a.republishNodes(ctx, publishState, rollbackTargetNodeNames)
 	if err != nil {
 		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
 			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
 		}
 		return err
 	}
-	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions); err != nil {
+	if _, err := current.SaveRelease(selected); err != nil {
+		return err
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, statusBaselines); err != nil {
 		if persistErr := a.persistSoloDeploymentRolloutFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
 			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
 		}
@@ -1674,6 +1895,13 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	})
 }
 
+func soloReadyPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
+	if ingressRequiresTLSReadiness(cfg) {
+		return nil
+	}
+	return soloStatusPublicURLs(cfg, nodes)
+}
+
 func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
 	if cfg == nil || len(nodes) == 0 {
 		return nil
@@ -1697,6 +1925,28 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 
 func ingressConfiguredPublicURLs(cfg *config.ProjectConfig) []string {
 	return publicURLsForHosts(ingressURLScheme(cfg), concreteIngressHosts(cfg))
+}
+
+func ingressRequiresTLSReadiness(cfg *config.ProjectConfig) bool {
+	if cfg == nil || cfg.Ingress == nil {
+		return false
+	}
+	tlsMode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
+	return strings.EqualFold(tlsMode, "auto") || strings.EqualFold(tlsMode, "manual")
+}
+
+func soloPublicURLStatus(cfg *config.ProjectConfig) string {
+	if ingressRequiresTLSReadiness(cfg) {
+		return "configured_tls_pending"
+	}
+	return "configured_pending"
+}
+
+func soloPublicURLWarning(cfg *config.ProjectConfig) string {
+	if ingressRequiresTLSReadiness(cfg) {
+		return "HTTPS public URLs are configured, but TLS readiness has not been verified yet; use `devopsellence ingress check --wait 2m` before treating them as reachable"
+	}
+	return "public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"
 }
 
 func ingressURLScheme(cfg *config.ProjectConfig) string {
@@ -1767,12 +2017,16 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return err
+	}
 	serviceName := strings.TrimSpace(opts.ServiceName)
 	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
-	service, ok := cfg.Services[serviceName]
+	service, ok := resolved.Services[serviceName]
 	if !ok {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
@@ -1790,7 +2044,7 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	configUpdated, err := ensureServiceSecretRef(cfg, serviceName, soloSecretConfigRef(record))
+	configUpdated, err := ensureServiceSecretRefForEnvironment(cfg, environmentName, serviceName, soloSecretConfigRef(record))
 	if err != nil {
 		return fmt.Errorf("secret saved locally but update devopsellence.yml failed: %w", err)
 	}
@@ -1812,6 +2066,9 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	}
 	if strings.TrimSpace(record.Reference) != "" {
 		payload["reference"] = record.Reference
+	}
+	if record.Store == solo.SecretStorePlaintext {
+		payload["warnings"] = []string{"solo plaintext secrets are stored locally in the devopsellence solo state file; use --store 1password --op-ref for production secrets"}
 	}
 	if a.SoloState != nil && strings.TrimSpace(a.SoloState.Path) != "" {
 		payload["state_path"] = a.SoloState.Path
@@ -1881,6 +2138,13 @@ func serviceSecretRefConflict(service config.ServiceConfig, name string) bool {
 	return true
 }
 
+func ensureServiceSecretRefForEnvironment(cfg *config.ProjectConfig, environmentName, serviceName string, ref config.SecretRef) (bool, error) {
+	if environmentServiceSecretRefsOverride(cfg, environmentName, serviceName) {
+		return ensureEnvironmentServiceSecretRef(cfg, environmentName, serviceName, ref)
+	}
+	return ensureServiceSecretRef(cfg, serviceName, ref)
+}
+
 func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref config.SecretRef) (bool, error) {
 	serviceName = strings.TrimSpace(serviceName)
 	if cfg == nil {
@@ -1890,22 +2154,65 @@ func ensureServiceSecretRef(cfg *config.ProjectConfig, serviceName string, ref c
 	if !ok {
 		return false, nil
 	}
-	for i, existing := range service.SecretRefs {
+	updated, changed, err := ensureSecretRef(service.SecretRefs, ref, serviceName, service)
+	if err != nil || !changed {
+		return changed, err
+	}
+	service.SecretRefs = updated
+	cfg.Services[serviceName] = service
+	return true, nil
+}
+
+func ensureEnvironmentServiceSecretRef(cfg *config.ProjectConfig, environmentName, serviceName string, ref config.SecretRef) (bool, error) {
+	serviceName = strings.TrimSpace(serviceName)
+	if cfg == nil {
+		return false, nil
+	}
+	environmentName = normalizedSoloEnvironmentName(environmentName, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return false, err
+	}
+	service, ok := resolved.Services[serviceName]
+	if !ok {
+		return false, nil
+	}
+	updated, changed, err := ensureSecretRef(service.SecretRefs, ref, serviceName, service)
+	if err != nil || !changed {
+		return changed, err
+	}
+	overlay := cfg.Environments[environmentName]
+	serviceOverlay := overlay.Services[serviceName]
+	serviceOverlay.SecretRefs = updated
+	overlay.Services[serviceName] = serviceOverlay
+	cfg.Environments[environmentName] = overlay
+	return true, nil
+}
+
+func ensureSecretRef(existingRefs []config.SecretRef, ref config.SecretRef, serviceName string, service config.ServiceConfig) ([]config.SecretRef, bool, error) {
+	for i, existing := range existingRefs {
 		if existing.Name == ref.Name {
 			if existing.Secret == ref.Secret {
-				return false, nil
+				return existingRefs, false, nil
 			}
-			service.SecretRefs[i] = ref
-			cfg.Services[serviceName] = service
-			return true, nil
+			updated := append([]config.SecretRef(nil), existingRefs...)
+			updated[i] = ref
+			return updated, true, nil
 		}
 	}
 	if serviceSecretRefConflict(service, ref.Name) {
-		return false, fmt.Errorf("service %q already defines %s in env; remove it before adding a secret_ref with the same name", serviceName, ref.Name)
+		return existingRefs, false, fmt.Errorf("service %q already defines %s in env; remove it before adding a secret_ref with the same name", serviceName, ref.Name)
 	}
-	service.SecretRefs = append(service.SecretRefs, ref)
-	cfg.Services[serviceName] = service
-	return true, nil
+	updated := append([]config.SecretRef(nil), existingRefs...)
+	updated = append(updated, ref)
+	return updated, true, nil
+}
+
+func removeServiceSecretRefForEnvironment(cfg *config.ProjectConfig, environmentName, serviceName, name string) bool {
+	if environmentServiceSecretRefsOverride(cfg, environmentName, serviceName) {
+		return removeEnvironmentServiceSecretRef(cfg, environmentName, serviceName, name)
+	}
+	return removeServiceSecretRef(cfg, serviceName, name)
 }
 
 func removeServiceSecretRef(cfg *config.ProjectConfig, serviceName, name string) bool {
@@ -1917,15 +2224,7 @@ func removeServiceSecretRef(cfg *config.ProjectConfig, serviceName, name string)
 	if !ok {
 		return false
 	}
-	filtered := make([]config.SecretRef, 0, len(service.SecretRefs))
-	changed := false
-	for _, existing := range service.SecretRefs {
-		if existing.Name == name {
-			changed = true
-			continue
-		}
-		filtered = append(filtered, existing)
-	}
+	filtered, changed := removeSecretRef(service.SecretRefs, name)
 	if !changed {
 		return false
 	}
@@ -1934,12 +2233,77 @@ func removeServiceSecretRef(cfg *config.ProjectConfig, serviceName, name string)
 	return true
 }
 
+func removeEnvironmentServiceSecretRef(cfg *config.ProjectConfig, environmentName, serviceName, name string) bool {
+	serviceName = strings.TrimSpace(serviceName)
+	if cfg == nil {
+		return false
+	}
+	environmentName = normalizedSoloEnvironmentName(environmentName, cfg)
+	overlay, ok := cfg.Environments[environmentName]
+	if !ok || overlay.Services == nil {
+		return false
+	}
+	serviceOverlay, ok := overlay.Services[serviceName]
+	if !ok || serviceOverlay.SecretRefs == nil {
+		return false
+	}
+	filtered, changed := removeSecretRef(serviceOverlay.SecretRefs, name)
+	if !changed {
+		return false
+	}
+	serviceOverlay.SecretRefs = filtered
+	overlay.Services[serviceName] = serviceOverlay
+	cfg.Environments[environmentName] = overlay
+	return true
+}
+
+func removeSecretRef(existingRefs []config.SecretRef, name string) ([]config.SecretRef, bool) {
+	filtered := make([]config.SecretRef, 0, len(existingRefs))
+	changed := false
+	for _, existing := range existingRefs {
+		if existing.Name == name {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	return filtered, changed
+}
+
+func environmentServiceSecretRefsOverride(cfg *config.ProjectConfig, environmentName, serviceName string) bool {
+	if cfg == nil {
+		return false
+	}
+	environmentName = normalizedSoloEnvironmentName(environmentName, cfg)
+	overlay, ok := cfg.Environments[environmentName]
+	if !ok || overlay.Services == nil {
+		return false
+	}
+	serviceOverlay, ok := overlay.Services[strings.TrimSpace(serviceName)]
+	return ok && serviceOverlay.SecretRefs != nil
+}
+
+func normalizedSoloEnvironmentName(environmentName string, cfg *config.ProjectConfig) string {
+	environmentName = strings.TrimSpace(environmentName)
+	if environmentName == "" && cfg != nil {
+		environmentName = strings.TrimSpace(cfg.DefaultEnvironment)
+	}
+	if environmentName == "" {
+		environmentName = config.DefaultEnvironment
+	}
+	return environmentName
+}
+
 func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) error {
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return err
+	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -1948,7 +2312,7 @@ func (a *App) SoloSecretsList(_ context.Context, opts SoloSecretsListOptions) er
 	if err != nil {
 		return err
 	}
-	items := soloSecretListItems(cfg, secrets, opts.ServiceName)
+	items := soloSecretListItems(&resolved, secrets, opts.ServiceName)
 
 	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "environment": environmentName, "secrets": items})
 
@@ -2092,9 +2456,10 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
-		"node":        opts.Node,
-		"environment": environmentName,
-		"changed":     changed,
+		"schema_version": outputSchemaVersion,
+		"node":           opts.Node,
+		"environment":    environmentName,
+		"changed":        changed,
 	})
 
 }
@@ -2150,9 +2515,10 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	}
 
 	payload := map[string]any{
-		"node":        opts.Node,
-		"environment": environmentName,
-		"changed":     true,
+		"schema_version": outputSchemaVersion,
+		"node":           opts.Node,
+		"environment":    environmentName,
+		"changed":        true,
 	}
 	if len(warnings) > 0 {
 		payload["warnings"] = warnings
@@ -2178,12 +2544,16 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return err
+	}
 	serviceName := strings.TrimSpace(opts.ServiceName)
 	if serviceName == "" {
 		return ExitError{Code: 2, Err: errors.New("missing required option: --service")}
 	}
-	if _, ok := cfg.Services[serviceName]; !ok {
+	if _, ok := resolved.Services[serviceName]; !ok {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
 	current, err := a.readSoloState()
@@ -2197,14 +2567,14 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	configUpdated := removeServiceSecretRef(cfg, serviceName, opts.Key)
+	configUpdated := removeServiceSecretRefForEnvironment(cfg, environmentName, serviceName, opts.Key)
 	if configUpdated {
 		if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
 			return fmt.Errorf("secret deleted locally but update devopsellence.yml failed: %w", err)
 		}
 	}
 
-	return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "deleted"})
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "deleted"})
 
 }
 
@@ -2229,7 +2599,7 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 		return err
 	}
 	lines := splitNonFinalEmptyLines(out)
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines, "limit": linesLimit})
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "node": opts.Node, "lines": lines, "limit": linesLimit})
 }
 
 func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions) error {
@@ -2252,15 +2622,28 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
 	}
 	environmentName := soloEnvironmentName(cfg, "")
+	workspaceRoot, err := a.soloCurrentWorkspaceRoot()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
 	results := make([]map[string]any, 0, len(nodes))
 	ok := true
 	for _, nodeName := range sortedNodeNames(nodes) {
-		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(environmentName, serviceName, linesLimit))
+		runtimeEnvironmentName, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, nodeName)
+		if err != nil {
+			return err
+		}
+		diag := runRemoteDiagnostic(ctx, nodes[nodeName], remoteDockerLogsCommand(runtimeEnvironmentName, serviceName, linesLimit))
 		entry := map[string]any{
-			"node":    nodeName,
-			"service": serviceName,
-			"ok":      diag.Err == nil && diag.ExitCode == 0,
-			"lines":   splitNonFinalEmptyLines(diag.Stdout),
+			"node":                nodeName,
+			"service":             serviceName,
+			"runtime_environment": runtimeEnvironmentName,
+			"ok":                  diag.Err == nil && diag.ExitCode == 0,
+			"lines":               splitNonFinalEmptyLines(diag.Stdout),
 		}
 		if diag.Err != nil {
 			entry["error"] = diag.Err.Error()
@@ -2342,6 +2725,14 @@ func (a *App) SoloExec(ctx context.Context, opts SoloExecOptions) error {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
 	environmentName := soloEnvironmentName(cfg, "")
+	workspaceRoot, err := a.soloCurrentWorkspaceRoot()
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
 	candidates := []soloExecTarget{}
 	for _, nodeName := range sortedNodeNames(nodes) {
 		result, err := readNodeStatus(ctx, nodes[nodeName])
@@ -2351,14 +2742,18 @@ func (a *App) SoloExec(ctx context.Context, opts SoloExecOptions) error {
 		if result.Missing {
 			continue
 		}
-		container := statusServiceContainer(result.Status, environmentName, serviceName)
+		runtimeEnvironmentName, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, nodeName)
+		if err != nil {
+			return err
+		}
+		container := statusServiceContainer(result.Status, runtimeEnvironmentName, serviceName)
 		if container == "" {
 			continue
 		}
 		candidates = append(candidates, soloExecTarget{
 			Kind:        "service",
 			Node:        nodeName,
-			Environment: environmentName,
+			Environment: runtimeEnvironmentName,
 			Service:     serviceName,
 			Container:   container,
 			Command:     append([]string(nil), opts.Command...),
@@ -3018,10 +3413,65 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
-		"node":   opts.Node,
-		"labels": labels,
+		"schema_version": outputSchemaVersion,
+		"node":           opts.Node,
+		"labels":         labels,
 	})
 
+}
+
+func (a *App) SoloNodeLabelList(_ context.Context, opts SoloNodeLabelListOptions) error {
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(opts.Node) != "" {
+		node, ok := current.Nodes[opts.Node]
+		if !ok {
+			return fmt.Errorf("node %q not found", opts.Node)
+		}
+		return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "node": opts.Node, "labels": solo.NormalizeNode(node).Labels})
+	}
+	items := make([]map[string]any, 0, len(current.Nodes))
+	for name, node := range current.Nodes {
+		items = append(items, map[string]any{"node": name, "labels": solo.NormalizeNode(node).Labels})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i]["node"].(string) < items[j]["node"].(string) })
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "nodes": items})
+}
+
+func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveOptions) error {
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	node, ok := current.Nodes[opts.Node]
+	if !ok {
+		return fmt.Errorf("node %q not found", opts.Node)
+	}
+	labels, err := parseSoloLabels(opts.Labels)
+	if err != nil {
+		return err
+	}
+	remove := map[string]bool{}
+	for _, label := range labels {
+		remove[label] = true
+	}
+	kept := make([]string, 0, len(node.Labels))
+	for _, label := range node.Labels {
+		if !remove[label] {
+			kept = append(kept, label)
+		}
+	}
+	node.Labels = kept
+	current.Nodes[opts.Node] = solo.NormalizeNode(node)
+	if err := a.writeSoloState(current); err != nil {
+		return err
+	}
+	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+		return err
+	}
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "node": opts.Node, "labels": current.Nodes[opts.Node].Labels, "removed": labels})
 }
 
 func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions) error {
@@ -3082,7 +3532,7 @@ func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) err
 		return err
 	}
 
-	if err := a.Printer.PrintJSON(map[string]any{"checks": results}); err != nil {
+	if err := a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "checks": results}); err != nil {
 		return err
 	}
 	if failed {
@@ -3637,6 +4087,194 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 
 }
 
+func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions) error {
+	discovered, err := discovery.Discover(a.Cwd)
+	if err != nil {
+		return err
+	}
+	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	environmentName := ""
+	attachedNodes := []string{}
+	if cfg != nil {
+		environmentName = a.effectiveEnvironment("", cfg)
+		attachedNodes, _ = current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
+	}
+	bundle := map[string]any{
+		"schema_version": outputSchemaVersion,
+		"kind":           "devopsellence_solo_support_bundle",
+		"generated_at":   time.Now().UTC().Format(time.RFC3339),
+		"cli_version":    cliversion.String(),
+		"workspace": map[string]any{
+			"root": discovered.WorkspaceRoot,
+			"slug": discovered.ProjectSlug,
+		},
+		"environment":    environmentName,
+		"config":         redactProjectConfigForSupport(cfg),
+		"solo_state":     redactSoloStateForSupport(current),
+		"attached_nodes": attachedNodes,
+		"recommended_commands": []string{
+			"devopsellence doctor",
+			"devopsellence status",
+			"devopsellence release list",
+			"devopsellence node list --all",
+			"devopsellence node diagnose <node>",
+			"devopsellence node logs <node> --lines 200",
+		},
+	}
+	outputPath := strings.TrimSpace(opts.Output)
+	if outputPath == "" {
+		outputPath = filepath.Join(discovered.WorkspaceRoot, ".devopsellence-support-bundle.json")
+	}
+	if !filepath.IsAbs(outputPath) {
+		outputPath = filepath.Join(discovered.WorkspaceRoot, outputPath)
+	}
+	data, err := json.MarshalIndent(bundle, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := writePrivateFileAtomic(outputPath, data); err != nil {
+		return err
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"action":         "support_bundle",
+		"path":           outputPath,
+		"redacted":       true,
+		"next_steps": []string{
+			"Attach this JSON file to a support/debugging issue when it is safe to share machine paths and node hostnames/IPs.",
+			"Run devopsellence node diagnose <node> for live remote runtime details.",
+		},
+	})
+}
+
+func redactSoloStateForSupport(current solo.State) solo.State {
+	for key, record := range current.Secrets {
+		record.Value = "[REDACTED]"
+		if strings.TrimSpace(record.Reference) != "" {
+			record.Reference = "[REDACTED]"
+		}
+		current.Secrets[key] = record
+	}
+	return current
+}
+
+func redactProjectConfigForSupport(cfg *config.ProjectConfig) *config.ProjectConfig {
+	if cfg == nil {
+		return nil
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		clone := *cfg
+		cfg = &clone
+	} else {
+		var clone config.ProjectConfig
+		if err := json.Unmarshal(data, &clone); err == nil {
+			cfg = &clone
+		} else {
+			clone := *cfg
+			cfg = &clone
+		}
+	}
+	for name, service := range cfg.Services {
+		service.Env = redactStringMapValues(service.Env)
+		service.SecretRefs = redactConfigSecretRefs(service.SecretRefs)
+		cfg.Services[name] = service
+	}
+	if cfg.Tasks.Release != nil {
+		cfg.Tasks.Release.Env = redactStringMapValues(cfg.Tasks.Release.Env)
+	}
+	for environmentName, overlay := range cfg.Environments {
+		for serviceName, service := range overlay.Services {
+			service.Env = redactStringMapValues(service.Env)
+			service.SecretRefs = redactConfigSecretRefs(service.SecretRefs)
+			overlay.Services[serviceName] = service
+		}
+		if overlay.Tasks != nil && overlay.Tasks.Release != nil {
+			overlay.Tasks.Release.Env = redactStringMapValues(overlay.Tasks.Release.Env)
+		}
+		cfg.Environments[environmentName] = overlay
+	}
+	return cfg
+}
+
+func redactStringMapValues(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	redacted := make(map[string]string, len(values))
+	for key, value := range values {
+		if strings.TrimSpace(value) == "" {
+			redacted[key] = value
+			continue
+		}
+		redacted[key] = "[REDACTED]"
+	}
+	return redacted
+}
+
+func redactConfigSecretRefs(refs []config.SecretRef) []config.SecretRef {
+	if refs == nil {
+		return nil
+	}
+	redacted := make([]config.SecretRef, len(refs))
+	copy(redacted, refs)
+	for i := range redacted {
+		if strings.TrimSpace(redacted[i].Secret) != "" {
+			redacted[i].Secret = "[REDACTED]"
+		}
+	}
+	return redacted
+}
+
+func writePrivateFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
+	}
+	return os.Chmod(path, 0o600)
+}
+
 func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 	discovered, err := discovery.Discover(a.Cwd)
 	if err != nil {
@@ -3814,7 +4452,7 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 }
 
 func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return err
 	}
@@ -3822,7 +4460,7 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 	if err != nil {
 		return err
 	}
-	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
+	nodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return err
 	}
@@ -3880,6 +4518,66 @@ func (a *App) loadSoloProjectConfig() (*config.ProjectConfig, string, error) {
 	return cfg, workspaceRoot, nil
 }
 
+func (a *App) loadResolvedSoloProjectConfig(explicitEnvironment string) (*config.ProjectConfig, string, string, error) {
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return nil, "", "", err
+	}
+	selectedEnvironment := a.effectiveEnvironment(explicitEnvironment, cfg)
+	resolved, err := config.ResolveEnvironmentConfig(*cfg, selectedEnvironment)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return &resolved, workspaceRoot, selectedEnvironment, nil
+}
+
+func cloneSoloState(current solo.State) solo.State {
+	cloned := current
+	if current.Nodes != nil {
+		cloned.Nodes = make(map[string]config.Node, len(current.Nodes))
+		for key, value := range current.Nodes {
+			cloned.Nodes[key] = value
+		}
+	}
+	if current.Attachments != nil {
+		cloned.Attachments = make(map[string]solo.AttachmentRecord, len(current.Attachments))
+		for key, value := range current.Attachments {
+			cloned.Attachments[key] = value
+		}
+	}
+	if current.Snapshots != nil {
+		cloned.Snapshots = make(map[string]desiredstate.DeploySnapshot, len(current.Snapshots))
+		for key, value := range current.Snapshots {
+			cloned.Snapshots[key] = value
+		}
+	}
+	if current.Releases != nil {
+		cloned.Releases = make(map[string]corerelease.Release, len(current.Releases))
+		for key, value := range current.Releases {
+			cloned.Releases[key] = value
+		}
+	}
+	if current.Current != nil {
+		cloned.Current = make(map[string]string, len(current.Current))
+		for key, value := range current.Current {
+			cloned.Current[key] = value
+		}
+	}
+	if current.Deployments != nil {
+		cloned.Deployments = make(map[string]corerelease.Deployment, len(current.Deployments))
+		for key, value := range current.Deployments {
+			cloned.Deployments[key] = value
+		}
+	}
+	if current.Secrets != nil {
+		cloned.Secrets = make(map[string]solo.SecretRecord, len(current.Secrets))
+		for key, value := range current.Secrets {
+			cloned.Secrets[key] = value
+		}
+	}
+	return cloned
+}
+
 func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 	if strings.TrimSpace(override) != "" {
 		return strings.TrimSpace(override)
@@ -3888,6 +4586,163 @@ func soloEnvironmentName(cfg *config.ProjectConfig, override string) string {
 		return config.DefaultEnvironment
 	}
 	return strings.TrimSpace(cfg.DefaultEnvironment)
+}
+
+func (a *App) soloCurrentWorkspaceRoot() (string, error) {
+	discovered, err := discovery.Discover(a.Cwd)
+	if err != nil {
+		return "", err
+	}
+	return discovered.WorkspaceRoot, nil
+}
+
+func soloRuntimeEnvironmentNameForNode(current solo.State, workspaceRoot, logicalEnvironment, nodeName string) (string, error) {
+	logicalEnvironment = strings.TrimSpace(logicalEnvironment)
+	if logicalEnvironment == "" {
+		logicalEnvironment = config.DefaultEnvironment
+	}
+	currentKey, err := solo.EnvironmentStateKey(workspaceRoot, logicalEnvironment)
+	if err != nil {
+		return "", err
+	}
+	currentSnapshot, ok := current.Snapshots[currentKey]
+	if !ok {
+		return logicalEnvironment, nil
+	}
+	base := defaultSoloSnapshotEnvironment(currentSnapshot, logicalEnvironment)
+	duplicates := 0
+	for key, attachment := range current.Attachments {
+		if !stringSliceContains(attachment.NodeNames, nodeName) {
+			continue
+		}
+		snapshot, ok := current.Snapshots[key]
+		if !ok {
+			continue
+		}
+		if defaultSoloSnapshotEnvironment(snapshot, attachment.Environment) == base {
+			duplicates++
+		}
+	}
+	if duplicates <= 1 {
+		return base, nil
+	}
+	return uniqueSoloRuntimeEnvironmentName(currentSnapshot, base), nil
+}
+
+func defaultSoloSnapshotEnvironment(snapshot desiredstate.DeploySnapshot, fallback string) string {
+	if value := strings.TrimSpace(snapshot.Environment); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(fallback); value != "" {
+		return value
+	}
+	return config.DefaultEnvironment
+}
+
+func stringSliceContains(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueSoloRuntimeEnvironmentName(snapshot desiredstate.DeploySnapshot, base string) string {
+	hashSource := strings.TrimSpace(snapshot.WorkspaceKey)
+	if hashSource == "" {
+		hashSource = strings.TrimSpace(snapshot.WorkspaceRoot)
+	}
+	sum := sha256.Sum256([]byte(hashSource))
+	suffix := hex.EncodeToString(sum[:4])
+	project := soloRuntimeEnvironmentToken(snapshot.Metadata.Project)
+	if project == "" {
+		return base + "-" + suffix
+	}
+	return project + "-" + base + "-" + suffix
+}
+
+func soloRuntimeEnvironmentToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func soloDisplayEnvironmentID(workspaceRoot, environment string) (string, error) {
+	key, err := solo.EnvironmentStateKey(workspaceRoot, environment)
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(key, "\n", "#", 1), nil
+}
+
+func (a *App) soloEnvironmentCreate(opts EnvironmentCreateOptions) error {
+	environmentName := strings.TrimSpace(opts.Name)
+	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	created := false
+	if environmentName != soloEnvironmentName(cfg, "") {
+		if cfg.Environments == nil {
+			cfg.Environments = map[string]config.EnvironmentOverlay{}
+		}
+		if _, ok := cfg.Environments[environmentName]; !ok {
+			cfg.Environments[environmentName] = config.EnvironmentOverlay{}
+			if _, err := a.ConfigStore.Write(workspaceRoot, *cfg); err != nil {
+				return err
+			}
+			created = true
+		}
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"mode":           string(ModeSolo),
+		"environment":    map[string]any{"name": environmentName},
+		"created":        created,
+		"config_path":    a.ConfigStore.PathFor(workspaceRoot),
+	})
+}
+
+func (a *App) soloEnvironmentUse(opts EnvironmentUseOptions) error {
+	environmentName := strings.TrimSpace(opts.Name)
+	cfg, _, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	if environmentName != soloEnvironmentName(cfg, "") {
+		if _, ok := cfg.Environments[environmentName]; !ok {
+			return ExitError{Code: 2, Err: fmt.Errorf("environment %q is not defined in devopsellence.yml; run `devopsellence context env create %s` or add environments.%s", environmentName, environmentName, environmentName)}
+		}
+	}
+	if err := a.SetEnvironment(environmentName); err != nil {
+		return wrapError(err)
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version":      outputSchemaVersion,
+		"ok":                  true,
+		"mode":                string(ModeSolo),
+		"environment":         map[string]any{"name": environmentName},
+		"workspace_key":       a.modeWorkspaceKey(),
+		"default_environment": cfg.DefaultEnvironment,
+	})
 }
 
 func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.Node, error) {
@@ -3908,14 +4763,16 @@ func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Nod
 		_, cfg, cfgErr := a.optionalWorkspaceConfig()
 		if cfgErr != nil {
 			cfg = nil
+		} else if resolved, _, _, resolveErr := a.loadResolvedSoloProjectConfig(""); resolveErr == nil {
+			cfg = resolved
 		}
 		return nodes, cfg, nil
 	}
-	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
 	if err != nil {
 		return nil, nil, err
 	}
-	nodeNames, err := current.AttachedNodeNames(workspaceRoot, soloEnvironmentName(cfg, ""))
+	nodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return nil, nil, err
 	}

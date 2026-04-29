@@ -50,6 +50,20 @@ func TestNewReleaseNormalizesImmutableSnapshot(t *testing.T) {
 	}
 }
 
+func TestSelectRollbackReleasePreviousSelectorDefaultsToPreviousCreatedRelease(t *testing.T) {
+	current := Release{ID: "rel-3", Revision: "ccc3333", CreatedAt: "2026-04-28T12:03:00Z"}
+	previous := Release{ID: "rel-2", Revision: "bbb2222", CreatedAt: "2026-04-28T12:02:00Z"}
+	oldest := Release{ID: "rel-1", Revision: "aaa1111", CreatedAt: "2026-04-28T12:01:00Z"}
+
+	got, err := SelectRollbackRelease([]Release{oldest, current, previous}, current.ID, "previous")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != previous.ID {
+		t.Fatalf("selected %s, want %s", got.ID, previous.ID)
+	}
+}
+
 func TestSelectRollbackReleaseDefaultsToPreviousCreatedRelease(t *testing.T) {
 	current := Release{ID: "rel-3", Revision: "ccc3333", CreatedAt: "2026-04-28T12:03:00Z"}
 	previous := Release{ID: "rel-2", Revision: "bbb2222", CreatedAt: "2026-04-28T12:02:00Z"}

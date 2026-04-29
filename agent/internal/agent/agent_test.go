@@ -314,6 +314,49 @@ func TestSuppressesDuplicateSettledReportForSameSequence(t *testing.T) {
 	}
 }
 
+func TestSettledFingerprintDoesNotSuppressEnvironmentChangesForSameSequence(t *testing.T) {
+	first := newReportFingerprint(7, report.Status{
+		Revision: "desired-rev",
+		Phase:    report.PhaseSettled,
+		Message:  "created=0 updated=0 removed=0 unchanged=1",
+		Environments: []report.EnvironmentStatus{{
+			Name:     "production",
+			Revision: "app-rev",
+			Phase:    report.PhaseSettled,
+			Services: []report.ServiceStatus{{
+				Name:      "web",
+				Kind:      "web",
+				Phase:     report.PhaseSettled,
+				Container: "svc-production-web-app-rev-old",
+				State:     "running",
+				Hash:      "old",
+			}},
+		}},
+	})
+	changed := newReportFingerprint(7, report.Status{
+		Revision: "desired-rev",
+		Phase:    report.PhaseSettled,
+		Message:  "created=0 updated=0 removed=0 unchanged=1",
+		Environments: []report.EnvironmentStatus{{
+			Name:     "production",
+			Revision: "app-rev",
+			Phase:    report.PhaseSettled,
+			Services: []report.ServiceStatus{{
+				Name:      "web",
+				Kind:      "web",
+				Phase:     report.PhaseError,
+				Container: "svc-production-web-app-rev-old",
+				State:     "exited",
+				Hash:      "old",
+			}},
+		}},
+	})
+
+	if first.suppresses(changed) {
+		t.Fatal("settled report suppression must not hide changed environment/service status")
+	}
+}
+
 func TestReportsSettledAgainForNewSequenceWithSameDesiredState(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 

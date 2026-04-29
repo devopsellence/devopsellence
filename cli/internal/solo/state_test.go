@@ -84,6 +84,35 @@ func TestStateStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateStoreWriteUsesAtomicPrivateFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStateStore(filepath.Join(dir, "solo-state.json"))
+	current := newState()
+	if err := current.SetNode("web-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("state mode = %o, want 0600", got)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".solo-state.json.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary state files left behind: %v", matches)
+	}
+}
+
 func TestStateStoreReadNormalizesLegacyData(t *testing.T) {
 	t.Parallel()
 

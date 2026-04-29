@@ -924,7 +924,7 @@ func TestEnsureUpdatesXDSSnapshotWithEndpoint(t *testing.T) {
 	}
 }
 
-func TestUpdateClusterEDSWithRoutesKeepsClustersIndependent(t *testing.T) {
+func TestUpdateClusterEDSWithRoutesKeepsRouteClustersIndependentAndMirrorsDefaultForReadiness(t *testing.T) {
 	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
 	bootstrapPath := tempBootstrapPath(t)
@@ -989,10 +989,10 @@ func TestUpdateClusterEDSWithRoutesKeepsClustersIndependent(t *testing.T) {
 
 	defaultEndpoint := mgr.lastEndpoints["devopsellence_web"]
 	if defaultEndpoint == nil {
-		t.Fatal("expected default cluster endpoint to be preserved")
+		t.Fatal("expected default cluster endpoint to be mirrored for internal readiness probes")
 	}
-	if defaultEndpoint.address != "10.0.0.9" || defaultEndpoint.port != 9000 {
-		t.Fatalf("route cluster update overwrote the default cluster: got %s:%d, want 10.0.0.9:9000",
+	if defaultEndpoint.address != "10.0.0.2" || defaultEndpoint.port != 4000 {
+		t.Fatalf("default cluster should mirror the latest route cluster for readiness: got %s:%d, want 10.0.0.2:4000",
 			defaultEndpoint.address, defaultEndpoint.port)
 	}
 }
@@ -1075,6 +1075,105 @@ func TestWaitForRoute(t *testing.T) {
 
 	if err := mgr.WaitForRoute(context.Background(), "/up"); err != nil {
 		t.Fatalf("wait for route: %v", err)
+	}
+}
+
+func TestWaitForRouteReconnectsWorkloadNetworksAfterRestart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no healthy upstream", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	host, portString, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split host/port: %v", err)
+	}
+	port, err := strconv.Atoi(portString)
+	if err != nil {
+		t.Fatalf("atoi port: %v", err)
+	}
+
+	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  tempBootstrapPath(t),
+		Port:           uint16(port),
+		ClusterName:    "devopsellence_web",
+		HTTPClient:     server.Client(),
+		RouteTimeout:   20 * time.Millisecond,
+		RouteInterval:  10 * time.Millisecond,
+		StartupTimeout: time.Second,
+	}, logger)
+
+	if err := mgr.Ensure(context.Background(), nil, "devopsellence-env-production"); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	eng.inspectInfo.NetworkIP["devopsellence"] = host
+	if err := mgr.WaitForRoute(context.Background(), "/up"); err == nil {
+		t.Fatal("expected route probe to fail after restart")
+	}
+	connections := 0
+	for _, network := range eng.connectedNetworks {
+		if network == "devopsellence-env-production" {
+			connections++
+		}
+	}
+	if connections != 2 {
+		t.Fatalf("workload network connections = %d, want 2 (initial ensure and post-restart reconnect); all connections: %#v", connections, eng.connectedNetworks)
+	}
+}
+
+func TestWaitForRouteReappliesSnapshotAfterRestart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "stale endpoint", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	host, portString, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split host/port: %v", err)
+	}
+	port, err := strconv.Atoi(portString)
+	if err != nil {
+		t.Fatalf("atoi port: %v", err)
+	}
+
+	eng := &fakeEngine{
+		inspectInfo: engine.ContainerInfo{
+			Name:            "devopsellence-envoy",
+			Running:         true,
+			HasHealthcheck:  true,
+			Health:          "healthy",
+			PublishHostPort: false,
+			NetworkIP:       map[string]string{"devopsellence": host},
+		},
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	mgr := New(eng, Config{
+		Image:          "docker.io/envoyproxy/envoy:v1.37.0",
+		ContainerName:  "devopsellence-envoy",
+		NetworkName:    "devopsellence",
+		BootstrapPath:  tempBootstrapPath(t),
+		Port:           uint16(port),
+		ClusterName:    "devopsellence_web",
+		HTTPClient:     server.Client(),
+		RouteTimeout:   20 * time.Millisecond,
+		RouteInterval:  10 * time.Millisecond,
+		StartupTimeout: time.Second,
+	}, logger)
+
+	if err := mgr.UpdateClusterEDS(context.Background(), "devopsellence_production_web_http", "172.19.0.3", 3000); err != nil {
+		t.Fatalf("update eds: %v", err)
+	}
+	versionBeforeRestart := mgr.snapshotVersion.Load()
+	if err := mgr.WaitForRoute(context.Background(), "/up"); err == nil {
+		t.Fatal("expected route probe to fail after restart")
+	}
+	if got := mgr.snapshotVersion.Load(); got <= versionBeforeRestart {
+		t.Fatalf("snapshot version = %d, want > %d after restart reapplies current snapshot", got, versionBeforeRestart)
 	}
 }
 

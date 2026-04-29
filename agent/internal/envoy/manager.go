@@ -53,15 +53,16 @@ type Config struct {
 }
 
 type Manager struct {
-	engine          engine.Engine
-	config          Config
-	logger          *slog.Logger
-	xds             *xdsServer
-	http            *http.Client
-	lastIngress     *desiredstatepb.Ingress
-	lastEndpoint    *endpointState
-	lastEndpoints   map[string]*endpointState
-	snapshotVersion atomic.Int64
+	engine               engine.Engine
+	config               Config
+	logger               *slog.Logger
+	xds                  *xdsServer
+	http                 *http.Client
+	lastIngress          *desiredstatepb.Ingress
+	lastEndpoint         *endpointState
+	lastEndpoints        map[string]*endpointState
+	lastWorkloadNetworks []string
+	snapshotVersion      atomic.Int64
 }
 
 func New(engine engine.Engine, config Config, logger *slog.Logger) *Manager {
@@ -114,6 +115,7 @@ func New(engine engine.Engine, config Config, logger *slog.Logger) *Manager {
 }
 
 func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, workloadNetworks ...string) error {
+	m.lastWorkloadNetworks = cloneStrings(workloadNetworks)
 	publicIngressListener, err := m.publicIngressListenerConfig(ingress)
 	if err != nil {
 		return err
@@ -220,6 +222,7 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, w
 // creating Envoy when it is absent. It is used to drop stale environment
 // networks after a node stops hosting web services.
 func (m *Manager) SyncWorkloadNetworks(ctx context.Context, workloadNetworks ...string) error {
+	m.lastWorkloadNetworks = cloneStrings(workloadNetworks)
 	_, err := m.engine.Inspect(ctx, m.config.ContainerName)
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
@@ -299,10 +302,7 @@ func (m *Manager) UpdateClusterEDS(ctx context.Context, clusterName string, addr
 }
 
 func (m *Manager) shouldMirrorToDefaultCluster(clusterName string) bool {
-	if clusterName == m.config.ClusterName {
-		return true
-	}
-	return m.lastIngress == nil || len(m.lastIngress.Routes) == 0
+	return clusterName != ""
 }
 
 func (m *Manager) WaitForRoute(ctx context.Context, path string) error {
@@ -485,11 +485,24 @@ func (m *Manager) restart(ctx context.Context) error {
 	if err := m.createEnvoy(ctx, m.lastIngress, desiredPorts, publicIngressListener != nil); err != nil {
 		return err
 	}
+	if err := m.syncWorkloadNetworks(ctx, m.lastWorkloadNetworks); err != nil {
+		return err
+	}
+	if err := m.applySnapshot(publicIngressListener); err != nil {
+		return err
+	}
 	if err := m.waitReady(ctx); err != nil {
 		return err
 	}
 	m.logger.Info("envoy restarted", "name", m.config.ContainerName, "port", m.config.Port)
 	return nil
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return append([]string(nil), values...)
 }
 
 func defaultHealthcheck() *engine.Healthcheck {

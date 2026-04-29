@@ -612,3 +612,48 @@ func TestIngressSetHelpShowsServiceFlag(t *testing.T) {
 		}
 	}
 }
+
+func TestIngressCertInstallHelpDocumentsManualTLSProvisioning(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"ingress", "cert", "install", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	for _, snippet := range []string{
+		"Install manual TLS certificate files",
+		"--cert-file string",
+		"--key-file string",
+		"--node strings",
+		"/var/lib/devopsellence/ingress-cert.pem",
+		"devopsellence ingress set --tls-mode manual",
+	} {
+		if !strings.Contains(stdout.String(), snippet) {
+			t.Fatalf("help output = %q, want %q", stdout.String(), snippet)
+		}
+	}
+}
+
+func TestExecHelpDocumentsEnvironmentOverride(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"exec", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	for _, snippet := range []string{"--env string", "Environment name override"} {
+		if !strings.Contains(stdout.String(), snippet) {
+			t.Fatalf("help output = %q, want %q", stdout.String(), snippet)
+		}
+	}
+}

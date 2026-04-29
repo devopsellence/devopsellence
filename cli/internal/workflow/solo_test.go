@@ -1962,6 +1962,96 @@ func TestSoloExecUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *testing.T
 	}
 }
 
+func TestRootExecEnvSelectsAttachedEnvironment(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	cfg, err := config.LoadFromRoot(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(cwd, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	status := `{"revision":"abc","phase":"settled","environments":[{"name":"production","services":[{"name":"web","state":"running","container":"wrong-container"}]},{"name":"staging","services":[{"name":"web","state":"running","container":"svc-production-web-abc"}]}]}` + "\n"
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: status}})
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"exec", "--env", "staging", "web", "--", "bin/rails", "runner", "puts Rails.env"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	if len(events) == 0 || events[0]["environment"] != "staging" || events[0]["container"] != "svc-production-web-abc" {
+		t.Fatalf("started event = %#v, want staging container", events[0])
+	}
+}
+
+func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T) {
+	cwd := rootTestSoloWorkspace(t)
+	uploadsPath := filepath.Join(t.TempDir(), "uploads")
+	scriptPath := filepath.Join(t.TempDir(), "script")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_UPLOADS", uploadsPath)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+	installFakeSoloCommands(t, nil)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := NewApp(bytes.NewBuffer(nil), &stdout, io.Discard, cwd)
+	if err := app.SoloIngressCertInstall(context.Background(), SoloIngressCertInstallOptions{CertFile: certFile, KeyFile: keyFile}); err != nil {
+		t.Fatalf("SoloIngressCertInstall() error = %v", err)
+	}
+	uploads, err := os.ReadFile(uploadsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(uploads), "/tmp/devopsellence-ingress-"); got != 2 {
+		t.Fatalf("uploads = %q, want two ingress TLS uploads", string(uploads))
+	}
+	script, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, snippet := range []string{"/var/lib/devopsellence/ingress-cert.pem", "/var/lib/devopsellence/ingress-key.pem", "systemctl restart devopsellence-agent"} {
+		if !strings.Contains(string(script), snippet) {
+			t.Fatalf("script = %q, want %q", string(script), snippet)
+		}
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if intValueAny(payload["schema_version"]) != outputSchemaVersion {
+		t.Fatalf("output = %#v, want JSON payload", payload)
+	}
+}
+
 func TestSoloExecPreservesRemoteExitCodeInErrorEvent(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
@@ -4807,6 +4897,29 @@ set -euo pipefail
 command="${!#}"
 
 if [[ "$command" == "true" ]]; then
+  exit 0
+fi
+
+if [[ "$command" == cat\ \>* ]]; then
+  target="${command#cat > }"
+  target="${target#\'}"
+  target="${target%\'}"
+  cat >"$target"
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_UPLOADS:-}" ]]; then
+    printf '%s\n' "$target" >>"$DEVOPSELLENCE_FAKE_SSH_UPLOADS"
+  fi
+  exit 0
+fi
+
+if [[ "$command" == "bash -s" ]]; then
+  script="$(cat)"
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_SCRIPT:-}" ]]; then
+    printf '%s' "$script" >"$DEVOPSELLENCE_FAKE_SSH_SCRIPT"
+  fi
+  exit 0
+fi
+
+if [[ "$command" == rm\ -f\ * ]]; then
   exit 0
 fi
 

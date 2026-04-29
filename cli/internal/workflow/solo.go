@@ -105,8 +105,15 @@ type SoloWorkloadLogsOptions struct {
 
 type SoloExecOptions struct {
 	ServiceName string
+	Environment string
 	Nodes       []string
 	Command     []string
+}
+
+type SoloIngressCertInstallOptions struct {
+	CertFile string
+	KeyFile  string
+	Nodes    []string
 }
 
 type SoloNodeExecOptions struct {
@@ -2711,27 +2718,30 @@ func (a *App) SoloExec(ctx context.Context, opts SoloExecOptions) error {
 	if _, err := remoteUserCommand(opts.Command); err != nil {
 		return err
 	}
-	nodes, cfg, err := a.soloStatusSelection(SoloStatusOptions{Nodes: opts.Nodes})
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(opts.Environment)
 	if err != nil {
 		return err
-	}
-	if len(nodes) == 0 {
-		return fmt.Errorf("no nodes selected; attach a node or pass --node")
-	}
-	if cfg == nil {
-		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
 	}
 	if _, ok := cfg.Services[serviceName]; !ok {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
 	}
-	environmentName := soloEnvironmentName(cfg, "")
-	workspaceRoot, err := a.soloCurrentWorkspaceRoot()
-	if err != nil {
-		return err
-	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
+	}
+	nodeNames := append([]string(nil), opts.Nodes...)
+	if len(nodeNames) == 0 {
+		nodeNames, err = current.AttachedNodeNames(workspaceRoot, environmentName)
+		if err != nil {
+			return err
+		}
+	}
+	nodes, err := a.resolveNodes(current, nodeNames)
+	if err != nil {
+		return err
+	}
+	if len(nodes) == 0 {
+		return fmt.Errorf("no nodes selected for environment %s; attach a node or pass --node", environmentName)
 	}
 	candidates := []soloExecTarget{}
 	for _, nodeName := range sortedNodeNames(nodes) {
@@ -4479,6 +4489,132 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
 	})
 
+}
+
+func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertInstallOptions) error {
+	certFile := strings.TrimSpace(opts.CertFile)
+	keyFile := strings.TrimSpace(opts.KeyFile)
+	if certFile == "" {
+		return ExitError{Code: 2, Err: errors.New("--cert-file is required")}
+	}
+	if keyFile == "" {
+		return ExitError{Code: 2, Err: errors.New("--key-file is required")}
+	}
+	if err := validateReadableFile(certFile, "cert-file"); err != nil {
+		return err
+	}
+	if err := validateReadableFile(keyFile, "key-file"); err != nil {
+		return err
+	}
+
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	nodeNames := append([]string(nil), opts.Nodes...)
+	if len(nodeNames) == 0 {
+		_, workspaceRoot, environmentName, resolveErr := a.loadResolvedSoloProjectConfig("")
+		if resolveErr != nil {
+			return resolveErr
+		}
+		nodeNames, err = current.AttachedNodeNames(workspaceRoot, environmentName)
+		if err != nil {
+			return err
+		}
+	}
+	nodes, err := a.resolveNodes(current, nodeNames)
+	if err != nil {
+		return err
+	}
+	if len(nodes) == 0 {
+		return fmt.Errorf("no nodes selected; attach a node or pass --node")
+	}
+
+	installed := make([]map[string]any, 0, len(nodes))
+	for _, nodeName := range sortedNodeNames(nodes) {
+		node := nodes[nodeName]
+		certPath, keyPath, err := installSoloIngressCert(ctx, node, certFile, keyFile)
+		if err != nil {
+			return fmt.Errorf("[%s] install ingress cert: %w", nodeName, err)
+		}
+		installed = append(installed, map[string]any{
+			"node":      nodeName,
+			"cert_path": certPath,
+			"key_path":  keyPath,
+		})
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"nodes":          installed,
+		"next_steps": []string{
+			"devopsellence ingress set --tls-mode manual --host <hostname>",
+			"devopsellence deploy",
+			"curl -vk https://<hostname>/",
+		},
+	})
+}
+
+func validateReadableFile(filePath, label string) error {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s %q is a directory", label, filePath)
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", label, err)
+	}
+	return file.Close()
+}
+
+func installSoloIngressCert(ctx context.Context, node config.Node, certFile, keyFile string) (string, string, error) {
+	stateDir := firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence")
+	certPath := path.Join(stateDir, "ingress-cert.pem")
+	keyPath := path.Join(stateDir, "ingress-key.pem")
+	nonce := time.Now().UnixNano()
+	remoteCert := fmt.Sprintf("/tmp/devopsellence-ingress-cert-%d.pem", nonce)
+	remoteKey := fmt.Sprintf("/tmp/devopsellence-ingress-key-%d.pem", nonce)
+	if err := uploadSoloFile(ctx, node, certFile, remoteCert); err != nil {
+		return certPath, keyPath, fmt.Errorf("upload cert: %w", err)
+	}
+	defer solo.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remoteCert), io.Discard, io.Discard)
+	if err := uploadSoloFile(ctx, node, keyFile, remoteKey); err != nil {
+		return certPath, keyPath, fmt.Errorf("upload key: %w", err)
+	}
+	defer solo.RunSSHInteractive(ctx, node, "rm -f "+shellQuote(remoteKey), io.Discard, io.Discard)
+	script := fmt.Sprintf(`set -euo pipefail
+if [ "$(id -u)" -ne 0 ]; then
+  SUDO=sudo
+else
+  SUDO=
+fi
+run_root() {
+  if [ -n "$SUDO" ]; then
+    "$SUDO" "$@"
+  else
+    "$@"
+  fi
+}
+run_root install -d -m 0755 %s
+run_root install -m 0644 %s %s
+run_root install -m 0600 %s %s
+run_root systemctl restart devopsellence-agent || true
+`, shellQuote(stateDir), shellQuote(remoteCert), shellQuote(certPath), shellQuote(remoteKey), shellQuote(keyPath))
+	if err := solo.RunSSHInteractiveWithStdin(ctx, node, "bash -s", strings.NewReader(script), io.Discard, io.Discard); err != nil {
+		return certPath, keyPath, err
+	}
+	return certPath, keyPath, nil
+}
+
+func uploadSoloFile(ctx context.Context, node config.Node, localPath, remotePath string) error {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return solo.RunSSHStream(ctx, node, "cat > "+shellQuote(remotePath), file)
 }
 
 func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {

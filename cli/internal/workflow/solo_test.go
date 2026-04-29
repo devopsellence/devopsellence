@@ -2590,6 +2590,70 @@ func TestNodeLabelRemovePersistsLabelsBeforeRepublishError(t *testing.T) {
 	}
 }
 
+func TestSoloSupportBundleWritesRedactedEvidence(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Secrets:     map[string]solo.SecretRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SetSecret(workspaceRoot, "production", config.DefaultWebServiceName, "DEMO_SECRET", solo.SecretMaterial{Store: solo.SecretStorePlaintext, Value: "super-secret-value"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SetSecret(workspaceRoot, "production", config.DefaultWebServiceName, "OP_SECRET", solo.SecretMaterial{Store: solo.SecretStoreOnePassword, Reference: "op://vault/item/field"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	outPath := filepath.Join(t.TempDir(), "bundle.json")
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloSupportBundle(context.Background(), SoloSupportBundleOptions{Output: outPath}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, forbidden := range []string{"super-secret-value", "op://vault/item/field"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("support bundle leaked %q: %s", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, "[REDACTED]") || !strings.Contains(text, "devopsellence_solo_support_bundle") {
+		t.Fatalf("support bundle missing redacted evidence: %s", text)
+	}
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("bundle mode = %o, want 0600", got)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("parse command output: %v\n%s", err, stdout.String())
+	}
+	if got := result["action"]; got != "support_bundle" {
+		t.Fatalf("action = %v, want support_bundle", got)
+	}
+}
+
 func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")

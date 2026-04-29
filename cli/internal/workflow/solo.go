@@ -147,6 +147,10 @@ type SoloDoctorOptions struct {
 	Nodes []string
 }
 
+type SoloSupportBundleOptions struct {
+	Output string
+}
+
 type SoloNodeCreateOptions struct {
 	Name         string
 	Provider     string
@@ -3834,6 +3838,126 @@ func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) er
 	}
 	return a.Printer.PrintResultEvent("devopsellence node remove", payload)
 
+}
+
+func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions) error {
+	discovered, err := discovery.Discover(a.Cwd)
+	if err != nil {
+		return err
+	}
+	cfg, err := a.ConfigStore.Read(discovered.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	environmentName := ""
+	attachedNodes := []string{}
+	if cfg != nil {
+		environmentName = soloEnvironmentName(cfg, "")
+		attachedNodes, _ = current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
+	}
+	bundle := map[string]any{
+		"schema_version": outputSchemaVersion,
+		"kind":           "devopsellence_solo_support_bundle",
+		"generated_at":   time.Now().UTC().Format(time.RFC3339),
+		"cli_version":    cliversion.String(),
+		"workspace": map[string]any{
+			"root": discovered.WorkspaceRoot,
+			"slug": discovered.ProjectSlug,
+		},
+		"environment":    environmentName,
+		"config":         cfg,
+		"solo_state":     redactSoloStateForSupport(current),
+		"attached_nodes": attachedNodes,
+		"recommended_commands": []string{
+			"devopsellence doctor",
+			"devopsellence status",
+			"devopsellence release list",
+			"devopsellence node list --all",
+			"devopsellence node diagnose <node>",
+			"devopsellence node logs <node> --lines 200",
+		},
+	}
+	outputPath := strings.TrimSpace(opts.Output)
+	if outputPath == "" {
+		outputPath = filepath.Join(discovered.WorkspaceRoot, ".devopsellence-support-bundle.json")
+	}
+	if !filepath.IsAbs(outputPath) {
+		outputPath = filepath.Join(discovered.WorkspaceRoot, outputPath)
+	}
+	data, err := json.MarshalIndent(bundle, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := writePrivateFileAtomic(outputPath, data); err != nil {
+		return err
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"action":         "support_bundle",
+		"path":           outputPath,
+		"redacted":       true,
+		"next_steps": []string{
+			"Attach this JSON file to a support/debugging issue when it is safe to share machine paths and node hostnames/IPs.",
+			"Run devopsellence node diagnose <node> for live remote runtime details.",
+		},
+	})
+}
+
+func redactSoloStateForSupport(current solo.State) solo.State {
+	for key, record := range current.Secrets {
+		record.Value = "[REDACTED]"
+		if strings.TrimSpace(record.Reference) != "" {
+			record.Reference = "[REDACTED]"
+		}
+		current.Secrets[key] = record
+	}
+	return current
+}
+
+func writePrivateFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func (a *App) SoloInit(context.Context, SoloInitOptions) error {

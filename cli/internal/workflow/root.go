@@ -1116,6 +1116,22 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	agentCommand.AddCommand(agentInstallCommand, agentUninstallCommand)
 	root.AddCommand(agentCommand)
 
+	var supportBundleOpts SoloSupportBundleOptions
+	supportCommand := &cobra.Command{
+		Use:   "support",
+		Short: "Collect redacted support/debugging evidence",
+	}
+	supportBundleCommand := &cobra.Command{
+		Use:   "bundle",
+		Short: "Write a redacted solo support bundle JSON file",
+		RunE: runSoloOnly("support bundle", func(ctx context.Context) error {
+			return app.SoloSupportBundle(ctx, supportBundleOpts)
+		}),
+	}
+	supportBundleCommand.Flags().StringVar(&supportBundleOpts.Output, "output", "", "Output path for support bundle JSON")
+	supportCommand.AddCommand(supportBundleCommand)
+	root.AddCommand(supportCommand)
+
 	return root
 }
 

@@ -562,6 +562,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 
 	var ingressSetOpts IngressSetOptions
 	var ingressCheckOpts IngressCheckOptions
+	var ingressCertInstallOpts SoloIngressCertInstallOptions
 	ingressCommand := &cobra.Command{
 		Use:   "ingress",
 		Short: "Manage public hostnames and TLS",
@@ -594,7 +595,27 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}),
 	}
 	ingressCheckCommand.Flags().DurationVar(&ingressCheckOpts.Wait, "wait", 0, "Poll until DNS is ready or this timeout elapses")
-	ingressCommand.AddCommand(ingressSetCommand, ingressCheckCommand)
+	ingressCertCommand := &cobra.Command{
+		Use:   "cert",
+		Short: "Manage manual ingress TLS certificates",
+	}
+	ingressCertInstallCommand := &cobra.Command{
+		Use:   "install",
+		Short: "Install manual TLS certificate files on solo nodes",
+		Long: strings.Join([]string{
+			"Install manual TLS certificate files on selected solo nodes.",
+			"The devopsellence solo agent reads manual TLS files from /var/lib/devopsellence/ingress-cert.pem and /var/lib/devopsellence/ingress-key.pem by default.",
+			"After installing the files, configure ingress with `devopsellence ingress set --tls-mode manual --host <hostname>` and deploy/redeploy so the agent reconciles Envoy with HTTPS enabled.",
+		}, "\n"),
+		RunE: runSoloOnly("ingress cert install", func(ctx context.Context) error {
+			return app.SoloIngressCertInstall(ctx, ingressCertInstallOpts)
+		}),
+	}
+	ingressCertInstallCommand.Flags().StringVar(&ingressCertInstallOpts.CertFile, "cert-file", "", "Local PEM certificate chain file to install")
+	ingressCertInstallCommand.Flags().StringVar(&ingressCertInstallOpts.KeyFile, "key-file", "", "Local PEM private key file to install")
+	ingressCertInstallCommand.Flags().StringSliceVar(&ingressCertInstallOpts.Nodes, "node", nil, "Solo node name to install on (repeatable or comma-separated)")
+	ingressCertCommand.AddCommand(ingressCertInstallCommand)
+	ingressCommand.AddCommand(ingressSetCommand, ingressCheckCommand, ingressCertCommand)
 	root.AddCommand(ingressCommand)
 
 	var statusSharedOpts StatusOptions
@@ -1073,6 +1094,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
+	execCommand.Flags().StringVar(&workloadExecOpts.Environment, "env", "", "Environment name override")
 	execCommand.Flags().StringSliceVar(&workloadExecOpts.Nodes, "node", nil, "Solo node name to run exec on (repeatable or comma-separated)")
 	root.AddCommand(execCommand)
 

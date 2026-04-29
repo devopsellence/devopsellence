@@ -2185,9 +2185,10 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
-		"node":        opts.Node,
-		"environment": environmentName,
-		"changed":     changed,
+		"schema_version": outputSchemaVersion,
+		"node":           opts.Node,
+		"environment":    environmentName,
+		"changed":        changed,
 	})
 
 }
@@ -2243,9 +2244,10 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	}
 
 	payload := map[string]any{
-		"node":        opts.Node,
-		"environment": environmentName,
-		"changed":     true,
+		"schema_version": outputSchemaVersion,
+		"node":           opts.Node,
+		"environment":    environmentName,
+		"changed":        true,
 	}
 	if len(warnings) > 0 {
 		payload["warnings"] = warnings
@@ -2297,7 +2299,7 @@ func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions
 		}
 	}
 
-	return a.Printer.PrintJSON(map[string]any{"key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "deleted"})
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "key": record.Name, "service_name": record.ServiceName, "environment": record.Environment, "config_updated": configUpdated, "config_path": a.ConfigStore.PathFor(workspaceRoot), "action": "deleted"})
 
 }
 
@@ -2322,7 +2324,7 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 		return err
 	}
 	lines := splitNonFinalEmptyLines(out)
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "lines": lines, "limit": linesLimit})
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "node": opts.Node, "lines": lines, "limit": linesLimit})
 }
 
 func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions) error {
@@ -3111,8 +3113,9 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
-		"node":   opts.Node,
-		"labels": labels,
+		"schema_version": outputSchemaVersion,
+		"node":           opts.Node,
+		"labels":         labels,
 	})
 
 }
@@ -3127,14 +3130,14 @@ func (a *App) SoloNodeLabelList(_ context.Context, opts SoloNodeLabelListOptions
 		if !ok {
 			return fmt.Errorf("node %q not found", opts.Node)
 		}
-		return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "labels": solo.NormalizeNode(node).Labels})
+		return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "node": opts.Node, "labels": solo.NormalizeNode(node).Labels})
 	}
 	items := make([]map[string]any, 0, len(current.Nodes))
 	for name, node := range current.Nodes {
 		items = append(items, map[string]any{"node": name, "labels": solo.NormalizeNode(node).Labels})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i]["node"].(string) < items[j]["node"].(string) })
-	return a.Printer.PrintJSON(map[string]any{"nodes": items})
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "nodes": items})
 }
 
 func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveOptions) error {
@@ -3168,7 +3171,7 @@ func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveO
 	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
 		return err
 	}
-	return a.Printer.PrintJSON(map[string]any{"node": opts.Node, "labels": current.Nodes[opts.Node].Labels, "removed": labels})
+	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "node": opts.Node, "labels": current.Nodes[opts.Node].Labels, "removed": labels})
 }
 
 func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions) error {
@@ -3229,7 +3232,7 @@ func (a *App) SoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) err
 		return err
 	}
 
-	if err := a.Printer.PrintJSON(map[string]any{"checks": results}); err != nil {
+	if err := a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "checks": results}); err != nil {
 		return err
 	}
 	if failed {

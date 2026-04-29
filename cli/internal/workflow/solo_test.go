@@ -164,6 +164,32 @@ func TestResolveStoredDeploySnapshotPreservesHistoricalReleaseShape(t *testing.T
 	}
 }
 
+func TestResolveStoredDeploySnapshotRejectsLegacySnapshotWhenSecretsExist(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	storedSnapshot := desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceRoot,
+		WorkspaceKey:  workspaceRoot,
+		Environment:   config.DefaultEnvironment,
+		Revision:      "oldrev",
+		Image:         "demo:old",
+		Services: []desiredstate.ServiceJSON{{
+			Name: "web",
+			Kind: config.ServiceKindWeb,
+			Env:  map[string]string{"APP_MODE": "old"},
+		}},
+	}
+	current := solo.State{}
+	if _, err := current.SetSecret(workspaceRoot, config.DefaultEnvironment, "web", "API_KEY", solo.SecretMaterial{Store: solo.SecretStorePlaintext, Value: "secret-value"}); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+
+	app := &App{}
+	_, err := app.resolveStoredDeploySnapshot(context.Background(), current, storedSnapshot)
+	if err == nil || !strings.Contains(err.Error(), "before secret metadata was tracked") {
+		t.Fatalf("resolve legacy snapshot error = %v, want secret metadata error", err)
+	}
+}
+
 func TestSoloReadyPublicURLsDoNotClaimAutoTLSBeforeHTTPSReadiness(t *testing.T) {
 	cfg := config.DefaultProjectConfig("acme", "demo", config.DefaultEnvironment)
 	cfg.Ingress = &config.IngressConfig{
@@ -2753,6 +2779,18 @@ func TestNodeLabelRemovePersistsLabelsBeforeRepublishError(t *testing.T) {
 func TestSoloSupportBundleWritesRedactedEvidence(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	web := cfg.Services[config.DefaultWebServiceName]
+	web.Env = map[string]string{"INLINE_TOKEN": "inline-config-secret"}
+	web.SecretRefs = []config.SecretRef{{Name: "CONFIG_SECRET", Secret: "op://config/item/field"}}
+	cfg.Services[config.DefaultWebServiceName] = web
+	cfg.Tasks.Release = &config.TaskConfig{Service: config.DefaultWebServiceName, Command: []string{"bin/migrate"}, Env: map[string]string{"RELEASE_TOKEN": "release-config-secret"}}
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {
+			Services: map[string]config.ServiceConfigOverlay{
+				config.DefaultWebServiceName: {Env: map[string]string{"STAGING_TOKEN": "staging-config-secret"}},
+			},
+		},
+	}
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -2790,7 +2828,7 @@ func TestSoloSupportBundleWritesRedactedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, forbidden := range []string{"super-secret-value", "op://vault/item/field"} {
+	for _, forbidden := range []string{"super-secret-value", "op://vault/item/field", "inline-config-secret", "op://config/item/field", "release-config-secret", "staging-config-secret"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("support bundle leaked %q: %s", forbidden, text)
 		}

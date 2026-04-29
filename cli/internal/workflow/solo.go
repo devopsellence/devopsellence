@@ -1108,6 +1108,9 @@ func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.Stat
 	for _, record := range records {
 		local[record.ServiceName+"\x00"+record.Name] = record
 	}
+	if len(local) > 0 && len(snapshot.SecretRefs) == 0 {
+		return desiredstate.DeploySnapshot{}, fmt.Errorf("stored release snapshot for %s (%s) was created before secret metadata was tracked; run `devopsellence deploy` to create a fresh release before rollback or republish", snapshot.WorkspaceRoot, snapshot.Environment)
+	}
 	cache := map[string]string{}
 	for i := range snapshot.Services {
 		serviceName := strings.TrimSpace(snapshot.Services[i].Name)
@@ -3940,7 +3943,7 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 			"slug": discovered.ProjectSlug,
 		},
 		"environment":    environmentName,
-		"config":         cfg,
+		"config":         redactProjectConfigForSupport(cfg),
 		"solo_state":     redactSoloStateForSupport(current),
 		"attached_nodes": attachedNodes,
 		"recommended_commands": []string{
@@ -3987,6 +3990,74 @@ func redactSoloStateForSupport(current solo.State) solo.State {
 		current.Secrets[key] = record
 	}
 	return current
+}
+
+func redactProjectConfigForSupport(cfg *config.ProjectConfig) *config.ProjectConfig {
+	if cfg == nil {
+		return nil
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		clone := *cfg
+		cfg = &clone
+	} else {
+		var clone config.ProjectConfig
+		if err := json.Unmarshal(data, &clone); err == nil {
+			cfg = &clone
+		} else {
+			clone := *cfg
+			cfg = &clone
+		}
+	}
+	for name, service := range cfg.Services {
+		service.Env = redactStringMapValues(service.Env)
+		service.SecretRefs = redactConfigSecretRefs(service.SecretRefs)
+		cfg.Services[name] = service
+	}
+	if cfg.Tasks.Release != nil {
+		cfg.Tasks.Release.Env = redactStringMapValues(cfg.Tasks.Release.Env)
+	}
+	for environmentName, overlay := range cfg.Environments {
+		for serviceName, service := range overlay.Services {
+			service.Env = redactStringMapValues(service.Env)
+			service.SecretRefs = redactConfigSecretRefs(service.SecretRefs)
+			overlay.Services[serviceName] = service
+		}
+		if overlay.Tasks != nil && overlay.Tasks.Release != nil {
+			overlay.Tasks.Release.Env = redactStringMapValues(overlay.Tasks.Release.Env)
+		}
+		cfg.Environments[environmentName] = overlay
+	}
+	return cfg
+}
+
+func redactStringMapValues(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	redacted := make(map[string]string, len(values))
+	for key, value := range values {
+		if strings.TrimSpace(value) == "" {
+			redacted[key] = value
+			continue
+		}
+		redacted[key] = "[REDACTED]"
+	}
+	return redacted
+}
+
+func redactConfigSecretRefs(refs []config.SecretRef) []config.SecretRef {
+	if refs == nil {
+		return nil
+	}
+	redacted := make([]config.SecretRef, len(refs))
+	copy(redacted, refs)
+	for i := range redacted {
+		if strings.TrimSpace(redacted[i].Secret) != "" {
+			redacted[i].Secret = "[REDACTED]"
+		}
+	}
+	return redacted
 }
 
 func writePrivateFileAtomic(path string, data []byte) error {

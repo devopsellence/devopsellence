@@ -302,10 +302,7 @@ func (m *Manager) UpdateClusterEDS(ctx context.Context, clusterName string, addr
 }
 
 func (m *Manager) shouldMirrorToDefaultCluster(clusterName string) bool {
-	if clusterName == m.config.ClusterName {
-		return true
-	}
-	return m.lastIngress == nil || len(m.lastIngress.Routes) == 0
+	return clusterName != ""
 }
 
 func (m *Manager) WaitForRoute(ctx context.Context, path string) error {

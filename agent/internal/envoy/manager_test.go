@@ -924,7 +924,7 @@ func TestEnsureUpdatesXDSSnapshotWithEndpoint(t *testing.T) {
 	}
 }
 
-func TestUpdateClusterEDSWithRoutesKeepsClustersIndependent(t *testing.T) {
+func TestUpdateClusterEDSWithRoutesKeepsRouteClustersIndependentAndMirrorsDefaultForReadiness(t *testing.T) {
 	eng := &fakeEngine{inspectErr: cerrdefs.ErrNotFound}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
 	bootstrapPath := tempBootstrapPath(t)
@@ -989,10 +989,10 @@ func TestUpdateClusterEDSWithRoutesKeepsClustersIndependent(t *testing.T) {
 
 	defaultEndpoint := mgr.lastEndpoints["devopsellence_web"]
 	if defaultEndpoint == nil {
-		t.Fatal("expected default cluster endpoint to be preserved")
+		t.Fatal("expected default cluster endpoint to be mirrored for internal readiness probes")
 	}
-	if defaultEndpoint.address != "10.0.0.9" || defaultEndpoint.port != 9000 {
-		t.Fatalf("route cluster update overwrote the default cluster: got %s:%d, want 10.0.0.9:9000",
+	if defaultEndpoint.address != "10.0.0.2" || defaultEndpoint.port != 4000 {
+		t.Fatalf("default cluster should mirror the latest route cluster for readiness: got %s:%d, want 10.0.0.2:4000",
 			defaultEndpoint.address, defaultEndpoint.port)
 	}
 }

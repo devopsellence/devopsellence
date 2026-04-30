@@ -218,6 +218,8 @@ type soloNodeStatus struct {
 
 type soloNodeStatusEnvironment struct {
 	Name     string                  `json:"name"`
+	Revision string                  `json:"revision,omitempty"`
+	Phase    string                  `json:"phase,omitempty"`
 	Services []soloNodeStatusService `json:"services"`
 }
 
@@ -1647,6 +1649,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	verifiedPublicURLs := a.soloVerifiedPublicURLs(cfg, nodes)
 	localReleaseKnown := len(opts.Nodes) > 0
 	expectedRevisions := map[string]string{}
+	expectedRuntimeEnvironment := ""
+	expectedWorkloadRevision := ""
 	if len(opts.Nodes) == 0 {
 		if current, stateErr := a.readSoloState(); stateErr == nil {
 			_, workspaceRoot, environmentName, configErr := a.loadResolvedSoloProjectConfig("")
@@ -1658,6 +1662,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				if hasCurrent {
 					localReleaseKnown = true
 					expectedRevisions = soloExpectedStatusRevisions(current, currentRelease)
+					expectedWorkloadRevision = strings.TrimSpace(currentRelease.Revision)
+					expectedRuntimeEnvironment, _ = soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, "")
 				}
 			}
 		}
@@ -1704,7 +1710,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			continue
 		}
 		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
-		if expectedRevision != "" && strings.TrimSpace(result.Status.Revision) != expectedRevision {
+		if expectedRevision != "" && !soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision) {
 			allSettled = false
 			jsonResults = append(jsonResults, map[string]any{
 				"node":    name,
@@ -1777,6 +1783,28 @@ func soloExpectedStatusRevisions(current solo.State, release corerelease.Release
 		expected[""] = strings.TrimSpace(release.Revision)
 	}
 	return expected
+}
+
+func soloNodeStatusMatchesExpectedRelease(status soloNodeStatus, expectedDesiredStateRevision, expectedRuntimeEnvironment, expectedWorkloadRevision string) bool {
+	if strings.TrimSpace(status.Revision) == strings.TrimSpace(expectedDesiredStateRevision) {
+		return true
+	}
+	expectedRuntimeEnvironment = strings.TrimSpace(expectedRuntimeEnvironment)
+	expectedWorkloadRevision = strings.TrimSpace(expectedWorkloadRevision)
+	if expectedRuntimeEnvironment == "" || expectedWorkloadRevision == "" {
+		return false
+	}
+	for _, environment := range status.Environments {
+		if strings.TrimSpace(environment.Name) != expectedRuntimeEnvironment {
+			continue
+		}
+		if strings.TrimSpace(environment.Revision) != expectedWorkloadRevision {
+			return false
+		}
+		phase := strings.TrimSpace(environment.Phase)
+		return phase == "" || phase == "settled"
+	}
+	return false
 }
 
 func soloExpectedStatusRevision(expected map[string]string, nodeName string) string {

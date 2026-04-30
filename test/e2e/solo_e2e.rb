@@ -12,7 +12,8 @@
 #   3. Scaffold a test app with a solo-mode devopsellence.yml
 #   4. Seed global solo state, attach the node, install the agent, set secrets,
 #      deploy, check status
-#   5. Assert: app container running, status.json terminal, secrets resolved
+#   5. Assert: app container running, status.json settled, secrets resolved
+#   6. Restart the agent, deploy a second release, rollback, and detach cleanup
 #
 # Usage:
 #   ruby test/e2e/solo_e2e.rb
@@ -166,6 +167,10 @@ class SoloE2E
     @ssh_port = Integer(ENV.fetch("DEVOPSELLENCE_E2E_SSH_PORT", available_port(20_000 + SecureRandom.random_number(10_000)).to_s))
     @artifact_server_port = available_port(31_000 + SecureRandom.random_number(1000))
     @network = "devopsellence-solo-e2e-#{@run_id}"
+    @envoy_container = "devopsellence-envoy-#{@run_id}"
+    @envoy_port = available_port(34_000 + SecureRandom.random_number(1000))
+    @envoy_http_port = available_port(32_000 + SecureRandom.random_number(1000))
+    @envoy_https_port = available_port(33_000 + SecureRandom.random_number(1000))
     @node_container = "devopsellence-solo-node-#{@run_id}"
     @node_image = "devopsellence/solo-e2e-node:#{@run_id}"
     @run_labels = {
@@ -198,10 +203,20 @@ class SoloE2E
     step("mode") { set_workspace_mode! }
     step("attach node") { attach_node! }
     step("install agent") { install_agent! }
+    step("agent runtime") { configure_agent_runtime! }
     step("pre-deploy status") { assert_status_before_first_deploy! }
     step("secrets") { set_secrets! }
     step("deploy") { run_deploy! }
-    step("assertions") { assert_runtime_state! }
+    @initial_workload_revision = current_revision
+    step("assertions") { assert_runtime_state!(expected_workload_revision: @initial_workload_revision, expected_plain_env: "hello-solo") }
+    step("agent restart recovery") { assert_agent_restart_recovery!(expected_workload_revision: @initial_workload_revision, expected_plain_env: "hello-solo") }
+    step("second release") { prepare_second_release! }
+    step("deploy second release") { run_deploy! }
+    @second_workload_revision = current_revision
+    step("assert second release") { assert_runtime_state!(expected_workload_revision: @second_workload_revision, expected_plain_env: "hello-solo-v2") }
+    step("rollback") { rollback_to_previous_release! }
+    step("assert rollback") { assert_runtime_state!(expected_workload_revision: @initial_workload_revision, expected_plain_env: "hello-solo") }
+    step("detach cleanup") { assert_detach_cleanup! }
 
     puts "\n[ok] solo e2e passed"
   ensure
@@ -259,11 +274,13 @@ class SoloE2E
       chown root:root /root/.ssh/authorized_keys
       chmod 600 /root/.ssh/authorized_keys
 
-      # Start sshd.
+      # Start sshd on a run-scoped host-network port. The node container uses
+      # the host network so the mounted Docker socket and agent HTTP probes see
+      # the same Docker bridge routes.
       mkdir -p /run/sshd
-      /usr/sbin/sshd
+      /usr/sbin/sshd -o Port=#{@ssh_port} -o ListenAddress=127.0.0.1
 
-      echo "[node] sshd started on port 22"
+      echo "[node] sshd started on 127.0.0.1:#{@ssh_port}"
       echo "[node] waiting for CLI-managed agent install..."
 
       exec tail -f /dev/null
@@ -348,6 +365,19 @@ PY
           if service_pid_running; then
             exit 0
           fi
+          service_pid="$(launch_exec_start "$exec_start")"
+          echo "$service_pid" > "$PID_FILE"
+          exit 0
+          ;;
+        restart)
+          unit="${1:-}"
+          service_matches "$unit"
+          if [[ -f "$PID_FILE" ]]; then
+            kill "$(cat "$PID_FILE")" 2>/dev/null || true
+            rm -f "$PID_FILE"
+          fi
+          exec_start="$(read_exec_start)"
+          [[ -n "$exec_start" ]]
           service_pid="$(launch_exec_start "$exec_start")"
           echo "$service_pid" > "$PID_FILE"
           exit 0
@@ -492,11 +522,9 @@ PY
     run!(
       "docker", "run", "-d", "--rm",
       "--name", @node_container,
-      "--network", @network,
-      "--network-alias", "node",
+      "--network", "host",
       "--add-host", "host.docker.internal:host-gateway",
       *docker_label_args,
-      "-p", "127.0.0.1:#{@ssh_port}:22",
       "-v", "/var/run/docker.sock:/var/run/docker.sock",
       "-v", "#{@agent_state_dir}:#{@agent_state_dir}",
       "-v", "#{@ssh_public_key}:/tmp/devopsellence_authorized_key.pub:ro",
@@ -666,28 +694,61 @@ PY
     puts "[ok] Agent installed via CLI"
   end
 
+  def configure_agent_runtime!
+    flags = [
+      "--network=#{@network}",
+      "--envoy-container=#{@envoy_container}",
+      "--envoy-port=#{@envoy_port}",
+      "--envoy-public-http-port=#{@envoy_http_port}",
+      "--envoy-public-https-port=#{@envoy_https_port}"
+    ]
+    script = <<~SH
+      python3 - <<'PY'
+      import json
+      from pathlib import Path
+
+      path = Path("/etc/systemd/system/devopsellence-agent.service")
+      flags = json.loads(#{JSON.generate(flags).inspect})
+      text = path.read_text()
+      lines = []
+      changed = False
+      found = False
+
+      for line in text.splitlines():
+          if line.startswith("ExecStart="):
+              found = True
+              for flag in flags:
+                  if f" {flag}" not in f" {line}":
+                      line += " " + flag
+                      changed = True
+          lines.append(line)
+
+      if not found:
+          raise SystemExit("missing ExecStart")
+      if changed:
+          path.write_text("\\n".join(lines) + "\\n")
+      PY
+      systemctl daemon-reload
+      systemctl restart devopsellence-agent
+      systemctl is-active --quiet devopsellence-agent
+    SH
+
+    ssh_to_node!(script)
+    puts "[ok] Agent runtime isolated: network=#{@network} envoy=#{@envoy_container}"
+  end
+
   def run_deploy!
-    result = run_command(
+    output = run!(
       cli_binary.to_s, "deploy",
       chdir: @app_dir.to_s,
       timeout: 600,
       env: ssh_env
     )
-    output = result.fetch(:output)
-    status = result.fetch(:status)
+    result = parse_cli_json(output)
+    raise "deploy did not report revision" if result["workload_revision"].to_s.empty?
+    raise "deploy did not report node-1" unless Array(result["nodes"]).include?("node-1")
 
-    if status.success?
-      result = parse_cli_json(output)
-      raise "deploy did not report revision" if result["workload_revision"].to_s.empty?
-      raise "deploy did not report node-1" unless Array(result["nodes"]).include?("node-1")
-      puts "[ok] Deploy completed"
-      return
-    end
-
-    unless output.include?("rollout failed on node-1:") && known_probe_error?(output)
-      raise "deploy failed unexpectedly (#{status.exitstatus})\n#{excerpt(output, 20)}"
-    end
-    puts "[ok] Deploy surfaced known rollout failure in solo e2e"
+    puts "[ok] Deploy completed"
   end
 
   def assert_status_before_first_deploy!
@@ -709,12 +770,12 @@ PY
     puts "[ok] CLI status reports no deploy status before first deploy"
   end
 
-  def assert_runtime_state!
+  def assert_runtime_state!(expected_workload_revision:, expected_plain_env:)
     desired = JSON.parse(ssh_to_node!("cat #{@desired_state_path}"))
     expected_runtime_revision = desired["revision"].to_s
     raise "desired state missing revision" if expected_runtime_revision.empty?
     environment_revisions = desired.fetch("environments").map { |environment| environment["revision"] }.compact.uniq
-    raise "unexpected environment revisions: #{environment_revisions.inspect}" unless environment_revisions == [current_revision]
+    raise "unexpected environment revisions: #{environment_revisions.inspect}" unless environment_revisions == [expected_workload_revision]
     workload_revision = environment_revisions.first
 
     # Wait for agent to reconcile and write status for the deployed revision.
@@ -722,7 +783,7 @@ PY
       output = ssh_to_node!("cat #{@status_path} 2>/dev/null || echo '{}'")
       begin
         status = JSON.parse(output)
-        status["revision"] == expected_runtime_revision && terminal_status_phase?(status["phase"])
+        status["revision"] == expected_runtime_revision && status["phase"] == "settled"
       rescue JSON::ParserError
         false
       end
@@ -735,18 +796,10 @@ PY
     revision = status["revision"]
     raise "revision missing from status" if revision.to_s.empty?
     raise "unexpected status revision: #{revision}" unless revision == expected_runtime_revision
-    case status["phase"]
-    when "settled"
-      puts "[ok] Status settled for revision #{revision}"
-    when "error"
-      error = status["error"].to_s
-      unless known_probe_error?(error)
-        raise "unexpected error status: #{status.inspect}"
-      end
-      puts "[ok] Status captured known docker-sock probe limitation for revision #{revision}"
-    else
+    unless status["phase"] == "settled"
       raise "unexpected phase: #{status['phase']}"
     end
+    puts "[ok] Status settled for revision #{revision}"
 
     # Verify the web container exists in Docker.
     web_containers = []
@@ -775,10 +828,8 @@ PY
     cli_revision = node_status.dig("status", "revision")
     cli_phase = node_status.dig("status", "phase")
     raise "CLI status revision mismatch: #{cli_revision}" unless cli_revision == revision
-    unless ["settled", "error"].include?(cli_phase)
-      raise "CLI status phase unexpected: #{cli_phase.inspect}"
-    end
-    unless cli_status_result.fetch(:status).success? || (cli_phase == "error" && known_probe_error?(node_status.dig("status", "error").to_s))
+    raise "CLI status phase unexpected: #{cli_phase.inspect}" unless cli_phase == "settled"
+    unless cli_status_result.fetch(:status).success?
       raise "CLI status failed unexpectedly (#{cli_status_result.fetch(:status).exitstatus}): #{excerpt(cli_status_result.fetch(:output), 20)}"
     end
     puts "[ok] CLI status confirms revision #{cli_revision} phase=#{cli_phase}"
@@ -789,9 +840,15 @@ PY
 
     web_service = services.find { |service| service["name"] == "web" }
     raise "web service not in desired state" unless web_service
-    raise "env #{PLAIN_ENV_NAME} missing" unless web_service.dig("env", PLAIN_ENV_NAME) == "hello-solo"
+    raise "env #{PLAIN_ENV_NAME} missing" unless web_service.dig("env", PLAIN_ENV_NAME) == expected_plain_env
     raise "secret #{SECRET_VALUE_NAME} not resolved" unless web_service.dig("env", SECRET_VALUE_NAME) == "secret-solo-123"
     puts "[ok] Desired state verified: secrets resolved, env present"
+    runtime_status = status.fetch("environments").find { |environment| environment.fetch("services", []).any? { |service| service["name"] == "web" } }
+    raise "status missing web runtime environment" unless runtime_status
+    web_status = runtime_status.fetch("services").find { |service| service["name"] == "web" }
+    @last_runtime_environment = runtime_status.fetch("name")
+    @last_web_container = web_status.fetch("container")
+    assert_endpoint!(@last_web_container, expected_plain_env)
 
     logs_output = run!(
       cli_binary.to_s, "node", "logs", "node-1",
@@ -806,16 +863,76 @@ PY
     puts "[ok] Logs command returned #{log_lines.length} agent log lines"
   end
 
+  def assert_endpoint!(container_name, expected_plain_env)
+    ip = ssh_to_node!(
+      "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' #{Shellwords.escape(container_name)}"
+    ).strip
+    raise "container #{container_name} missing inspect IP" if ip.empty?
+
+    payload = JSON.parse(ssh_to_node!("curl -fsS #{Shellwords.escape("http://#{ip}:#{APP_PORT}#{APP_PROBE_PATH}")}"))
+    raise "endpoint plain env = #{payload['plain_env'].inspect}, want #{expected_plain_env.inspect}" unless payload["plain_env"] == expected_plain_env
+    raise "endpoint secret not resolved" unless payload["secret_value"] == "secret-solo-123"
+
+    puts "[ok] Endpoint returned expected env and secret"
+  end
+
+  def assert_agent_restart_recovery!(expected_workload_revision:, expected_plain_env:)
+    old_pid = ssh_to_node!("cat /var/run/devopsellence-fake-systemd/devopsellence-agent.pid").strip
+    ssh_to_node!("systemctl restart devopsellence-agent")
+    wait_until!(timeout: 30) do
+      new_pid = ssh_to_node!("cat /var/run/devopsellence-fake-systemd/devopsellence-agent.pid").strip
+      !new_pid.empty? && new_pid != old_pid
+    end
+    wait_until!(timeout: 60) do
+      ssh_to_node!("grep -c 'starting agent in solo mode' /var/run/devopsellence-fake-systemd/devopsellence-agent.log").to_i >= 2
+    end
+    assert_runtime_state!(expected_workload_revision:, expected_plain_env:)
+    puts "[ok] Agent restart preserved settled runtime"
+  end
+
+  def prepare_second_release!
+    config = YAML.load_file(@app_dir.join("devopsellence.yml"))
+    config.fetch("services").fetch("web").fetch("env")[PLAIN_ENV_NAME] = "hello-solo-v2"
+    File.write(@app_dir.join("devopsellence.yml"), YAML.dump(config))
+    commit_all!("Update solo e2e app env")
+  end
+
+  def rollback_to_previous_release!
+    output = run!(
+      cli_binary.to_s, "release", "rollback",
+      chdir: @app_dir.to_s,
+      timeout: 180,
+      env: ssh_env
+    )
+    result = parse_cli_json(output)
+    raise "rollback phase = #{result['phase'].inspect}, want settled" unless result["phase"] == "settled"
+    raise "rollback revision = #{result['workload_revision'].inspect}, want #{@initial_workload_revision}" unless result["workload_revision"] == @initial_workload_revision
+    puts "[ok] Rollback settled to #{@initial_workload_revision}"
+  end
+
+  def assert_detach_cleanup!
+    output = run!(
+      cli_binary.to_s, "node", "detach", "node-1",
+      chdir: @app_dir.to_s,
+      timeout: 120,
+      env: ssh_env
+    )
+    result = parse_cli_json(output)
+    raise "detach did not report node-1 changed: #{result.inspect}" unless result["node"] == "node-1" && result["changed"]
+
+    wait_until!(timeout: 120) do
+      ssh_to_node!(
+        "docker ps -aq --filter label=devopsellence.environment=#{Shellwords.escape(@last_runtime_environment)}"
+      ).strip.empty?
+    end
+    desired = JSON.parse(ssh_to_node!("cat #{@desired_state_path}"))
+    raise "detached desired state still has environments: #{desired.inspect}" unless desired.fetch("environments", []).empty?
+
+    puts "[ok] Detach cleared desired state and removed workload containers"
+  end
+
   def current_revision
     @current_revision ||= capture!("git", "rev-parse", "--short=7", "HEAD", chdir: @app_dir.to_s).strip
-  end
-
-  def terminal_status_phase?(phase)
-    %w[settled error].include?(phase.to_s)
-  end
-
-  def known_probe_error?(text)
-    text.include?("http probe") && text.include?("context deadline exceeded")
   end
 
   # -- Helpers --
@@ -1017,6 +1134,7 @@ PY
     return if status.strip.empty?
 
     run!("git", "commit", "-m", message, chdir: @app_dir.to_s, timeout: 30, env: { "BUNDLE_GEMFILE" => nil })
+    @current_revision = nil
   end
 
   def go_binary
@@ -1175,9 +1293,17 @@ PY
   end
 
   def cleanup_runtime!
-    container_ids = capture!("docker", "ps", "-aq", "--filter", "network=#{@network}", chdir: MONOREPO_ROOT.to_s).lines.map(&:strip).reject(&:empty?)
+    run!("docker", "rm", "-f", @node_container, chdir: MONOREPO_ROOT.to_s, timeout: 120) if system_success?("docker", "container", "inspect", @node_container, chdir: MONOREPO_ROOT.to_s)
+    run!("docker", "rm", "-f", @envoy_container, chdir: MONOREPO_ROOT.to_s, timeout: 120) if system_success?("docker", "container", "inspect", @envoy_container, chdir: MONOREPO_ROOT.to_s)
+    network_names = capture!("docker", "network", "ls", "--format", "{{.Name}}", chdir: MONOREPO_ROOT.to_s).lines.map(&:strip)
+    managed_networks = network_names.select { |name| name == @network || name.start_with?("#{@network}-env-") }
+    container_ids = managed_networks.flat_map do |network|
+      capture!("docker", "ps", "-aq", "--filter", "network=#{network}", chdir: MONOREPO_ROOT.to_s).lines.map(&:strip)
+    end.reject(&:empty?).uniq
     run!("docker", "rm", "-f", *container_ids, chdir: MONOREPO_ROOT.to_s, timeout: 120) if container_ids.any?
-    run!("docker", "network", "rm", @network, chdir: MONOREPO_ROOT.to_s, timeout: 60)
+    managed_networks.each do |network|
+      run!("docker", "network", "rm", network, chdir: MONOREPO_ROOT.to_s, timeout: 60)
+    end
     run!("docker", "image", "rm", "-f", @node_image, chdir: MONOREPO_ROOT.to_s, timeout: 60)
     FileUtils.rm_rf(@state_dir)
     FileUtils.rm_rf(@app_root_dir)

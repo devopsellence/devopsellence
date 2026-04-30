@@ -202,6 +202,7 @@ type SoloInitOptions struct{}
 type IngressSetOptions struct {
 	Hosts               []string
 	Service             string
+	Environment         string
 	TLSMode             string
 	TLSEmail            string
 	TLSCADirectoryURL   string
@@ -210,7 +211,8 @@ type IngressSetOptions struct {
 }
 
 type IngressCheckOptions struct {
-	Wait time.Duration
+	Wait        time.Duration
+	Environment string
 }
 
 type soloNodeStatus struct {
@@ -1691,8 +1693,9 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	expectedRevisions := map[string]string{}
 	expectedRuntimeEnvironment := ""
 	expectedWorkloadRevision := ""
-	if len(opts.Nodes) == 0 {
-		if current, stateErr := a.readSoloState(); stateErr == nil {
+	if workspaceRoot != "" && environmentName != "" {
+		current, stateErr := a.readSoloState()
+		if stateErr == nil {
 			_, currentRelease, hasCurrent, releaseErr := current.CurrentRelease(workspaceRoot, environmentName)
 			if releaseErr != nil {
 				return releaseErr
@@ -1704,6 +1707,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				expectedRuntimeEnvironment, _ = soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, "")
 			}
 		}
+	} else if len(opts.Nodes) > 0 {
+		localReleaseKnown = true
 	}
 
 	var jsonResults []map[string]any
@@ -4576,7 +4581,7 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 	if cfg == nil {
 		cfg = soloDefaultProjectConfig(discovered)
 	}
-	selectedEnvironment := a.effectiveEnvironment("", cfg)
+	selectedEnvironment := a.effectiveEnvironment(opts.Environment, cfg)
 	resolvedCfg := *cfg
 	if selectedEnvironment != soloEnvironmentName(cfg, "") {
 		resolved, err := config.ResolveEnvironmentConfig(*cfg, selectedEnvironment)
@@ -4860,7 +4865,7 @@ func uploadSoloFile(ctx context.Context, node config.Node, localPath, remotePath
 }
 
 func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error {
-	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(opts.Environment)
 	if err != nil {
 		return err
 	}

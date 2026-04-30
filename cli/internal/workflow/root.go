@@ -592,6 +592,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	ingressSetCommand.Flags().StringSliceVar(&ingressSetOpts.Hosts, "host", nil, "Hostname, repeatable or comma-separated")
 	ingressSetCommand.Flags().StringVar(&ingressSetOpts.Service, "service", "", "Ingress service name")
+	ingressSetCommand.Flags().StringVar(&ingressSetOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override")
 	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSMode, "tls-mode", "auto", "TLS mode: auto, manual, or off")
 	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSEmail, "tls-email", "", "ACME account email")
 	ingressSetCommand.Flags().StringVar(&ingressSetOpts.TLSCADirectoryURL, "acme-ca", "", "ACME directory URL override")
@@ -606,6 +607,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}),
 	}
 	ingressCheckCommand.Flags().DurationVar(&ingressCheckOpts.Wait, "wait", 0, "Poll until DNS is ready or this timeout elapses")
+	ingressCheckCommand.Flags().StringVar(&ingressCheckOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override")
 	ingressCertCommand := &cobra.Command{
 		Use:   "cert",
 		Short: "Manage manual ingress TLS certificates",

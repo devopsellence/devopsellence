@@ -1151,6 +1151,64 @@ func TestSoloStatusUsesExplicitEnvironment(t *testing.T) {
 	}
 }
 
+func TestSoloStatusWithExplicitNodesUsesExplicitEnvironmentRelease(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"prod.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "prod.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {Ingress: &config.IngressConfigOverlay{
+			Hosts: []string{"staging.example.com"},
+			Rules: []config.IngressRuleConfig{{
+				Match:  config.IngressMatchConfig{Host: "staging.example.com", PathPrefix: "/"},
+				Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+			}},
+		}},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"prod-rev","phase":"settled","summary":{"environments":1,"services":1}}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "staging", "staging-rev")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}, Environment: "staging"}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, explicit node stale status must not emit verified public_urls", payload)
+	}
+	urls := jsonArrayFromMap(t, payload, "configured_public_urls")
+	if len(urls) != 1 || urls[0] != "http://staging.example.com/" {
+		t.Fatalf("configured_public_urls = %#v, want staging URL only", urls)
+	}
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	if node["status"] != nil || !strings.Contains(stringValueAny(node["message"]), "does not match current local deployment") {
+		t.Fatalf("node payload = %#v, want stale status message", node)
+	}
+}
+
 func TestSoloStatusDoesNotTreatDNSOnlyTLSCheckAsVerifiedPublicURL(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -6515,6 +6573,91 @@ func TestIngressSetWritesSelectedEnvironmentOverlay(t *testing.T) {
 	}
 	if overlay.TLS == nil || overlay.TLS.Email == nil || *overlay.TLS.Email != "staging@example.com" {
 		t.Fatalf("staging tls overlay = %#v, want staging email", overlay.TLS)
+	}
+}
+
+func TestIngressSetWritesExplicitEnvironmentOverlay(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", config.DefaultEnvironment)
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"prod.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "prod.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{Cwd: dir, ConfigStore: config.NewStore(), Printer: output.New(io.Discard, io.Discard)}
+	if err := app.IngressSet(context.Background(), IngressSetOptions{
+		Hosts:       []string{"staging.example.com"},
+		Environment: "staging",
+		TLSMode:     "auto",
+	}); err != nil {
+		t.Fatalf("IngressSet() error = %v", err)
+	}
+
+	written, err := config.Load(filepath.Join(dir, config.FilePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(written.Ingress.Hosts, ","); got != "prod.example.com" {
+		t.Fatalf("base ingress hosts = %q, want prod.example.com", got)
+	}
+	overlay := written.Environments["staging"].Ingress
+	if overlay == nil || strings.Join(overlay.Hosts, ",") != "staging.example.com" {
+		t.Fatalf("staging ingress overlay = %#v, want explicit staging host", overlay)
+	}
+}
+
+func TestIngressCheckUsesExplicitEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {Ingress: &config.IngressConfigOverlay{
+			Hosts: []string{"127.0.0.1"},
+			Rules: []config.IngressRuleConfig{{
+				Match:  config.IngressMatchConfig{Host: "127.0.0.1", PathPrefix: "/"},
+				Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+			}},
+			TLS: &config.IngressTLSConfigOverlay{Mode: configStringPtr("off")},
+		}},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.IngressCheck(context.Background(), IngressCheckOptions{Environment: "staging"}); err != nil {
+		t.Fatalf("IngressCheck() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != true {
+		t.Fatalf("payload = %#v, want successful explicit staging DNS check", payload)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok := loaded.IngressChecks[key]; !ok || !record.OK {
+		t.Fatalf("ingress checks = %#v, want staging success record", loaded.IngressChecks)
 	}
 }
 

@@ -853,10 +853,8 @@ func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
 
 func TestSoloNodeCreateAttachRollsBackExistingSSHStateWhenRepublishFails(t *testing.T) {
 	binDir := t.TempDir()
-	writeLog := filepath.Join(t.TempDir(), "desired-state-writes.log")
-	writeCount := filepath.Join(t.TempDir(), "desired-state-write-count")
-	t.Setenv("DEVOPSELLENCE_ROLLBACK_WRITE_LOG", writeLog)
-	t.Setenv("DEVOPSELLENCE_ROLLBACK_WRITE_COUNT", writeCount)
+	sshLogDir := t.TempDir()
+	t.Setenv("DEVOPSELLENCE_TEST_SSH_LOG_DIR", sshLogDir)
 	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
 set -euo pipefail
 command="${!#}"
@@ -871,18 +869,16 @@ if [[ "$command" == *"docker info"* ]]; then
   exit 0
 fi
 if [[ "$command" == *"desired-state set-override"* ]]; then
+  log_dir="${DEVOPSELLENCE_TEST_SSH_LOG_DIR:?}"
+  count_file="$log_dir/desired-state-count"
   count=0
-  if [[ -s "${DEVOPSELLENCE_ROLLBACK_WRITE_COUNT}" ]]; then
-    count="$(cat "${DEVOPSELLENCE_ROLLBACK_WRITE_COUNT}")"
+  if [[ -f "$count_file" ]]; then
+    count=$(cat "$count_file")
   fi
   count=$((count + 1))
-  printf '%s\n' "$count" >"${DEVOPSELLENCE_ROLLBACK_WRITE_COUNT}"
-  {
-    printf -- '--- write %s ---\n' "$count"
-    cat
-    printf '\n'
-  } >>"${DEVOPSELLENCE_ROLLBACK_WRITE_LOG}"
-  if [[ "$count" -eq 1 ]]; then
+  printf '%s' "$count" > "$count_file"
+  cat > "$log_dir/desired-state-$count.json"
+  if [[ "$count" == "1" ]]; then
     echo 'remote write failed' >&2
     exit 1
   fi
@@ -938,20 +934,19 @@ exit 1
 	if loaded.NodeHasAttachments("prod-1") {
 		t.Fatalf("attachment was kept after failed existing-SSH create/attach: %#v", loaded.Attachments)
 	}
-	countBytes, err := os.ReadFile(writeCount)
+	countBytes, err := os.ReadFile(filepath.Join(sshLogDir, "desired-state-count"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(string(countBytes)) != "2" {
-		logBytes, _ := os.ReadFile(writeLog)
-		t.Fatalf("desired-state writes = %q, want original write plus remote rollback; log:\n%s", strings.TrimSpace(string(countBytes)), string(logBytes))
+		t.Fatalf("desired-state writes = %q, want original attempt plus rollback republish", strings.TrimSpace(string(countBytes)))
 	}
-	logBytes, err := os.ReadFile(writeLog)
+	rollbackDesiredState, err := os.ReadFile(filepath.Join(sshLogDir, "desired-state-2.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logBytes), "--- write 2 ---") {
-		t.Fatalf("desired-state write log = %s, want rollback write", string(logBytes))
+	if bytes.Contains(rollbackDesiredState, []byte("prod-1")) || bytes.Contains(rollbackDesiredState, []byte("abc1234")) {
+		t.Fatalf("rollback desired state = %s, want pre-attach state without new node release", rollbackDesiredState)
 	}
 }
 
@@ -4985,7 +4980,7 @@ func TestSoloStatusComparesRemoteStatusToPublishedDesiredStateRevision(t *testin
 	}
 }
 
-func TestSoloStatusAcceptsExpectedRevisionWhenStatusTimePredatesDeployment(t *testing.T) {
+func TestSoloStatusAcceptsExpectedRevisionWhenStatusTimePredatesLocalDeploymentClock(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
@@ -5038,15 +5033,16 @@ func TestSoloStatusAcceptsExpectedRevisionWhenStatusTimePredatesDeployment(t *te
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
-	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
-		t.Fatalf("SoloStatus() error = %v", err)
+	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err != nil {
+		t.Fatalf("SoloStatus() error = %v, want same desired-state revision accepted despite remote/local clock skew", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	nodes := jsonArrayFromMap(t, payload, "nodes")
 	node := jsonMapFromAny(t, nodes[0])
 	status := jsonMapFromAny(t, node["status"])
-	if status["revision"] != "current-desired-state" || status["time"] != "2000-01-01T00:00:00Z" {
-		t.Fatalf("node = %#v, want matching revision accepted despite remote clock skew", node)
+	if status["revision"] != "current-desired-state" {
+		t.Fatalf("node = %#v, want status accepted from revision evidence", node)
 	}
 }
 

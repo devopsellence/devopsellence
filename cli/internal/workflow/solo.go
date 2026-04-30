@@ -4347,6 +4347,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if err := current.SetNode(nodeName, node); err != nil {
 		return err
 	}
+	remoteRollbackState := cloneSoloState(current)
 	attached := false
 	var attachment solo.AttachmentRecord
 	if opts.Attach {
@@ -4376,25 +4377,20 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if attached {
 		if soloAttachmentHasReleaseState(current, attachment) {
 			if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
-				remoteRollbackState := cloneSoloState(current)
-				_, _, _ = remoteRollbackState.DetachNode(workspaceRoot, attachment.Environment, nodeName)
-				_, rollbackRepublishErr := a.republishNodes(ctx, remoteRollbackState, attachment.NodeNames)
-
-				localRollbackState := cloneSoloState(remoteRollbackState)
+				rollbackTargets := append([]string(nil), attachment.NodeNames...)
+				var rollbackErr error
+				if _, republishErr := a.republishNodes(ctx, remoteRollbackState, rollbackTargets); republishErr != nil {
+					rollbackErr = fmt.Errorf("rollback failed republishing previous desired state: %w", republishErr)
+				}
+				rollbackState := cloneSoloState(current)
+				_, _, _ = rollbackState.DetachNode(workspaceRoot, attachment.Environment, nodeName)
 				if hasHost {
-					localRollbackState.RemoveNode(nodeName)
+					rollbackState.RemoveNode(nodeName)
 				}
-				if rollbackErr := a.writeSoloState(localRollbackState); rollbackErr != nil {
-					rollbackErrs := []error{err, fmt.Errorf("rollback failed node create state: %w", rollbackErr)}
-					if rollbackRepublishErr != nil {
-						rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback failed remote desired state: %w", rollbackRepublishErr))
-					}
-					return errors.Join(rollbackErrs...)
+				if writeErr := a.writeSoloState(rollbackState); writeErr != nil {
+					rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback failed node create state: %w", writeErr))
 				}
-				if rollbackRepublishErr != nil {
-					return errors.Join(err, fmt.Errorf("rollback failed remote desired state: %w", rollbackRepublishErr))
-				}
-				return err
+				return errors.Join(err, rollbackErr)
 			}
 		}
 	}

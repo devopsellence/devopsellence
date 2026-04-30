@@ -5,12 +5,9 @@ template: splash
 hero:
   tagline: Agent-primary deployments on VMs you control.
   actions:
-    - text: Solo quickstart
+    - text: Quickstart
       link: /getting-started/solo-quickstart/
       icon: right-arrow
-    - text: Agent-primary model
-      link: /concepts/agent-primary/
-      icon: open-book
 ---
 
 devopsellence helps AI coding and operations agents deploy containerized apps

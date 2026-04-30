@@ -3106,6 +3106,9 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 	if cfg == nil {
 		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
 	}
+	if _, ok := cfg.Services[serviceName]; !ok {
+		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
+	}
 	current, err := a.readSoloState()
 	if err != nil {
 		return err

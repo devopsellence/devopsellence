@@ -2321,6 +2321,44 @@ func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
 	}
 }
 
+func TestSoloWorkloadLogsRejectsUnknownService(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{ServiceName: "typo", Nodes: []string{"node-a"}, Lines: 20})
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("SoloWorkloadLogs() error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), `service "typo" not found in devopsellence.yml`) {
+		t.Fatalf("error = %v, want unknown service message", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no remote log output", stdout.String())
+	}
+}
+
 func TestSoloWorkloadLogsUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *testing.T) {
 	commandPath := filepath.Join(t.TempDir(), "workload-command")
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_COMMAND", commandPath)

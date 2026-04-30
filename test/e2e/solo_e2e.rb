@@ -25,6 +25,7 @@
 #   DEVOPSELLENCE_E2E_KEEP=1            - preserve runtime after test
 #   DEVOPSELLENCE_E2E_GO_BIN            - custom Go binary path
 #   DEVOPSELLENCE_E2E_SSH_PORT          - custom SSH port for the node container
+#   DEVOPSELLENCE_E2E_APP_TMPDIR        - parent directory for generated app/runtime files
 
 require "digest"
 require "fileutils"
@@ -154,7 +155,7 @@ class SoloE2E
     @cli_root = resolve_repo_root(%w[cli], "DEVOPSELLENCE_CLI_ROOT")
     @agent_root = resolve_repo_root(%w[agent], "DEVOPSELLENCE_AGENT_ROOT")
     @state_dir = MONOREPO_ROOT.join("test/e2e/tmp/solo", @run_id)
-    @app_root_dir = Pathname(Dir.tmpdir).join("devopsellence-solo-e2e", @run_id)
+    @app_root_dir = app_tmp_root.join(@run_id)
     @agent_state_dir = @app_root_dir.join("node-state").to_s
     @desired_state_path = File.join(@agent_state_dir, "desired-state-override.json")
     @status_path = File.join(@agent_state_dir, "status.json")
@@ -208,6 +209,13 @@ class SoloE2E
   end
 
   private
+
+  def app_tmp_root
+    configured_root = ENV.fetch("DEVOPSELLENCE_E2E_APP_TMPDIR", "").to_s.strip
+    return Pathname(configured_root).expand_path unless configured_root.empty?
+
+    Pathname(Dir.tmpdir).join("devopsellence-solo-e2e-#{Process.uid}")
+  end
 
   def step(name)
     puts "\n==> #{name}"
@@ -785,20 +793,17 @@ PY
     raise "secret #{SECRET_VALUE_NAME} not resolved" unless web_service.dig("env", SECRET_VALUE_NAME) == "secret-solo-123"
     puts "[ok] Desired state verified: secrets resolved, env present"
 
-    # Verify CLI logs command runs (may fail inside test container due to no systemd,
-    # but verify the SSH connection and command dispatch works).
-    begin
-      logs_output = run!(
-        cli_binary.to_s, "node", "logs", "node-1",
-        chdir: @app_dir.to_s,
-        timeout: 30,
-        env: ssh_env
-      )
-      puts "[ok] Logs command succeeded (#{logs_output.lines.length} lines)"
-    rescue StandardError => e
-      # journalctl may not be available in the test container — that's expected.
-      puts "[skip] Logs command failed (expected in test env): #{e.message.lines.first}"
-    end
+    logs_output = run!(
+      cli_binary.to_s, "node", "logs", "node-1",
+      chdir: @app_dir.to_s,
+      timeout: 30,
+      env: ssh_env
+    )
+    logs_result = parse_cli_json(logs_output)
+    log_lines = logs_result.fetch("lines")
+    raise "node logs did not return agent log lines" if log_lines.empty?
+
+    puts "[ok] Logs command returned #{log_lines.length} agent log lines"
   end
 
   def current_revision

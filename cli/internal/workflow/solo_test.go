@@ -2010,6 +2010,48 @@ func TestSoloNodeListDefaultsToCurrentEnvironmentAndRedactsPrivateFields(t *test
 	t.Fatalf("node_items = %#v, want node-a", items)
 }
 
+func TestSoloNodeListWarnsWhenListedNodeSharesHost(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"current-prod": {Host: "203.0.113.10", User: "root", ProviderServerID: "server-new"},
+			"stale-prod":   {Host: "203.0.113.10", User: "root", ProviderServerID: "server-old"},
+			"other-prod":   {Host: "203.0.113.11", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "current-prod"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, Cwd: workspaceRoot}
+	if err := app.SoloNodeList(context.Background(), SoloNodeListOptions{}); err != nil {
+		t.Fatalf("SoloNodeList() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want one duplicate-host warning", warnings)
+	}
+	warning := stringValueAny(warnings[0])
+	for _, want := range []string{"203.0.113.10", "current-prod", "stale-prod", "stale state", "provider IP reuse"} {
+		if !strings.Contains(warning, want) {
+			t.Fatalf("warning = %q, want %q", warning, want)
+		}
+	}
+	if strings.Contains(warning, "server-new") || strings.Contains(warning, "server-old") {
+		t.Fatalf("warning = %q, leaked provider server id", warning)
+	}
+}
+
 func TestSoloNodeListRequiresConfigForDefaultScope(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))

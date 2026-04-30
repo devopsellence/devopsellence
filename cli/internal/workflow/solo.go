@@ -1902,6 +1902,9 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			if runtime.State == "error" {
 				statusErrors++
 				message = runtime.Message
+			} else if strings.TrimSpace(result.Status.Phase) == "error" {
+				statusErrors++
+				message = firstNonEmpty(strings.TrimSpace(result.Status.Error), "node reported phase=error")
 			}
 			jsonResults = append(jsonResults, map[string]any{
 				"node":    name,
@@ -1910,7 +1913,14 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			})
 			continue
 		}
-		if strings.TrimSpace(result.Status.Phase) != "settled" {
+		switch strings.TrimSpace(result.Status.Phase) {
+		case "settled":
+		case "error":
+			allSettled = false
+			if expectedRevision != "" {
+				statusErrors++
+			}
+		default:
 			allSettled = false
 		}
 		jsonResults = append(jsonResults, map[string]any{

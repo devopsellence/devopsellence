@@ -737,6 +737,56 @@ func TestSoloNodeCreateRegistersExistingSSHNode(t *testing.T) {
 	}
 }
 
+func TestSoloNodeAttachUsesSavedCurrentEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaceState := state.New(filepath.Join(t.TempDir(), "workspace-state.json"))
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:        output.New(&stdout, io.Discard),
+		SoloState:      soloState,
+		WorkspaceState: workspaceState,
+		ConfigStore:    config.NewStore(),
+		Cwd:            workspaceRoot,
+	}
+	if err := app.SetEnvironment("staging"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.SoloNodeAttach(context.Background(), SoloNodeAttachOptions{Node: "node-a"}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingNodes, err := current.AttachedNodeNames(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stagingNodes, []string{"node-a"}) {
+		t.Fatalf("staging attachments = %#v, want node-a", stagingNodes)
+	}
+	productionNodes, err := current.AttachedNodeNames(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(productionNodes) != 0 {
+		t.Fatalf("production attachments = %#v, want none", productionNodes)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment"] != "staging" {
+		t.Fatalf("payload environment = %#v, want staging", payload["environment"])
+	}
+}
+
 func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
 	binDir := t.TempDir()
 	writeExecutable(t, filepath.Join(binDir, "ssh"), "#!/usr/bin/env bash\necho 'Permission denied (publickey).' >&2\nexit 255\n")
@@ -888,6 +938,41 @@ func TestSoloAffectedNodesForNodeIncludesCoHostedNodes(t *testing.T) {
 	}
 }
 
+func TestSoloAffectedNodesForNodeWithReleaseStateSkipsStatelessAttachments(t *testing.T) {
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {},
+			"node-b": {},
+			"node-c": {},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			"/workspace/a\nproduction": {
+				WorkspaceKey: "/workspace/a",
+				Environment:  "production",
+				NodeNames:    []string{"node-a", "node-b"},
+			},
+			"/workspace/b\nproduction": {
+				WorkspaceKey: "/workspace/b",
+				Environment:  "production",
+				NodeNames:    []string{"node-a", "node-c"},
+			},
+		},
+		Snapshots: map[string]desiredstate.DeploySnapshot{
+			"/workspace/b\nproduction": {WorkspaceKey: "/workspace/b", Environment: "production"},
+		},
+	}
+
+	got := soloAffectedNodesForNodeWithReleaseState(current, "node-a")
+	want := []string{"node-a", "node-c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("affected nodes with release state = %#v, want %#v", got, want)
+	}
+	delete(current.Snapshots, "/workspace/b\nproduction")
+	if got := soloAffectedNodesForNodeWithReleaseState(current, "node-a"); len(got) != 0 {
+		t.Fatalf("affected nodes with no release state = %#v, want none", got)
+	}
+}
+
 func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -991,6 +1076,60 @@ func TestSoloStatusUsesResolvedEnvironmentOverlay(t *testing.T) {
 	}
 }
 
+func TestSoloStatusUsesVerifiedTLSPublicURLsAfterIngressCheckRecord(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"rev","phase":"settled","summary":{"environments":1,"services":1}}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.IngressChecks = map[string]solo.IngressCheckRecord{
+		key: {
+			OK:          true,
+			PublicURLs:  []string{"https://app.example.com/"},
+			ExpectedIPs: []string{"203.0.113.10"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if len(urls) != 1 || urls[0] != "https://app.example.com/" {
+		t.Fatalf("public_urls = %#v, want verified HTTPS URL", urls)
+	}
+	if _, ok := payload["public_url_status"]; ok {
+		t.Fatalf("payload = %#v, did not expect tls pending status after verified ingress check", payload)
+	}
+	if _, ok := payload["warnings"]; ok {
+		t.Fatalf("payload = %#v, did not expect TLS warning after verified ingress check", payload)
+	}
+}
+
 func TestSoloStatusUsesConfiguredPublicURLsWhenNodeIsNotSettled(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -1091,6 +1230,59 @@ func TestIngressDNSReportIncludesPublicURLsAndReadyNextSteps(t *testing.T) {
 	}
 	if len(report.NextSteps) != 2 || report.NextSteps[0] != "devopsellence status" || report.NextSteps[1] != "curl https://127.0.0.1/" {
 		t.Fatalf("next_steps = %#v, want status and curl", report.NextSteps)
+	}
+}
+
+func TestIngressCheckPersistsSuccessfulReadinessRecord(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"127.0.0.1"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "127.0.0.1", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.IngressCheck(context.Background(), IngressCheckOptions{}); err != nil {
+		t.Fatalf("IngressCheck() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != true {
+		t.Fatalf("payload ok = %v, want true", payload["ok"])
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := loaded.IngressChecks[key]
+	if !record.OK || !reflect.DeepEqual(record.PublicURLs, []string{"https://127.0.0.1/"}) || !reflect.DeepEqual(record.ExpectedIPs, []string{"127.0.0.1"}) || strings.TrimSpace(record.CheckedAt) == "" {
+		t.Fatalf("ingress check record = %#v", record)
 	}
 }
 
@@ -2260,6 +2452,7 @@ func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T)
 
 func TestSoloIngressCertInstallWithExplicitNodeDoesNotRequireWorkspaceConfig(t *testing.T) {
 	cwd := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	uploadsPath := filepath.Join(t.TempDir(), "uploads")
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_UPLOADS", uploadsPath)
 	installFakeSoloCommands(t, nil)

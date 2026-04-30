@@ -922,7 +922,7 @@ func (a *App) currentSoloAttachment(current solo.State) (*config.ProjectConfig, 
 	if cfg == nil {
 		return nil, discovered.WorkspaceRoot, "", nil, false, nil
 	}
-	environmentName := soloEnvironmentName(cfg, "")
+	environmentName := a.effectiveEnvironment("", cfg)
 	nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
 	if err != nil {
 		return nil, "", "", nil, true, err
@@ -1647,6 +1647,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes attached to the current environment")
 	}
+	verifiedPublicURLs := a.soloVerifiedPublicURLs(cfg, nodes)
 
 	var jsonResults []map[string]any
 	readErrors := 0
@@ -1693,11 +1694,11 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		"schema_version": outputSchemaVersion,
 		"nodes":          jsonResults,
 	}
-	if urls := soloReadyPublicURLs(cfg, nodes); len(urls) > 0 {
+	if len(verifiedPublicURLs) > 0 {
 		if allSettled {
-			payload["public_urls"] = urls
+			payload["public_urls"] = verifiedPublicURLs
 		} else {
-			payload["configured_public_urls"] = urls
+			payload["configured_public_urls"] = verifiedPublicURLs
 			payload["warnings"] = []string{"public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"}
 		}
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
@@ -2448,7 +2449,7 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
 	attachment, changed, err := a.attachNode(&current, workspaceRoot, environmentName, opts.Node)
 	if err != nil {
 		return err
@@ -2487,7 +2488,7 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
 	nodeNamesBefore, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return err
@@ -2628,7 +2629,7 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 	if cfg == nil {
 		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
 	}
-	environmentName := soloEnvironmentName(cfg, "")
+	environmentName := a.effectiveEnvironment("", cfg)
 	workspaceRoot, err := a.soloCurrentWorkspaceRoot()
 	if err != nil {
 		return err
@@ -3422,7 +3423,7 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNodeWithReleaseState(current, opts.Node)); err != nil {
 		return err
 	}
 
@@ -3482,7 +3483,7 @@ func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveO
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNodeWithReleaseState(current, opts.Node)); err != nil {
 		return err
 	}
 	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "node": opts.Node, "labels": current.Nodes[opts.Node].Labels, "removed": labels})
@@ -3667,14 +3668,15 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		if len(current.Nodes) == 0 {
 			return "", errors.New("No nodes registered in solo state. Run `devopsellence node create <name>`.")
 		}
-		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, soloEnvironmentName(cfg, ""))
+		environmentName := a.effectiveEnvironment("", cfg)
+		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
 		if err != nil {
 			return "", err
 		}
 		if len(nodeNames) == 0 {
 			return "", errors.New("No nodes attached to the current environment. Run `devopsellence node attach <name>`.")
 		}
-		return fmt.Sprintf("%d node(s) attached to %s", len(nodeNames), soloEnvironmentName(cfg, "")), nil
+		return fmt.Sprintf("%d node(s) attached to %s", len(nodeNames), environmentName), nil
 	})
 
 	ok := true
@@ -3691,7 +3693,8 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		"checks":         checks,
 	}
 	if ok && cfg != nil {
-		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, soloEnvironmentName(cfg, ""))
+		environmentName := a.effectiveEnvironment("", cfg)
+		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
 		if err != nil {
 			return err
 		}
@@ -3795,7 +3798,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	attached := false
 	var attachment solo.AttachmentRecord
 	if opts.Attach {
-		environmentName := soloEnvironmentName(cfg, "")
+		environmentName := a.effectiveEnvironment("", cfg)
 		var attachErr error
 		attachment, _, attachErr = a.attachNode(&current, workspaceRoot, environmentName, nodeName)
 		if attachErr != nil {
@@ -4720,6 +4723,14 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 			return err
 		}
 		if report.OK || !ingressDNSReportRetryable(report) || opts.Wait <= 0 || time.Now().After(deadline) {
+			if report.OK {
+				if err := recordSuccessfulSoloIngressCheck(&current, workspaceRoot, environmentName, report); err != nil {
+					return err
+				}
+				if err := a.writeSoloState(current); err != nil {
+					return err
+				}
+			}
 
 			if err := a.Printer.PrintJSON(report); err != nil {
 				return err
@@ -4736,6 +4747,28 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+func recordSuccessfulSoloIngressCheck(current *solo.State, workspaceRoot, environmentName string, report ingressDNSReportResult) error {
+	if current == nil {
+		return errors.New("solo state is required")
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	if current.IngressChecks == nil {
+		current.IngressChecks = map[string]solo.IngressCheckRecord{}
+	}
+	current.IngressChecks[key] = solo.IngressCheckRecord{
+		OK:            true,
+		PublicURLs:    append([]string(nil), report.PublicURLs...),
+		ExpectedIPs:   append([]string(nil), report.ExpectedIPs...),
+		CheckedAt:     time.Now().UTC().Format(time.RFC3339),
+		WorkspaceRoot: workspaceRoot,
+		Environment:   environmentName,
+	}
+	return nil
 }
 
 func (a *App) installSoloAgent(ctx context.Context, nodeName string, node config.Node, opts SoloAgentInstallOptions) error {
@@ -4815,6 +4848,12 @@ func cloneSoloState(current solo.State) solo.State {
 		cloned.Secrets = make(map[string]solo.SecretRecord, len(current.Secrets))
 		for key, value := range current.Secrets {
 			cloned.Secrets[key] = value
+		}
+	}
+	if current.IngressChecks != nil {
+		cloned.IngressChecks = make(map[string]solo.IngressCheckRecord, len(current.IngressChecks))
+		for key, value := range current.IngressChecks {
+			cloned.IngressChecks[key] = value
 		}
 	}
 	return cloned
@@ -4999,6 +5038,57 @@ func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Nod
 	return nodes, cfg, err
 }
 
+func (a *App) soloVerifiedPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
+	if !ingressRequiresTLSReadiness(cfg) {
+		return soloReadyPublicURLs(cfg, nodes)
+	}
+	current, err := a.readSoloState()
+	if err != nil {
+		return nil
+	}
+	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+	if err != nil {
+		return nil
+	}
+	return soloVerifiedIngressPublicURLs(current, workspaceRoot, environmentName, cfg, nodes)
+}
+
+func soloVerifiedIngressPublicURLs(current solo.State, workspaceRoot, environmentName string, cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
+	key, err := solo.EnvironmentStateKey(workspaceRoot, environmentName)
+	if err != nil {
+		return nil
+	}
+	record, ok := current.IngressChecks[key]
+	if !ok || !record.OK {
+		return nil
+	}
+	urls := soloStatusPublicURLs(cfg, nodes)
+	if len(urls) == 0 || !sameStringSet(record.PublicURLs, urls) {
+		return nil
+	}
+	expectedIPs := webNodeIPs(cfg, nodes)
+	if len(expectedIPs) > 0 && !sameStringSet(record.ExpectedIPs, expectedIPs) {
+		return nil
+	}
+	return urls
+}
+
+func sameStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftCopy := append([]string(nil), left...)
+	rightCopy := append([]string(nil), right...)
+	sort.Strings(leftCopy)
+	sort.Strings(rightCopy)
+	for i := range leftCopy {
+		if leftCopy[i] != rightCopy[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *App) attachNode(current *solo.State, workspaceRoot, environmentName, nodeName string) (solo.AttachmentRecord, bool, error) {
 	if current == nil {
 		return solo.AttachmentRecord{}, false, fmt.Errorf("solo state is required")
@@ -5010,6 +5100,18 @@ func soloAffectedNodesForNode(current solo.State, nodeName string) []string {
 	affected := []string{nodeName}
 	for _, key := range current.AttachmentKeysForNode(nodeName) {
 		attachment := current.Attachments[key]
+		affected = append(affected, attachment.NodeNames...)
+	}
+	return normalizeSoloNames(affected)
+}
+
+func soloAffectedNodesForNodeWithReleaseState(current solo.State, nodeName string) []string {
+	affected := []string{}
+	for _, key := range current.AttachmentKeysForNode(nodeName) {
+		attachment := current.Attachments[key]
+		if !soloAttachmentHasReleaseState(current, attachment) {
+			continue
+		}
 		affected = append(affected, attachment.NodeNames...)
 	}
 	return normalizeSoloNames(affected)

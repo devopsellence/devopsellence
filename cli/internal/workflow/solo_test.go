@@ -6123,6 +6123,58 @@ func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
 	}
 }
 
+func TestIngressSetWritesSelectedEnvironmentOverlay(t *testing.T) {
+	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
+
+	dir := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", config.DefaultEnvironment)
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"prod.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "prod.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto", Email: "prod@example.com"},
+	}
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{
+		Cwd:         dir,
+		ConfigStore: config.NewStore(),
+		Printer:     output.New(io.Discard, io.Discard),
+	}
+	if err := app.IngressSet(context.Background(), IngressSetOptions{
+		Hosts:               []string{"staging.example.com"},
+		TLSMode:             "auto",
+		TLSEmail:            "staging@example.com",
+		RedirectHTTP:        true,
+		RedirectHTTPChanged: true,
+	}); err != nil {
+		t.Fatalf("IngressSet() error = %v", err)
+	}
+
+	written, err := config.Load(filepath.Join(dir, config.FilePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(written.Ingress.Hosts, ","); got != "prod.example.com" {
+		t.Fatalf("base ingress hosts = %q, want prod.example.com", got)
+	}
+	overlay := written.Environments["staging"].Ingress
+	if overlay == nil {
+		t.Fatal("staging ingress overlay = nil, want populated overlay")
+	}
+	if got := strings.Join(overlay.Hosts, ","); got != "staging.example.com" {
+		t.Fatalf("staging ingress hosts = %q, want staging.example.com", got)
+	}
+	if overlay.TLS == nil || overlay.TLS.Email == nil || *overlay.TLS.Email != "staging@example.com" {
+		t.Fatalf("staging tls overlay = %#v, want staging email", overlay.TLS)
+	}
+}
+
 func TestLineProgressWriterEmitsLines(t *testing.T) {
 	var got []string
 	writer := &lineProgressWriter{progress: func(line string) { got = append(got, line) }}

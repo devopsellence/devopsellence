@@ -40,7 +40,7 @@ Solo and shared are management topologies, not separate deployment systems.
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
 cd my-app
-codex e "Deploy this app with devopsellence solo. Inspect the repo, create or update devopsellence.yml, run devopsellence deploy --dry-run first, explain the plan, then apply it only if this prompt already gives enough approval to mutate the target VM."
+codex e "Deploy this app with devopsellence solo."
 ```
 
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).

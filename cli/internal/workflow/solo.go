@@ -1646,7 +1646,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	}
 	verifiedPublicURLs := a.soloVerifiedPublicURLs(cfg, nodes)
 	localReleaseKnown := len(opts.Nodes) > 0
-	expectedRevision := ""
+	expectedRevisions := map[string]string{}
 	if len(opts.Nodes) == 0 {
 		if current, stateErr := a.readSoloState(); stateErr == nil {
 			_, workspaceRoot, environmentName, configErr := a.loadResolvedSoloProjectConfig("")
@@ -1657,7 +1657,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				}
 				if hasCurrent {
 					localReleaseKnown = true
-					expectedRevision = strings.TrimSpace(currentRelease.Revision)
+					expectedRevisions = soloExpectedStatusRevisions(current, currentRelease)
 				}
 			}
 		}
@@ -1703,12 +1703,13 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			})
 			continue
 		}
+		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
 		if expectedRevision != "" && strings.TrimSpace(result.Status.Revision) != expectedRevision {
 			allSettled = false
 			jsonResults = append(jsonResults, map[string]any{
 				"node":    name,
 				"status":  nil,
-				"message": fmt.Sprintf("remote agent status revision %q does not match current local release %q; run `devopsellence deploy`", strings.TrimSpace(result.Status.Revision), expectedRevision),
+				"message": fmt.Sprintf("remote agent status revision %q does not match current local deployment %q; run `devopsellence deploy`", strings.TrimSpace(result.Status.Revision), expectedRevision),
 			})
 			continue
 		}
@@ -1745,6 +1746,44 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status failed for %d node(s)", readErrors)}}
 	}
 	return nil
+}
+
+func soloExpectedStatusRevisions(current solo.State, release corerelease.Release) map[string]string {
+	expected := map[string]string{}
+	latestSequence := -1
+	var latest corerelease.Deployment
+	for _, deployment := range current.Deployments {
+		if deployment.EnvironmentID != release.EnvironmentID || deployment.ReleaseID != release.ID || deployment.PublicationResult == nil {
+			continue
+		}
+		if deployment.Sequence > latestSequence {
+			latestSequence = deployment.Sequence
+			latest = deployment
+		}
+	}
+	if latestSequence >= 0 {
+		for _, result := range latest.PublicationResult.NodeResults {
+			nodeName := strings.TrimSpace(result.NodeName)
+			if nodeName == "" {
+				nodeName = strings.TrimSpace(result.NodeID)
+			}
+			revision := strings.TrimSpace(result.Revision)
+			if nodeName != "" && revision != "" {
+				expected[nodeName] = revision
+			}
+		}
+	}
+	if len(expected) == 0 {
+		expected[""] = strings.TrimSpace(release.Revision)
+	}
+	return expected
+}
+
+func soloExpectedStatusRevision(expected map[string]string, nodeName string) string {
+	if revision := strings.TrimSpace(expected[nodeName]); revision != "" {
+		return revision
+	}
+	return strings.TrimSpace(expected[""])
 }
 
 func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) error {

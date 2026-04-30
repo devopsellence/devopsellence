@@ -5187,7 +5187,7 @@ func TestSoloReleaseRollbackRepublishFailureDoesNotSwitchCurrentRelease(t *testi
 	}
 }
 
-func TestSoloReleaseRollbackPersistsSelectedReleaseOnRolloutFailure(t *testing.T) {
+func TestSoloReleaseRollbackRolloutFailurePreservesCurrentRelease(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
@@ -5195,10 +5195,14 @@ func TestSoloReleaseRollbackPersistsSelectedReleaseOnRolloutFailure(t *testing.T
 	}
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := soloReleaseWorkflowState(workspaceRoot)
+	oldRelease := current.Releases["rel-1"]
+	oldRelease.Snapshot.Services[0].Healthcheck = &desiredstate.HealthcheckJSON{Path: "/up", Port: 3000}
+	current.Releases["rel-1"] = oldRelease
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
 	}
 	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: soloStatusMissingSentinel + "\n"},
 		{stdout: `{"revision":"__REVISION__","phase":"error","error":"healthcheck failed"}` + "\n"},
 	})
 
@@ -5220,8 +5224,11 @@ func TestSoloReleaseRollbackPersistsSelectedReleaseOnRolloutFailure(t *testing.T
 		t.Fatal(readErr)
 	}
 	key := workspaceRoot + "\nproduction"
-	if updatedState.Current[key] != "rel-1" {
-		t.Fatalf("current release = %q, want selected rollback release rel-1", updatedState.Current[key])
+	if updatedState.Current[key] != "rel-2" {
+		t.Fatalf("current release = %q, want rel-2 preserved after rollback rollout failure", updatedState.Current[key])
+	}
+	if updatedState.Snapshots[key].Revision != "bbb2222" {
+		t.Fatalf("snapshot revision = %q, want current snapshot preserved", updatedState.Snapshots[key].Revision)
 	}
 	var deployment corerelease.Deployment
 	for _, candidate := range updatedState.Deployments {
@@ -5229,6 +5236,71 @@ func TestSoloReleaseRollbackPersistsSelectedReleaseOnRolloutFailure(t *testing.T
 	}
 	if deployment.Status != corerelease.DeploymentStatusFailed || !strings.Contains(deployment.StatusMessage, "rollout failed") {
 		t.Fatalf("deployment = %#v, want failed rollout deployment", deployment)
+	}
+	var rolloutErr *soloRolloutError
+	if !errors.As(err, &rolloutErr) {
+		t.Fatalf("error = %T %v, want soloRolloutError", err, err)
+	}
+	fields := rolloutErr.ErrorFields()
+	if fields["environment"] != "production" {
+		t.Fatalf("fields = %#v, want production environment", fields)
+	}
+	healthchecks := fields["healthchecks"].([]map[string]any)
+	if len(healthchecks) != 1 || healthchecks[0]["path"] != "/up" || healthchecks[0]["port"] != 3000 {
+		t.Fatalf("healthchecks = %#v, want selected release snapshot healthcheck", healthchecks)
+	}
+	steps := fields["next_steps"].([]string)
+	if len(steps) != 4 || steps[0] != "devopsellence status --env 'production'" || steps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || !strings.Contains(steps[1], "returns HTTP 2xx") {
+		t.Fatalf("next_steps = %#v, want env-scoped healthcheck remediation", steps)
+	}
+}
+
+func TestSoloReleaseRollbackTimeoutPreservesCurrentRelease(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	responses := []fakeSSHResponse{{stdout: soloStatusMissingSentinel + "\n"}}
+	for range 50 {
+		responses = append(responses, fakeSSHResponse{stdout: `{"revision":"__REVISION__","phase":"reconciling"}` + "\n"})
+	}
+	installFakeSoloCommands(t, responses)
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:            output.New(&stdout, io.Discard),
+		SoloState:          soloState,
+		ConfigStore:        config.NewStore(),
+		Cwd:                workspaceRoot,
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      20 * time.Millisecond,
+	}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111"})
+	if err == nil {
+		t.Fatal("expected rollout timeout")
+	}
+	var timeoutErr *soloRolloutTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("error = %T %v, want soloRolloutTimeoutError", err, err)
+	}
+	fields := timeoutErr.ErrorFields()
+	steps := fields["next_steps"].([]string)
+	if fields["environment"] != "production" || len(steps) != 3 || steps[0] != "devopsellence status --env 'production'" || steps[1] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" {
+		t.Fatalf("fields = %#v, want env-scoped timeout guidance", fields)
+	}
+	updatedState, readErr := soloState.Read()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	key := workspaceRoot + "\nproduction"
+	if updatedState.Current[key] != "rel-2" || updatedState.Snapshots[key].Revision != "bbb2222" {
+		t.Fatalf("current=%q snapshot=%q, want rel-2/bbb2222 preserved", updatedState.Current[key], updatedState.Snapshots[key].Revision)
 	}
 }
 
@@ -5372,7 +5444,7 @@ func TestSoloDeployRolloutFailureIncludesHealthcheckContext(t *testing.T) {
 		t.Fatalf("healthchecks = %#v, want web healthcheck context", healthchecks)
 	}
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 4 || !strings.Contains(steps[1], "returns HTTP 2xx on healthcheck path '/up' port 3000") {
+	if len(steps) != 4 || steps[0] != "devopsellence status --env 'production'" || steps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || !strings.Contains(steps[1], "returns HTTP 2xx on healthcheck path '/up' port 3000") {
 		t.Fatalf("next_steps = %#v, want healthcheck remediation before logs", steps)
 	}
 	loaded, err := soloState.Read()

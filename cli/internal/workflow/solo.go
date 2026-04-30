@@ -541,11 +541,13 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		resultErr := err
 		var rolloutErr *soloRolloutError
 		if errors.As(err, &rolloutErr) {
+			rolloutErr.Environment = environmentName
 			rolloutErr.Healthchecks = soloDeployHealthcheckDetails(cfg)
 			resultErr = ExitError{Code: 1, Err: rolloutErr}
 		}
 		var timeoutErr *soloRolloutTimeoutError
 		if errors.As(err, &timeoutErr) {
+			timeoutErr.Environment = environmentName
 			timeoutErr.Healthchecks = soloDeployHealthcheckDetails(cfg)
 			resultErr = ExitError{Code: 1, Err: timeoutErr}
 		}
@@ -690,6 +692,7 @@ func readNodeStatus(ctx context.Context, node config.Node) (soloNodeStatusResult
 
 type soloRolloutError struct {
 	Node               string
+	Environment        string
 	Message            string
 	Healthchecks       []map[string]any
 	HealthcheckFailure bool
@@ -708,7 +711,10 @@ func (e *soloRolloutError) ErrorFields() map[string]any {
 	}
 	fields := map[string]any{
 		"node":       e.Node,
-		"next_steps": soloRolloutNextSteps([]string{e.Node}, e.Healthchecks, e.HealthcheckFailure),
+		"next_steps": soloRolloutNextSteps(e.Environment, []string{e.Node}, e.Healthchecks, e.HealthcheckFailure),
+	}
+	if strings.TrimSpace(e.Environment) != "" {
+		fields["environment"] = e.Environment
 	}
 	if len(e.Healthchecks) > 0 {
 		fields["healthchecks"] = e.Healthchecks
@@ -719,6 +725,7 @@ func (e *soloRolloutError) ErrorFields() map[string]any {
 type soloRolloutTimeoutError struct {
 	Summary            string
 	Nodes              []string
+	Environment        string
 	Healthchecks       []map[string]any
 	HealthcheckFailure bool
 }
@@ -734,7 +741,10 @@ func (e *soloRolloutTimeoutError) ErrorFields() map[string]any {
 	if e == nil {
 		return map[string]any{}
 	}
-	fields := map[string]any{"next_steps": soloRolloutNextSteps(e.Nodes, e.Healthchecks, e.HealthcheckFailure)}
+	fields := map[string]any{"next_steps": soloRolloutNextSteps(e.Environment, e.Nodes, e.Healthchecks, e.HealthcheckFailure)}
+	if strings.TrimSpace(e.Environment) != "" {
+		fields["environment"] = e.Environment
+	}
 	if len(e.Healthchecks) > 0 {
 		fields["healthchecks"] = e.Healthchecks
 	}
@@ -760,16 +770,39 @@ func soloDeployHealthcheckDetails(cfg *config.ProjectConfig) []map[string]any {
 	return details
 }
 
-func soloRolloutNextSteps(nodes []string, healthchecks []map[string]any, healthcheckFailure bool) []string {
-	steps := []string{"devopsellence status"}
+func soloSnapshotHealthcheckDetails(snapshot desiredstate.DeploySnapshot) []map[string]any {
+	details := []map[string]any{}
+	for _, service := range snapshot.Services {
+		if service.Healthcheck == nil {
+			continue
+		}
+		details = append(details, map[string]any{
+			"service_name": service.Name,
+			"path":         service.Healthcheck.Path,
+			"port":         service.Healthcheck.Port,
+		})
+	}
+	return details
+}
+
+func soloRolloutNextSteps(environment string, nodes []string, healthchecks []map[string]any, healthcheckFailure bool) []string {
+	envFlag := soloEnvFlag(environment)
+	steps := []string{"devopsellence status" + envFlag}
 	if healthcheckFailure {
 		steps = append(steps, soloHealthcheckNextSteps(healthchecks)...)
 	}
 	for _, node := range nodes {
-		steps = append(steps, "devopsellence logs --node "+shellQuote(node)+" --lines 100")
+		steps = append(steps, "devopsellence logs"+envFlag+" --node "+shellQuote(node)+" --lines 100")
 		steps = append(steps, "devopsellence node logs "+shellQuote(node)+" --lines 100")
 	}
 	return steps
+}
+
+func soloEnvFlag(environment string) string {
+	if strings.TrimSpace(environment) == "" {
+		return ""
+	}
+	return " --env " + shellQuote(environment)
 }
 
 func soloHealthcheckNextSteps(healthchecks []map[string]any) []string {
@@ -2041,19 +2074,26 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 		}
 		return err
 	}
-	if _, err := current.SaveRelease(selected); err != nil {
-		return err
-	}
-	if err := current.SaveDeployment(deployment); err != nil {
-		return err
-	}
-	if err := a.writeSoloState(current); err != nil {
-		return err
-	}
 	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, statusBaselines); err != nil {
-		if persistErr := a.persistSoloDeploymentRolloutFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
-			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
+		resultErr := err
+		var rolloutErr *soloRolloutError
+		if errors.As(err, &rolloutErr) {
+			rolloutErr.Environment = environmentName
+			rolloutErr.Healthchecks = soloSnapshotHealthcheckDetails(selected.Snapshot)
+			resultErr = ExitError{Code: 1, Err: rolloutErr}
 		}
+		var timeoutErr *soloRolloutTimeoutError
+		if errors.As(err, &timeoutErr) {
+			timeoutErr.Environment = environmentName
+			timeoutErr.Healthchecks = soloSnapshotHealthcheckDetails(selected.Snapshot)
+			resultErr = ExitError{Code: 1, Err: timeoutErr}
+		}
+		if persistErr := a.persistSoloDeploymentRolloutFailure(current, deployment, desiredStateRevisions, resultErr); persistErr != nil {
+			return errors.Join(resultErr, fmt.Errorf("persist deployment failure: %w", persistErr))
+		}
+		return resultErr
+	}
+	if _, err := current.SaveRelease(selected); err != nil {
 		return err
 	}
 	deployment.Status = corerelease.DeploymentStatusSettled

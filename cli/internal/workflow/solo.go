@@ -565,7 +565,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
 	}
-	if urls := soloReadyPublicURLs(cfg, nodes); len(urls) > 0 {
+	if urls := a.soloVerifiedPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
 		payload["next_steps"] = append([]string{"devopsellence status", "curl " + urls[0]}, soloNodeLogNextSteps(nodes)...)
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {

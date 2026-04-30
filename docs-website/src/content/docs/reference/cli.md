@@ -20,7 +20,7 @@ devopsellence context show
 devopsellence deploy --dry-run
 devopsellence deploy
 devopsellence status
-devopsellence logs --service web
+devopsellence logs web --node prod-1 --lines 100
 devopsellence release rollback --dry-run <release-id>
 ```
 

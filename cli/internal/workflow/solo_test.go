@@ -4269,8 +4269,8 @@ func TestSoloDeployDryRunUsesExplicitEnvironmentWithoutDNS(t *testing.T) {
 		t.Fatalf("payload = %#v, want TLS pending dry-run without DNS failure", payload)
 	}
 	planned := jsonMapFromAny(t, payload["planned_dns_check"])
-	if planned["live_lookup"] != false || planned["required"] != true || planned["check_command"] != "devopsellence ingress check" {
-		t.Fatalf("planned_dns_check = %#v, want no-network required DNS check", planned)
+	if planned["live_lookup"] != false || planned["required"] != true || planned["check_command"] != "devopsellence ingress check --env 'staging'" {
+		t.Fatalf("planned_dns_check = %#v, want no-network required DNS check for staging", planned)
 	}
 	hosts := jsonArrayFromMap(t, planned, "hosts")
 	if len(hosts) != 1 || hosts[0] != "staging.invalid" {
@@ -4279,6 +4279,20 @@ func TestSoloDeployDryRunUsesExplicitEnvironmentWithoutDNS(t *testing.T) {
 	expected := jsonArrayFromMap(t, planned, "expected_ips")
 	if len(expected) != 1 || expected[0] != "203.0.113.10" {
 		t.Fatalf("planned_dns_check.expected_ips = %#v, want node IP", expected)
+	}
+
+	stdout.Reset()
+	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{DryRun: true, Environment: "staging", SkipDNSCheck: true}); err != nil {
+		t.Fatal(err)
+	}
+	events = decodeNDJSONOutput(t, &stdout)
+	payload = events[len(events)-1]
+	planned = jsonMapFromAny(t, payload["planned_dns_check"])
+	if planned["live_lookup"] != false || planned["required"] != false || planned["skipped"] != true {
+		t.Fatalf("planned_dns_check = %#v, want DNS check marked skipped/not required", planned)
+	}
+	if _, ok := planned["check_command"]; ok {
+		t.Fatalf("planned_dns_check = %#v, want no check command when DNS check is skipped", planned)
 	}
 }
 

@@ -938,6 +938,41 @@ func TestSoloAffectedNodesForNodeIncludesCoHostedNodes(t *testing.T) {
 	}
 }
 
+func TestSoloAffectedNodesForNodeWithReleaseStateSkipsStatelessAttachments(t *testing.T) {
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {},
+			"node-b": {},
+			"node-c": {},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			"/workspace/a\nproduction": {
+				WorkspaceKey: "/workspace/a",
+				Environment:  "production",
+				NodeNames:    []string{"node-a", "node-b"},
+			},
+			"/workspace/b\nproduction": {
+				WorkspaceKey: "/workspace/b",
+				Environment:  "production",
+				NodeNames:    []string{"node-a", "node-c"},
+			},
+		},
+		Snapshots: map[string]desiredstate.DeploySnapshot{
+			"/workspace/b\nproduction": {WorkspaceKey: "/workspace/b", Environment: "production"},
+		},
+	}
+
+	got := soloAffectedNodesForNodeWithReleaseState(current, "node-a")
+	want := []string{"node-a", "node-c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("affected nodes with release state = %#v, want %#v", got, want)
+	}
+	delete(current.Snapshots, "/workspace/b\nproduction")
+	if got := soloAffectedNodesForNodeWithReleaseState(current, "node-a"); len(got) != 0 {
+		t.Fatalf("affected nodes with no release state = %#v, want none", got)
+	}
+}
+
 func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")

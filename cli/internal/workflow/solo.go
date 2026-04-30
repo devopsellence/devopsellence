@@ -3423,7 +3423,7 @@ func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNodeWithReleaseState(current, opts.Node)); err != nil {
 		return err
 	}
 
@@ -3483,7 +3483,7 @@ func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveO
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNode(current, opts.Node)); err != nil {
+	if _, err := a.republishNodes(ctx, current, soloAffectedNodesForNodeWithReleaseState(current, opts.Node)); err != nil {
 		return err
 	}
 	return a.Printer.PrintJSON(map[string]any{"schema_version": outputSchemaVersion, "node": opts.Node, "labels": current.Nodes[opts.Node].Labels, "removed": labels})
@@ -5100,6 +5100,18 @@ func soloAffectedNodesForNode(current solo.State, nodeName string) []string {
 	affected := []string{nodeName}
 	for _, key := range current.AttachmentKeysForNode(nodeName) {
 		attachment := current.Attachments[key]
+		affected = append(affected, attachment.NodeNames...)
+	}
+	return normalizeSoloNames(affected)
+}
+
+func soloAffectedNodesForNodeWithReleaseState(current solo.State, nodeName string) []string {
+	affected := []string{}
+	for _, key := range current.AttachmentKeysForNode(nodeName) {
+		attachment := current.Attachments[key]
+		if !soloAttachmentHasReleaseState(current, attachment) {
+			continue
+		}
 		affected = append(affected, attachment.NodeNames...)
 	}
 	return normalizeSoloNames(affected)

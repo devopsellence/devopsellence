@@ -116,6 +116,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		existingByService[containerServiceKey(c)] = append(existingByService[containerServiceKey(c)], c)
 	}
 
+	var reconcileErr error
 	for serviceKey, c := range desiredByService {
 		serviceResult, err := r.reconcileService(ctx, desired.GetIngress(), desired.GetNodePeers(), c, existingByService[serviceKey], workloadNetworks)
 		result.Created += serviceResult.Created
@@ -123,8 +124,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 		result.Removed += serviceResult.Removed
 		result.Unchanged += serviceResult.Unchanged
 		if err != nil {
-			return result, err
+			reconcileErr = errors.Join(reconcileErr, err)
+			continue
 		}
+	}
+	if reconcileErr != nil {
+		return result, reconcileErr
 	}
 	for _, c := range existing {
 		if _, ok := desiredByService[containerServiceKey(c)]; ok {

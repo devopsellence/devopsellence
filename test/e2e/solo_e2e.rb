@@ -755,13 +755,13 @@ PY
     puts "[ok] Web container running: #{web_containers.join(', ')}"
 
     # Verify via CLI status command.
-    cli_status_output = run!(
+    cli_status_result = run_command(
       cli_binary.to_s, "status",
       chdir: @app_dir.to_s,
       timeout: 60,
       env: ssh_env
     )
-    cli_status = parse_cli_json(cli_status_output)
+    cli_status = parse_cli_json(cli_status_result.fetch(:output))
     node_status = (cli_status["nodes"] || []).find { |entry| entry["node"] == "node-1" }
     raise "CLI status missing node-1" unless node_status
     cli_revision = node_status.dig("status", "revision")
@@ -769,6 +769,9 @@ PY
     raise "CLI status revision mismatch: #{cli_revision}" unless cli_revision == revision
     unless ["settled", "error"].include?(cli_phase)
       raise "CLI status phase unexpected: #{cli_phase.inspect}"
+    end
+    unless cli_status_result.fetch(:status).success? || (cli_phase == "error" && known_probe_error?(node_status.dig("status", "error").to_s))
+      raise "CLI status failed unexpectedly (#{cli_status_result.fetch(:status).exitstatus}): #{excerpt(cli_status_result.fetch(:output), 20)}"
     end
     puts "[ok] CLI status confirms revision #{cli_revision} phase=#{cli_phase}"
 

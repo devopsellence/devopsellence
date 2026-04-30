@@ -3591,6 +3591,61 @@ exit 1
 	}
 }
 
+func TestSoloNodeDetachPreservesLocalAttachmentWhenRemoteCleanupFails(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"prod-1": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "prod-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
+set -euo pipefail
+command="${!#}"
+if [[ "$command" == *"desired-state set-override"* ]]; then
+  echo 'remote write failed' >&2
+  exit 1
+fi
+echo "unexpected ssh command: $command" >&2
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: "prod-1"}); err == nil {
+		t.Fatal("expected detach failure")
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.NodeHasAttachments("prod-1") {
+		t.Fatalf("prod-1 attachment was removed after failed detach: %#v", loaded.Attachments)
+	}
+}
+
 func TestNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 	t.Parallel()
 
@@ -4565,7 +4620,415 @@ func TestSoloStatusComparesRemoteStatusToPublishedDesiredStateRevision(t *testin
 	}
 }
 
+func TestSoloStatusFailsWhenCurrentDeploymentStatusIsError(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "*", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_test",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      1,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusFailed
+	deployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "desired-state-hash",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"desired-state-hash","phase":"error","error":"healthcheck failed"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want ExitError", err, err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not expect public_urls for errored current deployment", payload)
+	}
+}
+
 func TestSoloStatusAcceptsNewerCohostedDesiredStateWhenCurrentEnvironmentSettled(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_test",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      1,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusSettled
+	deployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "current-workspace-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	cohostedEnvironmentID, err := solo.EnvironmentStateKey(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cohostedRelease, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
+		ID:            "rel_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		Revision:      "cohostedsha",
+		Snapshot: desiredstate.DeploySnapshot{
+			WorkspaceRoot: workspaceRoot,
+			WorkspaceKey:  workspaceRoot,
+			Environment:   "staging",
+			Revision:      "cohostedsha",
+			Image:         "demo:cohostedsha",
+		},
+		Image:     corerelease.ImageRef{Reference: "demo:cohostedsha"},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SaveRelease(cohostedRelease); err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedDeployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_old_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		ReleaseID:     "rel_cohosted",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      1,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedDeployment.Status = corerelease.DeploymentStatusSettled
+	oldCohostedDeployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "old-cohosted-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(oldCohostedDeployment); err != nil {
+		t.Fatal(err)
+	}
+	cohostedDeployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		ReleaseID:     "rel_cohosted",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      2,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cohostedDeployment.Status = corerelease.DeploymentStatusSettled
+	cohostedDeployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "newer-cohosted-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(cohostedDeployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"newer-cohosted-desired-state","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	if len(nodes) != 1 {
+		t.Fatalf("nodes = %#v, want one node", nodes)
+	}
+	node := jsonMapFromAny(t, nodes[0])
+	if node["status"] == nil || node["message"] != nil {
+		t.Fatalf("node = %#v, want cohosted status accepted", node)
+	}
+	if urls := jsonArrayFromMap(t, payload, "public_urls"); len(urls) != 1 || urls[0] != "http://app.example.com/" {
+		t.Fatalf("public_urls = %#v, want public URL when scoped environment is settled", urls)
+	}
+}
+
+func TestSoloStatusRejectsStaleCohostedDesiredStateDespiteSettledRuntimeEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_test",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      1,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusSettled
+	deployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "current-workspace-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	cohostedEnvironmentID, err := solo.EnvironmentStateKey(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedRelease, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
+		ID:            "rel_old_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		Revision:      "oldcohostedsha",
+		Snapshot: desiredstate.DeploySnapshot{
+			WorkspaceRoot: workspaceRoot,
+			WorkspaceKey:  workspaceRoot,
+			Environment:   "staging",
+			Revision:      "oldcohostedsha",
+			Image:         "demo:oldcohostedsha",
+		},
+		Image:     corerelease.ImageRef{Reference: "demo:oldcohostedsha"},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SaveRelease(oldCohostedRelease); err != nil {
+		t.Fatal(err)
+	}
+	cohostedRelease, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
+		ID:            "rel_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		Revision:      "cohostedsha",
+		Snapshot: desiredstate.DeploySnapshot{
+			WorkspaceRoot: workspaceRoot,
+			WorkspaceKey:  workspaceRoot,
+			Environment:   "staging",
+			Revision:      "cohostedsha",
+			Image:         "demo:cohostedsha",
+		},
+		Image:     corerelease.ImageRef{Reference: "demo:cohostedsha"},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SaveRelease(cohostedRelease); err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedDeployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_old_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		ReleaseID:     "rel_old_cohosted",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      3,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedDeployment.Status = corerelease.DeploymentStatusSettled
+	oldCohostedDeployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "old-cohosted-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(oldCohostedDeployment); err != nil {
+		t.Fatal(err)
+	}
+	cohostedDeployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		ReleaseID:     "rel_cohosted",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      2,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cohostedDeployment.Status = corerelease.DeploymentStatusSettled
+	cohostedDeployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "newer-cohosted-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(cohostedDeployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"old-cohosted-desired-state","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not expect public URL for stale cohosted desired-state revision", payload)
+	}
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	if node["status"] != nil || node["message"] == nil {
+		t.Fatalf("node = %#v, want stale cohosted status withheld", node)
+	}
+}
+
+func TestSoloStatusRejectsUnhealthyRuntimeEnvironmentDespiteTopLevelSettled(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -4628,7 +5091,99 @@ func TestSoloStatusAcceptsNewerCohostedDesiredStateWhenCurrentEnvironmentSettled
 	if err != nil {
 		t.Fatal(err)
 	}
-	statusJSON := fmt.Sprintf(`{"revision":"newer-cohosted-desired-state","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","state":"running"}]}]}`, runtimeEnvironment)
+	statusJSON := fmt.Sprintf(`{"revision":"current-workspace-desired-state","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"unhealthy"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected unhealthy runtime environment status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want ExitError", err, err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not expect public_urls while runtime environment is unhealthy", payload)
+	}
+	if urls := jsonArrayFromMap(t, payload, "configured_public_urls"); len(urls) != 1 || urls[0] != "http://app.example.com/" {
+		t.Fatalf("configured_public_urls = %#v, want configured URL", urls)
+	}
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	if node["status"] != nil || node["message"] == nil {
+		t.Fatalf("node = %#v, want unhealthy status withheld", node)
+	}
+}
+
+func TestSoloStatusRejectsKnownStaleDesiredStateDespiteSettledRuntimeEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	for sequence, revision := range []string{"old-desired-state", "current-desired-state"} {
+		deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+			ID:            fmt.Sprintf("dep_%d", sequence+1),
+			EnvironmentID: environmentID,
+			ReleaseID:     release.ID,
+			Kind:          corerelease.DeploymentKindDeploy,
+			Sequence:      sequence + 1,
+			TargetNodeIDs: []string{"node-a"},
+			CreatedAt:     time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		deployment.Status = corerelease.DeploymentStatusSettled
+		deployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+			Status: corerelease.PublicationStatusWritten,
+			NodeResults: []corerelease.DesiredStatePublication{{
+				NodeName: "node-a",
+				Revision: revision,
+				Status:   corerelease.PublicationStatusWritten,
+			}},
+		}
+		if err := current.SaveDeployment(deployment); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"old-desired-state","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
 	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
 
 	var stdout bytes.Buffer
@@ -4637,16 +5192,13 @@ func TestSoloStatusAcceptsNewerCohostedDesiredStateWhenCurrentEnvironmentSettled
 		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not expect public_urls for known stale desired state", payload)
+	}
 	nodes := jsonArrayFromMap(t, payload, "nodes")
-	if len(nodes) != 1 {
-		t.Fatalf("nodes = %#v, want one node", nodes)
-	}
 	node := jsonMapFromAny(t, nodes[0])
-	if node["status"] == nil || node["message"] != nil {
-		t.Fatalf("node = %#v, want cohosted status accepted", node)
-	}
-	if urls := jsonArrayFromMap(t, payload, "public_urls"); len(urls) != 1 || urls[0] != "http://app.example.com/" {
-		t.Fatalf("public_urls = %#v, want public URL when scoped environment is settled", urls)
+	if node["status"] != nil || node["message"] == nil {
+		t.Fatalf("node = %#v, want stale desired-state status withheld", node)
 	}
 }
 
@@ -5084,6 +5636,10 @@ func TestSoloReleaseRollbackDryRunUsesExplicitEnvironment(t *testing.T) {
 	payload := events[len(events)-1]
 	if payload["environment"] != "staging" || payload["release_id"] != "rel-1" || payload["rolled_back_from"] != "rel-2" {
 		t.Fatalf("payload = %#v, want explicit staging rollback from rel-2 to rel-1", payload)
+	}
+	steps := jsonArrayFromMap(t, payload, "next_steps")
+	if len(steps) != 1 || steps[0] != "devopsellence release rollback --env 'staging' rel-1" {
+		t.Fatalf("next_steps = %#v, want env-scoped rollback command", steps)
 	}
 }
 
@@ -5614,6 +6170,34 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	steps := fields["next_steps"].([]string)
 	if len(steps) != 3 || steps[1] != "devopsellence logs --node 'node-a' --lines 100" || steps[2] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status, workload logs, and node logs commands", steps)
+	}
+}
+
+func TestWaitForSoloRolloutFailsOnUnhealthyRuntimeEnvironmentDespiteTopLevelSettled(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: `{"revision":"expected-revision","phase":"settled","environments":[{"name":"production","revision":"workload-revision","phase":"settled","services":[{"name":"web","phase":"settled","state":"unhealthy"}]}]}` + "\n"},
+	})
+
+	app := &App{
+		Printer:            output.New(io.Discard, io.Discard),
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      100 * time.Millisecond,
+	}
+
+	err := app.waitForSoloRolloutForRuntime(context.Background(), map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
+	}, map[string]string{
+		"node-a": "expected-revision",
+	}, "production", "workload-revision")
+	if err == nil {
+		t.Fatal("expected rollout failure")
+	}
+	var rolloutErr *soloRolloutError
+	if !errors.As(err, &rolloutErr) {
+		t.Fatalf("error = %T %v, want soloRolloutError", err, err)
+	}
+	if !rolloutErr.HealthcheckFailure || !strings.Contains(rolloutErr.Message, "state=unhealthy") {
+		t.Fatalf("rollout error = %#v, want healthcheck-like unhealthy service failure", rolloutErr)
 	}
 }
 

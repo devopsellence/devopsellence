@@ -1829,6 +1829,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	releaseRequired := workspaceRoot != "" && environmentName != "" && (len(opts.Nodes) == 0 || strings.TrimSpace(opts.Environment) != "")
 	localReleaseKnown := len(opts.Nodes) > 0 && !releaseRequired
 	expectedRevisions := map[string]string{}
+	cohostedRevisions := map[string]map[string]bool{}
+	staleRevisions := map[string]map[string]bool{}
 	expectedRuntimeEnvironment := ""
 	expectedWorkloadRevision := ""
 	if workspaceRoot != "" && environmentName != "" {
@@ -1841,6 +1843,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			if hasCurrent {
 				localReleaseKnown = true
 				expectedRevisions = soloExpectedStatusRevisions(current, currentRelease)
+				cohostedRevisions = soloCohostedStatusRevisions(current, currentRelease)
+				staleRevisions = soloStaleStatusRevisions(current, currentRelease, expectedRevisions)
 				expectedWorkloadRevision = strings.TrimSpace(currentRelease.Revision)
 				expectedRuntimeEnvironment, _ = soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, "")
 			}
@@ -1851,6 +1855,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 
 	var jsonResults []map[string]any
 	readErrors := 0
+	statusErrors := 0
 	allSettled := true
 
 	for name, node := range nodes {
@@ -1890,12 +1895,18 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			continue
 		}
 		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
-		if expectedRevision != "" && !soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision) {
+		if expectedRevision != "" && !soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name]) {
 			allSettled = false
+			message := fmt.Sprintf("remote agent status revision %q does not match current local deployment %q; run `devopsellence deploy`", strings.TrimSpace(result.Status.Revision), expectedRevision)
+			runtime := soloRuntimeEnvironmentStatus(result.Status, expectedRuntimeEnvironment, expectedWorkloadRevision)
+			if runtime.State == "error" {
+				statusErrors++
+				message = runtime.Message
+			}
 			jsonResults = append(jsonResults, map[string]any{
 				"node":    name,
 				"status":  nil,
-				"message": fmt.Sprintf("remote agent status revision %q does not match current local deployment %q; run `devopsellence deploy`", strings.TrimSpace(result.Status.Revision), expectedRevision),
+				"message": message,
 			})
 			continue
 		}
@@ -1932,6 +1943,9 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	if readErrors > 0 {
 		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status failed for %d node(s)", readErrors)}}
 	}
+	if statusErrors > 0 {
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status reported unhealthy runtime environment on %d node(s)", statusErrors)}}
+	}
 	return nil
 }
 
@@ -1966,10 +1980,68 @@ func soloExpectedStatusRevisions(current solo.State, release corerelease.Release
 	return expected
 }
 
-func soloNodeStatusMatchesExpectedRelease(status soloNodeStatus, expectedDesiredStateRevision, expectedRuntimeEnvironment, expectedWorkloadRevision string) bool {
+func soloStaleStatusRevisions(current solo.State, release corerelease.Release, expected map[string]string) map[string]map[string]bool {
+	stale := map[string]map[string]bool{}
+	for _, deployment := range current.Deployments {
+		if deployment.EnvironmentID != release.EnvironmentID || deployment.PublicationResult == nil {
+			continue
+		}
+		for _, result := range deployment.PublicationResult.NodeResults {
+			nodeName := strings.TrimSpace(result.NodeName)
+			if nodeName == "" {
+				nodeName = strings.TrimSpace(result.NodeID)
+			}
+			revision := strings.TrimSpace(result.Revision)
+			if nodeName == "" || revision == "" || revision == soloExpectedStatusRevision(expected, nodeName) {
+				continue
+			}
+			if stale[nodeName] == nil {
+				stale[nodeName] = map[string]bool{}
+			}
+			stale[nodeName][revision] = true
+		}
+	}
+	return stale
+}
+
+func soloCohostedStatusRevisions(current solo.State, release corerelease.Release) map[string]map[string]bool {
+	cohosted := map[string]map[string]bool{}
+	for _, deployment := range current.Deployments {
+		if deployment.EnvironmentID == release.EnvironmentID || deployment.PublicationResult == nil {
+			continue
+		}
+		for _, result := range deployment.PublicationResult.NodeResults {
+			nodeName := strings.TrimSpace(result.NodeName)
+			if nodeName == "" {
+				nodeName = strings.TrimSpace(result.NodeID)
+			}
+			revision := strings.TrimSpace(result.Revision)
+			if nodeName == "" || revision == "" {
+				continue
+			}
+			if cohosted[nodeName] == nil {
+				cohosted[nodeName] = map[string]bool{}
+			}
+			cohosted[nodeName][revision] = true
+		}
+	}
+	return cohosted
+}
+
+func soloNodeStatusMatchesExpectedRelease(status soloNodeStatus, expectedDesiredStateRevision, expectedRuntimeEnvironment, expectedWorkloadRevision string, cohostedDesiredStateRevisions, staleDesiredStateRevisions map[string]bool) bool {
 	runtime := soloRuntimeEnvironmentStatus(status, expectedRuntimeEnvironment, expectedWorkloadRevision)
 	if runtime.State != "" {
-		return runtime.State == "settled"
+		if runtime.State != "settled" {
+			return false
+		}
+		statusRevision := strings.TrimSpace(status.Revision)
+		if statusRevision == strings.TrimSpace(expectedDesiredStateRevision) {
+			return true
+		}
+		if staleDesiredStateRevisions[statusRevision] {
+			return false
+		}
+		return cohostedDesiredStateRevisions[statusRevision]
 	}
 	if strings.TrimSpace(status.Revision) == strings.TrimSpace(expectedDesiredStateRevision) {
 		return true

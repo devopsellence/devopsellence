@@ -1,36 +1,32 @@
 ---
 title: devopsellence docs
-description: Deploy and operate containerized apps on VMs you control.
+description: Agent-primary deployment docs for containerized apps on VMs.
 template: splash
 hero:
-  tagline: Built for agents, transparent for humans.
+  tagline: Agent-primary deployments on VMs you control.
   actions:
-    - text: Start with solo
+    - text: Solo quickstart
       link: /getting-started/solo-quickstart/
       icon: right-arrow
-    - text: Read the concepts
-      link: /concepts/runtime-model/
+    - text: Agent-primary model
+      link: /concepts/agent-primary/
       icon: open-book
 ---
 
-devopsellence is a VM-native deployment toolkit for containerized applications.
-It gives you a small app config, a node agent, and a reconciliation loop instead
-of a platform-owned runtime.
+devopsellence helps AI coding and operations agents deploy containerized apps
+without inventing production shell choreography.
 
-<img class="runtime-diagram" src="/devopsellence-runtime.svg" alt="devopsellence runtime model" />
+The contract is narrow: inspect, plan, apply desired state, observe
+reconciliation, and recover with ordinary tools when needed. Humans stay in the
+approval loop; the node agent stays deterministic.
 
-## The short version
+## Start here
 
-<div class="mode-grid">
-  <section class="mode-panel">
-    <h3>Solo</h3>
-    <p>Use SSH, Docker, local state files, and your own VM. Best when one operator or one AI agent owns the deployment loop.</p>
-  </section>
-  <section class="mode-panel">
-    <h3>Shared</h3>
-    <p>Use the same app model with sign-in, org/project/environment context, hosted APIs, and team workflows.</p>
-  </section>
-</div>
+- [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
+  one VM.
+- [Runtime model](/concepts/runtime-model/) for desired state, releases,
+  services, nodes, and status.
+- [CLI reference](/reference/cli/) for the agent-safe command surface.
 
-The node agent is the mandatory runtime component. The CLI and control plane are
-product surfaces around the same deployment model.
+Solo and shared use the same runtime model. Mode changes ownership,
+persistence, and transport; it should not change deployment semantics.

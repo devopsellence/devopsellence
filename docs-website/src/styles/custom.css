@@ -19,31 +19,6 @@
   max-width: min(100%, 42rem);
 }
 
-.runtime-diagram {
-  background: var(--sl-color-bg-sidebar);
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 8px;
-  display: block;
-  margin: 1.5rem 0;
-  max-width: 100%;
-}
-
-.mode-grid {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-}
-
-.mode-panel {
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 8px;
-  padding: 1rem;
-}
-
-.mode-panel h3 {
-  margin-top: 0;
-}
-
 .command-sequence {
   counter-reset: step;
   list-style: none;

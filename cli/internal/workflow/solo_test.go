@@ -2367,6 +2367,7 @@ func TestSoloIngressCertInstallUploadsManualTLSFilesToAttachedNode(t *testing.T)
 
 func TestSoloIngressCertInstallWithExplicitNodeDoesNotRequireWorkspaceConfig(t *testing.T) {
 	cwd := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	uploadsPath := filepath.Join(t.TempDir(), "uploads")
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_UPLOADS", uploadsPath)
 	installFakeSoloCommands(t, nil)

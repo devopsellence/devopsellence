@@ -112,6 +112,10 @@ class CliInstallsController < ActionController::Base
       if [[ -z "$INSTALL_DIR" ]]; then
         INSTALL_DIR="$HOME/.local/bin"
       fi
+      case "$INSTALL_DIR" in
+        /*) ;;
+        *) INSTALL_DIR="$(pwd -P)/$INSTALL_DIR" ;;
+      esac
 
       DOWNLOAD_URL="$BASE_URL/cli/download?os=$OS&arch=$ARCH&version=$CLI_VERSION"
       CHECKSUM_URL="$CLI_CHECKSUM_URL?version=$CLI_VERSION"

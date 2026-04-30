@@ -175,6 +175,23 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_equal "prerelease build\n", installed_cli
   end
 
+  test "cli install script normalizes relative install dir before path advice" do
+    get "/lfg.sh", params: { version: "master-0053792f6aec" }
+
+    assert_response :success
+
+    stdout, stderr, status, installed_cli = run_cli_install_script(
+      response.body,
+      version: "master-0053792f6aec",
+      install_dir: "bin"
+    )
+
+    assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
+    assert_includes stdout, "/bin/devopsellence"
+    refute_includes stdout, "installed to bin/devopsellence"
+    assert_equal "prerelease build\n", installed_cli
+  end
+
   test "cli install script derives checksum url after parsing base url overrides" do
     get "/lfg.sh"
 
@@ -422,8 +439,17 @@ class InstallsTest < ActionDispatch::IntegrationTest
       env["DEVOPSELLENCE_CLI_INSTALL_DIR"] = effective_install_dir if effective_install_dir
       env["DEVOPSELLENCE_INSTALL_AGENT_SKILL"] = "1" if install_agent_skill
 
-      stdout, stderr, status = Open3.capture3(env, script_path)
-      expected_install_dir = effective_install_dir || File.join(tmpdir, ".local", "bin")
+      working_dir = File.join(tmpdir, "work")
+      FileUtils.mkdir_p(working_dir)
+      stdout, stderr, status = Open3.capture3(env, script_path, chdir: working_dir)
+      expected_install_dir =
+        if effective_install_dir.nil?
+          File.join(tmpdir, ".local", "bin")
+        elsif effective_install_dir.start_with?("/")
+          effective_install_dir
+        else
+          File.expand_path(effective_install_dir, working_dir)
+        end
       installed_cli = File.exist?(File.join(expected_install_dir, "devopsellence")) ? File.read(File.join(expected_install_dir, "devopsellence")) : nil
       skill_args = File.exist?(skill_args_path) ? File.readlines(skill_args_path, chomp: true) : nil
       [ stdout, stderr, status, installed_cli, skill_args ]

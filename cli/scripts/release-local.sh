@@ -31,6 +31,10 @@ esac
 if [[ -z "$INSTALL_DIR" ]]; then
   INSTALL_DIR="$HOME/.local/bin"
 fi
+case "$INSTALL_DIR" in
+  /*) ;;
+  *) INSTALL_DIR="$(pwd -P)/$INSTALL_DIR" ;;
+esac
 
 BUILD_DIR="$CLI_DIR/dist/local-head"
 mkdir -p "$BUILD_DIR"

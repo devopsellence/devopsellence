@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solo Improvement Loop"
+  short_description: "Autonomous solo-mode release polish loop"
+  default_prompt: "Run the devopsellence solo improvement loop from the current branch: release preview artifacts, install official builds, dogfood solo mode, triage findings, fix root causes, open stacked PRs, resolve review threads, request Copilot review, and repeat with evidence until solo mode is public-release ready."

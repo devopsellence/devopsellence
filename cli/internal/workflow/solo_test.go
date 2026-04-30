@@ -761,6 +761,42 @@ func TestSoloNodeCreateRegistersExistingSSHNode(t *testing.T) {
 	}
 }
 
+func TestSoloNodeCreateMissingSSHKeyPathIsUsageError(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{}); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{
+		Name:   "prod-1",
+		Host:   "203.0.113.10",
+		User:   "root",
+		Port:   22,
+		SSHKey: filepath.Join(t.TempDir(), "missing-key"),
+	})
+	if err == nil {
+		t.Fatal("SoloNodeCreate() error = nil, want missing ssh key usage error")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "ssh key path") || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("error = %q, want missing ssh key path context", err.Error())
+	}
+}
+
 func TestSoloNodeAttachUsesSavedCurrentEnvironment(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -4017,6 +4053,22 @@ func TestNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 	payload := decodeJSONOutput(t, &stdout)
 	if payload["node"] != "manual-a" || payload["action"] != "forgotten" {
 		t.Fatalf("payload = %#v, want forgotten manual node", payload)
+	}
+}
+
+func TestNodeRemoveRequiresConfirmationUsageError(t *testing.T) {
+	app := &App{SoloState: solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))}
+
+	err := app.SoloNodeRemove(context.Background(), SoloNodeRemoveOptions{Name: "manual-a"})
+	if err == nil {
+		t.Fatal("SoloNodeRemove() error = nil, want confirmation error")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("error = %q, want --yes hint", err.Error())
 	}
 }
 

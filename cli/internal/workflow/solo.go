@@ -375,12 +375,12 @@ func expandSoloSSHKeyPath(path string) (string, error) {
 		return "", nil
 	}
 	if path == "~" {
-		return "", fmt.Errorf("ssh key path %q must reference a private key file, not the home directory", path)
+		return "", ExitError{Code: 2, Err: fmt.Errorf("ssh key path %q must reference a private key file, not the home directory", path)}
 	}
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("expand ssh key path: %w", err)
+			return "", ExitError{Code: 2, Err: fmt.Errorf("expand ssh key path: %w", err)}
 		}
 		path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
 	}
@@ -388,12 +388,12 @@ func expandSoloSSHKeyPath(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("ssh key path %q does not exist", path)
+			return "", ExitError{Code: 2, Err: fmt.Errorf("ssh key path %q does not exist", path)}
 		}
-		return "", fmt.Errorf("stat ssh key path %q: %w", path, err)
+		return "", ExitError{Code: 2, Err: fmt.Errorf("stat ssh key path %q: %w", path, err)}
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("ssh key path %q must be a file, not a directory", path)
+		return "", ExitError{Code: 2, Err: fmt.Errorf("ssh key path %q must be a file, not a directory", path)}
 	}
 	return path, nil
 }
@@ -4591,7 +4591,7 @@ func sshInteractiveError(prefix string, err error, stdout string, stderr string)
 
 func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {
 	if !opts.Yes {
-		return fmt.Errorf("node remove requires --yes")
+		return ExitError{Code: 2, Err: errors.New("node remove requires --yes; rerun with --yes to confirm local/provider cleanup")}
 	}
 	current, err := a.readSoloState()
 	if err != nil {

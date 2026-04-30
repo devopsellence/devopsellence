@@ -687,6 +687,24 @@ func TestSecretSetHelpPrefersStdinForValues(t *testing.T) {
 	}
 }
 
+func TestAgentInstallHelpDocumentsNDJSONProgress(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"agent", "install", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "newline-delimited JSON progress events") || !strings.Contains(output, "final result event") {
+		t.Fatalf("help output = %q, want NDJSON progress contract", output)
+	}
+}
+
 func TestReleaseRollbackHelpClarifiesSelectorSource(t *testing.T) {
 	t.Parallel()
 

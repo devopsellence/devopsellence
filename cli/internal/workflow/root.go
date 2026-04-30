@@ -1140,7 +1140,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	agentInstallCommand := &cobra.Command{
 		Use:   "install <name>",
 		Short: "Install the agent on a solo node",
-		Args:  cobra.ExactArgs(1),
+		Long: strings.Join([]string{
+			"Install the agent on a solo node over SSH.",
+			"This command writes newline-delimited JSON progress events followed by a final result event to stdout.",
+		}, "\n"),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentInstallOpts.Node = args[0]
 			return runSoloOnly("agent install", func(ctx context.Context) error {

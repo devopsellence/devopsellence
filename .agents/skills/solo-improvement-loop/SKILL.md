@@ -34,7 +34,26 @@ Use this skill with `dogfood-solo`; do not duplicate its full QA matrix. Load `.
 gh pr edit <pr-number> --add-reviewer copilot-pull-request-reviewer
 ```
 
-14. Repeat from release on the new branch/head until no blocker/release findings remain or the user stops the loop.
+14. Repeat from release on the new branch/head until the exit criteria say to stop.
+
+## Exit Criteria
+
+Stop and summarize when any hard cap is reached:
+
+- 5 hours elapsed in the current autonomous run, unless the user explicitly asked for a longer duration.
+- 10 PRs opened or updated in the current loop, unless the user explicitly raised the cap.
+- Credentials, quota, missing approval, or destructive cleanup risk blocks meaningful progress.
+
+Stop early and recommend release when all readiness criteria are met:
+
+- Official release artifacts install cleanly, checksums verify, and binaries report the expected version/SHA.
+- Solo CLI core lifecycle is feature-complete for public preview: init/config, node add/remove, deploy, status, logs/diagnostics, secrets where supported, rollback, detach, and cleanup.
+- Dogfood covers first-run and adversarial paths with no blocker or release-class findings.
+- UX/devx is polished enough for public use: clear commands, actionable errors, accurate exit codes, useful next steps, no hidden local-build assumptions.
+- CI, relevant local tests, release workflow, and live cleanup evidence are green.
+- Remaining work is documented as non-blocking polish or future roadmap.
+
+If the cap is reached with open blocker or release-class findings, do not call the product ready. Leave a prioritized continuation plan and the exact next command.
 
 ## Evidence
 

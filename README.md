@@ -260,13 +260,15 @@ The design rationale lives in [`docs/vision.md`](docs/vision.md). The explicit i
 
 ## Monorepo layout
 
-This repo contains three components plus a root-owned test harness:
+This repo contains product components plus a root-owned test harness:
 
 | Directory | Description |
 |---|---|
 | [`agent/`](agent/) | Single-node reconciliation daemon |
 | [`cli/`](cli/) | End-user CLI for solo and shared workflows |
 | [`control-plane/`](control-plane/) | Rails API and web app |
+| [`deployment-core/`](deployment-core/) | Shared Go deployment model and desired-state generation |
+| [`docs-website/`](docs-website/) | Public static documentation site |
 | [`test/e2e/`](test/e2e/) | Hermetic monorepo integration lane |
 | [`test/support/gcp-mock/`](test/support/gcp-mock/) | Local GCP emulator used by hermetic e2e |
 
@@ -280,7 +282,9 @@ From the repo root:
 mise install
 mise run test:agent
 mise run test:cli
+mise run test:core
 mise run test:cp
+mise run build:docs-website
 mise run e2e-shared
 mise run e2e-solo
 ```
@@ -291,6 +295,8 @@ Per component:
 cd agent && mise run test
 cd cli && mise run test
 cd control-plane && mise run test
+cd deployment-core && mise run test
+cd docs-website && mise run build
 ```
 
 For local control-plane development:

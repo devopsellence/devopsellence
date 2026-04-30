@@ -1,0 +1,36 @@
+name: Docs Website CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/docs-website-ci.yml
+      - docs-website/**
+      - mise.toml
+  pull_request:
+    paths:
+      - .github/workflows/docs-website-ci.yml
+      - docs-website/**
+      - mise.toml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: docs-website
+
+env:
+  ASTRO_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          working_directory: docs-website
+      - run: npm ci
+      - run: npm run build

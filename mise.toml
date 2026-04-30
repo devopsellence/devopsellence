@@ -1,5 +1,6 @@
 [tools]
 go = "1.26.2"
+node = "24.13.0"
 ruby = "4.0.3"
 
 [tasks."test:agent"]
@@ -22,6 +23,11 @@ description = "Run control plane tests"
 dir = "control-plane"
 run = "mise run test"
 
+[tasks."test:docs-website"]
+description = "Check and build docs website"
+dir = "docs-website"
+run = "mise run build"
+
 [tasks."e2e-shared"]
 description = "Run the hermetic shared mode e2e workflow"
 run = "ruby test/e2e/e2e.rb"
@@ -36,7 +42,7 @@ run = "docker build -f test/e2e/runner.Dockerfile -t ${DEVOPSELLENCE_E2E_RUNNER_
 
 [tasks."test:all"]
 description = "Run all tests"
-depends = ["test:agent", "test:cli", "test:core", "test:cp"]
+depends = ["test:agent", "test:cli", "test:core", "test:cp", "test:docs-website"]
 
 [tasks."build:agent"]
 description = "Build agent"
@@ -93,6 +99,11 @@ done
 [tasks."build:cli"]
 description = "Build CLI"
 dir = "cli"
+run = "mise run build"
+
+[tasks."build:docs-website"]
+description = "Build docs website"
+dir = "docs-website"
 run = "mise run build"
 
 [tasks."release:build:cli"]

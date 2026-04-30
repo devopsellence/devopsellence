@@ -19,6 +19,10 @@ bin/
 !control-plane/bin/**
 test/e2e/log/
 
+# JavaScript
+node_modules/
+.astro/
+
 # Editor/IDE
 .idea/
 .vscode/

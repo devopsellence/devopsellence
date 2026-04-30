@@ -1,0 +1,18 @@
+[tools]
+node = "24.13.0"
+
+[tasks.install]
+description = "Install docs website dependencies"
+run = "npm install"
+
+[tasks.dev]
+description = "Run the docs website dev server"
+run = "npm run dev"
+
+[tasks.check]
+description = "Type-check and validate the docs website"
+run = "npm run check"
+
+[tasks.build]
+description = "Build the docs website"
+run = "npm run build"

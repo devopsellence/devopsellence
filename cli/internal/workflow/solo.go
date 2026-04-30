@@ -1692,7 +1692,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		return fmt.Errorf("no nodes attached to the current environment")
 	}
 	verifiedPublicURLs := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes)
-	localReleaseKnown := len(opts.Nodes) > 0
+	releaseRequired := workspaceRoot != "" && environmentName != "" && (len(opts.Nodes) == 0 || strings.TrimSpace(opts.Environment) != "")
+	localReleaseKnown := len(opts.Nodes) > 0 && !releaseRequired
 	expectedRevisions := map[string]string{}
 	expectedRuntimeEnvironment := ""
 	expectedWorkloadRevision := ""
@@ -2068,6 +2069,7 @@ func soloPlannedDNSCheck(cfg *config.ProjectConfig, nodes map[string]config.Node
 		"hosts":        hosts,
 		"expected_ips": webNodeIPs(cfg, nodes),
 		"required":     !skipDNSCheck && ingressRequiresTLSReadiness(cfg),
+		"skipped":      false,
 	}
 	if skipDNSCheck {
 		payload["skipped"] = true
@@ -4689,6 +4691,7 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 
 	return a.Printer.PrintJSON(map[string]any{
 		"schema_version": outputSchemaVersion,
+		"environment":    selectedEnvironment,
 		"ingress":        ingress,
 		"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
 	})
@@ -4920,6 +4923,7 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 			return err
 		}
 		if report.OK || !ingressDNSReportRetryable(report) || opts.Wait <= 0 || time.Now().After(deadline) {
+			report.Environment = environmentName
 			if report.OK {
 				if err := recordSuccessfulSoloIngressCheckToStore(a.SoloState, workspaceRoot, environmentName, report); err != nil {
 					return err
@@ -5400,6 +5404,9 @@ func configOptionalStringPtr(value string) *string {
 type ingressDNSReportResult struct {
 	SchemaVersion int                    `json:"schema_version"`
 	OK            bool                   `json:"ok"`
+	Environment   string                 `json:"environment,omitempty"`
+	CheckScope    string                 `json:"check_scope"`
+	TLSVerified   bool                   `json:"tls_verified"`
 	PublicURLs    []string               `json:"public_urls,omitempty"`
 	ExpectedIPs   []string               `json:"expected_ips"`
 	Hosts         []ingressDNSHostResult `json:"hosts"`
@@ -5500,6 +5507,8 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 	report := ingressDNSReportResult{
 		SchemaVersion: outputSchemaVersion,
 		OK:            true,
+		CheckScope:    "dns",
+		TLSVerified:   false,
 		PublicURLs:    ingressConfiguredPublicURLs(cfg),
 		ExpectedIPs:   expected,
 		Hosts:         make([]ingressDNSHostResult, 0, len(hosts)),

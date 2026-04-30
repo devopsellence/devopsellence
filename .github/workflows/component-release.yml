@@ -242,9 +242,41 @@ jobs:
             fi
           }
 
+          verify_release_artifact_metadata() {
+            local component="$1"
+            local binary="$2"
+            local version="$3"
+            local short_sha="$4"
+
+            if [[ ! -s "$binary" ]]; then
+              echo "${component} release artifact is missing or empty: $binary" >&2
+              exit 1
+            fi
+            if ! grep -a -q -- "$version" "$binary"; then
+              echo "${component} release artifact is missing version metadata: $binary" >&2
+              echo "expected version=$version" >&2
+              exit 1
+            fi
+            if ! grep -a -q -- "$short_sha" "$binary"; then
+              echo "${component} release artifact is missing commit metadata: $binary" >&2
+              echo "expected commit=$short_sha" >&2
+              exit 1
+            fi
+          }
+
           verify_release_artifacts() {
-            verify_release_binary agent "${workspace_dir}/agent/dist/${version}/linux-amd64" "$version" "$short_sha"
-            verify_release_binary cli "${workspace_dir}/cli/dist/${version}/linux-amd64" "$version" "$short_sha"
+            local component target binary
+
+            for component in agent cli; do
+              (cd "${workspace_dir}/${component}/dist/${version}" && sha256sum -c SHA256SUMS)
+              for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+                binary="${workspace_dir}/${component}/dist/${version}/${target}"
+                verify_release_artifact_metadata "$component" "$binary" "$version" "$short_sha"
+                if [[ "$target" == "linux-amd64" ]]; then
+                  verify_release_binary "$component" "$binary" "$version" "$short_sha"
+                fi
+              done
+            done
           }
 
           publish_component agent

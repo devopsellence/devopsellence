@@ -9,10 +9,10 @@ and the same root CLI commands a local operator uses.
 Create a deploy token:
 
 ```bash
-devopsellence token create github-actions --scope deploy
+devopsellence auth token create --name github-actions
 ```
 
-Add repository secrets for the token and any app secrets the workflow needs.
+Add the returned token as a repository secret (for example `DEVOPSELLENCE_TOKEN`), along with any app secrets the workflow needs.
 
 Example workflow:
 

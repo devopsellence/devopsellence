@@ -25,7 +25,7 @@ Command results should converge on a shared envelope:
       "next_actions": [
         {
           "label": "set secret reference",
-          "command": "devopsellence secrets set DATABASE_URL --stdin"
+          "command": "devopsellence secret set DATABASE_URL --service web --stdin"
         }
       ]
     }

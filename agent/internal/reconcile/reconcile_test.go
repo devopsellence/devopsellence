@@ -730,6 +730,65 @@ func TestReconcileWebUnhealthyDoesNotUpdateEDS(t *testing.T) {
 	}
 }
 
+func TestReconcileContinuesHealthyCohostedServiceWhenPeerServiceFails(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["httpbin"] = true
+
+	healthy := webService(80, "/up")
+	healthyHash, err := desiredstate.HashService(healthy)
+	if err != nil {
+		t.Fatalf("hash healthy service: %v", err)
+	}
+	healthyNetwork, err := desiredstate.EnvironmentNetworkName("devopsellence", "app-b-production")
+	if err != nil {
+		t.Fatalf("healthy network: %v", err)
+	}
+	healthyHash = runtimeContainerHash(healthyHash, nil, healthyNetwork)
+	healthyName, err := desiredstate.ServiceContainerName("app-b-production", "web", "rev-b", healthyHash)
+	if err != nil {
+		t.Fatalf("healthy container name: %v", err)
+	}
+	eng.containers[healthyName] = engine.ContainerState{
+		Name:        healthyName,
+		Image:       "httpbin",
+		Running:     true,
+		Hash:        healthyHash,
+		Environment: "app-b-production",
+		Service:     "web",
+		ServiceKind: "web",
+	}
+
+	unhealthy := webService(80, "/up")
+	unhealthy.Image = "missing"
+	state := &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      "node-plan-1",
+		Environments: []*desiredstatepb.Environment{
+			{Name: "app-a-production", Revision: "rev-a", Services: []*desiredstatepb.Service{unhealthy}},
+			{Name: "app-b-production", Revision: "rev-b", Services: []*desiredstatepb.Service{healthy}},
+		},
+	}
+
+	envoyManager := &fakeEnvoyManager{engine: eng}
+	rec := New(eng, Options{Network: "devopsellence", StopTimeout: 2 * time.Second, WebPort: 80, Envoy: envoyManager})
+	result, err := rec.Reconcile(context.Background(), state)
+	if err == nil {
+		t.Fatal("expected failing peer service error")
+	}
+	if !strings.Contains(err.Error(), "image not found locally: missing") {
+		t.Fatalf("error = %v, want missing image error", err)
+	}
+	if result.Unchanged != 1 {
+		t.Fatalf("result = %+v, want healthy cohosted service reconciled", result)
+	}
+	if envoyManager.lastCluster != "env-app-b-production-web-http" {
+		t.Fatalf("last cluster = %q, want app-b EDS update despite app-a failure", envoyManager.lastCluster)
+	}
+	if len(eng.removed) != 0 {
+		t.Fatalf("removed = %#v, want no cleanup after partial reconcile failure", eng.removed)
+	}
+}
+
 func TestReconcileWebUpdateCutsOverBeforeRemovingOldContainer(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["httpbin"] = true

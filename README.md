@@ -12,7 +12,7 @@ exist.
 ## AI-operator-first
 
 The main operator is an AI coding or operations assistant acting for a human.
-devopsellence gives that AI operator narrow, auditable commands instead of
+devopsellence gives that AI operator narrow, auditable, and repeatable commands instead of
 asking it to invent production shell choreography.
 
 - inspect, validate, plan, deploy, status, doctor, logs, rollback;
@@ -21,7 +21,15 @@ asking it to invent production shell choreography.
 - desired state as the write boundary;
 - ordinary tools remain valid when humans need to inspect or recover.
 
-The node agent is deterministic. There is no LLM in the runtime reconciler.
+### Quickstart
+
+```bash
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
+cd my-app
+codex "deploy with devopsellence solo"
+```
+
+Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 
 ## Modes
 
@@ -34,16 +42,6 @@ The node agent is deterministic. There is no LLM in the runtime reconciler.
 | Runtime | same node agent | same node agent |
 
 Solo and shared are management topologies, not separate deployment systems.
-
-## AI operator quickstart
-
-```bash
-curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
-cd my-app
-codex e "Deploy this app with devopsellence solo."
-```
-
-Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 
 ## Example config
 

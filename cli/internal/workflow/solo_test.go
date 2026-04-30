@@ -853,6 +853,10 @@ func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
 
 func TestSoloNodeCreateAttachRollsBackExistingSSHStateWhenRepublishFails(t *testing.T) {
 	binDir := t.TempDir()
+	writeLog := filepath.Join(t.TempDir(), "desired-state-writes.log")
+	writeCount := filepath.Join(t.TempDir(), "desired-state-write-count")
+	t.Setenv("DEVOPSELLENCE_ROLLBACK_WRITE_LOG", writeLog)
+	t.Setenv("DEVOPSELLENCE_ROLLBACK_WRITE_COUNT", writeCount)
 	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
 set -euo pipefail
 command="${!#}"
@@ -867,8 +871,22 @@ if [[ "$command" == *"docker info"* ]]; then
   exit 0
 fi
 if [[ "$command" == *"desired-state set-override"* ]]; then
-  echo 'remote write failed' >&2
-  exit 1
+  count=0
+  if [[ -s "${DEVOPSELLENCE_ROLLBACK_WRITE_COUNT}" ]]; then
+    count="$(cat "${DEVOPSELLENCE_ROLLBACK_WRITE_COUNT}")"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" >"${DEVOPSELLENCE_ROLLBACK_WRITE_COUNT}"
+  {
+    printf -- '--- write %s ---\n' "$count"
+    cat
+    printf '\n'
+  } >>"${DEVOPSELLENCE_ROLLBACK_WRITE_LOG}"
+  if [[ "$count" -eq 1 ]]; then
+    echo 'remote write failed' >&2
+    exit 1
+  fi
+  exit 0
 fi
 echo "unexpected ssh command: $command" >&2
 exit 1
@@ -919,6 +937,21 @@ exit 1
 	}
 	if loaded.NodeHasAttachments("prod-1") {
 		t.Fatalf("attachment was kept after failed existing-SSH create/attach: %#v", loaded.Attachments)
+	}
+	countBytes, err := os.ReadFile(writeCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(countBytes)) != "2" {
+		logBytes, _ := os.ReadFile(writeLog)
+		t.Fatalf("desired-state writes = %q, want original write plus remote rollback; log:\n%s", strings.TrimSpace(string(countBytes)), string(logBytes))
+	}
+	logBytes, err := os.ReadFile(writeLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logBytes), "--- write 2 ---") {
+		t.Fatalf("desired-state write log = %s, want rollback write", string(logBytes))
 	}
 }
 
@@ -4952,7 +4985,7 @@ func TestSoloStatusComparesRemoteStatusToPublishedDesiredStateRevision(t *testin
 	}
 }
 
-func TestSoloStatusRejectsExpectedRevisionWhenStatusTimePredatesDeployment(t *testing.T) {
+func TestSoloStatusAcceptsExpectedRevisionWhenStatusTimePredatesDeployment(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
@@ -5005,23 +5038,15 @@ func TestSoloStatusRejectsExpectedRevisionWhenStatusTimePredatesDeployment(t *te
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
-	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
-	if err == nil {
-		t.Fatal("expected stale status-time failure")
-	}
-	var exitErr ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
-		t.Fatalf("error = %#v, want ExitError code 1", err)
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	nodes := jsonArrayFromMap(t, payload, "nodes")
 	node := jsonMapFromAny(t, nodes[0])
-	message := stringValueAny(node["message"])
-	if node["status"] != nil || !strings.Contains(message, "predates current local deployment") || !strings.Contains(message, "2000-01-01T00:00:00Z") || !strings.Contains(message, "2026-04-30T12:00:00Z") {
-		t.Fatalf("node = %#v, want stale status-time message", node)
-	}
-	if strings.Contains(message, "does not match current local deployment") {
-		t.Fatalf("message = %q, want freshness diagnostic instead of revision mismatch", message)
+	status := jsonMapFromAny(t, node["status"])
+	if status["revision"] != "current-desired-state" || status["time"] != "2000-01-01T00:00:00Z" {
+		t.Fatalf("node = %#v, want matching revision accepted despite remote clock skew", node)
 	}
 }
 

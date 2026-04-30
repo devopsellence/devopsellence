@@ -1877,7 +1877,6 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	releaseRequired := workspaceRoot != "" && environmentName != "" && (len(opts.Nodes) == 0 || strings.TrimSpace(opts.Environment) != "")
 	localReleaseKnown := len(opts.Nodes) > 0 && !releaseRequired
 	expectedRevisions := map[string]string{}
-	expectedStatusCreatedAts := map[string]string{}
 	cohostedRevisions := map[string]map[string]bool{}
 	staleRevisions := map[string]map[string]bool{}
 	expectedRuntimeEnvironment := ""
@@ -1892,7 +1891,6 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			if hasCurrent {
 				localReleaseKnown = true
 				expectedRevisions = soloExpectedStatusRevisions(current, currentRelease)
-				expectedStatusCreatedAts = soloExpectedStatusCreatedAts(current, currentRelease)
 				cohostedRevisions = soloCohostedStatusRevisions(current, currentRelease)
 				staleRevisions = soloStaleStatusRevisions(current, currentRelease, expectedRevisions)
 				expectedWorkloadRevision = strings.TrimSpace(currentRelease.Revision)
@@ -1952,17 +1950,6 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			continue
 		}
 		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
-		expectedStatusCreatedAt := soloExpectedStatusCreatedAt(expectedStatusCreatedAts, name)
-		if expectedRevision != "" && !soloStatusFreshForDeployment(result.Status, expectedStatusCreatedAt) {
-			allSettled = false
-			statusMismatches++
-			jsonResults = append(jsonResults, map[string]any{
-				"node":    name,
-				"status":  nil,
-				"message": fmt.Sprintf("remote agent status time %q predates current local deployment created_at %q; wait for rollout, rerun `devopsellence status%s`, and redeploy only if the remote status never advances", strings.TrimSpace(result.Status.Time), expectedStatusCreatedAt, soloEnvFlag(environmentName)),
-			})
-			continue
-		}
 		if expectedRevision != "" && !soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name]) {
 			allSettled = false
 			runtime := soloRuntimeEnvironmentStatus(result.Status, expectedRuntimeEnvironment, expectedWorkloadRevision)
@@ -2054,61 +2041,6 @@ func soloStatusMismatchMessage(status soloNodeStatus, expectedDesiredStateRevisi
 		}
 	}
 	return fmt.Sprintf("remote agent status revision %q does not match current local deployment %q; run `devopsellence deploy`", statusRevision, expectedDesiredStateRevision)
-}
-
-func soloExpectedStatusCreatedAts(current solo.State, release corerelease.Release) map[string]string {
-	expected := map[string]string{}
-	latestSequence := -1
-	var latest corerelease.Deployment
-	for _, deployment := range current.Deployments {
-		if deployment.EnvironmentID != release.EnvironmentID || deployment.ReleaseID != release.ID || deployment.PublicationResult == nil {
-			continue
-		}
-		if deployment.Sequence > latestSequence {
-			latestSequence = deployment.Sequence
-			latest = deployment
-		}
-	}
-	if latestSequence < 0 || strings.TrimSpace(latest.CreatedAt) == "" {
-		return expected
-	}
-	for _, result := range latest.PublicationResult.NodeResults {
-		nodeName := strings.TrimSpace(result.NodeName)
-		if nodeName == "" {
-			nodeName = strings.TrimSpace(result.NodeID)
-		}
-		if nodeName != "" {
-			expected[nodeName] = latest.CreatedAt
-		}
-	}
-	if len(expected) == 0 {
-		expected[""] = latest.CreatedAt
-	}
-	return expected
-}
-
-func soloExpectedStatusCreatedAt(expected map[string]string, nodeName string) string {
-	if createdAt := strings.TrimSpace(expected[nodeName]); createdAt != "" {
-		return createdAt
-	}
-	return strings.TrimSpace(expected[""])
-}
-
-func soloStatusFreshForDeployment(status soloNodeStatus, deploymentCreatedAt string) bool {
-	observed := strings.TrimSpace(status.Time)
-	deploymentCreatedAt = strings.TrimSpace(deploymentCreatedAt)
-	if observed == "" || deploymentCreatedAt == "" {
-		return true
-	}
-	observedTime, err := time.Parse(time.RFC3339Nano, observed)
-	if err != nil {
-		return false
-	}
-	createdTime, err := time.Parse(time.RFC3339Nano, deploymentCreatedAt)
-	if err != nil {
-		return true
-	}
-	return !observedTime.Before(createdTime)
 }
 
 func soloExpectedStatusRevisions(current solo.State, release corerelease.Release) map[string]string {
@@ -4444,13 +4376,23 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if attached {
 		if soloAttachmentHasReleaseState(current, attachment) {
 			if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
-				rollbackState := cloneSoloState(current)
-				_, _, _ = rollbackState.DetachNode(workspaceRoot, attachment.Environment, nodeName)
+				remoteRollbackState := cloneSoloState(current)
+				_, _, _ = remoteRollbackState.DetachNode(workspaceRoot, attachment.Environment, nodeName)
+				_, rollbackRepublishErr := a.republishNodes(ctx, remoteRollbackState, attachment.NodeNames)
+
+				localRollbackState := cloneSoloState(remoteRollbackState)
 				if hasHost {
-					rollbackState.RemoveNode(nodeName)
+					localRollbackState.RemoveNode(nodeName)
 				}
-				if rollbackErr := a.writeSoloState(rollbackState); rollbackErr != nil {
-					return errors.Join(err, fmt.Errorf("rollback failed node create state: %w", rollbackErr))
+				if rollbackErr := a.writeSoloState(localRollbackState); rollbackErr != nil {
+					rollbackErrs := []error{err, fmt.Errorf("rollback failed node create state: %w", rollbackErr)}
+					if rollbackRepublishErr != nil {
+						rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback failed remote desired state: %w", rollbackRepublishErr))
+					}
+					return errors.Join(rollbackErrs...)
+				}
+				if rollbackRepublishErr != nil {
+					return errors.Join(err, fmt.Errorf("rollback failed remote desired state: %w", rollbackRepublishErr))
 				}
 				return err
 			}

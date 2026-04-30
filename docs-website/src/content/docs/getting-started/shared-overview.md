@@ -3,8 +3,8 @@ title: Shared overview
 description: Use the same deployment model with team and control-plane workflows.
 ---
 
-Shared mode keeps the same agent, app config, and deploy verbs while moving
-ownership and coordination into a control plane.
+Shared mode keeps the same node agent, app config, and deploy verbs while
+moving ownership and coordination into a control plane.
 
 ```bash
 devopsellence init --mode shared

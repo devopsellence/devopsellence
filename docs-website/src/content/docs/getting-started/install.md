@@ -12,7 +12,7 @@ curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 The installer writes to `~/.local/bin` by default. If that directory is not on
 your `PATH`, it prints the shell command to add it.
 
-devopsellence is agent-first. To install the CLI and Codex skill together:
+devopsellence is AI-operator-first. To install the CLI and Codex skill together:
 
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill

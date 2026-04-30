@@ -21,7 +21,8 @@ devopsellence node register
 ```
 
 By default, registration generates a token scoped to the current environment.
-Run the output command on the server to install the agent and attach the node.
+Run the output command on the server to install the node agent and attach the
+node.
 
 Shared mode is the right default when API tokens, browser auth, team workflows,
 and hosted/self-hosted coordination are part of the product requirement.

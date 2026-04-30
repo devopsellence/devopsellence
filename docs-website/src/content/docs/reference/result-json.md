@@ -1,6 +1,6 @@
 ---
 title: Result JSON
-description: Target result shape for agent-primary operations.
+description: Target result shape for AI-operator-first operations.
 ---
 
 Command results should converge on a shared envelope:

@@ -1,19 +1,19 @@
 # devopsellence
 
-Built for agents, transparent for humans.
+Built for AI operators, transparent for humans.
 
-devopsellence is an agent-primary deployment toolkit for containerized apps on
+devopsellence is an AI-operator-first deployment toolkit for containerized apps on
 VMs you control. It keeps the runtime boring: Docker, SSH, Envoy, files, JSON,
 logs, and a node agent that reconciles desired state.
 
 No PaaS. No Kubernetes-lite. No hidden scheduler pretending machines do not
 exist.
 
-## Agent-primary
+## AI-operator-first
 
-The main operator is an AI coding or operations agent acting for a human.
-devopsellence gives that agent narrow, auditable commands instead of asking it
-to invent production shell choreography.
+The main operator is an AI coding or operations assistant acting for a human.
+devopsellence gives that AI operator narrow, auditable commands instead of
+asking it to invent production shell choreography.
 
 - inspect, validate, plan, deploy, status, doctor, logs, rollback;
 - structured JSON and deterministic exit codes as the contract;
@@ -29,7 +29,7 @@ The node agent is deterministic. There is no LLM in the runtime reconciler.
 |---|---|---|
 | Best for | single operator, one app, direct VM ownership | teams, API tokens, org/project/env workflows |
 | Control surface | local CLI and files | control plane |
-| Transport | SSH | agent pulls published state |
+| Transport | SSH | node agent pulls published state |
 | Secrets | local state or external refs | server-side team secret management |
 | Runtime | same node agent | same node agent |
 
@@ -101,7 +101,7 @@ ingress:
 ## Learn more
 
 - [docs website component](docs-website/)
-- [agent-primary direction](docs/agent-primary.md)
+- [AI operator direction](docs/agent-primary.md)
 - [vision](docs/vision.md)
 - [north star](docs/north-star.md)
 

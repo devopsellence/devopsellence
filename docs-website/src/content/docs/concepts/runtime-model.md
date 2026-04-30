@@ -12,9 +12,9 @@ The core objects are:
 - **Service**: a named runtime unit with image, command, ports, environment, and
   health check.
 - **Task**: a one-shot command, such as a release migration.
-- **Node**: a VM running the devopsellence agent.
+- **Node**: a VM running the devopsellence node agent.
 - **Release**: an immutable deploy snapshot derived from config and build inputs.
-- **Desired state**: the per-node document the agent reconciles.
+- **Desired state**: the per-node document the node agent reconciles.
 - **Status**: observed runtime state reported by the node.
 - **Ingress intent**: hostnames, routes, TLS mode, and HTTP redirect behavior.
 

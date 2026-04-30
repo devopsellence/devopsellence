@@ -69,7 +69,7 @@ devopsellence deploy
 ## Boundaries
 
 `docs-website/` should not own operational endpoints such as installer scripts,
-binary downloads, checksums, API routes, auth flows, or agent/control-plane
+binary downloads, checksums, API routes, auth flows, or node-agent/control-plane
 protocols. Those belong to the runtime and product components that serve them.
 
 Repo design notes, architecture records, and implementation specs can remain in

@@ -15,5 +15,5 @@ devopsellence status
 The dry-run should explain the target release, affected environment, services,
 nodes, and expected desired-state publication.
 
-Agents should present rollback plans to humans before mutating production unless
-an explicit policy says otherwise.
+AI operators should present rollback plans to humans before mutating production
+unless an explicit policy says otherwise.

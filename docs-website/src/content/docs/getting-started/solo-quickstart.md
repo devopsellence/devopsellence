@@ -30,7 +30,7 @@ git commit -m "initial deploy"
 devopsellence uses the current git commit as the workload revision and image tag.
 
 <ol class="command-sequence" start="3">
-  <li>Add a node, install the agent, and attach it.</li>
+  <li>Add a node, install the node agent, and attach it.</li>
 </ol>
 
 ```bash

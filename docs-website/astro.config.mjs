@@ -7,11 +7,6 @@ export default defineConfig({
     starlight({
       title: "devopsellence docs",
       description: "Deploy and operate containerized apps on VMs with devopsellence.",
-      favicon: "/favicon.svg",
-      logo: {
-        src: "./public/favicon.svg",
-        alt: "devopsellence",
-      },
       editLink: {
         baseUrl: "https://github.com/devopsellence/devopsellence/edit/master/docs-website/",
       },
@@ -38,8 +33,8 @@ export default defineConfig({
           items: [
             { label: "Runtime model", link: "/concepts/runtime-model/" },
             { label: "Solo and shared", link: "/concepts/solo-and-shared/" },
-            { label: "Agent and desired state", link: "/concepts/agent-desired-state/" },
-            { label: "Agent-primary operations", link: "/concepts/agent-primary/" },
+            { label: "Node agent and desired state", link: "/concepts/agent-desired-state/" },
+            { label: "AI operator model", link: "/concepts/agent-primary/" },
           ],
         },
         {

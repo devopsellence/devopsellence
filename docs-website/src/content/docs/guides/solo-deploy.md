@@ -14,7 +14,7 @@ devopsellence status
 ```
 
 The CLI builds locally, transfers or loads the image for each node, writes
-desired state, and lets the agent reconcile.
+desired state, and lets the node agent reconcile.
 
 Useful inspection commands:
 

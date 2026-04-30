@@ -3,8 +3,8 @@ title: CLI commands
 description: Common devopsellence command groups.
 ---
 
-The CLI is agent-primary: commands should emit structured results and use
-explicit plan/apply boundaries.
+The CLI is AI-operator-first: commands should emit structured results for AI
+operators and use explicit plan/apply boundaries.
 
 ## Workspace
 
@@ -36,7 +36,7 @@ devopsellence node diagnose prod-1
 devopsellence node logs prod-1 --lines 100
 ```
 
-## Agent
+## Node agent
 
 ```bash
 devopsellence agent install prod-1

@@ -14,7 +14,7 @@ Solo is the smallest useful expression of devopsellence:
 - secrets are local values or local references;
 - status is inspectable with local commands and ordinary tools.
 
-Use solo when one operator or one trusted agent owns the deployment loop.
+Use solo when one human or trusted AI operator owns the deployment loop.
 
 ## Shared
 

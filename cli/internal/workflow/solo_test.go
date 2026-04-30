@@ -5371,6 +5371,10 @@ func TestSoloDeployRolloutFailureIncludesHealthcheckContext(t *testing.T) {
 	if len(healthchecks) != 1 || healthchecks[0]["service_name"] != config.DefaultWebServiceName || healthchecks[0]["path"] != config.DefaultHealthcheckPath {
 		t.Fatalf("healthchecks = %#v, want web healthcheck context", healthchecks)
 	}
+	steps := fields["next_steps"].([]string)
+	if len(steps) != 4 || !strings.Contains(steps[1], "returns HTTP 2xx on healthcheck path '/up' port 3000") {
+		t.Fatalf("next_steps = %#v, want healthcheck remediation before logs", steps)
+	}
 	loaded, err := soloState.Read()
 	if err != nil {
 		t.Fatal(err)

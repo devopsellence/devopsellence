@@ -706,12 +706,8 @@ func (e *soloRolloutError) ErrorFields() map[string]any {
 		return map[string]any{}
 	}
 	fields := map[string]any{
-		"node": e.Node,
-		"next_steps": []string{
-			"devopsellence status",
-			"devopsellence logs --node " + shellQuote(e.Node) + " --lines 100",
-			"devopsellence node logs " + shellQuote(e.Node) + " --lines 100",
-		},
+		"node":       e.Node,
+		"next_steps": soloRolloutNextSteps([]string{e.Node}, e.Healthchecks),
 	}
 	if len(e.Healthchecks) > 0 {
 		fields["healthchecks"] = e.Healthchecks
@@ -736,12 +732,7 @@ func (e *soloRolloutTimeoutError) ErrorFields() map[string]any {
 	if e == nil {
 		return map[string]any{}
 	}
-	steps := []string{"devopsellence status"}
-	for _, node := range e.Nodes {
-		steps = append(steps, "devopsellence logs --node "+shellQuote(node)+" --lines 100")
-		steps = append(steps, "devopsellence node logs "+shellQuote(node)+" --lines 100")
-	}
-	fields := map[string]any{"next_steps": steps}
+	fields := map[string]any{"next_steps": soloRolloutNextSteps(e.Nodes, e.Healthchecks)}
 	if len(e.Healthchecks) > 0 {
 		fields["healthchecks"] = e.Healthchecks
 	}
@@ -765,6 +756,35 @@ func soloDeployHealthcheckDetails(cfg *config.ProjectConfig) []map[string]any {
 		})
 	}
 	return details
+}
+
+func soloRolloutNextSteps(nodes []string, healthchecks []map[string]any) []string {
+	steps := []string{"devopsellence status"}
+	steps = append(steps, soloHealthcheckNextSteps(healthchecks)...)
+	for _, node := range nodes {
+		steps = append(steps, "devopsellence logs --node "+shellQuote(node)+" --lines 100")
+		steps = append(steps, "devopsellence node logs "+shellQuote(node)+" --lines 100")
+	}
+	return steps
+}
+
+func soloHealthcheckNextSteps(healthchecks []map[string]any) []string {
+	if len(healthchecks) == 0 {
+		return nil
+	}
+	if len(healthchecks) > 1 {
+		return []string{"ensure each configured healthcheck returns HTTP 2xx, or edit services.<name>.healthcheck in devopsellence.yml"}
+	}
+	serviceName, _ := healthchecks[0]["service_name"].(string)
+	pathValue, _ := healthchecks[0]["path"].(string)
+	portValue := healthchecks[0]["port"]
+	if strings.TrimSpace(serviceName) == "" {
+		serviceName = config.DefaultWebServiceName
+	}
+	if strings.TrimSpace(pathValue) == "" {
+		pathValue = config.DefaultHealthcheckPath
+	}
+	return []string{fmt.Sprintf("ensure service %s returns HTTP 2xx on healthcheck path %s port %v, or edit services.%s.healthcheck in devopsellence.yml", shellQuote(serviceName), shellQuote(pathValue), portValue, serviceName)}
 }
 
 func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string, previousStatusTimes ...map[string]string) error {

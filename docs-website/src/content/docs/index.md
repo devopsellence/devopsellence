@@ -19,6 +19,12 @@ approval loop; the node agent stays deterministic.
 
 ## Start here
 
+```bash
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
+cd my-app
+codex e "Deploy this app with devopsellence solo."
+```
+
 - [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
   one VM.
 - [Runtime model](/concepts/runtime-model/) for desired state, releases,

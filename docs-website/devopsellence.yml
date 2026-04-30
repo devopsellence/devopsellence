@@ -3,15 +3,29 @@ organization: solo
 project: devopsellence-docs
 default_environment: production
 build:
-  context: .
-  dockerfile: Dockerfile
-  platforms:
-    - linux/amd64
+    context: .
+    dockerfile: Dockerfile
+    platforms:
+        - linux/amd64
 services:
-  web:
-    ports:
-      - name: http
-        port: 8080
-    healthcheck:
-      path: /healthz
-      port: 8080
+    web:
+        ports:
+            - name: http
+              port: 8080
+        healthcheck:
+            path: /healthz
+            port: 8080
+ingress:
+    hosts:
+        - docs.devopsellence.com
+    rules:
+        - match:
+            host: docs.devopsellence.com
+            path_prefix: /
+          target:
+            service: web
+            port: http
+    tls:
+        mode: auto
+        email: admin@devopsellence.com
+    redirect_http: true

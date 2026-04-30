@@ -1,0 +1,50 @@
+:root {
+  --sl-color-accent-low: #063d31;
+  --sl-color-accent: #2fb47c;
+  --sl-color-accent-high: #c8f5dd;
+  --sl-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #d9f4e7;
+  --sl-color-accent: #087f5b;
+  --sl-color-accent-high: #043f30;
+  --sl-color-bg: #fbfdfc;
+  --sl-color-bg-nav: #fbfdfc;
+  --sl-color-bg-sidebar: #f5f8f6;
+}
+
+.hero img {
+  max-width: min(100%, 42rem);
+}
+
+.command-sequence {
+  counter-reset: step;
+  list-style: none;
+  padding-left: 0;
+}
+
+.command-sequence li {
+  counter-increment: step;
+  margin: 0.9rem 0;
+  padding-left: 2.2rem;
+  position: relative;
+}
+
+.command-sequence li::before {
+  align-items: center;
+  background: var(--sl-color-accent);
+  border-radius: 999px;
+  color: white;
+  content: counter(step);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  height: 1.45rem;
+  justify-content: center;
+  left: 0;
+  position: absolute;
+  top: 0.05rem;
+  width: 1.45rem;
+}

@@ -20,7 +20,7 @@ These opinions are the foundation for everything else in this document. devopsel
 
 ## What devopsellence is
 
-devopsellence is a reconciler and toolkit for running containerized applications on machines you control.
+devopsellence is a reconciler and toolkit for running containerized applications on familiar VMs.
 
 At its core:
 

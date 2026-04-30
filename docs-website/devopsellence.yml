@@ -1,0 +1,17 @@
+schema_version: 1
+organization: solo
+project: devopsellence-docs
+default_environment: production
+build:
+  context: .
+  dockerfile: Dockerfile
+  platforms:
+    - linux/amd64
+services:
+  web:
+    ports:
+      - name: http
+        port: 8080
+    healthcheck:
+      path: /healthz
+      port: 8080

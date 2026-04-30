@@ -1,159 +1,51 @@
 # devopsellence
 
-VMs are enough.
+Built for AI operators, transparent for humans.
 
-devopsellence is a toolkit for deploying and running containerized apps. No PaaS. No platform. No extra abstraction layer.
+devopsellence is an AI-operator-first deployment toolkit for containerized apps
+on familiar VMs. It keeps the runtime boring: Docker, SSH, Envoy, files, JSON,
+logs, and a node agent that reconciles desired state.
 
-Pick a workspace mode.
+No PaaS. No Kubernetes-lite. No hidden scheduler pretending machines do not
+exist.
 
-- `solo` keeps the loop local: your app, your VM, SSH, Docker, and the `devopsellence` CLI.
-- `shared` keeps the same app model but adds sign-in, org/project/env context, hosted APIs, and team workflows.
+## AI-operator-first
 
-|  | Solo | Shared |
+The main operator is an AI coding or operations assistant acting for a human.
+devopsellence gives that AI operator narrow, auditable commands instead of
+asking it to invent production shell choreography.
+
+- inspect, validate, plan, deploy, status, doctor, logs, rollback;
+- structured JSON and deterministic exit codes as the contract;
+- explicit dry-run, approval, apply, and rollback boundaries;
+- desired state as the write boundary;
+- ordinary tools remain valid when humans need to inspect or recover.
+
+The node agent is deterministic. There is no LLM in the runtime reconciler.
+
+## Modes
+
+| | Solo | Shared |
 |---|---|---|
-| Infrastructure | SSH + your VMs | Control plane + your VMs |
-| Auth | SSH keys | Browser (GitHub / Google) |
-| Secrets | Local `.env` file | Encrypted server-side |
-| Images | Streamed over SSH | Pushed to registry |
-| HTTPS | Built-in (Envoy + Let's Encrypt) | Built-in (Envoy + Let's Encrypt) |
-| Team workflows | Single operator | Orgs, projects, environments |
-| Best for | Side projects, single-dev apps | Teams, production, multi-env |
+| Best for | single operator, one app, direct VM ownership | teams, API tokens, org/project/env workflows |
+| Control surface | local CLI and files | control plane |
+| Transport | SSH | node agent pulls published state |
+| Secrets | local state or external refs | server-side team secret management |
+| Runtime | same node agent | same node agent |
 
-## Start Here: solo mode
+Solo and shared are management topologies, not separate deployment systems.
 
-Install the CLI:
-
-```bash
-curl -fsSL https://www.devopsellence.com/lfg.sh | bash
-```
-
-The installer writes to `~/.local/bin` by default. If that directory is not already on your `PATH`, it prints the shell command to add it.
-
-devopsellence is agent-first. The installer prints the agent skill command; to install the CLI and skill together:
+## AI operator quickstart
 
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
+cd my-app
+codex e "Deploy this app with devopsellence solo."
 ```
 
-Initialize the workspace:
+Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 
-```bash
-devopsellence init --mode solo
-```
-
-Start from an app that already has a Dockerfile. devopsellence does not install language toolchains or generate Rails/Node/etc. projects for you; create the app with your normal framework tools first, then let devopsellence deploy the container.
-
-The generated generic config uses the container port from your Dockerfile when it can infer one, for example `EXPOSE 80`. Otherwise it defaults the `web` service and healthcheck to port `3000`. Your container must listen on the port in `devopsellence.yml`; edit `services.web.ports` and `services.web.healthcheck.port` if it listens elsewhere.
-
-Commit the app before the first deploy. devopsellence uses the current git commit as the workload revision and image tag:
-
-```bash
-git init # if this is not already a git checkout
-git add .
-git commit -m "initial deploy"
-```
-
-Register an existing SSH-accessible VM, install the agent, and attach it to the current environment:
-
-```bash
-devopsellence node create prod-1 --host 203.0.113.10 --user root --ssh-key ~/.ssh/id_ed25519
-devopsellence agent install prod-1
-devopsellence node attach prod-1
-devopsellence doctor
-```
-
-Existing SSH node prerequisites:
-
-- the host must accept key-based SSH for the selected `--user` and `--ssh-key`;
-- devopsellence stores SSH host keys in its own state directory and uses OpenSSH `StrictHostKeyChecking=accept-new`, so first contact does not write to your global `~/.ssh/known_hosts`;
-- Docker must be reachable by the SSH user, or the SSH user must have passwordless sudo for Docker. On supported Ubuntu VMs, `devopsellence agent install` can install Docker when it is missing;
-- `agent install` writes `/usr/local/bin/devopsellence-agent`, creates a `devopsellence-agent` systemd service, and uses `/var/lib/devopsellence` for node state by default.
-- The agent bounds disk growth for devopsellence-managed runtime artifacts: new managed containers get Docker log rotation by default, and old app image versions are expired automatically while retaining the current release and recent rollback candidates. This does not replace centralized logging or clean up user-owned Docker resources.
-
-If remote checks fail, start with:
-
-```bash
-devopsellence doctor
-devopsellence node diagnose prod-1
-devopsellence node logs prod-1 --lines 100
-devopsellence support bundle --output ./devopsellence-support.json
-```
-
-`support bundle` writes a local, redacted JSON evidence file with workspace config, solo state shape, attached nodes, CLI version, and recommended follow-up commands. It redacts locally stored secret values and external secret references before writing the bundle.
-
-Or create a Hetzner-backed node from the provider:
-
-```bash
-devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
-devopsellence node create prod-1 --provider hetzner --install --attach
-devopsellence doctor
-```
-
-For provider-created solo nodes, `devopsellence node create` can generate a workspace-scoped SSH keypair under `$XDG_STATE_HOME/devopsellence/solo/keys/` (default: `~/.local/state/devopsellence/solo/keys/`) and reuse it for later node creation from the same workspace.
-
-Deploy over SSH:
-
-```bash
-devopsellence deploy --dry-run
-devopsellence deploy
-devopsellence status
-devopsellence logs --node prod-1 --lines 100
-devopsellence node logs prod-1 --lines 100
-```
-
-`devopsellence status` includes `public_urls` only for URLs the CLI can honestly present as ready. When HTTPS/TLS is configured but not yet verified, deploy/status output reports `configured_public_urls` with a pending status. `devopsellence ingress check --wait ...` checks DNS only; after deploy, use `devopsellence status` and `curl https://...` to confirm TLS reachability.
-
-`devopsellence deploy --dry-run` prints a structured plan and does not build images, SSH to nodes, publish desired state, or write solo state. `devopsellence release rollback --dry-run <release>` does the same for rollback approval. These commands are intended for agents and humans to review changes before mutating VMs.
-
-Solo deploy scope comes from the nodes attached to the current workspace/environment. Use `devopsellence node attach <name>` and `devopsellence node detach <name>` to change which nodes receive the deploy.
-
-Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each web node, then configure hostnames. Pass `--service` when the target web service is not already obvious:
-
-```bash
-devopsellence ingress set --service web --host app.example.com --tls-email ops@example.com
-devopsellence ingress check --wait 5m
-devopsellence deploy
-devopsellence status
-curl https://app.example.com/
-```
-
-Store solo-mode deploy secrets locally:
-
-```bash
-printf '%s' "$RAILS_MASTER_KEY" | devopsellence secret set RAILS_MASTER_KEY --service web --stdin
-devopsellence secret list
-```
-
-By default, solo plaintext secrets are stored in the local solo state file with `0600` permissions and are suitable for single-operator SSH workflows, not shared team secret management. Use `--store 1password --op-ref ...` when you want devopsellence to keep only an external reference locally. Use shared mode when you need server-side encrypted team secrets.
-
-To clean up a solo experiment on an existing SSH node, first detach the node from the environment, then uninstall the agent and remove devopsellence-managed runtime resources before forgetting the node locally:
-
-```bash
-devopsellence node detach prod-1
-devopsellence agent uninstall prod-1 --yes
-devopsellence node remove prod-1 --yes
-```
-
-`agent uninstall --yes` stops and disables `devopsellence-agent`, removes devopsellence-managed containers, removes the `devopsellence-envoy` container and `devopsellence` Docker network, deletes agent state, and removes `/usr/local/bin/devopsellence-agent`. Use `--keep-workloads` only when you intentionally want to stop the agent without cleaning remote runtime resources.
-
-Solo mode keeps app config workload-only. Solo nodes, local environment attachments, and the latest desired environment snapshots live in `$XDG_STATE_HOME/devopsellence/solo/state.json` (default: `~/.local/state/devopsellence/solo/state.json` when `XDG_STATE_HOME` is unset). Generated solo SSH keys stay local under `$XDG_STATE_HOME/devopsellence/solo/keys/`.
-
-## Shared mode
-
-When you want sign-in, teams, org/project/env context, hosted deploy APIs, or managed node workflows:
-
-```bash
-devopsellence init --mode shared
-devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
-devopsellence node create prod-1 --provider hetzner
-devopsellence deploy
-devopsellence status
-```
-
-The root verbs stay the same. The selected workspace mode decides how they behave.
-In shared mode, `node create` provisions the server and runs the registration install command.
-
-### Example config
+## Example config
 
 `devopsellence` reads `devopsellence.yml` from the app root:
 
@@ -195,91 +87,36 @@ ingress:
     mode: auto
     email: ops@example.com
   redirect_http: true
-environments:
-  staging:
-    ingress:
-      hosts:
-        - staging.example.com
-      rules:
-        - match:
-            host: staging.example.com
-            path_prefix: /
-          target:
-            service: web
-            port: http
-  production:
-    services:
-      web:
-        env:
-          RAILS_ENV: production
 ```
 
-### Example: run cloudflared as a normal service
+## Learn more
 
-Cloudflare Tunnel can live in normal app config instead of as special agent-managed behavior:
-
-```yaml
-services:
-  web:
-    ports:
-      - name: http
-        port: 3000
-
-  cloudflared:
-    image: docker.io/cloudflare/cloudflared:latest
-    command: ["cloudflared"]
-    args: ["tunnel", "run"]
-    secret_refs:
-      - name: TUNNEL_TOKEN
-        secret: CLOUDFLARE_TUNNEL_TOKEN
-```
-
-Then store the token as a project secret and deploy normally:
-
-```bash
-printf '%s' "$CLOUDFLARE_TUNNEL_TOKEN" | devopsellence secret set CLOUDFLARE_TUNNEL_TOKEN --service cloudflared --stdin
-devopsellence deploy
-```
-
-## Need more than solo mode?
-
-When you want browser auth, team workflows, hosted deploy APIs, managed nodes, or a control plane, switch the workspace to `shared` and choose one of these paths:
-
-- Managed devopsellence: start from [www.devopsellence.com](https://www.devopsellence.com).
-- Self-hosted control plane: use [`control-plane/`](control-plane/) from this repo.
-
-The product layering is deliberate:
-
-- solo mode first.
-- shared mode when coordination matters.
-- hosted or self-hosted depending on how much convenience you want.
-
-When you outgrow solo, `devopsellence init --mode shared` switches to control-plane workflows. Same config, same agent, same deploy verbs.
-
-The design rationale lives in [`docs/vision.md`](docs/vision.md). The explicit ingress-rules + generic-services schema change is documented in [`docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md`](docs/specs/2026-04-24-explicit-ingress-rules-and-generic-services.md).
+- [docs website component](docs-website/)
+- [AI operator direction](docs/agent-primary.md)
+- [vision](docs/vision.md)
+- [north star](docs/north-star.md)
 
 ## Monorepo layout
 
-This repo contains three components plus a root-owned test harness:
-
 | Directory | Description |
 |---|---|
-| [`agent/`](agent/) | Single-node reconciliation daemon |
-| [`cli/`](cli/) | End-user CLI for solo and shared workflows |
+| [`agent/`](agent/) | single-node reconciliation daemon |
+| [`cli/`](cli/) | end-user CLI for solo and shared workflows |
 | [`control-plane/`](control-plane/) | Rails API and web app |
-| [`test/e2e/`](test/e2e/) | Hermetic monorepo integration lane |
-| [`test/support/gcp-mock/`](test/support/gcp-mock/) | Local GCP emulator used by hermetic e2e |
+| [`deployment-core/`](deployment-core/) | shared Go deployment model and desired-state generation |
+| [`docs-website/`](docs-website/) | public static documentation site |
+| [`test/e2e/`](test/e2e/) | hermetic monorepo integration lane |
+| [`test/support/gcp-mock/`](test/support/gcp-mock/) | local GCP emulator used by hermetic e2e |
 
 ## Developing
 
-This monorepo uses [mise](https://mise.jdx.dev) for toolchains and tasks.
-
-From the repo root:
+Use `mise`.
 
 ```bash
 mise install
 mise run test:agent
 mise run test:cli
+mise run test:core
 mise run test:cp
 mise run e2e-shared
 mise run e2e-solo
@@ -291,25 +128,17 @@ Per component:
 cd agent && mise run test
 cd cli && mise run test
 cd control-plane && mise run test
+cd deployment-core && mise run test
+cd docs-website && mise run build
 ```
-
-For local control-plane development:
-
-```bash
-cd control-plane
-bin/dev
-```
-
-GitHub binary releases for the agent and CLI are published from a manual public GitHub Actions workflow. Trigger `devopsellence release`, choose a branch/tag/SHA, and provide the release version for stable releases; for prereleases, `version` can be left blank and will be auto-derived. The workflow always rebuilds and republishes both binaries for the same shared release tag; prereleases can be rerun to replace an existing prerelease tag.
 
 ## Contributing
 
 Issues are welcome.
 
-Unsolicited code contributions are not currently accepted.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the current policy.
+Unsolicited code contributions are not currently accepted. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).

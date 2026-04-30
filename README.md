@@ -284,7 +284,6 @@ mise run test:agent
 mise run test:cli
 mise run test:core
 mise run test:cp
-mise run build:docs-website
 mise run e2e-shared
 mise run e2e-solo
 ```

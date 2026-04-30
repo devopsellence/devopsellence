@@ -976,6 +976,41 @@ func soloNodeListAttachments(attachments []solo.AttachmentRecord, currentWorkspa
 	return items
 }
 
+func soloNodeListDuplicateHostWarnings(current solo.State, listedNodeNames []string) []string {
+	listed := make(map[string]bool, len(listedNodeNames))
+	for _, name := range listedNodeNames {
+		listed[name] = true
+	}
+	hosts := make(map[string][]string)
+	for name, node := range current.Nodes {
+		host := strings.TrimSpace(strings.ToLower(node.Host))
+		if host == "" {
+			continue
+		}
+		hosts[host] = append(hosts[host], name)
+	}
+	warnings := []string{}
+	for host, names := range hosts {
+		if len(names) < 2 {
+			continue
+		}
+		listedInGroup := false
+		for _, name := range names {
+			if listed[name] {
+				listedInGroup = true
+				break
+			}
+		}
+		if !listedInGroup {
+			continue
+		}
+		sort.Strings(names)
+		warnings = append(warnings, fmt.Sprintf("multiple solo node records share host %s: %s; verify stale state or provider IP reuse before deploy/remove", host, strings.Join(names, ", ")))
+	}
+	sort.Strings(warnings)
+	return warnings
+}
+
 type soloRepublishErrorEntry struct {
 	node      string
 	operation string
@@ -2531,12 +2566,16 @@ func (a *App) SoloNodeList(_ context.Context, opts SoloNodeListOptions) error {
 		})
 	}
 
-	return a.Printer.PrintJSON(map[string]any{
+	payload := map[string]any{
 		"schema_version": outputSchemaVersion,
 		"scope":          scope,
 		"nodes":          nodes,
 		"node_items":     items,
-	})
+	}
+	if warnings := soloNodeListDuplicateHostWarnings(current, nodeNames); len(warnings) > 0 {
+		payload["warnings"] = warnings
+	}
+	return a.Printer.PrintJSON(payload)
 
 }
 

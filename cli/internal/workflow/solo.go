@@ -492,9 +492,6 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if _, err := current.SaveRelease(release); err != nil {
-		return err
-	}
 	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
 		ID:            soloDeploymentID(corerelease.DeploymentKindDeploy, shortSHA, now),
 		EnvironmentID: release.EnvironmentID,
@@ -507,25 +504,25 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := current.SaveDeployment(deployment); err != nil {
-		return err
-	}
 	deployment.Status = corerelease.DeploymentStatusRunning
 	deployment.StatusMessage = "publishing desired state"
-	if err := current.SaveDeployment(deployment); err != nil {
-		return err
-	}
-	// Persist desired local state first so follow-up republish operations can
-	// recover cleanly from partial remote updates.
-	if err := a.writeSoloState(current); err != nil {
+
+	publishState := cloneSoloState(current)
+	if _, err := publishState.SaveRelease(release); err != nil {
 		return err
 	}
 	statusBaselines := a.soloNodeStatusTimes(ctx, nodes)
-	desiredStateRevisions, err := a.republishNodes(ctx, current, attachedNodeNames)
+	desiredStateRevisions, err := a.republishNodes(ctx, publishState, attachedNodeNames)
 	if err != nil {
-		if persistErr := a.persistSoloDeploymentFailure(current, deployment, desiredStateRevisions, err); persistErr != nil {
-			return errors.Join(err, fmt.Errorf("persist deployment failure: %w", persistErr))
-		}
+		return err
+	}
+	if _, err := current.SaveRelease(release); err != nil {
+		return err
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		return err
+	}
+	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
 	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, statusBaselines); err != nil {
@@ -1648,6 +1645,23 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		return fmt.Errorf("no nodes attached to the current environment")
 	}
 	verifiedPublicURLs := a.soloVerifiedPublicURLs(cfg, nodes)
+	localReleaseKnown := len(opts.Nodes) > 0
+	expectedRevision := ""
+	if len(opts.Nodes) == 0 {
+		if current, stateErr := a.readSoloState(); stateErr == nil {
+			_, workspaceRoot, environmentName, configErr := a.loadResolvedSoloProjectConfig("")
+			if configErr == nil {
+				_, currentRelease, hasCurrent, releaseErr := current.CurrentRelease(workspaceRoot, environmentName)
+				if releaseErr != nil {
+					return releaseErr
+				}
+				if hasCurrent {
+					localReleaseKnown = true
+					expectedRevision = strings.TrimSpace(currentRelease.Revision)
+				}
+			}
+		}
+	}
 
 	var jsonResults []map[string]any
 	readErrors := 0
@@ -1680,6 +1694,24 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			continue
 		}
 
+		if !localReleaseKnown {
+			allSettled = false
+			jsonResults = append(jsonResults, map[string]any{
+				"node":    name,
+				"status":  nil,
+				"message": "remote agent has status, but this workspace has no current local release yet; run `devopsellence deploy`",
+			})
+			continue
+		}
+		if expectedRevision != "" && strings.TrimSpace(result.Status.Revision) != expectedRevision {
+			allSettled = false
+			jsonResults = append(jsonResults, map[string]any{
+				"node":    name,
+				"status":  nil,
+				"message": fmt.Sprintf("remote agent status revision %q does not match current local release %q; run `devopsellence deploy`", strings.TrimSpace(result.Status.Revision), expectedRevision),
+			})
+			continue
+		}
 		if strings.TrimSpace(result.Status.Phase) != "settled" {
 			allSettled = false
 		}
@@ -2063,6 +2095,7 @@ func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) erro
 	}
 
 	payload := map[string]any{
+		"schema_version": outputSchemaVersion,
 		"key":            record.Name,
 		"service_name":   record.ServiceName,
 		"environment":    record.Environment,

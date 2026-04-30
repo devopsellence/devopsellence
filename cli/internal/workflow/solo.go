@@ -2068,7 +2068,7 @@ func soloPlannedDNSCheck(cfg *config.ProjectConfig, nodes map[string]config.Node
 		"live_lookup":  false,
 		"hosts":        hosts,
 		"expected_ips": webNodeIPs(cfg, nodes),
-		"required":     !skipDNSCheck && ingressRequiresTLSReadiness(cfg),
+		"required":     !skipDNSCheck && ingressRequiresDNSPreflight(cfg),
 		"skipped":      false,
 	}
 	if skipDNSCheck {
@@ -2113,6 +2113,13 @@ func ingressRequiresTLSReadiness(cfg *config.ProjectConfig) bool {
 	}
 	tlsMode := strings.TrimSpace(cfg.Ingress.TLS.Mode)
 	return strings.EqualFold(tlsMode, "auto") || strings.EqualFold(tlsMode, "manual")
+}
+
+func ingressRequiresDNSPreflight(cfg *config.ProjectConfig) bool {
+	if cfg == nil || cfg.Ingress == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(cfg.Ingress.TLS.Mode), "auto")
 }
 
 func soloPublicURLStatus(cfg *config.ProjectConfig) string {
@@ -5467,7 +5474,7 @@ func (e ingressDNSReadinessError) ErrorFields() map[string]any {
 const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
 
 func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.Node, skip bool) error {
-	if skip || cfg == nil || cfg.Ingress == nil || !strings.EqualFold(strings.TrimSpace(cfg.Ingress.TLS.Mode), "auto") {
+	if skip || !ingressRequiresDNSPreflight(cfg) {
 		return nil
 	}
 	report, err := ingressDNSReport(ctx, cfg, nodes)

@@ -4353,6 +4353,47 @@ func TestSoloDeployDryRunUsesExplicitEnvironmentWithoutDNS(t *testing.T) {
 	}
 }
 
+func TestSoloDeployDryRunDoesNotRequireDNSPreflightForManualTLS(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"prod.invalid"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "prod.invalid", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "manual"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Git: git.Client{}, Cwd: workspaceRoot}
+	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["public_url_status"] != "configured_tls_pending" {
+		t.Fatalf("payload = %#v, want TLS pending dry-run", payload)
+	}
+	planned := jsonMapFromAny(t, payload["planned_dns_check"])
+	if planned["live_lookup"] != false || planned["required"] != false || planned["skipped"] != false || planned["check_command"] != "devopsellence ingress check --env 'production'" {
+		t.Fatalf("planned_dns_check = %#v, want optional manual-TLS DNS check", planned)
+	}
+}
+
 func TestSoloDeployRepublishFailureDoesNotRecordCurrentRelease(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {

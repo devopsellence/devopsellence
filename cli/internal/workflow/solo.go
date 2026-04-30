@@ -452,6 +452,9 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		}
 		if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 			payload["configured_public_urls"] = urls
+			if plannedCheck := soloPlannedDNSCheck(cfg, nodes, environmentName, opts.SkipDNSCheck); len(plannedCheck) > 0 {
+				payload["planned_dns_check"] = plannedCheck
+			}
 			if len(soloReadyPublicURLs(cfg, nodes)) == 0 {
 				payload["public_url_status"] = soloPublicURLStatus(cfg)
 				payload["warnings"] = []string{soloPublicURLWarning(cfg)}
@@ -1773,6 +1776,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 
 	payload := map[string]any{
 		"schema_version": outputSchemaVersion,
+		"environment":    environmentName,
 		"nodes":          jsonResults,
 	}
 	if len(verifiedPublicURLs) > 0 {
@@ -2049,6 +2053,31 @@ func soloReadyPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node
 		return nil
 	}
 	return soloStatusPublicURLs(cfg, nodes)
+}
+
+func soloPlannedDNSCheck(cfg *config.ProjectConfig, nodes map[string]config.Node, environmentName string, skipDNSCheck bool) map[string]any {
+	if cfg == nil || len(nodes) == 0 {
+		return nil
+	}
+	hosts := concreteIngressHosts(cfg)
+	if len(hosts) == 0 {
+		return nil
+	}
+	payload := map[string]any{
+		"live_lookup":  false,
+		"hosts":        hosts,
+		"expected_ips": webNodeIPs(cfg, nodes),
+		"required":     !skipDNSCheck && ingressRequiresTLSReadiness(cfg),
+	}
+	if skipDNSCheck {
+		payload["skipped"] = true
+		return payload
+	}
+	if environmentName == "" {
+		environmentName = config.DefaultEnvironment
+	}
+	payload["check_command"] = "devopsellence ingress check --env " + shellQuote(environmentName)
+	return payload
 }
 
 func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {

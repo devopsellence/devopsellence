@@ -2015,12 +2015,31 @@ func soloStaleStatusRevisions(current solo.State, release corerelease.Release, e
 }
 
 func soloCohostedStatusRevisions(current solo.State, release corerelease.Release) map[string]map[string]bool {
+	type latestPublication struct {
+		sequence int
+		revision string
+	}
+	currentReleaseIDs := map[string]string{}
+	for environmentID, releaseID := range current.Current {
+		environmentID = strings.TrimSpace(environmentID)
+		releaseID = strings.TrimSpace(releaseID)
+		if environmentID != "" && releaseID != "" {
+			currentReleaseIDs[environmentID] = releaseID
+		}
+	}
+	latest := map[string]latestPublication{}
 	cohosted := map[string]map[string]bool{}
 	for _, deployment := range current.Deployments {
-		if deployment.EnvironmentID == release.EnvironmentID || deployment.PublicationResult == nil {
+		if deployment.EnvironmentID == release.EnvironmentID || deployment.Status != corerelease.DeploymentStatusSettled || deployment.PublicationResult == nil {
+			continue
+		}
+		if currentReleaseIDs[deployment.EnvironmentID] != strings.TrimSpace(deployment.ReleaseID) {
 			continue
 		}
 		for _, result := range deployment.PublicationResult.NodeResults {
+			if result.Status != corerelease.PublicationStatusWritten {
+				continue
+			}
 			nodeName := strings.TrimSpace(result.NodeName)
 			if nodeName == "" {
 				nodeName = strings.TrimSpace(result.NodeID)
@@ -2029,11 +2048,22 @@ func soloCohostedStatusRevisions(current solo.State, release corerelease.Release
 			if nodeName == "" || revision == "" {
 				continue
 			}
-			if cohosted[nodeName] == nil {
-				cohosted[nodeName] = map[string]bool{}
+			key := deployment.EnvironmentID + "\x00" + nodeName
+			if existing, ok := latest[key]; ok && existing.sequence > deployment.Sequence {
+				continue
 			}
-			cohosted[nodeName][revision] = true
+			latest[key] = latestPublication{sequence: deployment.Sequence, revision: revision}
 		}
+	}
+	for key, publication := range latest {
+		_, nodeName, ok := strings.Cut(key, "\x00")
+		if !ok || nodeName == "" || publication.revision == "" {
+			continue
+		}
+		if cohosted[nodeName] == nil {
+			cohosted[nodeName] = map[string]bool{}
+		}
+		cohosted[nodeName][publication.revision] = true
 	}
 	return cohosted
 }

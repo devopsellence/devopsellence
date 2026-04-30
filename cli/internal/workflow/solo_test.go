@@ -4777,12 +4777,36 @@ func TestSoloStatusAcceptsNewerCohostedDesiredStateWhenCurrentEnvironmentSettled
 	if _, err := current.SaveRelease(cohostedRelease); err != nil {
 		t.Fatal(err)
 	}
+	oldCohostedDeployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_old_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		ReleaseID:     "rel_cohosted",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      1,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedDeployment.Status = corerelease.DeploymentStatusSettled
+	oldCohostedDeployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "old-cohosted-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(oldCohostedDeployment); err != nil {
+		t.Fatal(err)
+	}
 	cohostedDeployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
 		ID:            "dep_cohosted",
 		EnvironmentID: cohostedEnvironmentID,
 		ReleaseID:     "rel_cohosted",
 		Kind:          corerelease.DeploymentKindDeploy,
-		Sequence:      1,
+		Sequence:      2,
 		TargetNodeIDs: []string{"node-a"},
 		CreatedAt:     time.Now().UTC(),
 	})
@@ -4827,6 +4851,180 @@ func TestSoloStatusAcceptsNewerCohostedDesiredStateWhenCurrentEnvironmentSettled
 	}
 	if urls := jsonArrayFromMap(t, payload, "public_urls"); len(urls) != 1 || urls[0] != "http://app.example.com/" {
 		t.Fatalf("public_urls = %#v, want public URL when scoped environment is settled", urls)
+	}
+}
+
+func TestSoloStatusRejectsStaleCohostedDesiredStateDespiteSettledRuntimeEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_test",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      1,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusSettled
+	deployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "current-workspace-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	cohostedEnvironmentID, err := solo.EnvironmentStateKey(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedRelease, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
+		ID:            "rel_old_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		Revision:      "oldcohostedsha",
+		Snapshot: desiredstate.DeploySnapshot{
+			WorkspaceRoot: workspaceRoot,
+			WorkspaceKey:  workspaceRoot,
+			Environment:   "staging",
+			Revision:      "oldcohostedsha",
+			Image:         "demo:oldcohostedsha",
+		},
+		Image:     corerelease.ImageRef{Reference: "demo:oldcohostedsha"},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SaveRelease(oldCohostedRelease); err != nil {
+		t.Fatal(err)
+	}
+	cohostedRelease, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
+		ID:            "rel_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		Revision:      "cohostedsha",
+		Snapshot: desiredstate.DeploySnapshot{
+			WorkspaceRoot: workspaceRoot,
+			WorkspaceKey:  workspaceRoot,
+			Environment:   "staging",
+			Revision:      "cohostedsha",
+			Image:         "demo:cohostedsha",
+		},
+		Image:     corerelease.ImageRef{Reference: "demo:cohostedsha"},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SaveRelease(cohostedRelease); err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedDeployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_old_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		ReleaseID:     "rel_old_cohosted",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      3,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCohostedDeployment.Status = corerelease.DeploymentStatusSettled
+	oldCohostedDeployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "old-cohosted-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(oldCohostedDeployment); err != nil {
+		t.Fatal(err)
+	}
+	cohostedDeployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_cohosted",
+		EnvironmentID: cohostedEnvironmentID,
+		ReleaseID:     "rel_cohosted",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      2,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cohostedDeployment.Status = corerelease.DeploymentStatusSettled
+	cohostedDeployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "newer-cohosted-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(cohostedDeployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"old-cohosted-desired-state","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not expect public URL for stale cohosted desired-state revision", payload)
+	}
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	if node["status"] != nil || node["message"] == nil {
+		t.Fatalf("node = %#v, want stale cohosted status withheld", node)
 	}
 }
 

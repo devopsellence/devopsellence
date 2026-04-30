@@ -252,12 +252,12 @@ jobs:
               echo "${component} release artifact is missing or empty: $binary" >&2
               exit 1
             fi
-            if ! grep -a -q -- "$version" "$binary"; then
+            if ! grep -a -F -q -- "$version" "$binary"; then
               echo "${component} release artifact is missing version metadata: $binary" >&2
               echo "expected version=$version" >&2
               exit 1
             fi
-            if ! grep -a -q -- "$short_sha" "$binary"; then
+            if ! grep -a -F -q -- "$short_sha" "$binary"; then
               echo "${component} release artifact is missing commit metadata: $binary" >&2
               echo "expected commit=$short_sha" >&2
               exit 1

@@ -737,6 +737,56 @@ func TestSoloNodeCreateRegistersExistingSSHNode(t *testing.T) {
 	}
 }
 
+func TestSoloNodeAttachUsesSavedCurrentEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaceState := state.New(filepath.Join(t.TempDir(), "workspace-state.json"))
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:        output.New(&stdout, io.Discard),
+		SoloState:      soloState,
+		WorkspaceState: workspaceState,
+		ConfigStore:    config.NewStore(),
+		Cwd:            workspaceRoot,
+	}
+	if err := app.SetEnvironment("staging"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.SoloNodeAttach(context.Background(), SoloNodeAttachOptions{Node: "node-a"}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingNodes, err := current.AttachedNodeNames(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stagingNodes, []string{"node-a"}) {
+		t.Fatalf("staging attachments = %#v, want node-a", stagingNodes)
+	}
+	productionNodes, err := current.AttachedNodeNames(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(productionNodes) != 0 {
+		t.Fatalf("production attachments = %#v, want none", productionNodes)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment"] != "staging" {
+		t.Fatalf("payload environment = %#v, want staging", payload["environment"])
+	}
+}
+
 func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
 	binDir := t.TempDir()
 	writeExecutable(t, filepath.Join(binDir, "ssh"), "#!/usr/bin/env bash\necho 'Permission denied (publickey).' >&2\nexit 255\n")

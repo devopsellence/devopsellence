@@ -922,7 +922,7 @@ func (a *App) currentSoloAttachment(current solo.State) (*config.ProjectConfig, 
 	if cfg == nil {
 		return nil, discovered.WorkspaceRoot, "", nil, false, nil
 	}
-	environmentName := soloEnvironmentName(cfg, "")
+	environmentName := a.effectiveEnvironment("", cfg)
 	nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
 	if err != nil {
 		return nil, "", "", nil, true, err
@@ -2449,7 +2449,7 @@ func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) er
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
 	attachment, changed, err := a.attachNode(&current, workspaceRoot, environmentName, opts.Node)
 	if err != nil {
 		return err
@@ -2488,7 +2488,7 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	if err != nil {
 		return err
 	}
-	environmentName := soloEnvironmentName(cfg, opts.Environment)
+	environmentName := a.effectiveEnvironment(opts.Environment, cfg)
 	nodeNamesBefore, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
 		return err
@@ -2629,7 +2629,7 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 	if cfg == nil {
 		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
 	}
-	environmentName := soloEnvironmentName(cfg, "")
+	environmentName := a.effectiveEnvironment("", cfg)
 	workspaceRoot, err := a.soloCurrentWorkspaceRoot()
 	if err != nil {
 		return err
@@ -3668,14 +3668,15 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		if len(current.Nodes) == 0 {
 			return "", errors.New("No nodes registered in solo state. Run `devopsellence node create <name>`.")
 		}
-		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, soloEnvironmentName(cfg, ""))
+		environmentName := a.effectiveEnvironment("", cfg)
+		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
 		if err != nil {
 			return "", err
 		}
 		if len(nodeNames) == 0 {
 			return "", errors.New("No nodes attached to the current environment. Run `devopsellence node attach <name>`.")
 		}
-		return fmt.Sprintf("%d node(s) attached to %s", len(nodeNames), soloEnvironmentName(cfg, "")), nil
+		return fmt.Sprintf("%d node(s) attached to %s", len(nodeNames), environmentName), nil
 	})
 
 	ok := true
@@ -3692,7 +3693,8 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		"checks":         checks,
 	}
 	if ok && cfg != nil {
-		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, soloEnvironmentName(cfg, ""))
+		environmentName := a.effectiveEnvironment("", cfg)
+		nodeNames, err := current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
 		if err != nil {
 			return err
 		}
@@ -3796,7 +3798,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	attached := false
 	var attachment solo.AttachmentRecord
 	if opts.Attach {
-		environmentName := soloEnvironmentName(cfg, "")
+		environmentName := a.effectiveEnvironment("", cfg)
 		var attachErr error
 		attachment, _, attachErr = a.attachNode(&current, workspaceRoot, environmentName, nodeName)
 		if attachErr != nil {

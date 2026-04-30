@@ -101,7 +101,7 @@ devopsellence logs --node prod-1 --lines 100
 devopsellence node logs prod-1 --lines 100
 ```
 
-`devopsellence status` includes `public_urls` only for URLs the CLI can honestly present as ready. When HTTPS/TLS is configured but not yet verified, deploy/status output reports `configured_public_urls` with a pending status and points you back to `devopsellence ingress check --wait ...`.
+`devopsellence status` includes `public_urls` only for URLs the CLI can honestly present as ready. When HTTPS/TLS is configured but not yet verified, deploy/status output reports `configured_public_urls` with a pending status. `devopsellence ingress check --wait ...` checks DNS only; after deploy, use `devopsellence status` and `curl https://...` to confirm TLS reachability.
 
 `devopsellence deploy --dry-run` prints a structured plan and does not build images, SSH to nodes, publish desired state, or write solo state. `devopsellence release rollback --dry-run <release>` does the same for rollback approval. These commands are intended for agents and humans to review changes before mutating VMs.
 
@@ -113,6 +113,8 @@ Public ingress is Envoy in both modes. For solo HTTPS, point DNS at each web nod
 devopsellence ingress set --service web --host app.example.com --tls-email ops@example.com
 devopsellence ingress check --wait 5m
 devopsellence deploy
+devopsellence status
+curl https://app.example.com/
 ```
 
 Store solo-mode deploy secrets locally:

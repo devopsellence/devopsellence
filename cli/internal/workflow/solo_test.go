@@ -1130,6 +1130,36 @@ func TestSoloStatusUsesVerifiedTLSPublicURLsAfterIngressCheckRecord(t *testing.T
 	}
 }
 
+func TestSoloVerifiedIngressPublicURLsRejectsRecordWhenSelectedNodesHaveNoWebIPs(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	key, err := solo.EnvironmentStateKey("/workspace/demo", "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{IngressChecks: map[string]solo.IngressCheckRecord{
+		key: {
+			OK:          true,
+			PublicURLs:  []string{"https://app.example.com/"},
+			ExpectedIPs: []string{"203.0.113.10"},
+		},
+	}}
+	nodes := map[string]config.Node{
+		"worker-a": {Host: "203.0.113.11", User: "root", Labels: []string{"worker"}},
+	}
+
+	if got := soloVerifiedIngressPublicURLs(current, "/workspace/demo", "production", &cfg, nodes); len(got) != 0 {
+		t.Fatalf("verified public URLs = %#v, want none when selected nodes have no web-node IPs", got)
+	}
+}
+
 func TestSoloStatusUsesConfiguredPublicURLsWhenNodeIsNotSettled(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -1282,6 +1312,61 @@ func TestIngressCheckPersistsSuccessfulReadinessRecord(t *testing.T) {
 	}
 	record := loaded.IngressChecks[key]
 	if !record.OK || !reflect.DeepEqual(record.PublicURLs, []string{"https://127.0.0.1/"}) || !reflect.DeepEqual(record.ExpectedIPs, []string{"127.0.0.1"}) || strings.TrimSpace(record.CheckedAt) == "" {
+		t.Fatalf("ingress check record = %#v", record)
+	}
+}
+
+func TestRecordSuccessfulSoloIngressCheckToStorePreservesFreshState(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh.Secrets = map[string]solo.SecretRecord{
+		"api-key": {WorkspaceRoot: workspaceRoot, Environment: "production", ServiceName: config.DefaultWebServiceName, Name: "API_KEY", Value: "devopsellence://plaintext/redacted"},
+	}
+	if err := soloState.Write(fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	report := ingressDNSReportResult{
+		OK:          true,
+		PublicURLs:  []string{"https://127.0.0.1/"},
+		ExpectedIPs: []string{"127.0.0.1"},
+	}
+	if err := recordSuccessfulSoloIngressCheckToStore(soloState, workspaceRoot, "production", report); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretFound := false
+	for _, secret := range loaded.Secrets {
+		if secret.Name == "API_KEY" && secret.Value == "devopsellence://plaintext/redacted" {
+			secretFound = true
+			break
+		}
+	}
+	if !secretFound {
+		t.Fatalf("secrets = %#v, want unrelated fresh secret preserved", loaded.Secrets)
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := loaded.IngressChecks[key]
+	if !record.OK || !reflect.DeepEqual(record.PublicURLs, []string{"https://127.0.0.1/"}) || !reflect.DeepEqual(record.ExpectedIPs, []string{"127.0.0.1"}) {
 		t.Fatalf("ingress check record = %#v", record)
 	}
 }

@@ -4724,10 +4724,7 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 		}
 		if report.OK || !ingressDNSReportRetryable(report) || opts.Wait <= 0 || time.Now().After(deadline) {
 			if report.OK {
-				if err := recordSuccessfulSoloIngressCheck(&current, workspaceRoot, environmentName, report); err != nil {
-					return err
-				}
-				if err := a.writeSoloState(current); err != nil {
+				if err := recordSuccessfulSoloIngressCheckToStore(a.SoloState, workspaceRoot, environmentName, report); err != nil {
 					return err
 				}
 			}
@@ -4747,6 +4744,15 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+func recordSuccessfulSoloIngressCheckToStore(store *solo.StateStore, workspaceRoot, environmentName string, report ingressDNSReportResult) error {
+	if store == nil {
+		return errors.New("solo state store is required")
+	}
+	return store.Update(func(current *solo.State) error {
+		return recordSuccessfulSoloIngressCheck(current, workspaceRoot, environmentName, report)
+	})
 }
 
 func recordSuccessfulSoloIngressCheck(current *solo.State, workspaceRoot, environmentName string, report ingressDNSReportResult) error {
@@ -5067,7 +5073,7 @@ func soloVerifiedIngressPublicURLs(current solo.State, workspaceRoot, environmen
 		return nil
 	}
 	expectedIPs := webNodeIPs(cfg, nodes)
-	if len(expectedIPs) > 0 && !sameStringSet(record.ExpectedIPs, expectedIPs) {
+	if len(expectedIPs) == 0 || !sameStringSet(record.ExpectedIPs, expectedIPs) {
 		return nil
 	}
 	return urls

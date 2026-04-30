@@ -667,9 +667,15 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	releaseListCommand.Flags().IntVar(&releaseListOpts.Limit, "limit", 20, "Maximum releases to return (0 for full history)")
 	releaseListCommand.Flags().StringVar(&releaseListOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (solo mode)")
 	releaseRollbackCommand := &cobra.Command{
-		Use:   "rollback [revision-or-release-id]",
+		Use:   "rollback [release-id|revision-prefix]",
 		Short: "Republish a previous release",
-		Args:  cobra.MaximumNArgs(1),
+		Long:  "Republish a previous solo release. The optional selector must be a release id or workload revision shown by `devopsellence release list`; git rev syntax such as HEAD~1 is not supported.",
+		Example: strings.Join([]string{
+			"  devopsellence release list --limit 5",
+			"  devopsellence release rollback rel_abc123_01K00000000000000000000000",
+			"  devopsellence release rollback abc1234",
+		}, "\n"),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				releaseRollbackOpts.Selector = strings.TrimSpace(args[0])
@@ -749,11 +755,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	secretSetCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name (required)")
 	secretSetCommand.Flags().StringVar(&secretStore, "store", "", "Solo secret store: plaintext or 1password")
 	secretSetCommand.Flags().StringVar(&secretReference, "op-ref", "", "1Password secret reference for solo mode")
-	secretSetCommand.Flags().StringVar(&secretValue, "value", "", "Secret value")
+	secretSetCommand.Flags().StringVar(&secretValue, "value", "", "Secret value (prefer --stdin to avoid shell history)")
 	secretSetCommand.Flags().BoolVar(&secretValueStdin, "stdin", false, "Read secret value from stdin")
 	secretSetCommand.Example = strings.Join([]string{
-		"  devopsellence secret set SECRET_KEY_BASE --service web --value super-secret",
 		"  printf '%s' \"$VALUE\" | devopsellence secret set SECRET_KEY_BASE --service web --stdin",
+		"  devopsellence secret set SECRET_KEY_BASE --service web --value \"$VALUE\"",
 		"  devopsellence secret set DATABASE_URL --service web --env production --store 1password --op-ref op://app-prod/db/password",
 	}, "\n")
 	secretListCommand := &cobra.Command{
@@ -1051,6 +1057,9 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Short: "Run a command on a solo node over SSH",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.ArgsLenAtDash() == 0 {
+				return ExitError{Code: 2, Err: errors.New("missing node before --: devopsellence node exec <node> -- <command>")}
+			}
 			nodeExecOpts.Node = args[0]
 			if len(args) < 2 {
 				return ExitError{Code: 2, Err: errors.New("missing command after --")}
@@ -1098,6 +1107,9 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Short: "Run a command in a workload service container",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.ArgsLenAtDash() == 0 {
+				return ExitError{Code: 2, Err: errors.New("missing service before --: devopsellence exec <service> -- <command>")}
+			}
 			workloadExecOpts.ServiceName = args[0]
 			if len(args) < 2 {
 				return ExitError{Code: 2, Err: errors.New("missing command after --")}

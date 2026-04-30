@@ -25,6 +25,15 @@ func jsonArrayFromMap(t *testing.T, payload map[string]any, key string) []any {
 	return items
 }
 
+func jsonArrayContains(items []any, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
 func jsonMapFromAny(t *testing.T, value any) map[string]any {
 	t.Helper()
 	item, ok := value.(map[string]any)

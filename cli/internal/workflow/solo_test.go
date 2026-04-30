@@ -851,6 +851,77 @@ func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
 	}
 }
 
+func TestSoloNodeCreateAttachRollsBackExistingSSHStateWhenRepublishFails(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
+set -euo pipefail
+command="${!#}"
+if [[ "$command" == "true" ]]; then
+  exit 0
+fi
+if [[ "$command" == *"docker image inspect"* ]]; then
+  printf 'present\n'
+  exit 0
+fi
+if [[ "$command" == *"docker info"* ]]; then
+  exit 0
+fi
+if [[ "$command" == *"desired-state set-override"* ]]; then
+  echo 'remote write failed' >&2
+  exit 1
+fi
+echo "unexpected ssh command: $command" >&2
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(solo.State{
+		Snapshots: map[string]desiredstate.DeploySnapshot{
+			key: {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				Revision:      "abc1234",
+				Image:         "demo:abc1234",
+				Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "demo:abc1234"}},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	err = app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{Name: "prod-1", Host: "203.0.113.10", User: "root", Port: 22, Attach: true})
+	if err == nil || !strings.Contains(err.Error(), "remote write failed") {
+		t.Fatalf("SoloNodeCreate() error = %v, want remote write failure", err)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Nodes["prod-1"]; ok {
+		t.Fatalf("node was kept after failed existing-SSH create/attach: %#v", loaded.Nodes)
+	}
+	if loaded.NodeHasAttachments("prod-1") {
+		t.Fatalf("attachment was kept after failed existing-SSH create/attach: %#v", loaded.Attachments)
+	}
+}
+
 func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -1213,8 +1284,13 @@ func TestSoloStatusWithExplicitNodesUsesExplicitEnvironmentRelease(t *testing.T)
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
-	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}, Environment: "staging"}); err != nil {
-		t.Fatalf("SoloStatus() error = %v", err)
+	err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}, Environment: "staging"})
+	if err == nil {
+		t.Fatal("expected stale status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	if _, ok := payload["public_urls"]; ok {
@@ -1267,8 +1343,13 @@ func TestSoloStatusWithExplicitNodesAndEnvBeforeLocalDeployTreatsRemoteStatusAsS
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
-	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}, Environment: "staging"}); err != nil {
-		t.Fatalf("SoloStatus() error = %v", err)
+	err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}, Environment: "staging"})
+	if err == nil {
+		t.Fatal("expected foreign status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	if payload["environment"] != "staging" {
@@ -2340,6 +2421,54 @@ func TestSoloWorkloadLogsReadsDockerLogs(t *testing.T) {
 	}
 }
 
+func TestSoloWorkloadLogsDefaultsToPrimaryWebService(t *testing.T) {
+	commandPath := filepath.Join(t.TempDir(), "workload-command")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_COMMAND", commandPath)
+	installFakeSoloCommands(t, nil)
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["frontend"] = cfg.Services[config.DefaultWebServiceName]
+	delete(cfg.Services, config.DefaultWebServiceName)
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{Lines: 20}); err != nil {
+		t.Fatalf("SoloWorkloadLogs() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["service"] != "frontend" {
+		t.Fatalf("payload = %#v, want frontend service", payload)
+	}
+	commandBytes, err := os.ReadFile(commandPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(commandBytes), "frontend") {
+		t.Fatalf("workload logs command = %q, want frontend service", commandBytes)
+	}
+}
+
 func TestSoloWorkloadLogsRejectsUnknownService(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	workspaceRoot := t.TempDir()
@@ -3331,6 +3460,40 @@ func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
 	}
 }
 
+func TestSoloNodeDiagnoseNextStepsUseCurrentWorkspaceEnvironment(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, Cwd: workspaceRoot}
+	if err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"}); err != nil {
+		t.Fatalf("SoloNodeDiagnose() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	steps := jsonArrayFromMap(t, payload, "next_steps")
+	if len(steps) != 3 || steps[0] != "devopsellence status --env 'staging'" || steps[1] != "devopsellence logs --env 'staging' --node 'node-a' --lines 100" || steps[2] != "devopsellence node logs 'node-a' --lines 100" {
+		t.Fatalf("next_steps = %#v, want staging-scoped diagnose follow-ups", steps)
+	}
+}
+
 func TestSoloNodeDiagnoseReturnsFailureWhenSSHCheckFails(t *testing.T) {
 	binDir := t.TempDir()
 	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
@@ -3700,6 +3863,95 @@ exit 1
 	}
 	if !loaded.NodeHasAttachments("prod-1") {
 		t.Fatalf("prod-1 attachment was removed after failed detach: %#v", loaded.Attachments)
+	}
+}
+
+func TestSoloNodeDetachRepublishesRemainingCohostedDesiredState(t *testing.T) {
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	if _, err := config.Write(workspaceA, config.DefaultProjectConfig("solo", "app-a", "production")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Write(workspaceB, config.DefaultProjectConfig("solo", "app-b", "production")); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceA, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceB, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	keyA, err := solo.EnvironmentStateKey(workspaceA, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := solo.EnvironmentStateKey(workspaceB, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[keyA] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceA,
+		WorkspaceKey:  workspaceA,
+		Environment:   "production",
+		Revision:      "aaa1111",
+		Image:         "app-a:aaa1111",
+		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "app-a:aaa1111"}},
+	}
+	current.Snapshots[keyB] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceB,
+		WorkspaceKey:  workspaceB,
+		Environment:   "production",
+		Revision:      "bbb2222",
+		Image:         "app-b:bbb2222",
+		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "app-b:bbb2222"}},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, nil)
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceA,
+	}
+	if err := app.SoloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: "node-a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(os.Getenv("DEVOPSELLENCE_FAKE_SSH_REVISION_FILE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "aaa1111") {
+		t.Fatalf("published desired state still contains detached revision: %s", data)
+	}
+	var published desiredstate.DesiredStateJSON
+	if err := json.Unmarshal(data, &published); err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Environments) != 1 || published.Environments[0].Revision != "bbb2222" {
+		t.Fatalf("published environments = %#v, want remaining cohosted revision only", published.Environments)
+	}
+
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes, err := loaded.AttachedNodeNames(workspaceA, "production"); err != nil || len(nodes) != 0 {
+		t.Fatalf("workspace A attached nodes = %#v err=%v, want detached", nodes, err)
+	}
+	if nodes, err := loaded.AttachedNodeNames(workspaceB, "production"); err != nil || !reflect.DeepEqual(nodes, []string{"node-a"}) {
+		t.Fatalf("workspace B attached nodes = %#v err=%v, want node-a preserved", nodes, err)
 	}
 }
 
@@ -4114,6 +4366,16 @@ func TestSoloSupportBundleUsesActiveEnvironmentForAttachedNodes(t *testing.T) {
 	if !ok || len(attached) != 1 || attached[0] != "node-staging" {
 		t.Fatalf("attached_nodes = %#v, want staging node only", bundle["attached_nodes"])
 	}
+	commands := jsonArrayFromMap(t, bundle, "recommended_commands")
+	if !jsonArrayContains(commands, "devopsellence status --env 'staging'") {
+		t.Fatalf("recommended_commands = %#v, want env-qualified status", commands)
+	}
+	if !jsonArrayContains(commands, "devopsellence release list --env 'staging'") {
+		t.Fatalf("recommended_commands = %#v, want env-qualified release list", commands)
+	}
+	if !jsonArrayContains(commands, "devopsellence logs --env 'staging' --lines 100") {
+		t.Fatalf("recommended_commands = %#v, want env-qualified workload logs", commands)
+	}
 }
 
 func TestSoloSecretsCommandsUseCurrentSoloEnvironment(t *testing.T) {
@@ -4437,9 +4699,17 @@ func TestSoloDeployDryRunUsesExplicitEnvironmentWithoutDNS(t *testing.T) {
 	if payload["public_url_status"] != "configured_tls_pending" {
 		t.Fatalf("payload = %#v, want TLS pending dry-run without DNS failure", payload)
 	}
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	if len(warnings) != 1 || !strings.Contains(stringValueAny(warnings[0]), "devopsellence status --env 'staging'") {
+		t.Fatalf("warnings = %#v, want env-qualified status guidance", warnings)
+	}
 	planned := jsonMapFromAny(t, payload["planned_dns_check"])
 	if planned["live_lookup"] != false || planned["required"] != true || planned["skipped"] != false || planned["check_command"] != "devopsellence ingress check --env 'staging'" {
 		t.Fatalf("planned_dns_check = %#v, want no-network required DNS check", planned)
+	}
+	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
+	if len(nextSteps) != 1 || nextSteps[0] != "devopsellence deploy --env 'staging'" {
+		t.Fatalf("next_steps = %#v, want env-scoped deploy command", nextSteps)
 	}
 	hosts := jsonArrayFromMap(t, planned, "hosts")
 	if len(hosts) != 1 || hosts[0] != "staging.invalid" {
@@ -4582,8 +4852,13 @@ func TestSoloStatusBeforeLocalDeployTreatsRemoteStatusAsStale(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
-	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
-		t.Fatalf("SoloStatus() error = %v", err)
+	err := app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected foreign status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	if payload["public_urls"] != nil {
@@ -4674,6 +4949,199 @@ func TestSoloStatusComparesRemoteStatusToPublishedDesiredStateRevision(t *testin
 	status := jsonMapFromAny(t, node["status"])
 	if status["revision"] != "desired-state-hash" {
 		t.Fatalf("node = %#v, want published desired-state revision accepted", node)
+	}
+}
+
+func TestSoloStatusRejectsExpectedRevisionWhenStatusTimePredatesDeployment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_test",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      1,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusSettled
+	deployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "current-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"time":"2000-01-01T00:00:00Z","revision":"current-desired-state","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected stale status-time failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	message := stringValueAny(node["message"])
+	if node["status"] != nil || !strings.Contains(message, "predates current local deployment") || !strings.Contains(message, "2000-01-01T00:00:00Z") || !strings.Contains(message, "2026-04-30T12:00:00Z") {
+		t.Fatalf("node = %#v, want stale status-time message", node)
+	}
+	if strings.Contains(message, "does not match current local deployment") {
+		t.Fatalf("message = %q, want freshness diagnostic instead of revision mismatch", message)
+	}
+}
+
+func TestSoloStatusExplainsRuntimeRevisionMismatchWhenDesiredStateRevisionMatches(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_test",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      1,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusSettled
+	deployment.PublicationResult = &corerelease.DeploymentPublicationResult{
+		Status: corerelease.PublicationStatusWritten,
+		NodeResults: []corerelease.DesiredStatePublication{{
+			NodeName: "node-a",
+			Revision: "current-desired-state",
+			Status:   corerelease.PublicationStatusWritten,
+		}},
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"time":"2026-04-30T12:05:00Z","revision":"current-desired-state","phase":"settled","environments":[{"name":%q,"revision":"oldsha","phase":"settled","services":[{"name":"web","state":"running"}]}]}`+"\n", runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected runtime revision mismatch")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	message := stringValueAny(node["message"])
+	if !strings.Contains(message, "remote runtime environment") || !strings.Contains(message, "oldsha") || !strings.Contains(message, "shortsha") || !strings.Contains(message, "devopsellence status --env 'production'") {
+		t.Fatalf("message = %q, want runtime revision mismatch guidance", message)
+	}
+	if strings.Contains(message, `status revision "current-desired-state" does not match`) {
+		t.Fatalf("message = %q, should not describe equal desired-state revisions as mismatched", message)
+	}
+}
+
+func TestSoloStatusFailsWhenCurrentDeploymentStatusIsMissing(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: soloStatusMissingSentinel + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err := app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected missing current status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	nodes := jsonArrayFromMap(t, payload, "nodes")
+	node := jsonMapFromAny(t, nodes[0])
+	message := stringValueAny(node["message"])
+	if node["status"] != nil || !strings.Contains(message, "no status for the current local deployment") || !strings.Contains(message, "devopsellence status --env 'production'") {
+		t.Fatalf("node = %#v, want missing current status message", node)
+	}
+	if strings.Contains(message, "run `devopsellence deploy`") {
+		t.Fatalf("message = %q, want wait/status guidance before redeploy", message)
 	}
 }
 
@@ -5071,8 +5539,13 @@ func TestSoloStatusRejectsStaleCohostedDesiredStateDespiteSettledRuntimeEnvironm
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
-	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
-		t.Fatalf("SoloStatus() error = %v", err)
+	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected stale cohosted status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	if _, ok := payload["public_urls"]; ok {
@@ -5245,8 +5718,13 @@ func TestSoloStatusRejectsKnownStaleDesiredStateDespiteSettledRuntimeEnvironment
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
-	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
-		t.Fatalf("SoloStatus() error = %v", err)
+	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("expected stale desired-state status failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	if _, ok := payload["public_urls"]; ok {
@@ -5345,7 +5823,7 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		t.Fatalf("public_urls = %#v, want node URL", urls)
 	}
 	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
-	if len(nextSteps) != 4 || nextSteps[0] != "devopsellence status" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence logs --node 'node-a' --lines 100" || nextSteps[3] != "devopsellence node logs 'node-a' --lines 100" {
+	if len(nextSteps) != 4 || nextSteps[0] != "devopsellence status --env 'production'" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || nextSteps[3] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status, curl, and logs commands", nextSteps)
 	}
 }
@@ -5444,6 +5922,10 @@ func TestSoloDeployDoesNotTreatDNSOnlyTLSCheckAsVerifiedPublicURL(t *testing.T) 
 	if payload["public_url_status"] != "configured_tls_pending" {
 		t.Fatalf("public_url_status = %#v, want configured_tls_pending", payload["public_url_status"])
 	}
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	if len(warnings) != 1 || !strings.Contains(stringValueAny(warnings[0]), "devopsellence status --env 'production'") {
+		t.Fatalf("warnings = %#v, want env-qualified status guidance", warnings)
+	}
 }
 
 func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
@@ -5496,6 +5978,31 @@ func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
 	releases = jsonArrayFromMap(t, payload, "releases")
 	if len(releases) != 2 {
 		t.Fatalf("releases = %#v, want unlimited result", releases)
+	}
+}
+
+func TestSoloReleaseListRejectsNegativeLimit(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard),
+		SoloState:   solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json")),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloReleaseList(context.Background(), SoloReleaseListOptions{Limit: -1})
+	if err == nil {
+		t.Fatal("SoloReleaseList() error = nil, want negative limit validation")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "--limit must be 0 or greater") {
+		t.Fatalf("error = %v, want limit guidance", err)
 	}
 }
 
@@ -5631,6 +6138,65 @@ func TestSoloReleaseRollbackDryRunPlansWithoutSideEffects(t *testing.T) {
 	}
 	if payload["deployment_id"] != nil || payload["desired_state_revisions"] != nil {
 		t.Fatalf("payload = %#v, dry-run must not create deployment/publication revisions", payload)
+	}
+}
+
+func TestSoloReleaseRollbackUnknownSelectorSuggestsReleaseList(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{Printer: output.New(io.Discard, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "HEAD~1"})
+	if err == nil {
+		t.Fatal("SoloReleaseRollback() error = nil, want selector guidance")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), `release "HEAD~1" not found`) || !strings.Contains(err.Error(), "devopsellence release list --env 'production' --limit 5") || !strings.Contains(err.Error(), "release id or revision") {
+		t.Fatalf("error = %v, want release-list selector guidance", err)
+	}
+}
+
+func TestSoloReleaseRollbackWithoutPreviousReleaseIsStateError(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "aaa1111")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{Printer: output.New(io.Discard, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{})
+	if err == nil {
+		t.Fatal("SoloReleaseRollback() error = nil, want no previous release")
+	}
+	var exitErr ExitError
+	if errors.As(err, &exitErr) && exitErr.Code == 2 {
+		t.Fatalf("error = %#v, default rollback state failure should not be syntax code 2", err)
+	}
+	if !strings.Contains(err.Error(), "no previous release found") || !strings.Contains(err.Error(), "devopsellence release list --env 'production' --limit 5") {
+		t.Fatalf("error = %v, want no-previous release-list guidance", err)
 	}
 }
 
@@ -7668,6 +8234,10 @@ func TestIngressCheckUsesExplicitEnvironment(t *testing.T) {
 	}
 	if payload["environment"] != "staging" || payload["check_scope"] != "dns" || payload["tls_verified"] != false {
 		t.Fatalf("payload = %#v, want self-auditing staging DNS-only check", payload)
+	}
+	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
+	if len(nextSteps) != 2 || nextSteps[0] != "devopsellence status --env 'staging'" || nextSteps[1] != "curl http://127.0.0.1/" {
+		t.Fatalf("next_steps = %#v, want env-qualified status and curl", nextSteps)
 	}
 	loaded, err := soloState.Read()
 	if err != nil {

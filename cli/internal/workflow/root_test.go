@@ -606,6 +606,26 @@ func TestExecReturnsMissingCommandAfterSeparator(t *testing.T) {
 	}
 }
 
+func TestExecReturnsMissingServiceBeforeSeparator(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, rootTestSoloWorkspace(t))
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"exec", "--", "printenv", "API_TOKEN"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing service")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %T %v, want ExitError code 2", err, err)
+	}
+	if !strings.Contains(err.Error(), "missing service before --") || !strings.Contains(err.Error(), "devopsellence exec <service> -- <command>") {
+		t.Fatalf("error = %v, want missing service syntax hint", err)
+	}
+}
+
 func TestNodeExecReturnsMissingCommandAfterSeparator(t *testing.T) {
 	var stdout bytes.Buffer
 	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, rootTestSoloWorkspace(t))
@@ -623,6 +643,67 @@ func TestNodeExecReturnsMissingCommandAfterSeparator(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing command after --") {
 		t.Fatalf("error = %v, want missing command after --", err)
+	}
+}
+
+func TestNodeExecReturnsMissingNodeBeforeSeparator(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, rootTestSoloWorkspace(t))
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"node", "exec", "--", "uptime"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing node")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %T %v, want ExitError code 2", err, err)
+	}
+	if !strings.Contains(err.Error(), "missing node before --") || !strings.Contains(err.Error(), "devopsellence node exec <node> -- <command>") {
+		t.Fatalf("error = %v, want missing node syntax hint", err)
+	}
+}
+
+func TestSecretSetHelpPrefersStdinForValues(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "--stdin") || !strings.Contains(output, "prefer --stdin") {
+		t.Fatalf("help output = %q, want stdin guidance", output)
+	}
+	if strings.Contains(output, "--value super-secret") {
+		t.Fatalf("help output = %q, leaked unsafe literal example", output)
+	}
+}
+
+func TestReleaseRollbackHelpClarifiesSelectorSource(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"release", "rollback", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{"release list", "release id", "workload revision", "HEAD~1 is not supported"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output = %q, want %q", output, want)
+		}
 	}
 }
 

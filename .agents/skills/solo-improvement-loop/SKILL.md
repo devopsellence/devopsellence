@@ -15,10 +15,12 @@ Use this skill with `dogfood-solo`; do not duplicate its full QA matrix. Load `.
 
 1. Establish branch, base, PR stack, current SHA, and dirty worktree. Do not overwrite unrelated changes.
 2. Check open PR/review/CI state before new work. If a prior stacked PR exists, continue from its head unless the user says otherwise.
-3. Release `component-release.yml` for the current branch and target preview version unless the user gives another version.
-4. Verify GitHub release tag points at the intended SHA.
-5. Install only official release artifacts; never substitute local builds for release-readiness claims.
-6. Verify checksums and binary versions for CLI and agent. For the agent, use `-version`/`--version`, not a `version` subcommand.
+3. Choose the feedback path:
+   - For CLI-only changes that do not touch `agent/`, `deployment-core/`, release packaging, install scripts, or public artifact behavior, use `mise run release:cli:local` for the fast local dogfood loop.
+   - For agent/core/release/install changes, or any final release-readiness claim, release through `component-release.yml` and install official artifacts.
+4. If using GitHub release, verify the release tag points at the intended SHA.
+5. Install the matching artifact for the chosen path. Never substitute a local CLI build for final release-readiness claims.
+6. Verify checksums and binary versions for official artifacts. For the agent, use `-version`/`--version`, not a `version` subcommand.
 7. Dogfood solo mode with `dogfood-solo`: first-run UX, node lifecycle, deploy, status, logs, secrets if relevant, rollback, detach/remove, cleanup.
 8. Include at least one adversarial solo scenario when possible: failed healthcheck, stale desired-state/status, co-hosted environments on one node, agent restart, rollback, and detach cleanup.
 9. Spawn fresh QA subagents when available. Give them the skill path, artifact/version/SHA, and a bounded QA focus. If subagents fail or quota out, continue locally and note the gap.
@@ -76,6 +78,7 @@ Record enough detail in the thread or PR for another agent to continue without r
 - Preserve ordinary-tool escape hatches: SSH, Docker, files, logs, JSON, cloud CLIs.
 - If cleanup may delete unknown resources, stop and ask.
 - If a release artifact is stale or mismatched, treat the release as failed even when local tests pass.
+- If the fast path uses `mise run release:cli:local`, label the evidence as local CLI-loop evidence and run one official artifact pass before recommending release.
 - If a live run creates infrastructure, cleanup must be verified before calling the loop complete.
 - If a command exits nonzero as part of a negative test, capture why that exit is expected and make the harness explicit.
 - If GitHub Actions or release publishing takes several minutes, keep watching; do not assume success from queued/in-progress state.
@@ -103,6 +106,7 @@ gh release view v0.2.0-preview --json tagName,targetCommitish,isPrerelease,publi
 gh release download v0.2.0-preview --repo devopsellence/devopsellence --pattern 'cli-linux-amd64' --pattern 'cli-SHA256SUMS' --pattern 'agent-linux-amd64' --pattern 'agent-SHA256SUMS'
 sha256sum -c cli-SHA256SUMS --ignore-missing
 sha256sum -c agent-SHA256SUMS --ignore-missing
+mise run release:cli:local
 ```
 
 ## Handoff

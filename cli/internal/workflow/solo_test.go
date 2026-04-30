@@ -1145,6 +1145,9 @@ func TestSoloStatusUsesExplicitEnvironment(t *testing.T) {
 		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment"] != "staging" {
+		t.Fatalf("environment = %#v, want staging", payload["environment"])
+	}
 	urls := jsonArrayFromMap(t, payload, "public_urls")
 	if len(urls) != 1 || urls[0] != "http://staging.example.com/" {
 		t.Fatalf("public_urls = %#v, want explicit staging host only", urls)
@@ -4264,6 +4267,18 @@ func TestSoloDeployDryRunUsesExplicitEnvironmentWithoutDNS(t *testing.T) {
 	}
 	if payload["public_url_status"] != "configured_tls_pending" {
 		t.Fatalf("payload = %#v, want TLS pending dry-run without DNS failure", payload)
+	}
+	planned := jsonMapFromAny(t, payload["planned_dns_check"])
+	if planned["live_lookup"] != false || planned["required"] != true || planned["check_command"] != "devopsellence ingress check" {
+		t.Fatalf("planned_dns_check = %#v, want no-network required DNS check", planned)
+	}
+	hosts := jsonArrayFromMap(t, planned, "hosts")
+	if len(hosts) != 1 || hosts[0] != "staging.invalid" {
+		t.Fatalf("planned_dns_check.hosts = %#v, want staging.invalid", hosts)
+	}
+	expected := jsonArrayFromMap(t, planned, "expected_ips")
+	if len(expected) != 1 || expected[0] != "203.0.113.10" {
+		t.Fatalf("planned_dns_check.expected_ips = %#v, want node IP", expected)
 	}
 }
 

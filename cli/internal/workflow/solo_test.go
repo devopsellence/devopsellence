@@ -7466,6 +7466,115 @@ func TestIngressSetWritesExplicitEnvironmentOverlay(t *testing.T) {
 	}
 }
 
+func TestRepublishRefreshesCohostedIngressIntentFromCurrentConfigs(t *testing.T) {
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	writeSoloIngressConfig := func(root, project, host, email string) {
+		cfg := config.DefaultProjectConfig("solo", project, config.DefaultEnvironment)
+		cfg.Ingress = &config.IngressConfig{
+			Hosts: []string{host},
+			Rules: []config.IngressRuleConfig{{
+				Match:  config.IngressMatchConfig{Host: host, PathPrefix: "/"},
+				Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+			}},
+			TLS:          config.IngressTLSConfig{Mode: "auto", Email: email},
+			RedirectHTTP: configBoolPtr(true),
+		}
+		if _, err := config.Write(root, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSoloIngressConfig(workspaceA, "app-a", "a.example.com", "ops@example.com")
+	writeSoloIngressConfig(workspaceB, "app-b", "b.example.com", "ops@example.com")
+
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceA, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceB, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	keyA, err := solo.EnvironmentStateKey(workspaceA, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := solo.EnvironmentStateKey(workspaceB, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[keyA] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceA,
+		WorkspaceKey:  workspaceA,
+		Environment:   "production",
+		Revision:      "aaa1111",
+		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "app-a:aaa1111"}},
+		Image:         "app-a:aaa1111",
+		Ingress: &desiredstate.IngressJSON{
+			Mode:         "public",
+			Hosts:        []string{"a.example.com"},
+			TLS:          desiredstate.IngressTLSJSON{Mode: "auto", Email: "bad@invalid"},
+			RedirectHTTP: true,
+			Routes: []desiredstate.IngressRouteJSON{{
+				Match:  desiredstate.IngressMatchJSON{Hostname: "a.example.com", PathPrefix: "/"},
+				Target: desiredstate.IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+			}},
+		},
+		IngressService:     "web",
+		IngressServiceKind: config.ServiceKindWeb,
+	}
+	current.Snapshots[keyB] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceB,
+		WorkspaceKey:  workspaceB,
+		Environment:   "production",
+		Revision:      "bbb2222",
+		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "app-b:bbb2222"}},
+		Image:         "app-b:bbb2222",
+		Ingress: &desiredstate.IngressJSON{
+			Mode:         "public",
+			Hosts:        []string{"b.example.com"},
+			TLS:          desiredstate.IngressTLSJSON{Mode: "auto", Email: "also-bad@invalid"},
+			RedirectHTTP: true,
+			Routes: []desiredstate.IngressRouteJSON{{
+				Match:  desiredstate.IngressMatchJSON{Hostname: "b.example.com", PathPrefix: "/"},
+				Target: desiredstate.IngressTargetJSON{Environment: "production", Service: "web", Port: "http"},
+			}},
+		},
+		IngressService:     "web",
+		IngressServiceKind: config.ServiceKindWeb,
+	}
+
+	app := &App{ConfigStore: config.NewStore()}
+	inputs, err := app.preparedNodeDesiredStateInputs(context.Background(), current, "node-a", current.Nodes["node-a"], map[string]desiredstate.DeploySnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, snapshot := range inputs.snapshots {
+		if snapshot.Ingress == nil || snapshot.Ingress.TLS.Email != "ops@example.com" {
+			t.Fatalf("snapshot %s ingress = %#v, want refreshed TLS email", snapshot.WorkspaceRoot, snapshot.Ingress)
+		}
+	}
+	publication, err := corerelease.PlanPublication(corerelease.PublicationPlanInput{
+		NodeName:     "node-a",
+		Node:         current.Nodes["node-a"],
+		Releases:     publicationReleasesFromSnapshots(inputs.snapshots),
+		ReleaseNodes: inputs.releaseNodes,
+		NodePeers:    inputs.peers,
+	})
+	if err != nil {
+		t.Fatalf("PlanPublication() error = %v, want cohosted ingress merge after config refresh", err)
+	}
+	var state desiredstate.DesiredStateJSON
+	if err := json.Unmarshal(publication.DesiredStateJSON, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Ingress == nil || state.Ingress.TLS.Email != "ops@example.com" {
+		t.Fatalf("published ingress = %#v, want refreshed TLS email", state.Ingress)
+	}
+}
+
 func TestIngressCheckUsesExplicitEnvironment(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")

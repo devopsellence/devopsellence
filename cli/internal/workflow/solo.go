@@ -1362,6 +1362,41 @@ func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.Stat
 	return snapshot, nil
 }
 
+func (a *App) refreshSnapshotIngressIntent(snapshot desiredstate.DeploySnapshot) (desiredstate.DeploySnapshot, error) {
+	workspaceRoot := strings.TrimSpace(snapshot.WorkspaceRoot)
+	environmentName := strings.TrimSpace(snapshot.Environment)
+	if workspaceRoot == "" || environmentName == "" || snapshot.Ingress == nil {
+		return snapshot, nil
+	}
+	store := a.ConfigStore
+	cfg, err := store.Read(workspaceRoot)
+	if err != nil {
+		return desiredstate.DeploySnapshot{}, fmt.Errorf("refresh ingress intent for %s (%s): %w", workspaceRoot, environmentName, err)
+	}
+	if cfg == nil {
+		return snapshot, nil
+	}
+	resolvedCfg := *cfg
+	if environmentName != soloEnvironmentName(cfg, "") {
+		resolved, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+		if err != nil {
+			return desiredstate.DeploySnapshot{}, fmt.Errorf("refresh ingress intent for %s (%s): %w", workspaceRoot, environmentName, err)
+		}
+		resolvedCfg = resolved
+	}
+	if resolvedCfg.Ingress == nil {
+		return snapshot, nil
+	}
+	refreshed := desiredstate.BuildIngress(resolvedCfg.Ingress, environmentName)
+	if refreshed == nil {
+		return snapshot, nil
+	}
+	snapshot.Ingress.Mode = refreshed.Mode
+	snapshot.Ingress.TLS = refreshed.TLS
+	snapshot.Ingress.RedirectHTTP = refreshed.RedirectHTTP
+	return snapshot, nil
+}
+
 func cloneDeploySnapshot(snapshot desiredstate.DeploySnapshot) desiredstate.DeploySnapshot {
 	cloned := snapshot
 	if snapshot.Services != nil {
@@ -1596,6 +1631,17 @@ func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.S
 				}{}, fmt.Errorf("hydrate snapshot: %w", err)
 			}
 			resolvedSnapshotCache[key] = resolvedSnapshot
+		}
+		if len(storedSnapshots) > 1 {
+			resolvedSnapshot, err = a.refreshSnapshotIngressIntent(resolvedSnapshot)
+			if err != nil {
+				return struct {
+					snapshots    []desiredstate.DeploySnapshot
+					releaseNodes map[string]string
+					peers        []desiredstate.NodePeer
+					images       []string
+				}{}, fmt.Errorf("refresh cohosted ingress intent: %w", err)
+			}
 		}
 		resolvedSnapshots = append(resolvedSnapshots, resolvedSnapshot)
 		if snapshotNeedsImageOnNode(resolvedSnapshot, node, releaseNodes[key] == nodeName) {

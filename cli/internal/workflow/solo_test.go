@@ -4322,7 +4322,7 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		DeployTimeout:      time.Second,
 	}
 
-	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{}); err != nil {
+	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{SkipDNSCheck: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -4358,6 +4358,83 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
 	if len(nextSteps) != 4 || nextSteps[0] != "devopsellence status" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence logs --node 'node-a' --lines 100" || nextSteps[3] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status, curl, and logs commands", nextSteps)
+	}
+}
+
+func TestSoloDeployUsesVerifiedIngressPublicURLs(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+		IngressChecks: map[string]solo.IngressCheckRecord{
+			key: {
+				OK:          true,
+				PublicURLs:  []string{"https://app.example.com/"},
+				ExpectedIPs: []string{"203.0.113.10"},
+			},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: soloStatusMissingSentinel + "\n"},
+		{stdout: `{"revision":"__REVISION__","phase":"settled"}` + "\n"},
+	})
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:            output.New(&stdout, io.Discard),
+		SoloState:          soloState,
+		ConfigStore:        config.NewStore(),
+		Git:                git.Client{},
+		Cwd:                workspaceRoot,
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      time.Second,
+	}
+	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{SkipDNSCheck: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if len(urls) != 1 || urls[0] != "https://app.example.com/" {
+		t.Fatalf("public_urls = %#v, want verified HTTPS URL", urls)
+	}
+	if _, ok := payload["public_url_status"]; ok {
+		t.Fatalf("payload = %#v, did not expect TLS pending status", payload)
+	}
+	if _, ok := payload["warnings"]; ok {
+		t.Fatalf("payload = %#v, did not expect TLS warning", payload)
 	}
 }
 

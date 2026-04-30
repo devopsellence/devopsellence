@@ -237,7 +237,7 @@ services:
 Then store the token as a project secret and deploy normally:
 
 ```bash
-devopsellence secret set CLOUDFLARE_TUNNEL_TOKEN --service cloudflared
+printf '%s' "$CLOUDFLARE_TUNNEL_TOKEN" | devopsellence secret set CLOUDFLARE_TUNNEL_TOKEN --service cloudflared --stdin
 devopsellence deploy
 ```
 

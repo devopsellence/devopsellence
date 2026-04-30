@@ -375,12 +375,12 @@ func expandSoloSSHKeyPath(path string) (string, error) {
 		return "", nil
 	}
 	if path == "~" {
-		return "", fmt.Errorf("ssh key path %q must reference a private key file, not the home directory", path)
+		return "", ExitError{Code: 2, Err: fmt.Errorf("ssh key path %q must reference a private key file, not the home directory", path)}
 	}
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("expand ssh key path: %w", err)
+			return "", ExitError{Code: 2, Err: fmt.Errorf("expand ssh key path: %w", err)}
 		}
 		path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
 	}
@@ -388,12 +388,12 @@ func expandSoloSSHKeyPath(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("ssh key path %q does not exist", path)
+			return "", ExitError{Code: 2, Err: fmt.Errorf("ssh key path %q does not exist", path)}
 		}
-		return "", fmt.Errorf("stat ssh key path %q: %w", path, err)
+		return "", ExitError{Code: 2, Err: fmt.Errorf("stat ssh key path %q: %w", path, err)}
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("ssh key path %q must be a file, not a directory", path)
+		return "", ExitError{Code: 2, Err: fmt.Errorf("ssh key path %q must be a file, not a directory", path)}
 	}
 	return path, nil
 }
@@ -450,7 +450,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 				"publish":     false,
 				"state_write": false,
 			},
-			"next_steps": []string{"devopsellence deploy"},
+			"next_steps": []string{"devopsellence deploy" + soloEnvFlag(environmentName)},
 		}
 		if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 			payload["configured_public_urls"] = urls
@@ -459,13 +459,13 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 			}
 			if len(soloReadyPublicURLs(cfg, nodes)) == 0 {
 				payload["public_url_status"] = soloPublicURLStatus(cfg)
-				payload["warnings"] = []string{soloPublicURLWarning(cfg)}
+				payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
 			}
 		}
 		return stream.Result(payload)
 	}
 
-	if err := a.checkIngressBeforeDeploy(ctx, cfg, nodes, opts.SkipDNSCheck); err != nil {
+	if err := a.checkIngressBeforeDeploy(ctx, cfg, nodes, opts.SkipDNSCheck, environmentName); err != nil {
 		return err
 	}
 
@@ -585,14 +585,14 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	}
 	if urls := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
-		payload["next_steps"] = append([]string{"devopsellence status", "curl " + urls[0]}, soloNodeLogNextSteps(nodes)...)
+		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + urls[0]}, soloNodeLogNextSteps(environmentName, nodes)...)
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
-		payload["warnings"] = []string{soloPublicURLWarning(cfg)}
-		payload["next_steps"] = append([]string{"devopsellence status"}, soloNodeLogNextSteps(nodes)...)
+		payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
+		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName)}, soloNodeLogNextSteps(environmentName, nodes)...)
 	} else {
-		payload["next_steps"] = append([]string{"devopsellence status"}, soloNodeLogNextSteps(nodes)...)
+		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName)}, soloNodeLogNextSteps(environmentName, nodes)...)
 	}
 	return stream.Result(payload)
 
@@ -1739,10 +1739,11 @@ func (a *App) soloProgress(operation string, fields map[string]any) func(string)
 	}
 }
 
-func soloNodeLogNextSteps(nodes map[string]config.Node) []string {
+func soloNodeLogNextSteps(environment string, nodes map[string]config.Node) []string {
+	envFlag := soloEnvFlag(environment)
 	steps := []string{}
 	for _, nodeName := range sortedNodeNames(nodes) {
-		steps = append(steps, "devopsellence logs --node "+shellQuote(nodeName)+" --lines 100")
+		steps = append(steps, "devopsellence logs"+envFlag+" --node "+shellQuote(nodeName)+" --lines 100")
 		steps = append(steps, "devopsellence node logs "+shellQuote(nodeName)+" --lines 100")
 	}
 	return steps
@@ -1903,6 +1904,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	var jsonResults []map[string]any
 	readErrors := 0
 	statusErrors := 0
+	statusMismatches := 0
+	missingStatuses := 0
 	allSettled := true
 
 	for name, node := range nodes {
@@ -1922,6 +1925,10 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		if result.Missing {
 			allSettled = false
 			message := "no deploy status yet; run `devopsellence deploy`"
+			if localReleaseKnown {
+				missingStatuses++
+				message = "remote agent has no status for the current local deployment yet; wait for rollout, rerun `devopsellence status" + soloEnvFlag(environmentName) + "`, and redeploy only if the remote status never appears"
+			}
 
 			jsonResults = append(jsonResults, map[string]any{
 				"node":    name,
@@ -1934,6 +1941,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 
 		if !localReleaseKnown {
 			allSettled = false
+			statusMismatches++
 			jsonResults = append(jsonResults, map[string]any{
 				"node":    name,
 				"status":  nil,
@@ -1944,14 +1952,16 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
 		if expectedRevision != "" && !soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name]) {
 			allSettled = false
-			message := fmt.Sprintf("remote agent status revision %q does not match current local deployment %q; run `devopsellence deploy`", strings.TrimSpace(result.Status.Revision), expectedRevision)
 			runtime := soloRuntimeEnvironmentStatus(result.Status, expectedRuntimeEnvironment, expectedWorkloadRevision)
+			message := soloStatusMismatchMessage(result.Status, expectedRevision, runtime, expectedRuntimeEnvironment, expectedWorkloadRevision, environmentName)
 			if runtime.State == "error" {
 				statusErrors++
 				message = runtime.Message
 			} else if strings.TrimSpace(result.Status.Phase) == "error" {
 				statusErrors++
 				message = firstNonEmpty(strings.TrimSpace(result.Status.Error), "node reported phase=error")
+			} else {
+				statusMismatches++
 			}
 			jsonResults = append(jsonResults, map[string]any{
 				"node":    name,
@@ -1987,12 +1997,12 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			payload["public_urls"] = verifiedPublicURLs
 		} else {
 			payload["configured_public_urls"] = verifiedPublicURLs
-			payload["warnings"] = []string{"public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"}
+			payload["warnings"] = []string{"public URLs are configured, but one or more nodes are not settled; check `devopsellence status" + soloEnvFlag(environmentName) + "` before testing reachability"}
 		}
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
-		payload["warnings"] = []string{soloPublicURLWarning(cfg)}
+		payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
 	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
 		return err
@@ -2003,7 +2013,34 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	if statusErrors > 0 {
 		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status reported unhealthy runtime environment on %d node(s)", statusErrors)}}
 	}
+	if statusMismatches > 0 {
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status did not match the current local deployment on %d node(s)", statusMismatches)}}
+	}
+	if missingStatuses > 0 {
+		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status missing for current local deployment on %d node(s)", missingStatuses)}}
+	}
 	return nil
+}
+
+func soloStatusMismatchMessage(status soloNodeStatus, expectedDesiredStateRevision string, runtime soloRuntimeStatusResult, expectedRuntimeEnvironment, expectedWorkloadRevision, logicalEnvironment string) string {
+	statusRevision := strings.TrimSpace(status.Revision)
+	if statusRevision == strings.TrimSpace(expectedDesiredStateRevision) && runtime.State != "" && runtime.State != "settled" {
+		statusCommand := "devopsellence status" + soloEnvFlag(logicalEnvironment)
+		runtimeEnvironment := firstNonEmpty(expectedRuntimeEnvironment, "expected runtime environment")
+		switch runtime.State {
+		case "pending":
+			if revision, ok := strings.CutPrefix(runtime.Detail, "runtime_env_revision:"); ok {
+				return fmt.Sprintf("remote runtime environment %q revision %q does not match current workload revision %q; wait for rollout, rerun `%s`, and redeploy only if the remote runtime never advances", runtimeEnvironment, revision, expectedWorkloadRevision, statusCommand)
+			}
+			if runtime.Detail == "runtime_env:missing" {
+				return fmt.Sprintf("remote runtime environment %q is missing from status; wait for rollout, rerun `%s`, and redeploy only if the remote runtime never appears", runtimeEnvironment, statusCommand)
+			}
+		case "reconciling":
+			detail := firstNonEmpty(runtime.Detail, "reconciling")
+			return fmt.Sprintf("remote runtime environment %q is still reconciling (%s); wait for rollout and rerun `%s`", runtimeEnvironment, detail, statusCommand)
+		}
+	}
+	return fmt.Sprintf("remote agent status revision %q does not match current local deployment %q; run `devopsellence deploy`", statusRevision, expectedDesiredStateRevision)
 }
 
 func soloExpectedStatusRevisions(current solo.State, release corerelease.Release) map[string]string {
@@ -2144,6 +2181,9 @@ func soloExpectedStatusRevision(expected map[string]string, nodeName string) str
 }
 
 func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) error {
+	if opts.Limit < 0 {
+		return ExitError{Code: 2, Err: fmt.Errorf("--limit must be 0 or greater")}
+	}
 	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(opts.Environment)
 	if err != nil {
 		return err
@@ -2227,7 +2267,11 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	}
 	selected, err := corerelease.SelectRollbackRelease(releases, currentRelease.ID, opts.Selector)
 	if err != nil {
-		return err
+		message := fmt.Errorf("%w; run `devopsellence release list%s --limit 5` and pass a release id or revision shown there", err, soloEnvFlag(environmentName))
+		if strings.TrimSpace(opts.Selector) != "" {
+			return ExitError{Code: 2, Err: message}
+		}
+		return message
 	}
 	rollbackTargetNodeNames, err := soloRollbackTargetNodeNames(attachedNodeNames, selected)
 	if err != nil {
@@ -2422,11 +2466,12 @@ func soloPublicURLStatus(cfg *config.ProjectConfig) string {
 	return "configured_pending"
 }
 
-func soloPublicURLWarning(cfg *config.ProjectConfig) string {
+func soloPublicURLWarning(cfg *config.ProjectConfig, environment ...string) string {
+	statusCommand := "devopsellence status" + soloEnvFlag(firstNonEmpty(environment...))
 	if ingressRequiresTLSReadiness(cfg) {
-		return "HTTPS public URLs are configured, but TLS reachability has not been verified yet; use `devopsellence status` and curl the HTTPS endpoint before treating it as reachable"
+		return "HTTPS public URLs are configured, but TLS reachability has not been verified yet; use `" + statusCommand + "` and curl the HTTPS endpoint before treating it as reachable"
 	}
-	return "public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"
+	return "public URLs are configured, but one or more nodes are not settled; check `" + statusCommand + "` before testing reachability"
 }
 
 func ingressURLScheme(cfg *config.ProjectConfig) string {
@@ -3090,9 +3135,6 @@ func (a *App) SoloLogs(ctx context.Context, opts SoloLogsOptions) error {
 
 func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions) error {
 	serviceName := strings.TrimSpace(opts.ServiceName)
-	if serviceName == "" {
-		serviceName = "web"
-	}
 	linesLimit := opts.Lines
 	if linesLimit < 1 || linesLimit > soloLogsMaxLines {
 		return ExitError{Code: 2, Err: fmt.Errorf("--lines must be between 1 and %d", soloLogsMaxLines)}
@@ -3106,6 +3148,9 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 	}
 	if cfg == nil {
 		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
+	}
+	if serviceName == "" {
+		serviceName = primaryWebServiceName(*cfg)
 	}
 	if _, ok := cfg.Services[serviceName]; !ok {
 		return ExitError{Code: 2, Err: fmt.Errorf("service %q not found in devopsellence.yml", serviceName)}
@@ -3618,12 +3663,43 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 			payload["status"] = string(statusResult.Raw)
 		}
 	}
-	payload["next_steps"] = []string{
-		"devopsellence status",
-		"devopsellence logs --node " + shellQuote(opts.Node) + " --lines 100",
-		"devopsellence node logs " + shellQuote(opts.Node) + " --lines 100",
-	}
+	payload["next_steps"] = a.soloNodeDiagnoseNextSteps(current, opts.Node)
 	return a.printSoloDiagnoseResult(payload, diagnoseOK)
+}
+
+func (a *App) soloNodeDiagnoseNextSteps(current solo.State, nodeName string) []string {
+	environments := []string{}
+	if discovered, err := discovery.Discover(a.Cwd); err == nil {
+		for _, attachment := range current.AttachmentsForNode(nodeName) {
+			if strings.TrimSpace(attachment.WorkspaceKey) == discovered.WorkspaceRoot {
+				environments = append(environments, attachment.Environment)
+			}
+		}
+	}
+	if len(environments) == 0 {
+		for _, attachment := range current.AttachmentsForNode(nodeName) {
+			environments = append(environments, attachment.Environment)
+		}
+	}
+	environments = normalizeSoloNames(environments)
+
+	steps := []string{}
+	if len(environments) == 0 {
+		steps = append(steps,
+			"devopsellence status",
+			"devopsellence logs --node "+shellQuote(nodeName)+" --lines 100",
+		)
+	} else {
+		for _, environment := range environments {
+			envFlag := soloEnvFlag(environment)
+			steps = append(steps,
+				"devopsellence status"+envFlag,
+				"devopsellence logs"+envFlag+" --node "+shellQuote(nodeName)+" --lines 100",
+			)
+		}
+	}
+	steps = append(steps, "devopsellence node logs "+shellQuote(nodeName)+" --lines 100")
+	return steps
 }
 
 func diagnosticSectionsOK(sections ...map[string]any) bool {
@@ -4271,6 +4347,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if err := current.SetNode(nodeName, node); err != nil {
 		return err
 	}
+	remoteRollbackState := cloneSoloState(current)
 	attached := false
 	var attachment solo.AttachmentRecord
 	if opts.Attach {
@@ -4300,7 +4377,20 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	if attached {
 		if soloAttachmentHasReleaseState(current, attachment) {
 			if _, err := a.republishNodes(ctx, current, attachment.NodeNames); err != nil {
-				return err
+				rollbackTargets := append([]string(nil), attachment.NodeNames...)
+				var rollbackErr error
+				if _, republishErr := a.republishNodes(ctx, remoteRollbackState, rollbackTargets); republishErr != nil {
+					rollbackErr = fmt.Errorf("rollback failed republishing previous desired state: %w", republishErr)
+				}
+				rollbackState := cloneSoloState(current)
+				_, _, _ = rollbackState.DetachNode(workspaceRoot, attachment.Environment, nodeName)
+				if hasHost {
+					rollbackState.RemoveNode(nodeName)
+				}
+				if writeErr := a.writeSoloState(rollbackState); writeErr != nil {
+					rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback failed node create state: %w", writeErr))
+				}
+				return errors.Join(err, rollbackErr)
 			}
 		}
 	}
@@ -4501,7 +4591,7 @@ func sshInteractiveError(prefix string, err error, stdout string, stderr string)
 
 func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {
 	if !opts.Yes {
-		return fmt.Errorf("node remove requires --yes")
+		return ExitError{Code: 2, Err: errors.New("node remove requires --yes; rerun with --yes to confirm local/provider cleanup")}
 	}
 	current, err := a.readSoloState()
 	if err != nil {
@@ -4608,18 +4698,11 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 			"root": discovered.WorkspaceRoot,
 			"slug": discovered.ProjectSlug,
 		},
-		"environment":    environmentName,
-		"config":         redactProjectConfigForSupport(cfg),
-		"solo_state":     redactSoloStateForSupport(current),
-		"attached_nodes": attachedNodes,
-		"recommended_commands": []string{
-			"devopsellence doctor",
-			"devopsellence status",
-			"devopsellence release list",
-			"devopsellence node list --all",
-			"devopsellence node diagnose <node>",
-			"devopsellence node logs <node> --lines 200",
-		},
+		"environment":          environmentName,
+		"config":               redactProjectConfigForSupport(cfg),
+		"solo_state":           redactSoloStateForSupport(current),
+		"attached_nodes":       attachedNodes,
+		"recommended_commands": soloSupportBundleRecommendedCommands(environmentName),
 	}
 	outputPath := strings.TrimSpace(opts.Output)
 	if outputPath == "" {
@@ -4645,6 +4728,19 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 			"Run devopsellence node diagnose <node> for live remote runtime details.",
 		},
 	})
+}
+
+func soloSupportBundleRecommendedCommands(environment string) []string {
+	envFlag := soloEnvFlag(environment)
+	return []string{
+		"devopsellence doctor",
+		"devopsellence status" + envFlag,
+		"devopsellence release list" + envFlag,
+		"devopsellence logs" + envFlag + " --lines 100",
+		"devopsellence node list --all",
+		"devopsellence node diagnose <node>",
+		"devopsellence node logs <node> --lines 200",
+	}
 }
 
 func redactSoloStateForSupport(current solo.State) solo.State {
@@ -5222,7 +5318,7 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 	}
 	deadline := time.Now().Add(opts.Wait)
 	for {
-		report, err := ingressDNSReport(ctx, cfg, nodes)
+		report, err := ingressDNSReport(ctx, cfg, nodes, environmentName)
 		if err != nil {
 			return err
 		}
@@ -5770,11 +5866,11 @@ func (e ingressDNSReadinessError) ErrorFields() map[string]any {
 
 const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
 
-func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.Node, skip bool) error {
+func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.Node, skip bool, environment ...string) error {
 	if skip || !ingressRequiresDNSPreflight(cfg) {
 		return nil
 	}
-	report, err := ingressDNSReport(ctx, cfg, nodes)
+	report, err := ingressDNSReport(ctx, cfg, nodes, firstNonEmpty(environment...))
 	if err != nil {
 		return err
 	}
@@ -5802,15 +5898,18 @@ func ingressDNSReportError(report ingressDNSReportResult) error {
 	return fmt.Errorf("ingress DNS is not ready")
 }
 
-func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.Node) (ingressDNSReportResult, error) {
+func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.Node, environment ...string) (ingressDNSReportResult, error) {
 	hosts := concreteIngressHosts(cfg)
 	expected := webNodeIPs(cfg, selected)
 	if len(expected) == 0 {
 		return ingressDNSReportResult{}, fmt.Errorf("no web nodes configured")
 	}
+	environmentName := firstNonEmpty(environment...)
+	envFlag := soloEnvFlag(environmentName)
 	report := ingressDNSReportResult{
 		SchemaVersion: outputSchemaVersion,
 		OK:            true,
+		Environment:   strings.TrimSpace(environmentName),
 		CheckScope:    "dns",
 		TLSVerified:   false,
 		PublicURLs:    ingressConfiguredPublicURLs(cfg),
@@ -5819,8 +5918,8 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 	}
 	if len(hosts) == 0 {
 		report.OK = false
-		report.Hints = temporaryDNSHints(cfg, expected)
-		report.NextSteps = []string{"devopsellence status", "devopsellence ingress set --host <hostname> --service <service>", "devopsellence ingress check --wait 5m"}
+		report.Hints = temporaryDNSHints(cfg, expected, environmentName)
+		report.NextSteps = []string{"devopsellence status" + envFlag, "devopsellence ingress set" + envFlag + " --host <hostname> --service <service>", "devopsellence ingress check" + envFlag + " --wait 5m"}
 		return report, nil
 	}
 	for _, host := range hosts {
@@ -5839,9 +5938,9 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 	}
 	if len(report.PublicURLs) > 0 {
 		if report.OK {
-			report.NextSteps = []string{"devopsellence status", "curl " + report.PublicURLs[0]}
+			report.NextSteps = []string{"devopsellence status" + envFlag, "curl " + report.PublicURLs[0]}
 		} else {
-			report.NextSteps = []string{"devopsellence status", "update DNS records to point at expected_ips", "devopsellence ingress check --wait 5m"}
+			report.NextSteps = []string{"devopsellence status" + envFlag, "update DNS records to point at expected_ips", "devopsellence ingress check" + envFlag + " --wait 5m"}
 		}
 	}
 	return report, nil
@@ -5869,10 +5968,11 @@ func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Node) []st
 	return ips
 }
 
-func temporaryDNSHints(cfg *config.ProjectConfig, expectedIPs []string) []ingressHint {
+func temporaryDNSHints(cfg *config.ProjectConfig, expectedIPs []string, environment ...string) []ingressHint {
 	if len(expectedIPs) != 1 {
 		return nil
 	}
+	environmentName := firstNonEmpty(environment...)
 	hints := []ingressHint{}
 	for _, ip := range expectedIPs {
 		if !isTemporaryDNSIPv4(ip) {
@@ -5887,7 +5987,7 @@ func temporaryDNSHints(cfg *config.ProjectConfig, expectedIPs []string) []ingres
 				Kind:     "use_temporary_dns_hostname",
 				Provider: "sslip.io",
 				Hostname: hostname,
-				Command:  temporaryDNSCommand(cfg, hostname),
+				Command:  temporaryDNSCommand(cfg, hostname, environmentName),
 				Risks: []string{
 					"third_party_dns_dependency",
 					"breaks_if_public_ip_changes",
@@ -5903,8 +6003,8 @@ func temporaryDNSHostname(_ *config.ProjectConfig, ip string) string {
 	return strings.TrimSpace(ip) + ".sslip.io"
 }
 
-func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string) string {
-	return "devopsellence ingress set --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
+func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string, environment ...string) string {
+	return "devopsellence ingress set" + soloEnvFlag(firstNonEmpty(environment...)) + " --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
 }
 
 func temporaryDNSTLSMode(cfg *config.ProjectConfig) string {

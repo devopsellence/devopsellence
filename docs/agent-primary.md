@@ -60,8 +60,8 @@ devopsellence deploy --dry-run
 devopsellence apply <plan-id>
 devopsellence status
 devopsellence doctor
-devopsellence logs --service web
-devopsellence rollback --dry-run --to <release-id>
+devopsellence logs web
+devopsellence release rollback --dry-run <release-id>
 ```
 
 All of these should emit structured JSON without requiring `--json`.
@@ -90,7 +90,7 @@ Command results should converge toward a common envelope:
       "next_actions": [
         {
           "label": "set secret reference",
-          "command": "devopsellence secrets set DATABASE_URL --stdin"
+          "command": "devopsellence secret set DATABASE_URL --service web --stdin"
         }
       ]
     }

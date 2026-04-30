@@ -2064,6 +2064,9 @@ func (a *App) ProjectUse(ctx context.Context, opts ProjectUseOptions) error {
 }
 
 func (a *App) EnvironmentList(ctx context.Context, opts EnvironmentListOptions) error {
+	if mode, err := a.ResolveMode(); err == nil && mode == ModeSolo {
+		return a.soloEnvironmentList(opts)
+	}
 	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
 		return err

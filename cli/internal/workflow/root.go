@@ -556,6 +556,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			"  shared - deploys through the control plane using org/project/environment context",
 		}, "\n"),
 		RunE: runByMode(func(ctx context.Context) error {
+			deploySoloOpts.Environment = deploySharedOpts.Environment
 			return app.SoloDeploy(ctx, deploySoloOpts)
 		}, func(ctx context.Context) error {
 			return app.Deploy(ctx, deploySharedOpts)
@@ -566,7 +567,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	deployCommand.Flags().StringVar(&deploySharedOpts.Organization, "org", os.Getenv("DEVOPSELLENCE_ORGANIZATION"), "Organization name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Project, "project", os.Getenv("DEVOPSELLENCE_PROJECT"), "Project name override (shared mode)")
 	deployCommand.Flags().StringVar(&deploySharedOpts.Image, "image", "", "Deploy an existing digest ref instead of building locally (shared mode)")
-	deployCommand.Flags().StringVar(&deploySharedOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (shared mode)")
+	deployCommand.Flags().StringVar(&deploySharedOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (solo/shared)")
 	deployCommand.Flags().BoolVar(&deploySharedOpts.NonInteractive, "non-interactive", false, "Disable interactive prompts if re-initialization is needed (shared mode)")
 	root.AddCommand(deployCommand)
 
@@ -634,6 +635,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Use:   "status",
 		Short: "Show deploy or runtime status for the selected workspace mode",
 		RunE: runByMode(func(ctx context.Context) error {
+			statusSoloOpts.Environment = statusSharedOpts.Environment
 			return app.SoloStatus(ctx, statusSoloOpts)
 		}, func(ctx context.Context) error {
 			return app.Status(ctx, statusSharedOpts)
@@ -642,7 +644,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	statusCommand.Flags().StringSliceVar(&statusSoloOpts.Nodes, "nodes", nil, "Comma-separated node names (solo mode)")
 	statusCommand.Flags().StringVar(&statusSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
 	statusCommand.Flags().StringVar(&statusSharedOpts.Project, "project", "", "Project name override (shared mode)")
-	statusCommand.Flags().StringVar(&statusSharedOpts.Environment, "env", "", "Environment name override (shared mode)")
+	statusCommand.Flags().StringVar(&statusSharedOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (solo/shared)")
 	root.AddCommand(statusCommand)
 
 	var releaseListOpts SoloReleaseListOptions
@@ -661,6 +663,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}),
 	}
 	releaseListCommand.Flags().IntVar(&releaseListOpts.Limit, "limit", 20, "Maximum releases to return (0 for full history)")
+	releaseListCommand.Flags().StringVar(&releaseListOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (solo mode)")
 	releaseRollbackCommand := &cobra.Command{
 		Use:   "rollback [revision-or-release-id]",
 		Short: "Republish a previous release",
@@ -677,6 +680,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	releaseRollbackCommand.Flags().BoolVar(&releaseRollbackOpts.DryRun, "dry-run", false, "Plan solo rollback without publishing, SSHing, or mutating state")
+	releaseRollbackCommand.Flags().StringVar(&releaseRollbackOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (solo mode)")
 	releaseCommand.AddCommand(releaseListCommand, releaseRollbackCommand)
 	root.AddCommand(releaseCommand)
 
@@ -1080,6 +1084,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		},
 	}
 	logsCommand.Flags().StringSliceVar(&workloadLogsOpts.Nodes, "node", nil, "Solo node name to read logs from (repeatable or comma-separated)")
+	logsCommand.Flags().StringVar(&workloadLogsOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override")
 	logsCommand.Flags().IntVar(&workloadLogsOpts.Lines, "lines", soloLogsDefaultLines, fmt.Sprintf("Number of recent log lines to return, 1-%d", soloLogsMaxLines))
 	root.AddCommand(logsCommand)
 

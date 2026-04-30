@@ -227,8 +227,29 @@ jobs:
               "${dist_dir}/SHA256SUMS" > "${upload_dir}/${asset_prefix}-SHA256SUMS"
           }
 
+          verify_release_binary() {
+            local component="$1"
+            local binary="$2"
+            local version="$3"
+            local short_sha="$4"
+            local output
+
+            output="$("$binary" --version)"
+            if [[ "$output" != *"$version"* ]] || [[ "$output" != *"$short_sha"* ]]; then
+              echo "${component} release artifact has unexpected version output: $output" >&2
+              echo "expected version=$version commit=$short_sha" >&2
+              exit 1
+            fi
+          }
+
+          verify_release_artifacts() {
+            verify_release_binary agent "${workspace_dir}/agent/dist/${version}/linux-amd64" "$version" "$short_sha"
+            verify_release_binary cli "${workspace_dir}/cli/dist/${version}/linux-amd64" "$version" "$short_sha"
+          }
+
           publish_component agent
           publish_component cli
+          verify_release_artifacts
           prepare_release_target "$tag_name"
 
           release_assets=(

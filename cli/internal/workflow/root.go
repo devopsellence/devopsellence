@@ -15,6 +15,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func versionPayload() map[string]any {
+	versionNumber := strings.TrimSpace(version.Version)
+	payload := map[string]any{
+		"schema_version": outputSchemaVersion,
+		"version":        version.String(),
+		"version_number": versionNumber,
+		"commit":         strings.TrimSpace(version.Commit),
+		"built_at":       strings.TrimSpace(version.Date),
+	}
+	if versionNumber != "" && versionNumber != "dev" {
+		payload["release_url"] = "https://github.com/devopsellence/devopsellence/releases/tag/" + versionNumber
+		payload["checksums_url"] = "https://github.com/devopsellence/devopsellence/releases/download/" + versionNumber + "/cli-SHA256SUMS"
+	}
+	return payload
+}
+
 func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command {
 	app := NewApp(in, out, err, cwd)
 
@@ -95,10 +111,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if rootVersion {
-				return app.Printer.PrintJSON(map[string]any{
-					"schema_version": outputSchemaVersion,
-					"version":        version.String(),
-				})
+				return app.Printer.PrintJSON(versionPayload())
 			}
 			return cmd.Help()
 		},
@@ -108,10 +121,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Use:   "version",
 		Short: "Print the CLI version",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return app.Printer.PrintJSON(map[string]any{
-				"schema_version": outputSchemaVersion,
-				"version":        version.String(),
-			})
+			return app.Printer.PrintJSON(versionPayload())
 		},
 	})
 

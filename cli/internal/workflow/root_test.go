@@ -9,16 +9,14 @@ import (
 	"testing"
 
 	"github.com/devopsellence/cli/internal/solo"
+	cliversion "github.com/devopsellence/cli/internal/version"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
 func TestRootVersionCommand(t *testing.T) {
-	t.Parallel()
-
 	for _, args := range [][]string{{"version"}, {"--version"}} {
 		args := args
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			t.Parallel()
 
 			var stdout bytes.Buffer
 			cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
@@ -37,6 +35,38 @@ func TestRootVersionCommand(t *testing.T) {
 				t.Fatalf("version = %v, want non-empty string", payload["version"])
 			}
 		})
+	}
+}
+
+func TestRootVersionCommandIncludesReleaseProvenanceFields(t *testing.T) {
+	oldVersion, oldCommit, oldDate := cliversion.Version, cliversion.Commit, cliversion.Date
+	t.Cleanup(func() {
+		cliversion.Version = oldVersion
+		cliversion.Commit = oldCommit
+		cliversion.Date = oldDate
+	})
+	cliversion.Version = "v0.2.0-preview"
+	cliversion.Commit = "edbbd8e9688c"
+	cliversion.Date = "2026-04-29T19:38:29Z"
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"version"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["version_number"] != "v0.2.0-preview" || payload["commit"] != "edbbd8e9688c" || payload["built_at"] != "2026-04-29T19:38:29Z" {
+		t.Fatalf("payload = %#v, want split version provenance fields", payload)
+	}
+	if payload["release_url"] != "https://github.com/devopsellence/devopsellence/releases/tag/v0.2.0-preview" {
+		t.Fatalf("release_url = %#v, want GitHub release tag URL", payload["release_url"])
+	}
+	if payload["checksums_url"] != "https://github.com/devopsellence/devopsellence/releases/download/v0.2.0-preview/cli-SHA256SUMS" {
+		t.Fatalf("checksums_url = %#v, want CLI checksums asset URL", payload["checksums_url"])
 	}
 }
 
@@ -131,6 +161,9 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	setPayload := decodeJSONOutput(t, &stdout)
+	if setPayload["schema_version"] != float64(outputSchemaVersion) {
+		t.Fatalf("schema_version = %#v, want %d", setPayload["schema_version"], outputSchemaVersion)
+	}
 	if setPayload["secret_ref"] != "devopsellence://plaintext/DATABASE_URL" {
 		t.Fatalf("secret_ref = %#v, want plaintext config ref", setPayload["secret_ref"])
 	}
@@ -209,6 +242,44 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 				t.Fatalf("secret %s %s = %#v, want %#v", name, key, item[key], expected)
 			}
 		}
+	}
+}
+
+func TestRootSoloSecretSetFromStdinUpdatesConfigAndResolvedConfig(t *testing.T) {
+	var stdout bytes.Buffer
+	cwd := rootTestSoloWorkspace(t)
+	cmd := NewRootCommand(strings.NewReader("super-secret\n"), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"secret", "set", "DOGFOOD_SECRET", "--service", "web", "--stdin"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	setPayload := decodeJSONOutput(t, &stdout)
+	if setPayload["schema_version"] != float64(outputSchemaVersion) || setPayload["config_updated"] != true {
+		t.Fatalf("secret set payload = %#v, want schema_version and config_updated=true", setPayload)
+	}
+
+	cfg, err := config.LoadFromRoot(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := cfg.Services["web"].SecretRefs
+	if len(refs) != 1 || refs[0].Name != "DOGFOOD_SECRET" || refs[0].Secret != "devopsellence://plaintext/DOGFOOD_SECRET" {
+		t.Fatalf("secret refs = %#v, want DOGFOOD_SECRET plaintext ref", refs)
+	}
+
+	stdout.Reset()
+	cmd = NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"config", "resolve"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("config resolve error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "DOGFOOD_SECRET") || !strings.Contains(stdout.String(), "devopsellence://plaintext/DOGFOOD_SECRET") {
+		t.Fatalf("resolved config = %s, want DOGFOOD_SECRET secret ref", stdout.String())
 	}
 }
 

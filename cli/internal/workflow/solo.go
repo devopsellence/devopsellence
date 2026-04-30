@@ -4540,17 +4540,26 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 	if cfg == nil {
 		cfg = soloDefaultProjectConfig(discovered)
 	}
+	selectedEnvironment := a.effectiveEnvironment("", cfg)
+	resolvedCfg := *cfg
+	if selectedEnvironment != soloEnvironmentName(cfg, "") {
+		resolved, err := config.ResolveEnvironmentConfig(*cfg, selectedEnvironment)
+		if err != nil {
+			return err
+		}
+		resolvedCfg = resolved
+	}
 	hosts := normalizeIngressHosts(opts.Hosts)
 	if len(hosts) == 0 {
 		return fmt.Errorf("ingress set requires at least one --host")
 	}
 	serviceName := strings.TrimSpace(opts.Service)
-	if serviceName == "" && cfg.Ingress != nil && len(cfg.Ingress.Rules) > 0 {
-		serviceName = strings.TrimSpace(cfg.Ingress.Rules[0].Target.Service)
+	if serviceName == "" && resolvedCfg.Ingress != nil && len(resolvedCfg.Ingress.Rules) > 0 {
+		serviceName = strings.TrimSpace(resolvedCfg.Ingress.Rules[0].Target.Service)
 	}
 	if serviceName == "" {
 		var ok bool
-		serviceName, ok = cfg.PrimaryWebServiceName()
+		serviceName, ok = resolvedCfg.PrimaryWebServiceName()
 		if !ok {
 			return fmt.Errorf("ingress set requires --service when the primary web service cannot be inferred")
 		}
@@ -4575,7 +4584,7 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 	if opts.RedirectHTTPChanged {
 		redirectHTTP = opts.RedirectHTTP
 	}
-	cfg.Ingress = &config.IngressConfig{
+	ingress := config.IngressConfig{
 		Hosts: hosts,
 		Rules: rules,
 		TLS: config.IngressTLSConfig{
@@ -4585,14 +4594,32 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		},
 		RedirectHTTP: configBoolPtr(redirectHTTP),
 	}
-	written, err := a.ConfigStore.Write(discovered.WorkspaceRoot, *cfg)
-	if err != nil {
+	if selectedEnvironment != soloEnvironmentName(cfg, "") {
+		if cfg.Environments == nil {
+			cfg.Environments = map[string]config.EnvironmentOverlay{}
+		}
+		overlay := cfg.Environments[selectedEnvironment]
+		overlay.Ingress = &config.IngressConfigOverlay{
+			Hosts: hosts,
+			Rules: rules,
+			TLS: &config.IngressTLSConfigOverlay{
+				Mode:           configStringPtr(tlsMode),
+				Email:          configOptionalStringPtr(opts.TLSEmail),
+				CADirectoryURL: configOptionalStringPtr(opts.TLSCADirectoryURL),
+			},
+			RedirectHTTP: configBoolPtr(redirectHTTP),
+		}
+		cfg.Environments[selectedEnvironment] = overlay
+	} else {
+		cfg.Ingress = &ingress
+	}
+	if _, err := a.ConfigStore.Write(discovered.WorkspaceRoot, *cfg); err != nil {
 		return err
 	}
 
 	return a.Printer.PrintJSON(map[string]any{
 		"schema_version": outputSchemaVersion,
-		"ingress":        written.Ingress,
+		"ingress":        ingress,
 		"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
 	})
 
@@ -5244,6 +5271,18 @@ func soloDefaultProjectConfig(discovered discovery.Result) *config.ProjectConfig
 }
 
 func configBoolPtr(value bool) *bool {
+	return &value
+}
+
+func configStringPtr(value string) *string {
+	return &value
+}
+
+func configOptionalStringPtr(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
 	return &value
 }
 

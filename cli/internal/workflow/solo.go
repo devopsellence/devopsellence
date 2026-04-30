@@ -232,6 +232,7 @@ type soloNodeStatusEnvironment struct {
 
 type soloNodeStatusService struct {
 	Name      string `json:"name"`
+	Phase     string `json:"phase,omitempty"`
 	State     string `json:"state"`
 	Container string `json:"container"`
 }
@@ -537,7 +538,11 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, statusBaselines); err != nil {
+	expectedRuntimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, "")
+	if err != nil {
+		return err
+	}
+	if err := a.waitForSoloRolloutForRuntime(ctx, nodes, desiredStateRevisions, expectedRuntimeEnvironment, release.Revision, statusBaselines); err != nil {
 		resultErr := err
 		var rolloutErr *soloRolloutError
 		if errors.As(err, &rolloutErr) {
@@ -830,6 +835,10 @@ func soloRolloutMessageLooksLikeHealthcheck(message string) bool {
 }
 
 func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string, previousStatusTimes ...map[string]string) error {
+	return a.waitForSoloRolloutForRuntime(ctx, nodes, expectedRevisions, "", "", previousStatusTimes...)
+}
+
+func (a *App) waitForSoloRolloutForRuntime(ctx context.Context, nodes map[string]config.Node, expectedRevisions map[string]string, expectedRuntimeEnvironment, expectedWorkloadRevision string, previousStatusTimes ...map[string]string) error {
 	timeout := a.DeployTimeout
 	if timeout <= 0 {
 		timeout = defaultDeployProgressTimeout
@@ -879,6 +888,22 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 				pendingCount++
 				details = append(details, fmt.Sprintf("%s=status_time:%s", name, firstNonEmpty(strings.TrimSpace(result.Status.Time), "none")))
 			default:
+				runtime := soloRuntimeEnvironmentStatus(result.Status, expectedRuntimeEnvironment, expectedWorkloadRevision)
+				switch runtime.State {
+				case "pending":
+					pendingCount++
+					details = append(details, name+"="+runtime.Detail)
+					continue
+				case "reconciling":
+					reconcilingCount++
+					details = append(details, name+"="+runtime.Detail)
+					continue
+				case "error":
+					return ExitError{Code: 1, Err: &soloRolloutError{Node: name, Message: runtime.Message, HealthcheckFailure: runtime.HealthcheckFailure}}
+				case "settled":
+					settledCount++
+					continue
+				}
 				switch strings.TrimSpace(result.Status.Phase) {
 				case "settled":
 					settledCount++
@@ -912,6 +937,53 @@ func (a *App) waitForSoloRollout(ctx context.Context, nodes map[string]config.No
 		case <-timer.C:
 		}
 	}
+}
+
+type soloRuntimeStatusResult struct {
+	State              string
+	Detail             string
+	Message            string
+	HealthcheckFailure bool
+}
+
+func soloRuntimeEnvironmentStatus(status soloNodeStatus, expectedRuntimeEnvironment, expectedWorkloadRevision string) soloRuntimeStatusResult {
+	expectedRuntimeEnvironment = strings.TrimSpace(expectedRuntimeEnvironment)
+	expectedWorkloadRevision = strings.TrimSpace(expectedWorkloadRevision)
+	if expectedRuntimeEnvironment == "" || expectedWorkloadRevision == "" || len(status.Environments) == 0 {
+		return soloRuntimeStatusResult{}
+	}
+	for _, environment := range status.Environments {
+		if strings.TrimSpace(environment.Name) != expectedRuntimeEnvironment {
+			continue
+		}
+		if revision := strings.TrimSpace(environment.Revision); revision != expectedWorkloadRevision {
+			return soloRuntimeStatusResult{State: "pending", Detail: fmt.Sprintf("runtime_env_revision:%s", firstNonEmpty(revision, "none"))}
+		}
+		if strings.TrimSpace(environment.Phase) == "error" {
+			return soloRuntimeStatusResult{State: "error", Message: fmt.Sprintf("runtime environment %s reported phase=error", expectedRuntimeEnvironment)}
+		}
+		for _, service := range environment.Services {
+			serviceName := firstNonEmpty(strings.TrimSpace(service.Name), config.DefaultWebServiceName)
+			servicePhase := strings.TrimSpace(service.Phase)
+			serviceState := strings.ToLower(strings.TrimSpace(service.State))
+			if servicePhase == "error" {
+				return soloRuntimeStatusResult{State: "error", Message: fmt.Sprintf("service %s reported phase=error", serviceName), HealthcheckFailure: serviceState == "unhealthy"}
+			}
+			switch serviceState {
+			case "unhealthy", "stopped", "exited", "dead":
+				return soloRuntimeStatusResult{State: "error", Message: fmt.Sprintf("service %s reported state=%s", serviceName, serviceState), HealthcheckFailure: serviceState == "unhealthy"}
+			}
+			if servicePhase != "" && servicePhase != "settled" {
+				return soloRuntimeStatusResult{State: "reconciling", Detail: fmt.Sprintf("service:%s:%s", serviceName, servicePhase)}
+			}
+		}
+		phase := strings.TrimSpace(environment.Phase)
+		if phase == "" || phase == "settled" {
+			return soloRuntimeStatusResult{State: "settled"}
+		}
+		return soloRuntimeStatusResult{State: "reconciling", Detail: fmt.Sprintf("runtime_env:%s", phase)}
+	}
+	return soloRuntimeStatusResult{State: "pending", Detail: "runtime_env:missing"}
 }
 
 func (a *App) soloNodeStatusTimes(ctx context.Context, nodes map[string]config.Node) map[string]string {
@@ -1895,23 +1967,12 @@ func soloExpectedStatusRevisions(current solo.State, release corerelease.Release
 }
 
 func soloNodeStatusMatchesExpectedRelease(status soloNodeStatus, expectedDesiredStateRevision, expectedRuntimeEnvironment, expectedWorkloadRevision string) bool {
+	runtime := soloRuntimeEnvironmentStatus(status, expectedRuntimeEnvironment, expectedWorkloadRevision)
+	if runtime.State != "" {
+		return runtime.State == "settled"
+	}
 	if strings.TrimSpace(status.Revision) == strings.TrimSpace(expectedDesiredStateRevision) {
 		return true
-	}
-	expectedRuntimeEnvironment = strings.TrimSpace(expectedRuntimeEnvironment)
-	expectedWorkloadRevision = strings.TrimSpace(expectedWorkloadRevision)
-	if expectedRuntimeEnvironment == "" || expectedWorkloadRevision == "" {
-		return false
-	}
-	for _, environment := range status.Environments {
-		if strings.TrimSpace(environment.Name) != expectedRuntimeEnvironment {
-			continue
-		}
-		if strings.TrimSpace(environment.Revision) != expectedWorkloadRevision {
-			return false
-		}
-		phase := strings.TrimSpace(environment.Phase)
-		return phase == "" || phase == "settled"
 	}
 	return false
 }
@@ -2034,7 +2095,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 				"publish":     false,
 				"state_write": false,
 			},
-			"next_steps": []string{"devopsellence release rollback " + selected.ID},
+			"next_steps": []string{"devopsellence release rollback" + soloEnvFlag(environmentName) + " " + selected.ID},
 		})
 	}
 	now := time.Now().UTC()
@@ -2074,7 +2135,11 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 		}
 		return err
 	}
-	if err := a.waitForSoloRollout(ctx, nodes, desiredStateRevisions, statusBaselines); err != nil {
+	expectedRuntimeEnvironment, err := soloRuntimeEnvironmentNameForNode(publishState, workspaceRoot, environmentName, "")
+	if err != nil {
+		return err
+	}
+	if err := a.waitForSoloRolloutForRuntime(ctx, nodes, desiredStateRevisions, expectedRuntimeEnvironment, selected.Revision, statusBaselines); err != nil {
 		resultErr := err
 		var rolloutErr *soloRolloutError
 		if errors.As(err, &rolloutErr) {
@@ -2749,7 +2814,8 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	if len(nodeNamesBefore) == 0 {
 		return fmt.Errorf("environment %s has no attached nodes", environmentName)
 	}
-	if _, changed, err := current.DetachNode(workspaceRoot, environmentName, opts.Node); err != nil {
+	next := cloneSoloState(current)
+	if _, changed, err := next.DetachNode(workspaceRoot, environmentName, opts.Node); err != nil {
 		return err
 	} else if !changed {
 		return fmt.Errorf("node %q is not attached to %s", opts.Node, environmentName)
@@ -2761,18 +2827,18 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 		}
 	}
 	remainingNodeNames = normalizeSoloNames(remainingNodeNames)
-	if err := a.writeSoloState(current); err != nil {
-		return err
-	}
-	if _, err := a.republishNodes(ctx, current, remainingNodeNames); err != nil {
+	if _, err := a.republishNodes(ctx, next, remainingNodeNames); err != nil {
 		return err
 	}
 	warnings := []string{}
-	if _, err := a.republishNodes(ctx, current, []string{opts.Node}); err != nil {
-		if current.NodeHasAttachments(opts.Node) || !soloRepublishMissingAgentError(err) {
+	if _, err := a.republishNodes(ctx, next, []string{opts.Node}); err != nil {
+		if next.NodeHasAttachments(opts.Node) || !soloRepublishMissingAgentError(err) {
 			return err
 		}
 		warnings = append(warnings, "remote desired state was not cleared because the agent is already uninstalled on the node")
+	}
+	if err := a.writeSoloState(next); err != nil {
+		return err
 	}
 
 	payload := map[string]any{

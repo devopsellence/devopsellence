@@ -2,7 +2,7 @@
 
 ## stance
 
-devopsellence is an agent-primary deployment toolkit for containerized apps on VMs you control.
+devopsellence is an agent-primary deployment toolkit for containerized apps on familiar VMs.
 
 The primary operator is an AI coding or operations agent. A human can still call the CLI directly, approve plans, inspect JSON, SSH into nodes, read files, use Docker, and recover with ordinary tools. But the product surface is designed first for agents that need narrow, structured, auditable operations rather than terminal-only workflows.
 

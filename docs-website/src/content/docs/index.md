@@ -3,7 +3,7 @@ title: devopsellence docs
 description: AI-operator-first deployment docs for containerized apps on VMs.
 template: splash
 hero:
-  tagline: AI-operator-first deployments on VMs you control.
+  tagline: AI-operator-first deployments on vanilla VMs.
   actions:
     - text: Quickstart
       link: /getting-started/solo-quickstart/

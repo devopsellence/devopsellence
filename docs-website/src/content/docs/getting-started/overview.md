@@ -3,7 +3,7 @@ title: Overview
 description: What devopsellence is and when to use each mode.
 ---
 
-devopsellence deploys containerized applications to VMs you control. It does not
+devopsellence deploys containerized applications to familiar VMs. It does not
 try to hide machines, containers, files, registries, or secret stores. It makes
 the ordinary primitives easier to use together.
 

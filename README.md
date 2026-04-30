@@ -2,8 +2,8 @@
 
 Built for AI operators, transparent for humans.
 
-devopsellence is an AI-operator-first deployment toolkit for containerized apps on
-VMs you control. It keeps the runtime boring: Docker, SSH, Envoy, files, JSON,
+devopsellence is an AI-operator-first deployment toolkit for containerized apps
+on familiar VMs. It keeps the runtime boring: Docker, SSH, Envoy, files, JSON,
 logs, and a node agent that reconciles desired state.
 
 No PaaS. No Kubernetes-lite. No hidden scheduler pretending machines do not

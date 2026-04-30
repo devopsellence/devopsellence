@@ -4,7 +4,7 @@ This document turns [vision.md](vision.md) into a more concrete target. The visi
 
 ## North-star statement
 
-devopsellence should be the simplest serious system for running a small-to-medium containerized application on VMs you control.
+devopsellence should be the simplest serious system for running a small-to-medium containerized application on familiar VMs.
 
 It is agent-primary: the product is designed first as the production-safe deployment target for AI coding and operations agents. Humans can still use the CLI directly, inspect files and JSON, approve changes, and recover with ordinary tools, but the CLI, APIs, and control plane should optimize for autonomous agents that need deterministic, structured, auditable operations instead of terminal-only UX.
 

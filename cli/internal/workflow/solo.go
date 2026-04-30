@@ -166,6 +166,7 @@ type SoloSupportBundleOptions struct {
 
 type SoloNodeCreateOptions struct {
 	Name         string
+	Environment  string
 	Provider     string
 	Host         string
 	User         string
@@ -4273,7 +4274,7 @@ func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) er
 	attached := false
 	var attachment solo.AttachmentRecord
 	if opts.Attach {
-		environmentName := a.effectiveEnvironment("", cfg)
+		environmentName := a.effectiveEnvironment(opts.Environment, cfg)
 		var attachErr error
 		attachment, _, attachErr = a.attachNode(&current, workspaceRoot, environmentName, nodeName)
 		if attachErr != nil {

@@ -802,6 +802,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var nodeRegisterOpts NodeBootstrapOptions
 	var nodeCreateOpts SoloNodeCreateOptions
 	var nodeCreateBootstrapOpts NodeBootstrapOptions
+	var nodeCreateEnvironment string
 	var nodeListSharedOpts NodeListOptions
 	var nodeListSoloOpts SoloNodeListOptions
 	var nodeAttachSoloOpts SoloNodeAttachOptions
@@ -850,6 +851,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeCreateOpts.Name = args[0]
+			nodeCreateOpts.Environment = nodeCreateEnvironment
+			nodeCreateBootstrapOpts.Environment = nodeCreateEnvironment
 			return runByMode(func(ctx context.Context) error {
 				return app.SoloNodeCreate(ctx, nodeCreateOpts)
 			}, func(ctx context.Context) error {
@@ -874,7 +877,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Attach, "attach", false, "Attach the created solo node to the current environment (solo mode)")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Organization, "org", "", "Shared-mode organization name override")
 	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Project, "project", "", "Shared-mode project name override")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Environment, "env", "", "Shared-mode environment name override")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateEnvironment, "env", "", "Environment name override (solo/shared)")
 	nodeCreateCommand.Flags().BoolVar(&nodeCreateBootstrapOpts.Unassigned, "unassigned", false, "Shared mode: register without auto-attaching to the current environment")
 	nodeListCommand := &cobra.Command{
 		Use:   "list",

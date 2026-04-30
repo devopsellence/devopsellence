@@ -854,6 +854,7 @@ func TestSoloNodeCreateValidatesExistingSSHBeforeWritingState(t *testing.T) {
 func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -883,7 +884,7 @@ func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 		},
 	}
 
-	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{Name: "prod-1", Provider: "hetzner", Region: "ash", Size: "cpx11", Image: "  "})
+	err := app.SoloNodeCreate(context.Background(), SoloNodeCreateOptions{Name: "prod-1", Provider: "hetzner", Region: "ash", Size: "cpx11", Image: "  ", Attach: true, Environment: "staging"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -894,6 +895,24 @@ func TestSoloNodeCreateProviderReportsMetadataAndProgress(t *testing.T) {
 	}
 	if payload["provider"] != providerHetzner || payload["provider_server_id"] != "srv-1" || payload["provider_region"] != "ash" || payload["provider_size"] != "cpx11" || payload["provider_image"] != providers.DefaultHetznerImage {
 		t.Fatalf("payload = %#v, want provider metadata", payload)
+	}
+	if payload["attached"] != true || payload["environment"] != "staging" {
+		t.Fatalf("payload = %#v, want attached staging node", payload)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingNodes, err := loaded.AttachedNodeNames(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	productionNodes, err := loaded.AttachedNodeNames(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stagingNodes) != 1 || stagingNodes[0] != "prod-1" || len(productionNodes) != 0 {
+		t.Fatalf("attachments staging=%#v production=%#v, want prod-1 only in staging", stagingNodes, productionNodes)
 	}
 	if fakeProvider.createInput.Image != providers.DefaultHetznerImage {
 		t.Fatalf("CreateServer image = %q, want normalized default image", fakeProvider.createInput.Image)

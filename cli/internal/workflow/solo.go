@@ -37,19 +37,23 @@ import (
 type SoloDeployOptions struct {
 	SkipDNSCheck bool
 	DryRun       bool
+	Environment  string
 }
 
 type SoloReleaseListOptions struct {
-	Limit int
+	Limit       int
+	Environment string
 }
 
 type SoloReleaseRollbackOptions struct {
-	Selector string
-	DryRun   bool
+	Selector    string
+	DryRun      bool
+	Environment string
 }
 
 type SoloStatusOptions struct {
-	Nodes []string
+	Nodes       []string
+	Environment string
 }
 
 var (
@@ -99,6 +103,7 @@ type SoloLogsOptions struct {
 
 type SoloWorkloadLogsOptions struct {
 	ServiceName string
+	Environment string
 	Nodes       []string
 	Lines       int
 }
@@ -394,7 +399,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err := stream.Event("started", map[string]any{}); err != nil {
 		return err
 	}
-	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(opts.Environment)
 	if err != nil {
 		return err
 	}
@@ -416,10 +421,6 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if _, err := validateNodeSchedule(cfg, nodes); err != nil {
 		return err
 	}
-	if err := a.checkIngressBeforeDeploy(ctx, cfg, nodes, opts.SkipDNSCheck); err != nil {
-		return err
-	}
-
 	sha, err := a.Git.CurrentSHA(workspaceRoot)
 	if err != nil {
 		return fmt.Errorf("get git SHA: %w", err)
@@ -455,6 +456,10 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 			}
 		}
 		return stream.Result(payload)
+	}
+
+	if err := a.checkIngressBeforeDeploy(ctx, cfg, nodes, opts.SkipDNSCheck); err != nil {
+		return err
 	}
 
 	buildCtx := filepath.Join(workspaceRoot, cfg.Build.Context)
@@ -565,7 +570,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
 	}
-	if urls := a.soloVerifiedPublicURLs(cfg, nodes); len(urls) > 0 {
+	if urls := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
 		payload["next_steps"] = append([]string{"devopsellence status", "curl " + urls[0]}, soloNodeLogNextSteps(nodes)...)
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
@@ -863,11 +868,11 @@ func soloNodeStatusAdvancedAfter(status soloNodeStatus, previousStatusTime strin
 	}
 	observed := strings.TrimSpace(status.Time)
 	if observed == "" {
-		return true
+		return false
 	}
 	parsedObserved, err := time.Parse(time.RFC3339Nano, observed)
 	if err != nil {
-		return true
+		return false
 	}
 	parsedPrevious, err := time.Parse(time.RFC3339Nano, previousStatusTime)
 	if err != nil {
@@ -1674,32 +1679,29 @@ func sortedSoloPeerNames(peers map[string]desiredstate.NodePeer) []string {
 }
 
 func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
-	nodes, cfg, err := a.soloStatusSelection(opts)
+	nodes, cfg, workspaceRoot, environmentName, err := a.soloStatusSelection(opts)
 	if err != nil {
 		return err
 	}
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes attached to the current environment")
 	}
-	verifiedPublicURLs := a.soloVerifiedPublicURLs(cfg, nodes)
+	verifiedPublicURLs := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes)
 	localReleaseKnown := len(opts.Nodes) > 0
 	expectedRevisions := map[string]string{}
 	expectedRuntimeEnvironment := ""
 	expectedWorkloadRevision := ""
 	if len(opts.Nodes) == 0 {
 		if current, stateErr := a.readSoloState(); stateErr == nil {
-			_, workspaceRoot, environmentName, configErr := a.loadResolvedSoloProjectConfig("")
-			if configErr == nil {
-				_, currentRelease, hasCurrent, releaseErr := current.CurrentRelease(workspaceRoot, environmentName)
-				if releaseErr != nil {
-					return releaseErr
-				}
-				if hasCurrent {
-					localReleaseKnown = true
-					expectedRevisions = soloExpectedStatusRevisions(current, currentRelease)
-					expectedWorkloadRevision = strings.TrimSpace(currentRelease.Revision)
-					expectedRuntimeEnvironment, _ = soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, "")
-				}
+			_, currentRelease, hasCurrent, releaseErr := current.CurrentRelease(workspaceRoot, environmentName)
+			if releaseErr != nil {
+				return releaseErr
+			}
+			if hasCurrent {
+				localReleaseKnown = true
+				expectedRevisions = soloExpectedStatusRevisions(current, currentRelease)
+				expectedWorkloadRevision = strings.TrimSpace(currentRelease.Revision)
+				expectedRuntimeEnvironment, _ = soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, "")
 			}
 		}
 	}
@@ -1850,7 +1852,7 @@ func soloExpectedStatusRevision(expected map[string]string, nodeName string) str
 }
 
 func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) error {
-	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(opts.Environment)
 	if err != nil {
 		return err
 	}
@@ -1905,7 +1907,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err := stream.Event("started", map[string]any{}); err != nil {
 		return err
 	}
-	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(opts.Environment)
 	if err != nil {
 		return err
 	}
@@ -2086,7 +2088,7 @@ func soloPublicURLStatus(cfg *config.ProjectConfig) string {
 
 func soloPublicURLWarning(cfg *config.ProjectConfig) string {
 	if ingressRequiresTLSReadiness(cfg) {
-		return "HTTPS public URLs are configured, but TLS readiness has not been verified yet; use `devopsellence ingress check --wait 2m` before treating them as reachable"
+		return "HTTPS public URLs are configured, but TLS reachability has not been verified yet; use `devopsellence status` and curl the HTTPS endpoint before treating it as reachable"
 	}
 	return "public URLs are configured, but one or more nodes are not settled; check node status before testing reachability"
 }
@@ -2758,7 +2760,7 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 	if linesLimit < 1 || linesLimit > soloLogsMaxLines {
 		return ExitError{Code: 2, Err: fmt.Errorf("--lines must be between 1 and %d", soloLogsMaxLines)}
 	}
-	nodes, cfg, err := a.soloStatusSelection(SoloStatusOptions{Nodes: opts.Nodes})
+	nodes, cfg, workspaceRoot, environmentName, err := a.soloStatusSelection(SoloStatusOptions{Nodes: opts.Nodes, Environment: opts.Environment})
 	if err != nil {
 		return err
 	}
@@ -2767,11 +2769,6 @@ func (a *App) SoloWorkloadLogs(ctx context.Context, opts SoloWorkloadLogsOptions
 	}
 	if cfg == nil {
 		return fmt.Errorf("no workspace selected; attach a workspace or run this command from a workspace")
-	}
-	environmentName := a.effectiveEnvironment("", cfg)
-	workspaceRoot, err := a.soloCurrentWorkspaceRoot()
-	if err != nil {
-		return err
 	}
 	current, err := a.readSoloState()
 	if err != nil {
@@ -5148,6 +5145,44 @@ func (a *App) soloEnvironmentCreate(opts EnvironmentCreateOptions) error {
 	})
 }
 
+func (a *App) soloEnvironmentList(opts EnvironmentListOptions) error {
+	if strings.TrimSpace(opts.Organization) != "" || strings.TrimSpace(opts.Project) != "" {
+		return ExitError{Code: 2, Err: errors.New("--org and --project are only supported in shared mode")}
+	}
+	cfg, _, err := a.loadSoloProjectConfig()
+	if err != nil {
+		return err
+	}
+	current := a.effectiveEnvironment("", cfg)
+
+	defaultEnvironment := soloEnvironmentName(cfg, "")
+	names := []string{defaultEnvironment}
+	seen := map[string]bool{defaultEnvironment: true}
+	for name := range cfg.Environments {
+		if strings.TrimSpace(name) != "" && !seen[name] {
+			names = append(names, name)
+			seen[name] = true
+		}
+	}
+	sort.Strings(names)
+	environments := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		environments = append(environments, map[string]any{
+			"name":    name,
+			"default": name == defaultEnvironment,
+			"current": name == current,
+		})
+	}
+	return a.Printer.PrintJSON(map[string]any{
+		"schema_version": outputSchemaVersion,
+		"ok":             true,
+		"mode":           string(ModeSolo),
+		"project":        cfg.Project,
+		"current":        current,
+		"environments":   environments,
+	})
+}
+
 func (a *App) soloEnvironmentUse(opts EnvironmentUseOptions) error {
 	environmentName := strings.TrimSpace(opts.Name)
 	cfg, _, err := a.loadSoloProjectConfig()
@@ -5173,44 +5208,48 @@ func (a *App) soloEnvironmentUse(opts EnvironmentUseOptions) error {
 }
 
 func (a *App) soloStatusNodes(opts SoloStatusOptions) (map[string]config.Node, error) {
-	nodes, _, err := a.soloStatusSelection(opts)
+	nodes, _, _, _, err := a.soloStatusSelection(opts)
 	return nodes, err
 }
 
-func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Node, *config.ProjectConfig, error) {
+func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Node, *config.ProjectConfig, string, string, error) {
 	current, err := a.readSoloState()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", "", err
 	}
 	if len(opts.Nodes) > 0 {
 		nodes, err := a.resolveNodes(current, opts.Nodes)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", "", err
 		}
+		workspaceRoot := ""
+		environmentName := ""
 		_, cfg, cfgErr := a.optionalWorkspaceConfig()
 		if cfgErr != nil {
 			cfg = nil
-		} else if resolved, _, _, resolveErr := a.loadResolvedSoloProjectConfig(""); resolveErr == nil {
+		} else if resolved, resolvedWorkspaceRoot, resolvedEnvironmentName, resolveErr := a.loadResolvedSoloProjectConfig(opts.Environment); resolveErr == nil {
 			cfg = resolved
+			workspaceRoot = resolvedWorkspaceRoot
+			environmentName = resolvedEnvironmentName
 		}
-		return nodes, cfg, nil
+		return nodes, cfg, workspaceRoot, environmentName, nil
 	}
-	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
+	cfg, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig(opts.Environment)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", "", err
 	}
 	nodeNames, err := current.AttachedNodeNames(workspaceRoot, environmentName)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", "", err
 	}
 	if len(nodeNames) == 0 {
-		return map[string]config.Node{}, cfg, nil
+		return map[string]config.Node{}, cfg, workspaceRoot, environmentName, nil
 	}
 	nodes, err := a.resolveNodes(current, nodeNames)
-	return nodes, cfg, err
+	return nodes, cfg, workspaceRoot, environmentName, err
 }
 
-func (a *App) soloVerifiedPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
+func (a *App) soloVerifiedPublicURLs(workspaceRoot, environmentName string, cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
 	if !ingressRequiresTLSReadiness(cfg) {
 		return soloReadyPublicURLs(cfg, nodes)
 	}
@@ -5218,14 +5257,13 @@ func (a *App) soloVerifiedPublicURLs(cfg *config.ProjectConfig, nodes map[string
 	if err != nil {
 		return nil
 	}
-	_, workspaceRoot, environmentName, err := a.loadResolvedSoloProjectConfig("")
-	if err != nil {
-		return nil
-	}
 	return soloVerifiedIngressPublicURLs(current, workspaceRoot, environmentName, cfg, nodes)
 }
 
 func soloVerifiedIngressPublicURLs(current solo.State, workspaceRoot, environmentName string, cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
+	if ingressRequiresTLSReadiness(cfg) {
+		return nil
+	}
 	key, err := solo.EnvironmentStateKey(workspaceRoot, environmentName)
 	if err != nil {
 		return nil

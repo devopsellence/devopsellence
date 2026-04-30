@@ -115,6 +115,34 @@ func TestInitModeFlagPersistsWorkspaceModeAndWritesConfig(t *testing.T) {
 	}
 }
 
+func TestRootSoloContextEnvListDoesNotRequireAuth(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(cwd, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"context", "env", "list"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["mode"] != "solo" {
+		t.Fatalf("payload = %#v, want solo mode", payload)
+	}
+	environments := jsonArrayFromMap(t, payload, "environments")
+	if len(environments) != 2 {
+		t.Fatalf("environments = %#v, want production and staging", environments)
+	}
+}
+
 func TestModeCommandDefaultsToShow(t *testing.T) {
 	var stdout bytes.Buffer
 	cwd := rootTestWorkspaceWithMode(t, ModeSolo)

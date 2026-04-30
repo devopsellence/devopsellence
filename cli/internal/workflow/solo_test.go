@@ -1101,7 +1101,57 @@ func TestSoloStatusUsesResolvedEnvironmentOverlay(t *testing.T) {
 	}
 }
 
-func TestSoloStatusUsesVerifiedTLSPublicURLsAfterIngressCheckRecord(t *testing.T) {
+func TestSoloStatusUsesExplicitEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"prod.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "prod.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {Ingress: &config.IngressConfigOverlay{
+			Hosts: []string{"staging.example.com"},
+			Rules: []config.IngressRuleConfig{{
+				Match:  config.IngressMatchConfig{Host: "staging.example.com", PathPrefix: "/"},
+				Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+			}},
+		}},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"rev","phase":"settled","summary":{"environments":1,"services":1}}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "staging", "rev")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Environment: "staging"}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if len(urls) != 1 || urls[0] != "http://staging.example.com/" {
+		t.Fatalf("public_urls = %#v, want explicit staging host only", urls)
+	}
+}
+
+func TestSoloStatusDoesNotTreatDNSOnlyTLSCheckAsVerifiedPublicURL(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -1144,15 +1194,15 @@ func TestSoloStatusUsesVerifiedTLSPublicURLsAfterIngressCheckRecord(t *testing.T
 		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
-	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, DNS-only TLS check must not emit verified public_urls", payload)
+	}
+	urls := jsonArrayFromMap(t, payload, "configured_public_urls")
 	if len(urls) != 1 || urls[0] != "https://app.example.com/" {
-		t.Fatalf("public_urls = %#v, want verified HTTPS URL", urls)
+		t.Fatalf("configured_public_urls = %#v, want configured HTTPS URL", urls)
 	}
-	if _, ok := payload["public_url_status"]; ok {
-		t.Fatalf("payload = %#v, did not expect tls pending status after verified ingress check", payload)
-	}
-	if _, ok := payload["warnings"]; ok {
-		t.Fatalf("payload = %#v, did not expect TLS warning after verified ingress check", payload)
+	if payload["public_url_status"] != "configured_tls_pending" {
+		t.Fatalf("public_url_status = %#v, want configured_tls_pending", payload["public_url_status"])
 	}
 }
 
@@ -2216,6 +2266,58 @@ func TestSoloWorkloadLogsUsesProjectScopedRuntimeEnvironmentForCoHostedNode(t *t
 	node := jsonMapFromAny(t, nodes[0])
 	if node["runtime_environment"] != runtimeEnvironment {
 		t.Fatalf("node payload = %#v, want runtime environment %q", node, runtimeEnvironment)
+	}
+}
+
+func TestSoloWorkloadLogsUsesExplicitEnvironment(t *testing.T) {
+	commandPath := filepath.Join(t.TempDir(), "workload-command")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_WORKLOAD_LOGS_COMMAND", commandPath)
+	installFakeSoloCommands(t, nil)
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots = map[string]desiredstate.DeploySnapshot{
+		key: {WorkspaceRoot: workspaceRoot, WorkspaceKey: strings.Split(key, "\n")[0], Environment: "staging", Metadata: desiredstate.SnapshotMetadata{Project: "demo"}},
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloWorkloadLogs(context.Background(), SoloWorkloadLogsOptions{ServiceName: "web", Environment: "staging", Lines: 20}); err != nil {
+		t.Fatalf("SoloWorkloadLogs() error = %v", err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "staging", "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandBytes, err := os.ReadFile(commandPath)
+	if err != nil {
+		t.Fatalf("read workload command: %v", err)
+	}
+	if !strings.Contains(string(commandBytes), runtimeEnvironment) {
+		t.Fatalf("workload logs command = %q, want explicit staging runtime environment %q", commandBytes, runtimeEnvironment)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment"] != "staging" {
+		t.Fatalf("payload = %#v, want staging environment", payload)
 	}
 }
 
@@ -4056,6 +4158,57 @@ func TestSoloDeployDryRunUsesResolvedEnvironmentOverlay(t *testing.T) {
 	}
 }
 
+func TestSoloDeployDryRunUsesExplicitEnvironmentWithoutDNS(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"prod.invalid"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "prod.invalid", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	cfg.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {
+			Ingress: &config.IngressConfigOverlay{
+				Hosts: []string{"staging.invalid"},
+				Rules: []config.IngressRuleConfig{{
+					Match:  config.IngressMatchConfig{Host: "staging.invalid", PathPrefix: "/"},
+					Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+				}},
+			},
+		},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Git: git.Client{}, Cwd: workspaceRoot}
+	if err := app.SoloDeploy(context.Background(), SoloDeployOptions{DryRun: true, Environment: "staging"}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["environment"] != "staging" {
+		t.Fatalf("payload = %#v, want explicit staging environment", payload)
+	}
+	if payload["public_url_status"] != "configured_tls_pending" {
+		t.Fatalf("payload = %#v, want TLS pending dry-run without DNS failure", payload)
+	}
+}
+
 func TestSoloDeployRepublishFailureDoesNotRecordCurrentRelease(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
@@ -4403,7 +4556,26 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	}
 }
 
-func TestSoloDeployUsesVerifiedIngressPublicURLs(t *testing.T) {
+func TestSoloNodeStatusAdvancedAfterRequiresFreshParseableObservedTime(t *testing.T) {
+	baseline := "2026-04-28T12:00:00Z"
+	for _, status := range []soloNodeStatus{
+		{Time: ""},
+		{Time: "not-a-time"},
+		{Time: "2026-04-28T12:00:00Z"},
+	} {
+		if soloNodeStatusAdvancedAfter(status, baseline) {
+			t.Fatalf("status time %q advanced after baseline %q; want false", status.Time, baseline)
+		}
+	}
+	if !soloNodeStatusAdvancedAfter(soloNodeStatus{Time: "2026-04-28T12:00:01Z"}, baseline) {
+		t.Fatal("newer status time did not advance after baseline")
+	}
+	if !soloNodeStatusAdvancedAfter(soloNodeStatus{Time: ""}, "") {
+		t.Fatal("missing baseline should accept status time")
+	}
+}
+
+func TestSoloDeployDoesNotTreatDNSOnlyTLSCheckAsVerifiedPublicURL(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -4468,15 +4640,15 @@ func TestSoloDeployUsesVerifiedIngressPublicURLs(t *testing.T) {
 
 	events := decodeNDJSONOutput(t, &stdout)
 	payload := events[len(events)-1]
-	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, DNS-only TLS check must not emit verified public_urls", payload)
+	}
+	urls := jsonArrayFromMap(t, payload, "configured_public_urls")
 	if len(urls) != 1 || urls[0] != "https://app.example.com/" {
-		t.Fatalf("public_urls = %#v, want verified HTTPS URL", urls)
+		t.Fatalf("configured_public_urls = %#v, want configured HTTPS URL", urls)
 	}
-	if _, ok := payload["public_url_status"]; ok {
-		t.Fatalf("payload = %#v, did not expect TLS pending status", payload)
-	}
-	if _, ok := payload["warnings"]; ok {
-		t.Fatalf("payload = %#v, did not expect TLS warning", payload)
+	if payload["public_url_status"] != "configured_tls_pending" {
+		t.Fatalf("public_url_status = %#v, want configured_tls_pending", payload["public_url_status"])
 	}
 }
 
@@ -4558,6 +4730,33 @@ func TestSoloReleaseListUsesCurrentSoloEnvironment(t *testing.T) {
 	}
 	if environmentID, ok := payload["environment_id"].(string); !ok || !strings.Contains(environmentID, "#staging") {
 		t.Fatalf("environment_id = %#v, want staging identifier", payload["environment_id"])
+	}
+	if payload["current_release_id"] != "rel-2" {
+		t.Fatalf("current_release_id = %#v, want staging current release rel-2", payload["current_release_id"])
+	}
+}
+
+func TestSoloReleaseListUsesExplicitEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowStateForEnvironment(workspaceRoot, "staging")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseList(context.Background(), SoloReleaseListOptions{Limit: 1, Environment: "staging"}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment"] != "staging" {
+		t.Fatalf("environment = %#v, want staging", payload["environment"])
 	}
 	if payload["current_release_id"] != "rel-2" {
 		t.Fatalf("current_release_id = %#v, want staging current release rel-2", payload["current_release_id"])
@@ -4675,6 +4874,31 @@ func TestSoloReleaseRollbackDryRunUsesCurrentSoloEnvironment(t *testing.T) {
 	payload := events[len(events)-1]
 	if payload["environment"] != "staging" || payload["release_id"] != "rel-1" || payload["rolled_back_from"] != "rel-2" {
 		t.Fatalf("payload = %#v, want staging rollback from rel-2 to rel-1", payload)
+	}
+}
+
+func TestSoloReleaseRollbackDryRunUsesExplicitEnvironment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowStateForEnvironment(workspaceRoot, "staging")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true, Environment: "staging"}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	if payload["environment"] != "staging" || payload["release_id"] != "rel-1" || payload["rolled_back_from"] != "rel-2" {
+		t.Fatalf("payload = %#v, want explicit staging rollback from rel-2 to rel-1", payload)
 	}
 }
 

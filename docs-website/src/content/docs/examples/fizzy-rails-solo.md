@@ -394,7 +394,7 @@ For the split-worker config, the worker uses the same secret names. Set them for
 same 1Password references for both services:
 
 ```bash
-SECRET_KEY_BASE=$(bin/rails secret)
+SECRET_KEY_BASE="<generated-secret>"
 for service in web worker; do
   printf '%s' "$SECRET_KEY_BASE" | devopsellence secret set SECRET_KEY_BASE --service "$service" --stdin
   printf '%s' '<public-key>' | devopsellence secret set VAPID_PUBLIC_KEY --service "$service" --stdin
@@ -408,7 +408,7 @@ For staging, set values in the staging environment. Use different secrets if sta
 from production:
 
 ```bash
-STAGING_SECRET_KEY_BASE=$(bin/rails secret)
+STAGING_SECRET_KEY_BASE="<generated-staging-secret>"
 for service in web worker; do
   printf '%s' "$STAGING_SECRET_KEY_BASE" | devopsellence secret set SECRET_KEY_BASE --service "$service" --env staging --stdin
   printf '%s' '<staging-vapid-public-key>' | devopsellence secret set VAPID_PUBLIC_KEY --service "$service" --env staging --stdin

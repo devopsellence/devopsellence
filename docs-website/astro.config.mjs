@@ -51,6 +51,12 @@ export default defineConfig({
           ],
         },
         {
+          label: "Examples",
+          items: [
+            { label: "Basecamp Fizzy on Rails", link: "/examples/fizzy-rails-solo/" },
+          ],
+        },
+        {
           label: "Reference",
           items: [
             { label: "devopsellence.yml", link: "/reference/devopsellence-yml/" },

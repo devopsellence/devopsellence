@@ -27,6 +27,8 @@ codex e "Deploy this app with devopsellence solo."
 
 - [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
   one VM.
+- [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app
+  example that maps a Kamal-style deployment to devopsellence solo.
 - [Runtime model](/concepts/runtime-model/) for desired state, releases,
   services, nodes, and status.
 - [CLI reference](/reference/cli/) for the AI-operator-safe command surface.

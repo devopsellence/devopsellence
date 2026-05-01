@@ -61,6 +61,38 @@ func TestWriteAndLoadFromRoot(t *testing.T) {
 	}
 }
 
+func TestWriteUsesTwoSpaceYAMLIndentation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := DefaultProjectConfig("acme", "ShopApp", "staging")
+	project.Services["jobs"] = ServiceConfig{
+		Command: []string{"./bin/jobs"},
+		Ports:   []ServicePort{{Name: "metrics", Port: 9394}},
+	}
+
+	if _, err := Write(root, project); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, FilePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"build:\n  context: .\n  dockerfile: Dockerfile\n  platforms:\n    - linux/amd64\n",
+		"services:\n  jobs:\n    command:\n      - ./bin/jobs\n    ports:\n      - name: metrics\n        port: 9394\n",
+		"  web:\n    ports:\n      - name: http\n        port: 3000\n    healthcheck:\n      path: /up\n      port: 3000\n",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("written config missing two-space YAML block %q in:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "\n    platforms:\n        - ") || strings.Contains(content, "\n    ports:\n        - ") {
+		t.Fatalf("written config used four-space sequence indentation:\n%s", content)
+	}
+}
+
 func TestLoadRejectsSchemaWithoutRootConfig(t *testing.T) {
 	t.Parallel()
 

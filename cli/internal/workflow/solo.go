@@ -600,7 +600,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 			"container_replaced":     true,
 			"healthcheck":            true,
 			"endpoint_probe":         true,
-			"tls":                    true,
+			"tls":                    ingressRequiresTLSReadiness(cfg),
 		}
 		payload["runtime_verified"] = runtimeVerified
 		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + urls[0]}, soloNodeLogNextSteps(environmentName, nodes)...)

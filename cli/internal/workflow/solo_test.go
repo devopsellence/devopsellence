@@ -5993,6 +5993,13 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
 		t.Fatalf("public_urls = %#v, want node URL", urls)
 	}
+	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
+	if runtimeVerified["desired_state_revision"] != true || runtimeVerified["container_replaced"] != true || runtimeVerified["healthcheck"] != true || runtimeVerified["endpoint_probe"] != true {
+		t.Fatalf("runtime_verified = %#v, want deploy/runtime probes verified", runtimeVerified)
+	}
+	if runtimeVerified["tls"] != false {
+		t.Fatalf("runtime_verified = %#v, plain HTTP deploy must not report TLS verified", runtimeVerified)
+	}
 	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
 	if len(nextSteps) != 4 || nextSteps[0] != "devopsellence status --env 'production'" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || nextSteps[3] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status, curl, and logs commands", nextSteps)

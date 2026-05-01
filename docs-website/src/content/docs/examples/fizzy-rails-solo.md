@@ -1,6 +1,6 @@
 ---
 title: Deploy Basecamp Fizzy with solo
-description: Use devopsellence solo instead of Kamal to deploy a real Rails app, worker, and staging environment on a VM.
+description: Use devopsellence solo instead of Kamal to deploy a real Rails app and worker on a VM.
 ---
 
 [Fizzy](https://github.com/basecamp/fizzy) is Basecamp's open-source Rails kanban app. It is a useful
@@ -12,10 +12,8 @@ This guide shows the same deployment concerns Fizzy's `config/deploy.yml` descri
 `devopsellence solo`: local config and secrets, SSH to your VM, direct image transfer, desired-state
 publication, and a deterministic node agent reconcile loop.
 
-It then expands the single-service deployment in two ways:
-
-1. run Solid Queue as a separate `worker` service instead of inside Puma
-2. add a `staging` environment layered over the production-shaped base config
+It then expands the single-service deployment to run Solid Queue as a separate `worker` service instead of
+inside Puma.
 
 ## What changes from Kamal
 
@@ -35,7 +33,7 @@ outside the app config.
 ## Prerequisites
 
 - a VM reachable over SSH with Docker installed, or a provider-backed solo node created by devopsellence
-- DNS names such as `fizzy.example.com` and `staging.fizzy.example.com` pointing at the VM
+- a DNS name such as `fizzy.example.com` pointing at the VM
 - the devopsellence CLI installed locally
 - a local clone of Fizzy
 
@@ -212,160 +210,6 @@ The worker has no `ports`, `healthcheck`, or ingress rule because it is a backgr
 endpoint. It shares `/rails/storage` with `web` because Fizzy's queue database lives under the same storage
 path in the default SQLite deployment.
 
-## Add staging with layered config
-
-Use environment overlays when production and staging share the same app shape but differ in hostnames,
-clear env values, volumes, and secret values.
-
-This example keeps common settings at the top level:
-
-- both environments build the same Dockerfile
-- both run `web` plus `worker`
-- both use `RAILS_ENV=production`, because Rails production mode is still the right runtime mode for a
-  deployed staging instance
-- both use the same secret names in `secret_refs`
-
-The `production` and `staging` overlays then layer environment-specific values on top:
-
-- `services.*.env` maps are merged, so `BASE_URL` and SMTP settings can differ per environment while
-  inherited keys such as `RAILS_ENV` and `SOLID_QUEUE_IN_PUMA` stay common
-- `services.*.volumes` are replaced, so staging can use a separate SQLite/storage volume
-- `ingress.hosts` and `ingress.rules` are replaced, so each environment gets its own host routing
-- `secret_refs` remain inherited; set separate secret values in solo state with `--env staging`
-
-```yaml
-schema_version: 1
-organization: solo
-project: fizzy
-default_environment: production
-
-build:
-  context: .
-  dockerfile: Dockerfile
-  platforms:
-    - linux/amd64
-
-services:
-  web:
-    ports:
-      - name: http
-        port: 80
-    healthcheck:
-      path: /up
-      port: 80
-    volumes: &production_storage
-      - source: fizzy_production_storage
-        target: /rails/storage
-    env: &base_env
-      RAILS_ENV: production
-      MULTI_TENANT: "false"
-      SOLID_QUEUE_IN_PUMA: "false"
-    secret_refs: &base_secrets
-      - name: SECRET_KEY_BASE
-        secret: SECRET_KEY_BASE
-      - name: VAPID_PUBLIC_KEY
-        secret: VAPID_PUBLIC_KEY
-      - name: VAPID_PRIVATE_KEY
-        secret: VAPID_PRIVATE_KEY
-      - name: SMTP_USERNAME
-        secret: SMTP_USERNAME
-      - name: SMTP_PASSWORD
-        secret: SMTP_PASSWORD
-
-  worker:
-    command:
-      - ./bin/jobs
-    volumes: *production_storage
-    env: *base_env
-    secret_refs: *base_secrets
-
-tasks:
-  release:
-    service: web
-    command:
-      - ./bin/rails
-      - db:prepare
-
-ingress:
-  hosts:
-    - fizzy.example.com
-  rules:
-    - match:
-        host: fizzy.example.com
-        path_prefix: /
-      target:
-        service: web
-        port: http
-  tls:
-    mode: auto
-    email: ops@example.com
-  redirect_http: true
-
-environments:
-  production:
-    services:
-      web:
-        env:
-          BASE_URL: https://fizzy.example.com
-          MAILER_FROM_ADDRESS: support@example.com
-          SMTP_ADDRESS: mail.example.com
-          WEB_CONCURRENCY: "2"
-      worker:
-        env:
-          BASE_URL: https://fizzy.example.com
-          MAILER_FROM_ADDRESS: support@example.com
-          SMTP_ADDRESS: mail.example.com
-    ingress:
-      hosts:
-        - fizzy.example.com
-      rules:
-        - match:
-            host: fizzy.example.com
-            path_prefix: /
-          target:
-            service: web
-            port: http
-      tls:
-        mode: auto
-        email: ops@example.com
-      redirect_http: true
-
-  staging:
-    services:
-      web:
-        volumes: &staging_storage
-          - source: fizzy_staging_storage
-            target: /rails/storage
-        env:
-          BASE_URL: https://staging.fizzy.example.com
-          MAILER_FROM_ADDRESS: staging-support@example.com
-          SMTP_ADDRESS: sandbox-smtp.example.com
-          WEB_CONCURRENCY: "1"
-      worker:
-        volumes: *staging_storage
-        env:
-          BASE_URL: https://staging.fizzy.example.com
-          MAILER_FROM_ADDRESS: staging-support@example.com
-          SMTP_ADDRESS: sandbox-smtp.example.com
-    ingress:
-      hosts:
-        - staging.fizzy.example.com
-      rules:
-        - match:
-            host: staging.fizzy.example.com
-            path_prefix: /
-          target:
-            service: web
-            port: http
-      tls:
-        mode: auto
-        email: ops@example.com
-      redirect_http: true
-```
-
-This layout demonstrates the intended layering model: the top-level config describes the app's common
-runtime shape; environment overlays describe what changes for a specific environment.
-
 ## Set secrets
 
 Generate app secrets locally, then store them in solo state. Prefer `--stdin` so values do not land in
@@ -394,27 +238,13 @@ For the split-worker config, the worker uses the same secret names. Set them for
 same 1Password references for both services:
 
 ```bash
-SECRET_KEY_BASE="<generated-secret>"
+SECRET_KEY_BASE="<gener...ret>"
 for service in web worker; do
   printf '%s' "$SECRET_KEY_BASE" | devopsellence secret set SECRET_KEY_BASE --service "$service" --stdin
   printf '%s' '<public-key>' | devopsellence secret set VAPID_PUBLIC_KEY --service "$service" --stdin
   printf '%s' '<private-key>' | devopsellence secret set VAPID_PRIVATE_KEY --service "$service" --stdin
   printf '%s' '<smtp-username>' | devopsellence secret set SMTP_USERNAME --service "$service" --stdin
   printf '%s' '<smtp-password>' | devopsellence secret set SMTP_PASSWORD --service "$service" --stdin
-done
-```
-
-For staging, set values in the staging environment. Use different secrets if staging should be isolated
-from production:
-
-```bash
-STAGING_SECRET_KEY_BASE="<generated-staging-secret>"
-for service in web worker; do
-  printf '%s' "$STAGING_SECRET_KEY_BASE" | devopsellence secret set SECRET_KEY_BASE --service "$service" --env staging --stdin
-  printf '%s' '<staging-vapid-public-key>' | devopsellence secret set VAPID_PUBLIC_KEY --service "$service" --env staging --stdin
-  printf '%s' '<staging-vapid-private-key>' | devopsellence secret set VAPID_PRIVATE_KEY --service "$service" --env staging --stdin
-  printf '%s' '<staging-smtp-username>' | devopsellence secret set SMTP_USERNAME --service "$service" --env staging --stdin
-  printf '%s' '<staging-smtp-password>' | devopsellence secret set SMTP_PASSWORD --service "$service" --env staging --stdin
 done
 ```
 
@@ -441,15 +271,9 @@ printf '%s' "$HCLOUD_TOKEN" | devopsellence provider login hetzner --stdin
 devopsellence node create prod-1 --provider hetzner --install --attach
 ```
 
-To co-host staging on the same VM, attach the node to staging too:
+## Deploy
 
-```bash
-devopsellence node attach prod-1 --env staging
-```
-
-## Deploy production and staging
-
-Check the production workspace before applying changes:
+Check the workspace before applying changes:
 
 ```bash
 devopsellence doctor
@@ -458,31 +282,19 @@ devopsellence deploy
 devopsellence status
 ```
 
-Deploy staging by selecting the environment explicitly:
-
-```bash
-DEVOPSELLENCE_ENVIRONMENT=staging devopsellence doctor
-devopsellence deploy --env staging --dry-run
-devopsellence deploy --env staging
-devopsellence status --env staging
-```
-
 Verify the real endpoints, not just the CLI output:
 
 ```bash
 curl -fsS https://fizzy.example.com/up
-curl -fsS https://staging.fizzy.example.com/up
 curl -I http://fizzy.example.com/
-curl -I http://staging.fizzy.example.com/
+curl -fsS https://fizzy.example.com/
 ```
 
-If TLS is still pending, run the explicit ingress readiness checks and then retry the HTTPS probes:
+If TLS is still pending, run the explicit ingress readiness check and then retry the HTTPS probe:
 
 ```bash
 devopsellence ingress check --wait 2m
-devopsellence ingress check --env staging --wait 2m
 curl -fsS https://fizzy.example.com/up
-curl -fsS https://staging.fizzy.example.com/up
 ```
 
 ## Operate it
@@ -493,9 +305,6 @@ Useful replacements for Fizzy's Kamal aliases:
 # Rails console
 devopsellence exec web -- ./bin/rails console
 
-# Staging Rails console
-devopsellence exec --env staging web -- ./bin/rails console
-
 # Shell
 devopsellence exec web -- bash
 
@@ -504,9 +313,6 @@ devopsellence logs web --node prod-1 --lines 200
 
 # Worker logs
 devopsellence logs worker --node prod-1 --lines 200
-
-# Staging worker logs
-devopsellence logs worker --env staging --node prod-1 --lines 200
 
 # Database console
 devopsellence exec web -- ./bin/rails dbconsole --include-password
@@ -520,16 +326,16 @@ Create a redacted support bundle when handing context to another operator or age
 
 ```bash
 devopsellence support bundle --output ./devopsellence-support.json
-DEVOPSELLENCE_ENVIRONMENT=staging devopsellence support bundle --output ./devopsellence-support-staging.json
 ```
 
 ## Notes for production Fizzy instances
 
-- Back up every VM volume that backs Fizzy storage; for this guide that means both `fizzy_production_storage`
-  and `fizzy_staging_storage` if you deploy both environments.
+- Back up the VM volume that backs `fizzy_storage`; it contains SQLite databases and local Active Storage
+  files.
 - Use real SMTP credentials before inviting users. Passwordless login and notifications depend on mail.
-- Keep each environment's `BASE_URL` aligned with its public HTTPS origin.
+- Keep `BASE_URL` aligned with the public HTTPS origin.
 - If you enable multi-tenant signup, set `MULTI_TENANT=true` intentionally and review Fizzy's product-level
   account/signup expectations.
 - This guide keeps the default SQLite/local-storage shape. If you later move to external object storage,
   MySQL, or more job workers, model each dependency explicitly instead of hiding it in shell hooks.
+

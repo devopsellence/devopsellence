@@ -8458,3 +8458,16 @@ func TestProgressReaderReportsBytes(t *testing.T) {
 		t.Fatalf("progress = %#v, want compressed progress", got)
 	}
 }
+
+func TestSoloSupportBundleRecommendedCommandsIncludeEnvAndSupportBundle(t *testing.T) {
+	commands := soloSupportBundleRecommendedCommands("staging")
+	if len(commands) < 3 {
+		t.Fatalf("commands = %#v, want support command set", commands)
+	}
+	if commands[1] != "devopsellence status --env 'staging'" {
+		t.Fatalf("commands = %#v, want env-qualified status command", commands)
+	}
+	if commands[2] != "devopsellence support bundle --env 'staging'" {
+		t.Fatalf("commands = %#v, want env-qualified support bundle command", commands)
+	}
+}

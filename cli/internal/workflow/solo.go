@@ -585,9 +585,24 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
+		"runtime_verified": map[string]any{
+			"desired_state_revision": true,
+			"container_replaced":     true,
+			"healthcheck":            true,
+			"endpoint_probe":         false,
+			"tls":                    false,
+		},
 	}
 	if urls := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
+		runtimeVerified := map[string]any{
+			"desired_state_revision": true,
+			"container_replaced":     true,
+			"healthcheck":            true,
+			"endpoint_probe":         true,
+			"tls":                    true,
+		}
+		payload["runtime_verified"] = runtimeVerified
 		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + urls[0]}, soloNodeLogNextSteps(environmentName, nodes)...)
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls
@@ -4748,6 +4763,7 @@ func soloSupportBundleRecommendedCommands(environment string) []string {
 	return []string{
 		"devopsellence doctor",
 		"devopsellence status" + envFlag,
+		"devopsellence support bundle" + envFlag,
 		"devopsellence release list" + envFlag,
 		"devopsellence logs" + envFlag + " --lines 100",
 		"devopsellence node list --all",

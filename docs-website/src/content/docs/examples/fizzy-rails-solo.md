@@ -338,4 +338,3 @@ devopsellence support bundle --output ./devopsellence-support.json
   account/signup expectations.
 - This guide keeps the default SQLite/local-storage shape. If you later move to external object storage,
   MySQL, or more job workers, model each dependency explicitly instead of hiding it in shell hooks.
-

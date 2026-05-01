@@ -29,6 +29,8 @@ codex e "Deploy this app with devopsellence solo."
   one VM.
 - [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app
   example that maps a Kamal-style deployment to devopsellence solo.
+- [Flue agents on Node.js](/examples/flue-node-solo/) for deploying a webhook
+  AI agent server to your own VM with devopsellence solo.
 - [Runtime model](/concepts/runtime-model/) for desired state, releases,
   services, nodes, and status.
 - [CLI reference](/reference/cli/) for the AI-operator-safe command surface.

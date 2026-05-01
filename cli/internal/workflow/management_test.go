@@ -42,6 +42,8 @@ func TestInitWritesConfigOnly(t *testing.T) {
 			return nil, nil
 		}
 	}))
+	var stdout bytes.Buffer
+	app.Printer = output.New(&stdout, io.Discard)
 
 	if err := app.Init(context.Background(), InitOptions{NonInteractive: true}); err != nil {
 		t.Fatalf("Init() error = %v", err)
@@ -54,6 +56,14 @@ func TestInitWritesConfigOnly(t *testing.T) {
 		t.Fatal("AGENTS.md exists, want not exist")
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat AGENTS.md: %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["port_source"] != "default" || runtimeContract["healthcheck_path_source"] != "default" {
+		t.Fatalf("runtime_contract = %#v, want default port and healthcheck sources", runtimeContract)
+	}
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 2 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want shared init port and healthcheck hints", hints)
 	}
 }
 

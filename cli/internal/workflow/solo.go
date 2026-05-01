@@ -4951,7 +4951,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"mode":             string(ModeSolo),
 		"workspace_root":   discovered.WorkspaceRoot,
 		"project_slug":     discovered.ProjectSlug,
-		"runtime_contract": soloInitRuntimeContract(*cfg, discovered, created),
+		"runtime_contract": initRuntimeContract(*cfg, discovered, created),
 		"config": map[string]any{
 			"path":           configPath,
 			"created":        created,
@@ -4965,7 +4965,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 	})
 }
 
-func soloInitRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, created bool) map[string]any {
+func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, created bool) map[string]any {
 	serviceName, ok := cfg.PrimaryWebServiceName()
 	if !ok {
 		return map[string]any{
@@ -4977,27 +4977,77 @@ func soloInitRuntimeContract(cfg config.ProjectConfig, discovered discovery.Resu
 	}
 	service := cfg.Services[serviceName]
 	port := service.HTTPPort(0)
-	source := "default"
+	portSource := "default"
+	portConfidence := "low"
 	switch {
 	case !created:
-		source = "config"
+		portSource = "config"
+		portConfidence = "high"
 	case discovered.InferredWebPort > 0 && port == discovered.InferredWebPort:
-		source = "dockerfile"
+		portSource = "dockerfile"
+		portConfidence = "high"
 	case port != config.DefaultWebPort:
-		source = "config"
+		portSource = "config"
+		portConfidence = "high"
 	}
 	contract := map[string]any{
-		"web_service": true,
-		"service":     serviceName,
-		"port":        port,
-		"port_source": source,
-		"requirement": "the container must listen on this port; add EXPOSE to the Dockerfile or edit devopsellence.yml if it listens elsewhere",
+		"web_service":     true,
+		"service":         serviceName,
+		"port":            port,
+		"port_source":     portSource,
+		"port_confidence": portConfidence,
+		"requirement":     "the container must listen on this port; add EXPOSE to the Dockerfile or edit devopsellence.yml if it listens elsewhere",
+		"agent_hints":     []map[string]any{},
 	}
 	if service.Healthcheck != nil {
+		healthcheckPath := strings.TrimSpace(service.Healthcheck.Path)
+		healthcheckPathSource := "default"
+		healthcheckConfidence := "low"
+		if !created || healthcheckPath != config.DefaultHealthcheckPath {
+			healthcheckPathSource = "config"
+			healthcheckConfidence = "high"
+		}
 		contract["healthcheck_path"] = service.Healthcheck.Path
 		contract["healthcheck_port"] = service.Healthcheck.Port
+		contract["healthcheck_path_source"] = healthcheckPathSource
+		contract["healthcheck_confidence"] = healthcheckConfidence
 	}
+	contract["agent_hints"] = initRuntimeAgentHints(serviceName, contract)
 	return contract
+}
+
+func initRuntimeAgentHints(serviceName string, contract map[string]any) []map[string]any {
+	hints := []map[string]any{}
+	if contract["port_source"] == "default" {
+		hints = append(hints, map[string]any{
+			"action": "inspect_app_port",
+			"reason": "No Dockerfile EXPOSE directive or image-exposed port was found, so devopsellence used its default web port.",
+			"instructions": []string{
+				"Inspect framework files, package scripts, server bind/listen code, and PORT defaults.",
+				"If the app listens on a different port, update devopsellence.yml before deploying.",
+				"Alternatively add EXPOSE <port> to the Dockerfile so future init/deploy runs can infer it deterministically.",
+			},
+			"config_fields": []string{
+				fmt.Sprintf("services.%s.ports.http", serviceName),
+				fmt.Sprintf("services.%s.healthcheck.port", serviceName),
+			},
+		})
+	}
+	if contract["healthcheck_path_source"] == "default" {
+		hints = append(hints, map[string]any{
+			"action": "inspect_healthcheck_path",
+			"reason": "No explicit healthcheck path was configured, so devopsellence used its default /up path.",
+			"instructions": []string{
+				"Inspect framework routes and existing health/readiness endpoints.",
+				"If the app exposes a different health path, update devopsellence.yml before deploying.",
+				"If the app has no health endpoint, add one or configure a path that returns HTTP 2xx when the service is ready.",
+			},
+			"config_fields": []string{
+				fmt.Sprintf("services.%s.healthcheck.path", serviceName),
+			},
+		})
+	}
+	return hints
 }
 
 func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {

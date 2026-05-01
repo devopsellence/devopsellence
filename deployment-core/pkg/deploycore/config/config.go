@@ -268,11 +268,17 @@ func Write(workspaceRoot string, cfg ProjectConfig) (ProjectConfig, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return ProjectConfig{}, err
 	}
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
+	var buffer bytes.Buffer
+	encoder := yaml.NewEncoder(&buffer)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(cfg); err != nil {
+		_ = encoder.Close()
 		return ProjectConfig{}, err
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := encoder.Close(); err != nil {
+		return ProjectConfig{}, err
+	}
+	if err := os.WriteFile(path, buffer.Bytes(), 0o644); err != nil {
 		return ProjectConfig{}, err
 	}
 	return cfg, nil

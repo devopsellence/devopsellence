@@ -595,12 +595,13 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	}
 	if urls := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
+		ingressProbeVerified := ingressRequiresTLSReadiness(cfg)
 		runtimeVerified := map[string]any{
 			"desired_state_revision": true,
 			"container_replaced":     true,
 			"healthcheck":            true,
-			"endpoint_probe":         true,
-			"tls":                    ingressRequiresTLSReadiness(cfg),
+			"endpoint_probe":         ingressProbeVerified,
+			"tls":                    ingressProbeVerified,
 		}
 		payload["runtime_verified"] = runtimeVerified
 		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + urls[0]}, soloNodeLogNextSteps(environmentName, nodes)...)

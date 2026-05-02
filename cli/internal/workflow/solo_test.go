@@ -1488,6 +1488,60 @@ func TestSoloStatusDoesNotTreatDNSOnlyTLSCheckAsVerifiedPublicURL(t *testing.T) 
 	}
 }
 
+func TestSoloStatusTreatsTLSVerifiedCheckAsReadyPublicURL(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"rev","phase":"settled","summary":{"environments":1,"services":1}}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "rev")
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.IngressChecks = map[string]solo.IngressCheckRecord{
+		key: {
+			OK:          true,
+			TLSVerified: true,
+			CheckScope:  "dns_tls",
+			PublicURLs:  []string{"https://app.example.com/"},
+			ExpectedIPs: []string{"203.0.113.10"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	urls := jsonArrayFromMap(t, payload, "public_urls")
+	if len(urls) != 1 || urls[0] != "https://app.example.com/" {
+		t.Fatalf("public_urls = %#v, want verified HTTPS URL", urls)
+	}
+	if _, ok := payload["public_url_status"]; ok {
+		t.Fatalf("payload = %#v, did not want pending public_url_status after TLS verification", payload)
+	}
+}
+
 func TestSoloVerifiedIngressPublicURLsRejectsRecordWhenSelectedNodesHaveNoWebIPs(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -1651,6 +1705,12 @@ func TestIngressCheckPersistsSuccessfulReadinessRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	oldProbe := ingressTLSProbe
+	ingressTLSProbe = func(context.Context, string) ingressTLSProbeResult {
+		return ingressTLSProbeResult{OK: true, StatusCode: 200}
+	}
+	t.Cleanup(func() { ingressTLSProbe = oldProbe })
+
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
 	if err := app.IngressCheck(context.Background(), IngressCheckOptions{}); err != nil {
@@ -1659,6 +1719,9 @@ func TestIngressCheckPersistsSuccessfulReadinessRecord(t *testing.T) {
 	payload := decodeJSONOutput(t, &stdout)
 	if payload["ok"] != true {
 		t.Fatalf("payload ok = %v, want true", payload["ok"])
+	}
+	if payload["check_scope"] != "dns_tls" || payload["tls_verified"] != true {
+		t.Fatalf("payload = %#v, want dns_tls scope with TLS verified", payload)
 	}
 	loaded, err := soloState.Read()
 	if err != nil {
@@ -1669,7 +1732,7 @@ func TestIngressCheckPersistsSuccessfulReadinessRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := loaded.IngressChecks[key]
-	if !record.OK || !reflect.DeepEqual(record.PublicURLs, []string{"https://127.0.0.1/"}) || !reflect.DeepEqual(record.ExpectedIPs, []string{"127.0.0.1"}) || strings.TrimSpace(record.CheckedAt) == "" {
+	if !record.OK || !record.TLSVerified || record.CheckScope != "dns_tls" || !reflect.DeepEqual(record.PublicURLs, []string{"https://127.0.0.1/"}) || !reflect.DeepEqual(record.ExpectedIPs, []string{"127.0.0.1"}) || strings.TrimSpace(record.CheckedAt) == "" {
 		t.Fatalf("ingress check record = %#v", record)
 	}
 }

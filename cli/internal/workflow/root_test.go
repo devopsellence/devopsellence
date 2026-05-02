@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -497,6 +498,57 @@ func rootTestSoloWorkspace(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return cwd
+}
+
+func TestSupportBundleAcceptsEnvFlag(t *testing.T) {
+	cwd := rootTestWorkspaceWithMode(t, ModeSolo)
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Environments = map[string]config.EnvironmentOverlay{"staging": {}}
+	if _, err := config.Write(cwd, cfg); err != nil {
+		t.Fatal(err)
+	}
+	current := solo.State{Nodes: map[string]config.Node{
+		"node-prod":    {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		"node-staging": {Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWebRole}},
+	}}
+	if _, _, err := current.AttachNode(cwd, "production", "node-prod"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cwd, "staging", "node-staging"); err != nil {
+		t.Fatal(err)
+	}
+	if err := solo.NewStateStore(solo.DefaultStatePath()).Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	outPath := filepath.Join(t.TempDir(), "support.json")
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"support", "bundle", "--env", "staging", "--output", outPath})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v\n%s", err, stdout.String())
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment"] != "staging" || strings.TrimSpace(stringValueAny(payload["environment_id"])) == "" {
+		t.Fatalf("payload = %#v, want staging environment and environment_id", payload)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		t.Fatalf("parse bundle: %v\n%s", err, string(data))
+	}
+	if bundle["environment"] != "staging" || strings.TrimSpace(stringValueAny(bundle["environment_id"])) == "" {
+		t.Fatalf("bundle = %#v, want staging environment and environment_id", bundle)
+	}
+	attached := jsonArrayFromMap(t, bundle, "attached_nodes")
+	if len(attached) != 1 || attached[0] != "node-staging" {
+		t.Fatalf("attached_nodes = %#v, want staging node only", attached)
+	}
 }
 
 func TestNodeHelpShowsSharedAndSoloActions(t *testing.T) {

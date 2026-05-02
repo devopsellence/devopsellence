@@ -58,6 +58,8 @@ type IngressCheckRecord struct {
 	WorkspaceKey  string   `json:"workspace_key,omitempty"`
 	Environment   string   `json:"environment,omitempty"`
 	OK            bool     `json:"ok"`
+	CheckScope    string   `json:"check_scope,omitempty"`
+	TLSVerified   bool     `json:"tls_verified,omitempty"`
 	PublicURLs    []string `json:"public_urls,omitempty"`
 	ExpectedIPs   []string `json:"expected_ips,omitempty"`
 	CheckedAt     string   `json:"checked_at,omitempty"`

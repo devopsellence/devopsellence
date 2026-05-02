@@ -7522,6 +7522,39 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 	}
 }
 
+func TestSoloInitKeepsGeneratedDefaultsLowConfidenceOnRerun(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["port_source"] != "default" || runtimeContract["port_confidence"] != "low" || runtimeContract["healthcheck_path_source"] != "default" || runtimeContract["healthcheck_confidence"] != "low" {
+		t.Fatalf("runtime_contract = %#v, want generated defaults to remain low-confidence on rerun", runtimeContract)
+	}
+	hints := jsonArrayFromMap(t, runtimeContract, "agent_hints")
+	if len(hints) != 2 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want port and healthcheck hints", hints)
+	}
+	portHint := jsonMapFromAny(t, hints[0])
+	fields := jsonArrayFromMap(t, portHint, "config_fields")
+	if len(fields) == 0 || fields[0] != "services.web.ports[http].port" {
+		t.Fatalf("port hint config_fields = %#v, want schema-addressable http port field", fields)
+	}
+}
+
 func TestSoloInitReportsConfigPortContract(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM nginx:1.27-alpine\nEXPOSE 8080\n"), 0o644); err != nil {

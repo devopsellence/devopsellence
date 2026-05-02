@@ -550,6 +550,10 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 		if initErr != nil {
 			return initErr
 		}
+		resolvedConfig, err := config.ResolveEnvironmentConfig(initialized.Config, initialized.Environment.Name)
+		if err != nil {
+			return ExitError{Code: 1, Err: err}
+		}
 		result = map[string]any{
 			"schema_version":       outputSchemaVersion,
 			"mode":                 string(ModeShared),
@@ -564,7 +568,7 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 			"environment_created":  initialized.CreatedEnv,
 			"config_path":          initialized.ConfigPath,
 			"project_slug":         initialized.Discovered.ProjectSlug,
-			"runtime_contract":     initRuntimeContract(initialized.Config, initialized.Discovered, initialized.CreatedConfig),
+			"runtime_contract":     initRuntimeContract(resolvedConfig, initialized.Discovered, initialized.CreatedConfig),
 			"config":               initialized.Config,
 		}
 		return nil
@@ -2834,6 +2838,7 @@ func (a *App) initializeWorkspace(ctx context.Context, callAuth authCall, opts I
 		projectConfig.Services = existing.Services
 		projectConfig.Tasks = existing.Tasks
 		projectConfig.Ingress = existing.Ingress
+		projectConfig.Environments = existing.Environments
 		projectConfig.Organization = org.Name
 		projectConfig.Project = project.Name
 		projectConfig.DefaultEnvironment = environment.Name

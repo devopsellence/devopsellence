@@ -4980,7 +4980,7 @@ func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, 
 	portSource := "default"
 	portConfidence := "low"
 	switch {
-	case !created:
+	case !created && port != config.DefaultWebPort:
 		portSource = "config"
 		portConfidence = "high"
 	case discovered.InferredWebPort > 0 && port == discovered.InferredWebPort:
@@ -5003,7 +5003,7 @@ func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, 
 		healthcheckPath := strings.TrimSpace(service.Healthcheck.Path)
 		healthcheckPathSource := "default"
 		healthcheckConfidence := "low"
-		if !created || healthcheckPath != config.DefaultHealthcheckPath {
+		if healthcheckPath != config.DefaultHealthcheckPath {
 			healthcheckPathSource = "config"
 			healthcheckConfidence = "high"
 		}
@@ -5028,7 +5028,7 @@ func initRuntimeAgentHints(serviceName string, contract map[string]any) []map[st
 				"Alternatively add EXPOSE <port> to the Dockerfile so future init/deploy runs can infer it deterministically.",
 			},
 			"config_fields": []string{
-				fmt.Sprintf("services.%s.ports.http", serviceName),
+				fmt.Sprintf("services.%s.ports[http].port", serviceName),
 				fmt.Sprintf("services.%s.healthcheck.port", serviceName),
 			},
 		})

@@ -576,6 +576,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return err
 	}
 
+	runtimeVerified := soloDeployRuntimeVerified(false, false)
 	payload := map[string]any{
 		"release_id":              release.ID,
 		"deployment_id":           deployment.ID,
@@ -585,9 +586,12 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
+		"runtime_verified":        runtimeVerified,
 	}
-	if urls := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
+	if urls, endpointProbeVerified, tlsVerified := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
+		runtimeVerified["endpoint_probe"] = endpointProbeVerified
+		runtimeVerified["tls"] = tlsVerified
 		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + urls[0]}, soloNodeLogNextSteps(environmentName, nodes)...)
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls
@@ -599,6 +603,16 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	}
 	return stream.Result(payload)
 
+}
+
+func soloDeployRuntimeVerified(endpointProbe, tls bool) map[string]any {
+	return map[string]any{
+		"desired_state_revision": true,
+		"container_replaced":     false,
+		"healthcheck":            true,
+		"endpoint_probe":         endpointProbe,
+		"tls":                    tls,
+	}
 }
 
 func validateNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.Node) (string, error) {
@@ -1876,7 +1890,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes attached to the current environment")
 	}
-	verifiedPublicURLs := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes)
+	verifiedPublicURLs, _, _ := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes)
 	releaseRequired := workspaceRoot != "" && environmentName != "" && (len(opts.Nodes) == 0 || strings.TrimSpace(opts.Environment) != "")
 	localReleaseKnown := len(opts.Nodes) > 0 && !releaseRequired
 	expectedRevisions := map[string]string{}
@@ -4748,6 +4762,7 @@ func soloSupportBundleRecommendedCommands(environment string) []string {
 	return []string{
 		"devopsellence doctor",
 		"devopsellence status" + envFlag,
+		"devopsellence support bundle" + envFlag,
 		"devopsellence release list" + envFlag,
 		"devopsellence logs" + envFlag + " --lines 100",
 		"devopsellence node list --all",
@@ -5702,15 +5717,19 @@ func (a *App) soloStatusSelection(opts SoloStatusOptions) (map[string]config.Nod
 	return nodes, cfg, workspaceRoot, environmentName, err
 }
 
-func (a *App) soloVerifiedPublicURLs(workspaceRoot, environmentName string, cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
+func (a *App) soloVerifiedPublicURLs(workspaceRoot, environmentName string, cfg *config.ProjectConfig, nodes map[string]config.Node) ([]string, bool, bool) {
 	if !ingressRequiresTLSReadiness(cfg) {
-		return soloReadyPublicURLs(cfg, nodes)
+		return soloReadyPublicURLs(cfg, nodes), false, false
 	}
 	current, err := a.readSoloState()
 	if err != nil {
-		return nil
+		return nil, false, false
 	}
-	return soloVerifiedIngressPublicURLs(current, workspaceRoot, environmentName, cfg, nodes)
+	urls := soloVerifiedIngressPublicURLs(current, workspaceRoot, environmentName, cfg, nodes)
+	if len(urls) == 0 {
+		return nil, false, false
+	}
+	return urls, true, true
 }
 
 func soloVerifiedIngressPublicURLs(current solo.State, workspaceRoot, environmentName string, cfg *config.ProjectConfig, nodes map[string]config.Node) []string {

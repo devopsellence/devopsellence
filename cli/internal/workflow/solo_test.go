@@ -5993,6 +5993,19 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	if len(urls) != 1 || urls[0] != "http://203.0.113.10/" {
 		t.Fatalf("public_urls = %#v, want node URL", urls)
 	}
+	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
+	if runtimeVerified["desired_state_revision"] != true || runtimeVerified["healthcheck"] != true {
+		t.Fatalf("runtime_verified = %#v, want deploy/runtime state verified", runtimeVerified)
+	}
+	if runtimeVerified["container_replaced"] != false {
+		t.Fatalf("runtime_verified = %#v, deploy does not prove service container ID replacement", runtimeVerified)
+	}
+	if runtimeVerified["endpoint_probe"] != false {
+		t.Fatalf("runtime_verified = %#v, plain HTTP deploy must not report endpoint probe verified from inferred public URLs", runtimeVerified)
+	}
+	if runtimeVerified["tls"] != false {
+		t.Fatalf("runtime_verified = %#v, plain HTTP deploy must not report TLS verified", runtimeVerified)
+	}
 	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
 	if len(nextSteps) != 4 || nextSteps[0] != "devopsellence status --env 'production'" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || nextSteps[3] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status, curl, and logs commands", nextSteps)
@@ -6096,6 +6109,50 @@ func TestSoloDeployDoesNotTreatDNSOnlyTLSCheckAsVerifiedPublicURL(t *testing.T) 
 	warnings := jsonArrayFromMap(t, payload, "warnings")
 	if len(warnings) != 1 || !strings.Contains(stringValueAny(warnings[0]), "devopsellence status --env 'production'") {
 		t.Fatalf("warnings = %#v, want env-qualified status guidance", warnings)
+	}
+}
+
+func TestSoloDeployRuntimeVerificationTracksPersistedTLSProbe(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}},
+	}
+	current := solo.State{
+		Nodes:       nodes,
+		Attachments: map[string]solo.AttachmentRecord{},
+		IngressChecks: map[string]solo.IngressCheckRecord{
+			key: {
+				OK:          true,
+				TLSVerified: true,
+				PublicURLs:  []string{"https://app.example.com/"},
+				ExpectedIPs: []string{"203.0.113.10"},
+			},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{SoloState: soloState}
+	urls, endpointProbeVerified, tlsVerified := app.soloVerifiedPublicURLs(workspaceRoot, "production", &cfg, nodes)
+	if !reflect.DeepEqual(urls, []string{"https://app.example.com/"}) || !endpointProbeVerified || !tlsVerified {
+		t.Fatalf("soloVerifiedPublicURLs = %#v, endpoint=%v tls=%v; want persisted TLS probe evidence", urls, endpointProbeVerified, tlsVerified)
 	}
 }
 
@@ -8456,5 +8513,18 @@ func TestProgressReaderReportsBytes(t *testing.T) {
 	}
 	if len(got) == 0 || !strings.Contains(got[len(got)-1], "compressed") {
 		t.Fatalf("progress = %#v, want compressed progress", got)
+	}
+}
+
+func TestSoloSupportBundleRecommendedCommandsIncludeEnvAndSupportBundle(t *testing.T) {
+	commands := soloSupportBundleRecommendedCommands("staging")
+	if len(commands) < 3 {
+		t.Fatalf("commands = %#v, want support command set", commands)
+	}
+	if commands[1] != "devopsellence status --env 'staging'" {
+		t.Fatalf("commands = %#v, want env-qualified status command", commands)
+	}
+	if commands[2] != "devopsellence support bundle --env 'staging'" {
+		t.Fatalf("commands = %#v, want env-qualified support bundle command", commands)
 	}
 }

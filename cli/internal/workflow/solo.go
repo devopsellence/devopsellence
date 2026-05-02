@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -161,7 +163,8 @@ type SoloDoctorOptions struct {
 }
 
 type SoloSupportBundleOptions struct {
-	Output string
+	Output      string
+	Environment string
 }
 
 type SoloNodeCreateOptions struct {
@@ -4684,10 +4687,12 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 		return err
 	}
 	environmentName := ""
+	environmentID := ""
 	attachedNodes := []string{}
 	if cfg != nil {
-		environmentName = a.effectiveEnvironment("", cfg)
+		environmentName = a.effectiveEnvironment(opts.Environment, cfg)
 		attachedNodes, _ = current.AttachedNodeNames(discovered.WorkspaceRoot, environmentName)
+		environmentID, _ = soloDisplayEnvironmentID(discovered.WorkspaceRoot, environmentName)
 	}
 	bundle := map[string]any{
 		"schema_version": outputSchemaVersion,
@@ -4699,6 +4704,7 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 			"slug": discovered.ProjectSlug,
 		},
 		"environment":          environmentName,
+		"environment_id":       environmentID,
 		"config":               redactProjectConfigForSupport(cfg),
 		"solo_state":           redactSoloStateForSupport(current),
 		"attached_nodes":       attachedNodes,
@@ -4718,7 +4724,7 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 	if err := writePrivateFileAtomic(outputPath, data); err != nil {
 		return err
 	}
-	return a.Printer.PrintJSON(map[string]any{
+	result := map[string]any{
 		"schema_version": outputSchemaVersion,
 		"action":         "support_bundle",
 		"path":           outputPath,
@@ -4727,7 +4733,14 @@ func (a *App) SoloSupportBundle(_ context.Context, opts SoloSupportBundleOptions
 			"Attach this JSON file to a support/debugging issue when it is safe to share machine paths and node hostnames/IPs.",
 			"Run devopsellence node diagnose <node> for live remote runtime details.",
 		},
-	})
+	}
+	if environmentName != "" {
+		result["environment"] = environmentName
+	}
+	if environmentID != "" {
+		result["environment_id"] = environmentID
+	}
+	return a.Printer.PrintJSON(result)
 }
 
 func soloSupportBundleRecommendedCommands(environment string) []string {
@@ -5318,7 +5331,7 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 	}
 	deadline := time.Now().Add(opts.Wait)
 	for {
-		report, err := ingressDNSReport(ctx, cfg, nodes, environmentName)
+		report, err := ingressReadinessReport(ctx, cfg, nodes, true, environmentName)
 		if err != nil {
 			return err
 		}
@@ -5369,6 +5382,8 @@ func recordSuccessfulSoloIngressCheck(current *solo.State, workspaceRoot, enviro
 	}
 	current.IngressChecks[key] = solo.IngressCheckRecord{
 		OK:            true,
+		CheckScope:    report.CheckScope,
+		TLSVerified:   report.TLSVerified,
 		PublicURLs:    append([]string(nil), report.PublicURLs...),
 		ExpectedIPs:   append([]string(nil), report.ExpectedIPs...),
 		CheckedAt:     time.Now().UTC().Format(time.RFC3339),
@@ -5699,15 +5714,15 @@ func (a *App) soloVerifiedPublicURLs(workspaceRoot, environmentName string, cfg 
 }
 
 func soloVerifiedIngressPublicURLs(current solo.State, workspaceRoot, environmentName string, cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
-	if ingressRequiresTLSReadiness(cfg) {
-		return nil
-	}
 	key, err := solo.EnvironmentStateKey(workspaceRoot, environmentName)
 	if err != nil {
 		return nil
 	}
 	record, ok := current.IngressChecks[key]
 	if !ok || !record.OK {
+		return nil
+	}
+	if ingressRequiresTLSReadiness(cfg) && !record.TLSVerified {
 		return nil
 	}
 	urls := soloStatusPublicURLs(cfg, nodes)
@@ -5815,12 +5830,22 @@ type ingressDNSReportResult struct {
 }
 
 type ingressDNSHostResult struct {
-	Host     string   `json:"host"`
-	OK       bool     `json:"ok"`
-	Resolved []string `json:"resolved,omitempty"`
-	Missing  []string `json:"missing,omitempty"`
-	Error    string   `json:"error,omitempty"`
+	Host        string   `json:"host"`
+	OK          bool     `json:"ok"`
+	Resolved    []string `json:"resolved,omitempty"`
+	Missing     []string `json:"missing,omitempty"`
+	TLSVerified bool     `json:"tls_verified,omitempty"`
+	TLSError    string   `json:"tls_error,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }
+
+type ingressTLSProbeResult struct {
+	OK         bool
+	StatusCode int
+	Error      string
+}
+
+var ingressTLSProbe = defaultIngressTLSProbe
 
 type ingressHint struct {
 	Code            string            `json:"code"`
@@ -5848,8 +5873,10 @@ func (e ingressDNSReadinessError) Error() string {
 
 func (e ingressDNSReadinessError) ErrorFields() map[string]any {
 	fields := map[string]any{
-		"kind":         "ingress_dns_not_ready",
+		"kind":         firstNonEmpty(ingressReadinessErrorKind(e.report), "ingress_dns_not_ready"),
 		"ok":           e.report.OK,
+		"check_scope":  e.report.CheckScope,
+		"tls_verified": e.report.TLSVerified,
 		"expected_ips": e.report.ExpectedIPs,
 	}
 	if len(e.report.Hosts) > 0 {
@@ -5862,6 +5889,13 @@ func (e ingressDNSReadinessError) ErrorFields() map[string]any {
 		fields["next_steps"] = e.report.NextSteps
 	}
 	return fields
+}
+
+func ingressReadinessErrorKind(report ingressDNSReportResult) string {
+	if report.CheckScope == "dns_tls" && !report.TLSVerified {
+		return "ingress_tls_not_ready"
+	}
+	return "ingress_dns_not_ready"
 }
 
 const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
@@ -5895,10 +5929,17 @@ func ingressDNSReportError(report ingressDNSReportResult) error {
 	if len(report.Hosts) == 0 {
 		return fmt.Errorf("no ingress hostnames configured")
 	}
+	if report.CheckScope == "dns_tls" && !report.TLSVerified {
+		return fmt.Errorf("ingress TLS is not ready")
+	}
 	return fmt.Errorf("ingress DNS is not ready")
 }
 
 func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.Node, environment ...string) (ingressDNSReportResult, error) {
+	return ingressReadinessReport(ctx, cfg, selected, false, environment...)
+}
+
+func ingressReadinessReport(ctx context.Context, cfg *config.ProjectConfig, selected map[string]config.Node, verifyTLS bool, environment ...string) (ingressDNSReportResult, error) {
 	hosts := concreteIngressHosts(cfg)
 	expected := webNodeIPs(cfg, selected)
 	if len(expected) == 0 {
@@ -5936,14 +5977,75 @@ func ingressDNSReport(ctx context.Context, cfg *config.ProjectConfig, selected m
 		}
 		report.Hosts = append(report.Hosts, result)
 	}
+	if verifyTLS && report.OK && ingressRequiresTLSReadiness(cfg) {
+		report.CheckScope = "dns_tls"
+		report.TLSVerified = true
+		probeResults := ingressTLSProbeResults(ctx, report.PublicURLs)
+		for i := range report.Hosts {
+			probe, ok := probeResults[report.Hosts[i].Host]
+			if !ok {
+				report.TLSVerified = false
+				report.OK = false
+				report.Hosts[i].OK = false
+				report.Hosts[i].TLSError = "missing HTTPS probe result"
+				continue
+			}
+			report.Hosts[i].TLSVerified = probe.OK
+			if !probe.OK {
+				report.TLSVerified = false
+				report.OK = false
+				report.Hosts[i].OK = false
+				report.Hosts[i].TLSError = probe.Error
+			}
+		}
+	}
 	if len(report.PublicURLs) > 0 {
 		if report.OK {
 			report.NextSteps = []string{"devopsellence status" + envFlag, "curl " + report.PublicURLs[0]}
+		} else if report.CheckScope == "dns_tls" && !report.TLSVerified {
+			report.NextSteps = []string{"devopsellence status" + envFlag, "curl " + report.PublicURLs[0], "devopsellence ingress check" + envFlag + " --wait 5m"}
 		} else {
 			report.NextSteps = []string{"devopsellence status" + envFlag, "update DNS records to point at expected_ips", "devopsellence ingress check" + envFlag + " --wait 5m"}
 		}
 	}
 	return report, nil
+}
+
+func ingressTLSProbeResults(ctx context.Context, publicURLs []string) map[string]ingressTLSProbeResult {
+	results := map[string]ingressTLSProbeResult{}
+	for _, publicURL := range publicURLs {
+		parsed, err := url.Parse(publicURL)
+		if err != nil {
+			continue
+		}
+		host := strings.TrimSpace(parsed.Hostname())
+		if host == "" {
+			continue
+		}
+		results[host] = ingressTLSProbe(ctx, publicURL)
+	}
+	return results
+}
+
+func defaultIngressTLSProbe(ctx context.Context, publicURL string) ingressTLSProbeResult {
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, publicURL, nil)
+	if err != nil {
+		return ingressTLSProbeResult{Error: err.Error()}
+	}
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ingressTLSProbeResult{Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	return ingressTLSProbeResult{OK: true, StatusCode: resp.StatusCode}
 }
 
 func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Node) []string {

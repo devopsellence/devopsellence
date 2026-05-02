@@ -585,25 +585,12 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
-		"runtime_verified": map[string]any{
-			"desired_state_revision": true,
-			"container_replaced":     true,
-			"healthcheck":            true,
-			"endpoint_probe":         false,
-			"tls":                    false,
-		},
+		"runtime_verified":        soloDeployRuntimeVerified(false, false),
 	}
 	if urls := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
 		ingressProbeVerified := ingressRequiresTLSReadiness(cfg)
-		runtimeVerified := map[string]any{
-			"desired_state_revision": true,
-			"container_replaced":     true,
-			"healthcheck":            true,
-			"endpoint_probe":         ingressProbeVerified,
-			"tls":                    ingressProbeVerified,
-		}
-		payload["runtime_verified"] = runtimeVerified
+		payload["runtime_verified"] = soloDeployRuntimeVerified(ingressProbeVerified, ingressProbeVerified)
 		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + urls[0]}, soloNodeLogNextSteps(environmentName, nodes)...)
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls
@@ -615,6 +602,16 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	}
 	return stream.Result(payload)
 
+}
+
+func soloDeployRuntimeVerified(endpointProbe, tls bool) map[string]any {
+	return map[string]any{
+		"desired_state_revision": true,
+		"container_replaced":     false,
+		"healthcheck":            true,
+		"endpoint_probe":         endpointProbe,
+		"tls":                    tls,
+	}
 }
 
 func validateNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.Node) (string, error) {

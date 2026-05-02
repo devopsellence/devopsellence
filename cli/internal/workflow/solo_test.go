@@ -5994,8 +5994,11 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 		t.Fatalf("public_urls = %#v, want node URL", urls)
 	}
 	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
-	if runtimeVerified["desired_state_revision"] != true || runtimeVerified["container_replaced"] != true || runtimeVerified["healthcheck"] != true {
+	if runtimeVerified["desired_state_revision"] != true || runtimeVerified["healthcheck"] != true {
 		t.Fatalf("runtime_verified = %#v, want deploy/runtime state verified", runtimeVerified)
+	}
+	if runtimeVerified["container_replaced"] != false {
+		t.Fatalf("runtime_verified = %#v, deploy does not prove service container ID replacement", runtimeVerified)
 	}
 	if runtimeVerified["endpoint_probe"] != false {
 		t.Fatalf("runtime_verified = %#v, plain HTTP deploy must not report endpoint probe verified from inferred public URLs", runtimeVerified)

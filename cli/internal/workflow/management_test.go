@@ -42,6 +42,8 @@ func TestInitWritesConfigOnly(t *testing.T) {
 			return nil, nil
 		}
 	}))
+	var stdout bytes.Buffer
+	app.Printer = output.New(&stdout, io.Discard)
 
 	if err := app.Init(context.Background(), InitOptions{NonInteractive: true}); err != nil {
 		t.Fatalf("Init() error = %v", err)
@@ -54,6 +56,77 @@ func TestInitWritesConfigOnly(t *testing.T) {
 		t.Fatal("AGENTS.md exists, want not exist")
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat AGENTS.md: %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["port_source"] != "default" || runtimeContract["healthcheck_path_source"] != "default" {
+		t.Fatalf("runtime_contract = %#v, want default port and healthcheck sources", runtimeContract)
+	}
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 2 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want shared init port and healthcheck hints", hints)
+	}
+}
+
+func TestInitRuntimeContractUsesSelectedEnvironmentOverlay(t *testing.T) {
+	t.Parallel()
+
+	root := makeRubyRoot(t, "ShopApp")
+	healthcheckPath := config.DefaultHealthcheckPath
+	healthcheckPort := config.DefaultWebPort
+	project := config.DefaultProjectConfig("default", "ShopApp", "production")
+	project.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {
+			Services: map[string]config.ServiceConfigOverlay{
+				"web": {
+					Ports: []config.ServicePort{{Name: "http", Port: config.DefaultWebPort}},
+					Healthcheck: &config.HTTPHealthcheckOverlay{
+						Path: &healthcheckPath,
+						Port: &healthcheckPort,
+					},
+				},
+			},
+		},
+	}
+	if _, err := config.Write(root, project); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	app := newTestApp(t, root, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/organizations":
+			return jsonResponse(t, map[string]any{"organizations": []map[string]any{{"id": 7, "name": "default", "role": "owner"}}}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects":
+			return jsonResponse(t, map[string]any{"projects": []map[string]any{{"id": 11, "name": "ShopApp"}}}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cli/projects/11/environments":
+			return jsonResponse(t, map[string]any{"environments": []map[string]any{
+				{"id": 44, "name": "production"},
+				{"id": 45, "name": "staging"},
+			}}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	}))
+	var stdout bytes.Buffer
+	app.Printer = output.New(&stdout, io.Discard)
+
+	if err := app.Init(context.Background(), InitOptions{Environment: "staging", NonInteractive: true}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["environment_name"] != "staging" {
+		t.Fatalf("environment_name = %#v, want staging", payload["environment_name"])
+	}
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["port"] != float64(config.DefaultWebPort) || runtimeContract["healthcheck_path"] != config.DefaultHealthcheckPath || runtimeContract["healthcheck_port"] != float64(config.DefaultWebPort) {
+		t.Fatalf("runtime_contract = %#v, want selected environment overlay default port/healthcheck", runtimeContract)
+	}
+	if runtimeContract["port_source"] != "config" || runtimeContract["healthcheck_path_source"] != "config" {
+		t.Fatalf("runtime_contract = %#v, want explicit default overlay values reported as config", runtimeContract)
+	}
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 0 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want no hints for explicit overlay config", hints)
 	}
 }
 

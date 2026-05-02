@@ -7656,9 +7656,51 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 	if runtimeContract["healthcheck_path"] != config.DefaultHealthcheckPath || runtimeContract["healthcheck_port"] != float64(3000) {
 		t.Fatalf("runtime_contract healthcheck = %#v, want %s on port 3000", runtimeContract, config.DefaultHealthcheckPath)
 	}
+	if runtimeContract["port_confidence"] != "low" || runtimeContract["healthcheck_path_source"] != "default" || runtimeContract["healthcheck_confidence"] != "low" {
+		t.Fatalf("runtime_contract confidence/source = %#v, want low-confidence default port and healthcheck path", runtimeContract)
+	}
 	requirement := stringValueAny(runtimeContract["requirement"])
 	if !strings.Contains(requirement, "EXPOSE") || !strings.Contains(requirement, "devopsellence.yml") {
 		t.Fatalf("runtime_contract.requirement = %q, want Dockerfile/config guidance", requirement)
+	}
+	hints := jsonArrayFromMap(t, runtimeContract, "agent_hints")
+	if len(hints) != 2 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want port and healthcheck hints", hints)
+	}
+	portHint := jsonMapFromAny(t, hints[0])
+	if portHint["action"] != "inspect_app_port" || portHint["config_fields"] == nil {
+		t.Fatalf("port agent hint = %#v, want inspect_app_port with config fields", portHint)
+	}
+	healthHint := jsonMapFromAny(t, hints[1])
+	if healthHint["action"] != "inspect_healthcheck_path" || healthHint["config_fields"] == nil {
+		t.Fatalf("healthcheck agent hint = %#v, want inspect_healthcheck_path with config fields", healthHint)
+	}
+}
+
+func TestSoloInitReportsExplicitDefaultConfigContract(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["port_source"] != "config" || runtimeContract["port_confidence"] != "high" || runtimeContract["healthcheck_path_source"] != "config" || runtimeContract["healthcheck_confidence"] != "high" {
+		t.Fatalf("runtime_contract = %#v, want explicit default config to be high-confidence", runtimeContract)
+	}
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 0 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want none for explicit default config", hints)
 	}
 }
 
@@ -7693,6 +7735,12 @@ func TestSoloInitReportsConfigPortContract(t *testing.T) {
 	}
 	if runtimeContract["healthcheck_path"] != "/health" || runtimeContract["healthcheck_port"] != float64(8080) {
 		t.Fatalf("runtime_contract healthcheck = %#v, want /health on port 8080", runtimeContract)
+	}
+	if runtimeContract["port_confidence"] != "high" || runtimeContract["healthcheck_path_source"] != "config" || runtimeContract["healthcheck_confidence"] != "high" {
+		t.Fatalf("runtime_contract confidence/source = %#v, want high-confidence configured port and healthcheck", runtimeContract)
+	}
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 0 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want none for explicit config", hints)
 	}
 }
 
@@ -7754,6 +7802,17 @@ func TestSoloInitReportsDockerfileInferredPortContract(t *testing.T) {
 	}
 	if runtimeContract["healthcheck_port"] != float64(80) {
 		t.Fatalf("runtime_contract.healthcheck_port = %#v, want 80", runtimeContract["healthcheck_port"])
+	}
+	if runtimeContract["port_confidence"] != "high" || runtimeContract["healthcheck_path_source"] != "default" || runtimeContract["healthcheck_confidence"] != "low" {
+		t.Fatalf("runtime_contract confidence/source = %#v, want dockerfile port with low-confidence default healthcheck", runtimeContract)
+	}
+	hints := jsonArrayFromMap(t, runtimeContract, "agent_hints")
+	if len(hints) != 1 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want healthcheck hint only", hints)
+	}
+	healthHint := jsonMapFromAny(t, hints[0])
+	if healthHint["action"] != "inspect_healthcheck_path" {
+		t.Fatalf("healthcheck agent hint = %#v, want inspect_healthcheck_path", healthHint)
 	}
 }
 

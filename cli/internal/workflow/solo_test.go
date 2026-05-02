@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1672,6 +1674,39 @@ func TestIngressDNSReportIncludesPublicURLsAndReadyNextSteps(t *testing.T) {
 	}
 	if len(report.NextSteps) != 2 || report.NextSteps[0] != "devopsellence status" || report.NextSteps[1] != "curl https://127.0.0.1/" {
 		t.Fatalf("next_steps = %#v, want status and curl", report.NextSteps)
+	}
+}
+
+func TestDefaultIngressTLSProbeDoesNotFollowRedirects(t *testing.T) {
+	redirectTargetHit := false
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirectTargetHit = true
+	}))
+	defer redirectTarget.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirectTarget.URL, http.StatusFound)
+	}))
+	defer server.Close()
+
+	result := defaultIngressTLSProbe(context.Background(), server.URL)
+	if !result.OK || result.StatusCode != http.StatusFound || result.Error != "" {
+		t.Fatalf("defaultIngressTLSProbe() = %#v, want redirect response accepted without following it", result)
+	}
+	if redirectTargetHit {
+		t.Fatal("defaultIngressTLSProbe followed redirect target; want original ingress host only")
+	}
+}
+
+func TestDefaultIngressTLSProbeAcceptsServerErrorResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "warming up", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	result := defaultIngressTLSProbe(context.Background(), server.URL)
+	if !result.OK || result.StatusCode != http.StatusServiceUnavailable || result.Error != "" {
+		t.Fatalf("defaultIngressTLSProbe() = %#v, want any completed HTTP response to prove readiness", result)
 	}
 }
 

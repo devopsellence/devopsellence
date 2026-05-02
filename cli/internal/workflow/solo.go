@@ -6034,18 +6034,18 @@ func defaultIngressTLSProbe(ctx context.Context, publicURL string) ingressTLSPro
 	if err != nil {
 		return ingressTLSProbeResult{Error: err.Error()}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return ingressTLSProbeResult{Error: err.Error()}
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	ok := resp.StatusCode >= 200 && resp.StatusCode < 500
-	result := ingressTLSProbeResult{OK: ok, StatusCode: resp.StatusCode}
-	if !ok {
-		result.Error = fmt.Sprintf("HTTPS probe returned status %d", resp.StatusCode)
-	}
-	return result
+	return ingressTLSProbeResult{OK: true, StatusCode: resp.StatusCode}
 }
 
 func webNodeIPs(cfg *config.ProjectConfig, selected map[string]config.Node) []string {

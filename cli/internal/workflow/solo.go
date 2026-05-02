@@ -576,6 +576,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return err
 	}
 
+	runtimeVerified := soloDeployRuntimeVerified(false, false)
 	payload := map[string]any{
 		"release_id":              release.ID,
 		"deployment_id":           deployment.ID,
@@ -585,12 +586,15 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
-		"runtime_verified":        soloDeployRuntimeVerified(false, false),
+		"runtime_verified":        runtimeVerified,
 	}
 	if urls := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
 		payload["public_urls"] = urls
-		ingressProbeVerified := ingressRequiresTLSReadiness(cfg)
-		payload["runtime_verified"] = soloDeployRuntimeVerified(ingressProbeVerified, ingressProbeVerified)
+		if ingressRequiresTLSReadiness(cfg) {
+			// soloVerifiedPublicURLs only returns TLS-required URLs after a persisted ingress readiness probe.
+			runtimeVerified["endpoint_probe"] = true
+			runtimeVerified["tls"] = true
+		}
 		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + urls[0]}, soloNodeLogNextSteps(environmentName, nodes)...)
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls

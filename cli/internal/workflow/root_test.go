@@ -116,6 +116,23 @@ func TestInitModeFlagPersistsWorkspaceModeAndWritesConfig(t *testing.T) {
 	}
 }
 
+func TestRootSoloSupportBundleHelpDocumentsEnvironmentResolution(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"support", "bundle", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	help := stdout.String()
+	want := "Environment resolution uses --env first, then DEVOPSELLENCE_ENVIRONMENT, then the saved workspace environment, then the project default environment."
+	if !strings.Contains(help, want) {
+		t.Fatalf("help = %q, want environment resolution text %q", help, want)
+	}
+}
+
 func TestRootSoloContextEnvListDoesNotRequireAuth(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cwd := rootTestWorkspaceWithMode(t, ModeSolo)

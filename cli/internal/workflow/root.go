@@ -1183,7 +1183,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	supportBundleCommand := &cobra.Command{
 		Use:   "bundle",
 		Short: "Write a redacted solo support bundle JSON file",
-		Long:  "Write a redacted solo support bundle JSON file. Environment resolution uses --env first, then DEVOPSELLENCE_ENVIRONMENT, then the project default environment.",
+		Long:  "Write a redacted solo support bundle JSON file. Environment resolution uses --env first, then DEVOPSELLENCE_ENVIRONMENT, then the saved workspace environment, then the project default environment.",
 		RunE: runSoloOnly("support bundle", func(ctx context.Context) error {
 			return app.SoloSupportBundle(ctx, supportBundleOpts)
 		}),

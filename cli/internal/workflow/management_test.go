@@ -71,14 +71,14 @@ func TestInitRuntimeContractUsesSelectedEnvironmentOverlay(t *testing.T) {
 	t.Parallel()
 
 	root := makeRubyRoot(t, "ShopApp")
-	healthcheckPath := "/healthz"
-	healthcheckPort := 8080
+	healthcheckPath := config.DefaultHealthcheckPath
+	healthcheckPort := config.DefaultWebPort
 	project := config.DefaultProjectConfig("default", "ShopApp", "production")
 	project.Environments = map[string]config.EnvironmentOverlay{
 		"staging": {
 			Services: map[string]config.ServiceConfigOverlay{
 				"web": {
-					Ports: []config.ServicePort{{Name: "http", Port: 8080}},
+					Ports: []config.ServicePort{{Name: "http", Port: config.DefaultWebPort}},
 					Healthcheck: &config.HTTPHealthcheckOverlay{
 						Path: &healthcheckPath,
 						Port: &healthcheckPort,
@@ -119,8 +119,11 @@ func TestInitRuntimeContractUsesSelectedEnvironmentOverlay(t *testing.T) {
 		t.Fatalf("environment_name = %#v, want staging", payload["environment_name"])
 	}
 	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
-	if runtimeContract["port"] != float64(8080) || runtimeContract["healthcheck_path"] != "/healthz" || runtimeContract["healthcheck_port"] != float64(8080) {
-		t.Fatalf("runtime_contract = %#v, want selected environment overlay port/healthcheck", runtimeContract)
+	if runtimeContract["port"] != float64(config.DefaultWebPort) || runtimeContract["healthcheck_path"] != config.DefaultHealthcheckPath || runtimeContract["healthcheck_port"] != float64(config.DefaultWebPort) {
+		t.Fatalf("runtime_contract = %#v, want selected environment overlay default port/healthcheck", runtimeContract)
+	}
+	if runtimeContract["port_source"] != "config" || runtimeContract["healthcheck_path_source"] != "config" {
+		t.Fatalf("runtime_contract = %#v, want explicit default overlay values reported as config", runtimeContract)
 	}
 	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 0 {
 		t.Fatalf("runtime_contract.agent_hints = %#v, want no hints for explicit overlay config", hints)

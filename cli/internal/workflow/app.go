@@ -568,7 +568,7 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 			"environment_created":  initialized.CreatedEnv,
 			"config_path":          initialized.ConfigPath,
 			"project_slug":         initialized.Discovered.ProjectSlug,
-			"runtime_contract":     initRuntimeContract(resolvedConfig, initialized.Discovered, initialized.CreatedConfig),
+			"runtime_contract":     initRuntimeContract(resolvedConfig, initialized.Discovered, initRuntimeContractProvenance(initialized.Config, resolvedConfig, initialized.Environment.Name, initialized.CreatedConfig)),
 			"config":               initialized.Config,
 		}
 		return nil

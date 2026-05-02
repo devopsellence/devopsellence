@@ -4915,6 +4915,10 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 	}
 	configPath := a.ConfigStore.PathFor(discovered.WorkspaceRoot)
 	environmentName := soloEnvironmentName(cfg, "")
+	resolvedCfg, err := config.ResolveEnvironmentConfig(*cfg, environmentName)
+	if err != nil {
+		return err
+	}
 	ready := false
 	if a.SoloState != nil {
 		current, stateErr := a.readSoloState()
@@ -4951,7 +4955,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"mode":             string(ModeSolo),
 		"workspace_root":   discovered.WorkspaceRoot,
 		"project_slug":     discovered.ProjectSlug,
-		"runtime_contract": initRuntimeContract(*cfg, discovered, created),
+		"runtime_contract": initRuntimeContract(resolvedCfg, discovered, initRuntimeContractProvenance(*cfg, resolvedCfg, environmentName, created)),
 		"config": map[string]any{
 			"path":           configPath,
 			"created":        created,
@@ -4965,7 +4969,53 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 	})
 }
 
-func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, created bool) map[string]any {
+type runtimeContractProvenance struct {
+	Created                 bool
+	PortExplicit            bool
+	HealthcheckPathExplicit bool
+}
+
+func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.ProjectConfig, environmentName string, created bool) runtimeContractProvenance {
+	provenance := runtimeContractProvenance{Created: created}
+	serviceName, ok := resolved.PrimaryWebServiceName()
+	if !ok || created {
+		return provenance
+	}
+	if baseService, ok := base.Services[serviceName]; ok {
+		provenance.PortExplicit = hasHTTPPortConfig(baseService.Ports)
+		provenance.HealthcheckPathExplicit = hasHealthcheckPathConfig(baseService.Healthcheck)
+	}
+	envName := strings.TrimSpace(environmentName)
+	if envName == "" {
+		envName = strings.TrimSpace(base.DefaultEnvironment)
+	}
+	if overlay, ok := base.Environments[envName]; ok {
+		if serviceOverlay, ok := overlay.Services[serviceName]; ok {
+			provenance.PortExplicit = provenance.PortExplicit || hasHTTPPortConfig(serviceOverlay.Ports)
+			provenance.HealthcheckPathExplicit = provenance.HealthcheckPathExplicit || hasHealthcheckPathOverlayConfig(serviceOverlay.Healthcheck)
+		}
+	}
+	return provenance
+}
+
+func hasHTTPPortConfig(ports []config.ServicePort) bool {
+	for _, port := range ports {
+		if strings.TrimSpace(port.Name) == "http" && port.Port > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
+	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != ""
+}
+
+func hasHealthcheckPathOverlayConfig(healthcheck *config.HTTPHealthcheckOverlay) bool {
+	return healthcheck != nil && healthcheck.Path != nil && strings.TrimSpace(*healthcheck.Path) != ""
+}
+
+func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, provenance runtimeContractProvenance) map[string]any {
 	serviceName, ok := cfg.PrimaryWebServiceName()
 	if !ok {
 		return map[string]any{
@@ -4980,7 +5030,7 @@ func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, 
 	portSource := "default"
 	portConfidence := "low"
 	switch {
-	case !created && port != config.DefaultWebPort:
+	case provenance.PortExplicit:
 		portSource = "config"
 		portConfidence = "high"
 	case discovered.InferredWebPort > 0 && port == discovered.InferredWebPort:
@@ -5000,10 +5050,9 @@ func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, 
 		"agent_hints":     []map[string]any{},
 	}
 	if service.Healthcheck != nil {
-		healthcheckPath := strings.TrimSpace(service.Healthcheck.Path)
 		healthcheckPathSource := "default"
 		healthcheckConfidence := "low"
-		if healthcheckPath != config.DefaultHealthcheckPath {
+		if provenance.HealthcheckPathExplicit {
 			healthcheckPathSource = "config"
 			healthcheckConfidence = "high"
 		}
@@ -5021,7 +5070,7 @@ func initRuntimeAgentHints(serviceName string, contract map[string]any) []map[st
 	if contract["port_source"] == "default" {
 		hints = append(hints, map[string]any{
 			"action": "inspect_app_port",
-			"reason": "No Dockerfile EXPOSE directive or image-exposed port was found, so devopsellence used its default web port.",
+			"reason": "No Dockerfile EXPOSE directive was found, so devopsellence used its default web port.",
 			"instructions": []string{
 				"Inspect framework files, package scripts, server bind/listen code, and PORT defaults.",
 				"If the app listens on a different port, update devopsellence.yml before deploying.",

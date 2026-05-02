@@ -7522,7 +7522,7 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 	}
 }
 
-func TestSoloInitKeepsGeneratedDefaultsLowConfidenceOnRerun(t *testing.T) {
+func TestSoloInitReportsExplicitDefaultConfigContract(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
@@ -7541,17 +7541,11 @@ func TestSoloInitKeepsGeneratedDefaultsLowConfidenceOnRerun(t *testing.T) {
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
-	if runtimeContract["port_source"] != "default" || runtimeContract["port_confidence"] != "low" || runtimeContract["healthcheck_path_source"] != "default" || runtimeContract["healthcheck_confidence"] != "low" {
-		t.Fatalf("runtime_contract = %#v, want generated defaults to remain low-confidence on rerun", runtimeContract)
+	if runtimeContract["port_source"] != "config" || runtimeContract["port_confidence"] != "high" || runtimeContract["healthcheck_path_source"] != "config" || runtimeContract["healthcheck_confidence"] != "high" {
+		t.Fatalf("runtime_contract = %#v, want explicit default config to be high-confidence", runtimeContract)
 	}
-	hints := jsonArrayFromMap(t, runtimeContract, "agent_hints")
-	if len(hints) != 2 {
-		t.Fatalf("runtime_contract.agent_hints = %#v, want port and healthcheck hints", hints)
-	}
-	portHint := jsonMapFromAny(t, hints[0])
-	fields := jsonArrayFromMap(t, portHint, "config_fields")
-	if len(fields) == 0 || fields[0] != "services.web.ports[http].port" {
-		t.Fatalf("port hint config_fields = %#v, want schema-addressable http port field", fields)
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 0 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want none for explicit default config", hints)
 	}
 }
 

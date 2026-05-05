@@ -2304,8 +2304,9 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
+	rollbackContract := soloRollbackContract(currentRelease, selected)
 	if opts.DryRun {
-		return stream.Result(map[string]any{
+		result := map[string]any{
 			"action":            "rollback",
 			"dry_run":           true,
 			"release_id":        selected.ID,
@@ -2322,7 +2323,11 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 				"state_write": false,
 			},
 			"next_steps": []string{"devopsellence release rollback" + soloEnvFlag(environmentName) + " " + selected.ID},
-		})
+		}
+		if rollbackContract != nil {
+			result["rollback_contract"] = rollbackContract
+		}
+		return stream.Result(result)
 	}
 	now := time.Now().UTC()
 	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
@@ -2397,7 +2402,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	return stream.Result(map[string]any{
+	result := map[string]any{
 		"release_id":              selected.ID,
 		"deployment_id":           deployment.ID,
 		"rolled_back_from":        currentRelease.ID,
@@ -2406,7 +2411,29 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
-	})
+	}
+	if rollbackContract != nil {
+		result["rollback_contract"] = rollbackContract
+	}
+	return stream.Result(result)
+}
+
+func soloRollbackContract(currentRelease, selectedRelease corerelease.Release) map[string]any {
+	selectedTask := selectedRelease.Snapshot.ReleaseTask != nil
+	currentTask := currentRelease.Snapshot.ReleaseTask != nil
+	if !selectedTask && !currentTask {
+		return nil
+	}
+	return map[string]any{
+		"data_rollback_automatic":       false,
+		"selected_release_task":         selectedTask,
+		"current_release_task":          currentTask,
+		"selected_release_task_reruns":  selectedTask,
+		"message":                       "rollback republishes selected desired state; devopsellence does not reverse database or data migrations",
+		"operator_responsibility":       "verify data compatibility before rollback; restore from backup if the current migration is not backward-compatible",
+		"recommended_dry_run_first":     true,
+		"recommended_backup_before_run": true,
+	}
 }
 
 func soloReadyPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {

@@ -6574,6 +6574,40 @@ func TestSoloReleaseRollbackDryRunPlansWithoutSideEffects(t *testing.T) {
 	}
 }
 
+func TestSoloReleaseRollbackReportsMigrationContract(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	current.Releases["rel-1"] = previous
+	active := current.Releases["rel-2"]
+	active.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:bbb2222", Command: []string{"bin/migrate"}}
+	current.Releases["rel-2"] = active
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	contract := jsonMapFromAny(t, payload["rollback_contract"])
+	if contract["data_rollback_automatic"] != false || contract["selected_release_task_reruns"] != true {
+		t.Fatalf("rollback_contract = %#v, want release task/data contract", contract)
+	}
+	if !strings.Contains(stringValueAny(contract["operator_responsibility"]), "backup") || !strings.Contains(stringValueAny(contract["message"]), "does not reverse") {
+		t.Fatalf("rollback_contract = %#v, want migration warning", contract)
+	}
+}
+
 func TestSoloReleaseRollbackUnknownSelectorSuggestsReleaseList(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")

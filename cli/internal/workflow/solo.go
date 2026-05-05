@@ -152,6 +152,12 @@ type SoloAgentInstallOptions struct {
 	BaseURL     string
 }
 
+type SoloAgentUpgradeOptions struct {
+	Node        string
+	AgentBinary string
+	BaseURL     string
+}
+
 type SoloAgentUninstallOptions struct {
 	Node          string
 	Yes           bool
@@ -3648,10 +3654,14 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 		payload["next_steps"] = []string{fmt.Sprintf("ssh -p %d %s true", node.Port, shellQuote(node.User+"@"+node.Host))}
 		return a.printSoloDiagnoseResult(payload, diagnoseOK)
 	}
+	agentVersion := collectRemoteText(ctx, node, remoteAgentVersionCommand())
 	agent := map[string]any{
-		"active": collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent"),
-		"status": collectRemoteLines(ctx, node, remoteSystemctlStatusCommand("devopsellence-agent", 40)),
+		"active":         collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent"),
+		"status":         collectRemoteLines(ctx, node, remoteSystemctlStatusCommand("devopsellence-agent", 40)),
+		"version":        agentVersion,
+		"target_version": soloAgentTargetVersion(),
 	}
+	agent["version_status"] = soloAgentVersionStatus(stringFromMap(agentVersion, "value"), stringFromAny(agent["target_version"]))
 	payload["agent"] = agent
 	dockerSnapshot := map[string]any{
 		"containers": collectRemoteJSONLines(ctx, node, remoteDockerPSJSONCommand(), soloDiagnoseDockerItemLimit),
@@ -3799,6 +3809,46 @@ type soloSecurityCheck struct {
 	Severity   string
 	Observed   string
 	NextAction string
+}
+
+func soloAgentVersionCheck(ctx context.Context, node config.Node) soloSecurityCheck {
+	target := soloAgentTargetVersion()
+	diag := runRemoteDiagnostic(ctx, node, remoteAgentVersionCommand())
+	check := soloSecurityCheck{Name: "agent_version", OK: true}
+	if diag.Err != nil || diag.ExitCode != 0 {
+		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		return check
+	}
+	observed := strings.TrimSpace(diag.Stdout)
+	if observed == "" {
+		check.Observed = "unknown: agent version not reported"
+		return check
+	}
+	check.Observed = observed
+	if soloAgentVersionStatus(observed, target) == "mismatch" {
+		check.OK = false
+		check.NextAction = "run devopsellence agent upgrade <node>"
+	}
+	return check
+}
+
+func soloAgentTargetVersion() string {
+	return releasedAgentVersionForInstall()
+}
+
+func soloAgentVersionStatus(observed, target string) string {
+	observed = strings.TrimSpace(observed)
+	target = strings.TrimSpace(target)
+	if observed == "" || observed == "missing" || strings.HasPrefix(observed, "unknown:") {
+		return "unknown"
+	}
+	if target == "" {
+		return "target_unknown"
+	}
+	if strings.Contains(observed, target) {
+		return "current"
+	}
+	return "mismatch"
 }
 
 func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node) map[string]any {
@@ -4339,6 +4389,38 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 
 }
 
+func (a *App) SoloAgentUpgrade(ctx context.Context, opts SoloAgentUpgradeOptions) error {
+	current, err := a.readSoloState()
+	if err != nil {
+		return err
+	}
+	node, ok := current.Nodes[opts.Node]
+	if !ok {
+		return fmt.Errorf("node %q not found", opts.Node)
+	}
+
+	before := stringFromMap(collectRemoteText(ctx, node, remoteAgentVersionCommand()), "value")
+	reporter := newSoloAgentReporter(a.Printer, opts.Node, "devopsellence agent upgrade")
+	defer reporter.Close()
+	if err := installSoloAgent(ctx, node, SoloAgentInstallOptions{
+		Node:        opts.Node,
+		AgentBinary: opts.AgentBinary,
+		BaseURL:     opts.BaseURL,
+	}, reporter); err != nil {
+		return err
+	}
+	after := stringFromMap(collectRemoteText(ctx, node, remoteAgentVersionCommand()), "value")
+	target := soloAgentTargetVersion()
+	return a.Printer.PrintResultEvent("devopsellence agent upgrade", map[string]any{
+		"node":             opts.Node,
+		"action":           "upgraded",
+		"previous_version": before,
+		"agent_version":    after,
+		"target_version":   target,
+		"version_status":   soloAgentVersionStatus(after, target),
+	})
+}
+
 func (a *App) SoloAgentUninstall(ctx context.Context, opts SoloAgentUninstallOptions) error {
 	if !opts.Yes {
 		return ExitError{Code: 2, Err: errors.New("agent uninstall requires --yes; rerun with --yes to confirm remote cleanup")}
@@ -4423,6 +4505,20 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			}
 			results = append(results, result)
 		}
+		versionCheck := soloAgentVersionCheck(ctx, node)
+		versionResult := map[string]any{
+			"node":   name,
+			"check":  "agent_version",
+			"ok":     versionCheck.OK,
+			"detail": versionCheck.Observed,
+		}
+		if versionCheck.NextAction != "" {
+			versionResult["next_action"] = versionCheck.NextAction
+		}
+		if !versionCheck.OK {
+			failed = true
+		}
+		results = append(results, versionResult)
 		for _, check := range soloNodeSecurityChecks(ctx, node) {
 			result := map[string]any{
 				"node":     name,
@@ -7490,6 +7586,10 @@ func withRemoteLineLimit(command string, limit int) string {
 
 func remoteListeningPortsCommand() string {
 	return withRemoteLineLimit("if command -v ss >/dev/null 2>&1; then ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi", soloDiagnosePortsLineLimit)
+}
+
+func remoteAgentVersionCommand() string {
+	return "if command -v devopsellence-agent >/dev/null 2>&1; then devopsellence-agent --version; elif [ -x /usr/local/bin/devopsellence-agent ]; then /usr/local/bin/devopsellence-agent --version; else echo missing; fi"
 }
 
 func remoteSSHPasswordAuthCommand() string {

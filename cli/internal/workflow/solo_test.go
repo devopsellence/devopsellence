@@ -2356,6 +2356,58 @@ func TestSoloDoctorReportsSecurityFindings(t *testing.T) {
 	t.Fatalf("runtime_checks = %#v, want security_ssh_password_auth", checks)
 }
 
+func TestSoloDoctorReportsAgentVersionSkew(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v1.9.0 (commit old, built earlier)")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want version skew failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "agent_version" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["next_action"]), "agent upgrade") {
+				t.Fatalf("agent_version = %#v, want upgrade guidance", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want agent_version", checks)
+}
+
 func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -3672,6 +3724,11 @@ func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
 	if len(items) != 1 || jsonMapFromAny(t, items[0])["Names"] != "svc-production-web" {
 		t.Fatalf("containers = %#v, want web container", containers)
 	}
+	agent := jsonMapFromAny(t, payload["agent"])
+	agentVersion := jsonMapFromAny(t, agent["version"])
+	if !strings.Contains(stringValueAny(agentVersion["value"]), "devopsellence dev") || agent["version_status"] != "target_unknown" {
+		t.Fatalf("agent = %#v, want remote version with unknown dev target", agent)
+	}
 	status := jsonMapFromAny(t, payload["status"])
 	if status["phase"] != "settled" {
 		t.Fatalf("status = %#v, want settled phase", status)
@@ -3846,6 +3903,43 @@ func TestSoloAgentUninstallRejectsUnsafeStateDir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsafe devopsellence agent state dir") {
 		t.Fatalf("error = %q, want unsafe state dir", err.Error())
+	}
+}
+
+func TestSoloAgentUpgradeReinstallsAgent(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v2.0.0 (commit new, built now)")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentUpgrade(context.Background(), SoloAgentUpgradeOptions{Node: "node-a", BaseURL: "https://example.test"}); err != nil {
+		t.Fatalf("SoloAgentUpgrade() error = %v", err)
+	}
+	payload := lastNDJSONEvent(t, &stdout)
+	if payload["action"] != "upgraded" || payload["target_version"] != "v2.0.0" || payload["version_status"] != "current" {
+		t.Fatalf("payload = %#v, want upgraded current agent", payload)
+	}
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read install script: %v", err)
+	}
+	if !strings.Contains(string(scriptBytes), "AGENT_VERSION='v2.0.0'") {
+		t.Fatalf("install script missing pinned version:\n%s", string(scriptBytes))
 	}
 }
 
@@ -8272,6 +8366,12 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"systemctl
   exit 0
 fi
 
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"devopsellence-agent --version"* ]]; then
+  agent_version="${DEVOPSELLENCE_FAKE_AGENT_VERSION:-devopsellence dev (commit unknown, built unknown)}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$agent_version"
+  exit 0
+fi
+
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && ( "$command" == *"ss -ltn"* || "$command" == *"netstat -ltn"* ) ]]; then
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nLISTEN 0 4096 0.0.0.0:80 0.0.0.0:*\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
@@ -8288,6 +8388,11 @@ fi
 
 if [[ "$command" == *"systemctl status"* ]]; then
   printf 'devopsellence-agent active\n'
+  exit 0
+fi
+
+if [[ "$command" == *"devopsellence-agent --version"* ]]; then
+  printf '%s\n' "${DEVOPSELLENCE_FAKE_AGENT_VERSION:-devopsellence dev (commit unknown, built unknown)}"
   exit 0
 fi
 

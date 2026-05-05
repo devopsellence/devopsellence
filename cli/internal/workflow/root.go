@@ -1132,6 +1132,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(execCommand)
 
 	var agentInstallOpts SoloAgentInstallOptions
+	var agentUpgradeOpts SoloAgentUpgradeOptions
 	var agentUninstallOpts SoloAgentUninstallOptions
 	agentCommand := &cobra.Command{
 		Use:   "agent",
@@ -1154,6 +1155,23 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	agentInstallCommand.Flags().StringVar(&agentInstallOpts.AgentBinary, "agent-binary", "", "Local agent binary to upload instead of downloading")
 	agentInstallCommand.Flags().StringVar(&agentInstallOpts.BaseURL, "base-url", "", "Agent download base URL")
+	agentUpgradeCommand := &cobra.Command{
+		Use:   "upgrade <name>",
+		Short: "Upgrade the agent on a solo node",
+		Long: strings.Join([]string{
+			"Upgrade the agent on a solo node over SSH.",
+			"This reinstalls the agent binary and systemd service using the same release source as agent install.",
+		}, "\n"),
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			agentUpgradeOpts.Node = args[0]
+			return runSoloOnly("agent upgrade", func(ctx context.Context) error {
+				return app.SoloAgentUpgrade(ctx, agentUpgradeOpts)
+			})(cmd, args)
+		},
+	}
+	agentUpgradeCommand.Flags().StringVar(&agentUpgradeOpts.AgentBinary, "agent-binary", "", "Local agent binary to upload instead of downloading")
+	agentUpgradeCommand.Flags().StringVar(&agentUpgradeOpts.BaseURL, "base-url", "", "Agent download base URL")
 	agentUninstallCommand := &cobra.Command{
 		Use:   "uninstall <name>",
 		Short: "Uninstall the solo agent from a node",
@@ -1172,7 +1190,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	agentUninstallCommand.Flags().BoolVar(&agentUninstallOpts.Yes, "yes", false, "Confirm agent uninstall and cleanup")
 	agentUninstallCommand.Flags().BoolVar(&agentUninstallOpts.KeepWorkloads, "keep-workloads", false, "Stop and remove the agent but leave workloads and agent state on the node")
-	agentCommand.AddCommand(agentInstallCommand, agentUninstallCommand)
+	agentCommand.AddCommand(agentInstallCommand, agentUpgradeCommand, agentUninstallCommand)
 	root.AddCommand(agentCommand)
 
 	var supportBundleOpts SoloSupportBundleOptions

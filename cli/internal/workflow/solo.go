@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -4982,8 +4983,9 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 		return provenance
 	}
 	if baseService, ok := base.Services[serviceName]; ok {
-		provenance.PortExplicit = hasNonDefaultHTTPPortConfig(baseService.Ports)
-		provenance.HealthcheckPathExplicit = hasNonDefaultHealthcheckPathConfig(baseService.Healthcheck)
+		baseLooksGenerated := looksLikeGeneratedDefaultConfig(base)
+		provenance.PortExplicit = hasHTTPPortConfig(baseService.Ports) && !baseLooksGenerated
+		provenance.HealthcheckPathExplicit = hasHealthcheckPathConfig(baseService.Healthcheck) && !baseLooksGenerated
 	}
 	envName := strings.TrimSpace(environmentName)
 	if envName == "" {
@@ -4998,15 +5000,6 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 	return provenance
 }
 
-func hasNonDefaultHTTPPortConfig(ports []config.ServicePort) bool {
-	for _, port := range ports {
-		if strings.TrimSpace(port.Name) == "http" && port.Port > 0 && port.Port != config.DefaultWebPort {
-			return true
-		}
-	}
-	return false
-}
-
 func hasHTTPPortConfig(ports []config.ServicePort) bool {
 	for _, port := range ports {
 		if strings.TrimSpace(port.Name) == "http" && port.Port > 0 {
@@ -5016,8 +5009,13 @@ func hasHTTPPortConfig(ports []config.ServicePort) bool {
 	return false
 }
 
-func hasNonDefaultHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
-	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != "" && strings.TrimSpace(healthcheck.Path) != config.DefaultHealthcheckPath
+func hasHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
+	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != ""
+}
+
+func looksLikeGeneratedDefaultConfig(cfg config.ProjectConfig) bool {
+	defaultCfg := config.DefaultProjectConfig(cfg.Organization, cfg.Project, cfg.DefaultEnvironment)
+	return reflect.DeepEqual(cfg, defaultCfg)
 }
 
 func hasHealthcheckPathOverlayConfig(healthcheck *config.HTTPHealthcheckOverlay) bool {

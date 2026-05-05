@@ -453,6 +453,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 			"environment":       environmentName,
 			"nodes":             sortedNodeNames(nodes),
 			"phase":             "planned",
+			"rollout_contract":  soloDeployRolloutContract(cfg),
 			"side_effects": map[string]bool{
 				"build":       false,
 				"ssh":         false,
@@ -592,6 +593,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
+		"rollout_contract":        soloDeployRolloutContract(cfg),
 		"runtime_verified":        runtimeVerified,
 	}
 	if urls, endpointProbeVerified, tlsVerified := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
@@ -619,6 +621,32 @@ func soloDeployRuntimeVerified(endpointProbe, tls bool) map[string]any {
 		"endpoint_probe":         endpointProbe,
 		"tls":                    tls,
 	}
+}
+
+func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
+	if cfg == nil {
+		return nil
+	}
+	contracts := []map[string]any{}
+	for _, serviceName := range cfg.ServiceNames() {
+		service := cfg.Services[serviceName]
+		kind := config.InferredServiceKind(serviceName, service)
+		item := map[string]any{
+			"service": serviceName,
+			"kind":    kind,
+		}
+		if kind == config.ServiceKindWeb {
+			item["strategy"] = "health_gated_cutover"
+			item["health_gated"] = true
+			item["operator_note"] = "web traffic moves after the replacement passes its healthcheck"
+		} else {
+			item["strategy"] = "stop_old_before_start_new"
+			item["health_gated"] = false
+			item["operator_note"] = "non-web services are restarted without concurrent old/new overlap"
+		}
+		contracts = append(contracts, item)
+	}
+	return contracts
 }
 
 func validateNodeSchedule(cfg *config.ProjectConfig, nodes map[string]config.Node) (string, error) {

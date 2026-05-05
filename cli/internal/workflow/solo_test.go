@@ -1156,6 +1156,7 @@ func TestSoloAffectedNodesForNodeWithReleaseStateSkipsStatelessAttachments(t *te
 func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["worker"] = config.ServiceConfig{Command: []string{"bin/worker"}}
 	cfg.Ingress = &config.IngressConfig{
 		Hosts: []string{"*"},
 		Rules: []config.IngressRuleConfig{{
@@ -1213,6 +1214,7 @@ func TestSoloStatusUsesResolvedEnvironmentOverlay(t *testing.T) {
 	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["worker"] = config.ServiceConfig{Command: []string{"bin/worker"}}
 	cfg.Ingress = &config.IngressConfig{
 		Hosts: []string{"prod.example.com"},
 		Rules: []config.IngressRuleConfig{{
@@ -4973,6 +4975,7 @@ func secretRefsContain(refs []config.SecretRef, name string) bool {
 func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["worker"] = config.ServiceConfig{Command: []string{"bin/worker"}}
 	cfg.Ingress = &config.IngressConfig{
 		Hosts: []string{"*"},
 		Rules: []config.IngressRuleConfig{{
@@ -4989,7 +4992,7 @@ func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
 		Nodes: map[string]config.Node{
-			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}},
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole, config.DefaultWorkerRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
 		Snapshots:   map[string]desiredstate.DeploySnapshot{},
@@ -5025,6 +5028,15 @@ func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	}
 	if payload["release_id"] != nil || payload["deployment_id"] != nil || payload["desired_state_revisions"] != nil {
 		t.Fatalf("payload = %#v, dry-run must not create release/deployment/publication revisions", payload)
+	}
+	contracts := jsonArrayFromMap(t, payload, "rollout_contract")
+	byService := map[string]map[string]any{}
+	for _, item := range contracts {
+		contract := jsonMapFromAny(t, item)
+		byService[stringValueAny(contract["service"])] = contract
+	}
+	if byService["web"]["strategy"] != "health_gated_cutover" || byService["worker"]["strategy"] != "stop_old_before_start_new" {
+		t.Fatalf("rollout_contract = %#v, want web health-gated and worker stop/start", contracts)
 	}
 }
 

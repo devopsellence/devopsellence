@@ -111,6 +111,14 @@ The CLI and control plane should stay thin relative to the core.
 
 Product surfaces matter, but they should not redefine the deploy model.
 
+### CI boundary
+
+Solo mode is for a single operator or agent working from a trusted workstation or admin box. It should be non-interactive, scriptable, structured, and recoverable, but it is not the primary CI/CD surface.
+
+Shared mode should own CI deploys. CI introduces registry auth, digest policy, CI secret handling, deploy locks, provenance, audit trails, and the question of who pushed what. Those concerns fit shared-mode product state and hosted coordination. Adding them deeply to solo weakens the solo/shared boundary and removes one of shared mode's clearest reasons to exist.
+
+Solo should therefore avoid CI-oriented shortcuts such as making `deploy --image` a default production path unless there is a deliberate product decision to expand solo's scope. If solo needs better production reliability, prefer improvements that preserve the single-operator model: dry-run plans, stronger local image identity, interrupted-deploy recovery, richer diagnostics, rollback clarity, and agent upgrade visibility.
+
 ## System shape
 
 The intended shape is:

@@ -2300,6 +2300,62 @@ func TestSoloDoctorScopesRuntimeChecksToCurrentEnvironment(t *testing.T) {
 	}
 }
 
+func TestSoloDoctorReportsSecurityFindings(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want security finding failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %#v, want false", payload["ok"])
+	}
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "security_ssh_password_auth" {
+			if check["ok"] != false || check["severity"] != "high" || !strings.Contains(stringValueAny(check["detail"]), "yes") {
+				t.Fatalf("security_ssh_password_auth = %#v, want high severity finding", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want security_ssh_password_auth", checks)
+}
+
 func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -3619,6 +3675,61 @@ func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
 	status := jsonMapFromAny(t, payload["status"])
 	if status["phase"] != "settled" {
 		t.Fatalf("status = %#v, want settled phase", status)
+	}
+	security := jsonMapFromAny(t, payload["security"])
+	if security["ok"] != true {
+		t.Fatalf("security = %#v, want ok", security)
+	}
+	securityChecks := jsonArrayFromMap(t, security, "checks")
+	if len(securityChecks) != 6 {
+		t.Fatalf("security checks = %#v, want baseline hardening checks", securityChecks)
+	}
+}
+
+func TestSoloNodeDiagnoseReportsSecurityFindings(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloNodeDiagnose() error = nil, want security finding failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %#v, want false", payload["ok"])
+	}
+	security := jsonMapFromAny(t, payload["security"])
+	if security["ok"] != false {
+		t.Fatalf("security = %#v, want not ok", security)
+	}
+	checks := jsonArrayFromMap(t, security, "checks")
+	findings := map[string]map[string]any{}
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		findings[stringValueAny(check["name"])] = check
+	}
+	if findings["ssh_password_auth"]["ok"] != false || !strings.Contains(stringValueAny(findings["ssh_password_auth"]["observed"]), "yes") {
+		t.Fatalf("ssh_password_auth = %#v, want disabled finding", findings["ssh_password_auth"])
+	}
+	if findings["docker_socket_mounts"]["ok"] != false || !strings.Contains(stringValueAny(findings["docker_socket_mounts"]["observed"]), "/var/run/docker.sock") {
+		t.Fatalf("docker_socket_mounts = %#v, want socket finding", findings["docker_socket_mounts"])
 	}
 }
 
@@ -8087,7 +8198,7 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"journalct
   exit 0
 fi
 
-if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ps -a"* ]]; then
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ps -a --format"* ]]; then
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi
@@ -8102,7 +8213,37 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ne
   exit 0
 fi
 
-if [[ "$command" == *"docker ps -a"* ]]; then
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"sshd -T"* ]]; then
+  password_auth="${DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH:-no}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$password_auth"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nmissing\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n755 root root /var/lib/devopsellence\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *"Mounts"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /var/run/docker.sock:/var/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
+  else
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web app_storage:/app/storage\n__DEVOPSELLENCE_STDERR__\n'
+  fi
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *".HostConfig.Privileged"* ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web false\n__DEVOPSELLENCE_STDERR__\n'
+  exit 0
+fi
+
+if [[ "$command" == *"docker ps -a --format"* ]]; then
   printf '{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n'
   exit 0
 fi

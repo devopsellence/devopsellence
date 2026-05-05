@@ -5353,6 +5353,14 @@ func TestSoloStatusComparesRemoteStatusToPublishedDesiredStateRevision(t *testin
 	if status["revision"] != "desired-state-hash" {
 		t.Fatalf("node = %#v, want published desired-state revision accepted", node)
 	}
+	currentRelease := jsonMapFromAny(t, payload["current_release"])
+	if currentRelease["id"] != release.ID || currentRelease["revision"] != "shortsha" || currentRelease["image"] != "demo:shortsha" {
+		t.Fatalf("current_release = %#v, want local release metadata", currentRelease)
+	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_test" || currentDeployment["status"] != corerelease.DeploymentStatusFailed || intValueAny(currentDeployment["sequence"]) != 1 {
+		t.Fatalf("current_deployment = %#v, want latest deployment metadata", currentDeployment)
+	}
 }
 
 func TestSoloStatusAcceptsExpectedRevisionWhenStatusTimePredatesLocalDeploymentClock(t *testing.T) {

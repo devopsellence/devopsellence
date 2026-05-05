@@ -2021,6 +2021,12 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		"environment":    environmentName,
 		"nodes":          jsonResults,
 	}
+	if hasCurrent {
+		payload["current_release"] = soloStatusReleasePayload(currentRelease)
+		if deployment, ok := soloLatestDeploymentForRelease(current, environmentID, currentRelease.ID); ok {
+			payload["current_deployment"] = soloStatusDeploymentPayload(deployment)
+		}
+	}
 	if len(verifiedPublicURLs) > 0 {
 		if allSettled {
 			payload["public_urls"] = verifiedPublicURLs
@@ -2065,14 +2071,35 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	return nil
 }
 
-func soloRecoverSettledRunningDeployment(current solo.State, environmentID, releaseID string) (corerelease.Deployment, solo.State, bool) {
-	if strings.TrimSpace(environmentID) == "" || strings.TrimSpace(releaseID) == "" {
-		return corerelease.Deployment{}, current, false
+func soloStatusReleasePayload(release corerelease.Release) map[string]any {
+	return map[string]any{
+		"id":           release.ID,
+		"revision":     release.Revision,
+		"image":        release.Image.Reference,
+		"created_at":   release.CreatedAt,
+		"target_nodes": release.TargetNodeIDs,
 	}
+}
+
+func soloStatusDeploymentPayload(deployment corerelease.Deployment) map[string]any {
+	return map[string]any{
+		"id":             deployment.ID,
+		"release_id":     deployment.ReleaseID,
+		"kind":           deployment.Kind,
+		"status":         deployment.Status,
+		"status_message": deployment.StatusMessage,
+		"sequence":       deployment.Sequence,
+		"created_at":     deployment.CreatedAt,
+		"finished_at":    deployment.FinishedAt,
+		"target_nodes":   deployment.TargetNodeIDs,
+	}
+}
+
+func soloLatestDeploymentForRelease(current solo.State, environmentID, releaseID string) (corerelease.Deployment, bool) {
 	var selected corerelease.Deployment
 	found := false
 	for _, deployment := range current.Deployments {
-		if deployment.EnvironmentID != environmentID || deployment.ReleaseID != releaseID || deployment.Status != corerelease.DeploymentStatusRunning {
+		if deployment.EnvironmentID != environmentID || deployment.ReleaseID != releaseID {
 			continue
 		}
 		if !found || deployment.Sequence > selected.Sequence || (deployment.Sequence == selected.Sequence && deployment.CreatedAt > selected.CreatedAt) {
@@ -2080,7 +2107,15 @@ func soloRecoverSettledRunningDeployment(current solo.State, environmentID, rele
 			found = true
 		}
 	}
-	if !found {
+	return selected, found
+}
+
+func soloRecoverSettledRunningDeployment(current solo.State, environmentID, releaseID string) (corerelease.Deployment, solo.State, bool) {
+	if strings.TrimSpace(environmentID) == "" || strings.TrimSpace(releaseID) == "" {
+		return corerelease.Deployment{}, current, false
+	}
+	selected, ok := soloLatestDeploymentForRelease(current, environmentID, releaseID)
+	if !ok || selected.Status != corerelease.DeploymentStatusRunning {
 		return corerelease.Deployment{}, current, false
 	}
 	selected.Status = corerelease.DeploymentStatusSettled

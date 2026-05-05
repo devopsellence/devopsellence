@@ -3963,6 +3963,34 @@ func TestSoloAgentUpgradeReinstallsAgent(t *testing.T) {
 	}
 }
 
+func TestSoloAgentInstallReportsVerification(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v2.0.0 (commit new, built now)")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"}); err != nil {
+		t.Fatalf("SoloAgentInstall() error = %v", err)
+	}
+	payload := lastNDJSONEvent(t, &stdout)
+	if payload["action"] != "installed" || payload["target_version"] != "v2.0.0" || payload["version_status"] != "current" || payload["agent_active"] != true {
+		t.Fatalf("payload = %#v, want verified installed agent", payload)
+	}
+}
+
 func TestSoloAgentUninstallRunsCleanupScript(t *testing.T) {
 	binDir := t.TempDir()
 	scriptPath := filepath.Join(t.TempDir(), "uninstall.sh")

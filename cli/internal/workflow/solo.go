@@ -4544,7 +4544,17 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		return err
 	}
 
-	return a.Printer.PrintResultEvent("devopsellence agent install", map[string]any{"node": opts.Node, "action": "installed"})
+	agentVersion := stringFromMap(collectRemoteText(ctx, node, remoteAgentVersionCommand()), "value")
+	target := soloAgentTargetVersion()
+	active := collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent")
+	return a.Printer.PrintResultEvent("devopsellence agent install", map[string]any{
+		"node":           opts.Node,
+		"action":         "installed",
+		"agent_version":  agentVersion,
+		"target_version": target,
+		"version_status": soloAgentVersionStatus(agentVersion, target),
+		"agent_active":   stringFromMap(active, "value") == "active",
+	})
 
 }
 

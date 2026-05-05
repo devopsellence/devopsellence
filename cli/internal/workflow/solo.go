@@ -5079,7 +5079,7 @@ func initRuntimeAgentHints(serviceName string, contract map[string]any) []map[st
 	if contract["port_source"] == "default" {
 		hints = append(hints, map[string]any{
 			"action": "inspect_app_port",
-			"reason": "No Dockerfile EXPOSE directive was found, so devopsellence used its default web port.",
+			"reason": "devopsellence is using its default web port because no matching Dockerfile EXPOSE or non-default config value selected another port.",
 			"instructions": []string{
 				"Inspect framework files, package scripts, server bind/listen code, and PORT defaults.",
 				"If the app listens on a different port, update devopsellence.yml before deploying.",

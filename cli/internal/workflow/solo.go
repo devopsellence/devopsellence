@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -5011,9 +5012,10 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 		return provenance
 	}
 	provenance.ConfigFieldPrefix = fmt.Sprintf("services.%s", serviceName)
-	if baseService, ok := base.Services[serviceName]; ok {
-		provenance.PortExplicit = hasNonDefaultHTTPPortConfig(baseService.Ports)
-		provenance.HealthcheckPathExplicit = hasNonDefaultHealthcheckPathConfig(baseService.Healthcheck)
+	if baseService, ok := base.Services[serviceName]; ok && !isGeneratedDefaultBaseService(base, serviceName, baseService) {
+		nonRuntimeEdited := hasNonRuntimeBaseServiceEdits(base, serviceName, baseService)
+		provenance.PortExplicit = hasNonDefaultHTTPPortConfig(baseService.Ports) || (nonRuntimeEdited && hasHTTPPortConfig(baseService.Ports))
+		provenance.HealthcheckPathExplicit = hasNonDefaultHealthcheckPathConfig(baseService.Healthcheck) || (nonRuntimeEdited && hasHealthcheckPathConfig(baseService.Healthcheck))
 	}
 	envName := strings.TrimSpace(environmentName)
 	if envName == "" {
@@ -5021,12 +5023,31 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 	}
 	if overlay, ok := base.Environments[envName]; ok {
 		if serviceOverlay, ok := overlay.Services[serviceName]; ok {
-			provenance.ConfigFieldPrefix = fmt.Sprintf("environments.%s.services.%s", envName, serviceName)
-			provenance.PortExplicit = provenance.PortExplicit || hasHTTPPortConfig(serviceOverlay.Ports)
-			provenance.HealthcheckPathExplicit = provenance.HealthcheckPathExplicit || hasHealthcheckPathOverlayConfig(serviceOverlay.Healthcheck)
+			portExplicit := hasHTTPPortConfig(serviceOverlay.Ports)
+			healthcheckPathExplicit := hasHealthcheckPathOverlayConfig(serviceOverlay.Healthcheck)
+			if portExplicit || healthcheckPathExplicit {
+				provenance.ConfigFieldPrefix = fmt.Sprintf("environments.%s.services.%s", envName, serviceName)
+			}
+			provenance.PortExplicit = provenance.PortExplicit || portExplicit
+			provenance.HealthcheckPathExplicit = provenance.HealthcheckPathExplicit || healthcheckPathExplicit
 		}
 	}
 	return provenance
+}
+
+func isGeneratedDefaultBaseService(cfg config.ProjectConfig, serviceName string, service config.ServiceConfig) bool {
+	defaultService, ok := config.DefaultProjectConfig(cfg.Organization, cfg.Project, cfg.DefaultEnvironment).Services[serviceName]
+	return ok && reflect.DeepEqual(service, defaultService)
+}
+
+func hasNonRuntimeBaseServiceEdits(cfg config.ProjectConfig, serviceName string, service config.ServiceConfig) bool {
+	defaultService, ok := config.DefaultProjectConfig(cfg.Organization, cfg.Project, cfg.DefaultEnvironment).Services[serviceName]
+	if !ok {
+		return true
+	}
+	service.Ports = defaultService.Ports
+	service.Healthcheck = defaultService.Healthcheck
+	return !reflect.DeepEqual(service, defaultService)
 }
 
 func hasNonDefaultHTTPPortConfig(ports []config.ServicePort) bool {
@@ -5049,6 +5070,10 @@ func hasHTTPPortConfig(ports []config.ServicePort) bool {
 
 func hasNonDefaultHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
 	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != "" && strings.TrimSpace(healthcheck.Path) != config.DefaultHealthcheckPath
+}
+
+func hasHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
+	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != ""
 }
 
 func hasHealthcheckPathOverlayConfig(healthcheck *config.HTTPHealthcheckOverlay) bool {

@@ -7740,6 +7740,36 @@ func TestSoloInitKeepsGeneratedDefaultsLowConfidenceWithUnrelatedOverlay(t *test
 	}
 }
 
+func TestSoloInitTreatsEditedBaseDefaultRuntimeContractAsExplicit(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	web := cfg.Services["web"]
+	web.Env = map[string]string{"RAILS_ENV": "production"}
+	cfg.Services["web"] = web
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["port_source"] != "config" || runtimeContract["port_confidence"] != "high" || runtimeContract["healthcheck_path_source"] != "config" || runtimeContract["healthcheck_confidence"] != "high" {
+		t.Fatalf("runtime_contract = %#v, want edited base service default runtime contract values treated as explicit config", runtimeContract)
+	}
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 0 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want no hints for explicit base config", hints)
+	}
+}
+
 func TestSoloInitRuntimeContractTreatsBlankOverlayHealthcheckAsExplicitDefault(t *testing.T) {
 	base := config.DefaultProjectConfig("solo", "demo", "production")
 	web := base.Services["web"]

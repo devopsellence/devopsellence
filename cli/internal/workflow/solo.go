@@ -4982,8 +4982,8 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 		return provenance
 	}
 	if baseService, ok := base.Services[serviceName]; ok {
-		provenance.PortExplicit = hasHTTPPortConfig(baseService.Ports)
-		provenance.HealthcheckPathExplicit = hasHealthcheckPathConfig(baseService.Healthcheck)
+		provenance.PortExplicit = hasNonDefaultHTTPPortConfig(baseService.Ports)
+		provenance.HealthcheckPathExplicit = hasNonDefaultHealthcheckPathConfig(baseService.Healthcheck)
 	}
 	envName := strings.TrimSpace(environmentName)
 	if envName == "" {
@@ -4998,6 +4998,15 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 	return provenance
 }
 
+func hasNonDefaultHTTPPortConfig(ports []config.ServicePort) bool {
+	for _, port := range ports {
+		if strings.TrimSpace(port.Name) == "http" && port.Port > 0 && port.Port != config.DefaultWebPort {
+			return true
+		}
+	}
+	return false
+}
+
 func hasHTTPPortConfig(ports []config.ServicePort) bool {
 	for _, port := range ports {
 		if strings.TrimSpace(port.Name) == "http" && port.Port > 0 {
@@ -5007,8 +5016,8 @@ func hasHTTPPortConfig(ports []config.ServicePort) bool {
 	return false
 }
 
-func hasHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
-	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != ""
+func hasNonDefaultHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
+	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != "" && strings.TrimSpace(healthcheck.Path) != config.DefaultHealthcheckPath
 }
 
 func hasHealthcheckPathOverlayConfig(healthcheck *config.HTTPHealthcheckOverlay) bool {

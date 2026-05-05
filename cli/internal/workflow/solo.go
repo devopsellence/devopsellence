@@ -3671,7 +3671,8 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	payload["docker"] = dockerSnapshot
 	ports := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
 	payload["ports"] = ports
-	security := a.soloNodeSecurityDiagnostics(ctx, node)
+	portLines, _ := ports["lines"].([]string)
+	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines)
 	payload["security"] = security
 	if !diagnosticSectionsOK(agent, dockerSnapshot, ports) {
 		diagnoseOK = false
@@ -3851,20 +3852,20 @@ func soloAgentVersionStatus(observed, target string) string {
 	return "mismatch"
 }
 
-func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node) map[string]any {
-	checks := soloNodeSecurityChecks(ctx, node)
+func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string) map[string]any {
+	checks := soloNodeSecurityChecks(ctx, node, portLines)
 	items, ok := soloNodeSecurityCheckItems(checks)
 	return map[string]any{"ok": ok, "checks": items}
 }
 
-func soloNodeSecurityChecks(ctx context.Context, node config.Node) []soloSecurityCheck {
+func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string) []soloSecurityCheck {
 	return []soloSecurityCheck{
 		soloSSHPasswordAuthCheck(ctx, node),
 		soloAgentStatePermissionsCheck(ctx, node),
 		soloTLSKeyPermissionsCheck(ctx, node),
 		soloDockerSocketMountsCheck(ctx, node),
 		soloPrivilegedContainersCheck(ctx, node),
-		soloPublicListeningPortsCheck(ctx, node),
+		soloPublicListeningPortsCheck(ctx, node, portLines),
 	}
 }
 
@@ -3893,7 +3894,9 @@ func soloSSHPasswordAuthCheck(ctx context.Context, node config.Node) soloSecurit
 	diag := runRemoteDiagnostic(ctx, node, remoteSSHPasswordAuthCommand())
 	check := soloSecurityCheck{Name: "ssh_password_auth", OK: true, Severity: "high"}
 	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
 		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after SSH daemon configuration can be inspected"
 		return check
 	}
 	value := strings.ToLower(strings.TrimSpace(diag.Stdout))
@@ -3917,7 +3920,9 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 	diag := runRemoteDiagnostic(ctx, node, remoteStatPathCommand(stateDir))
 	check := soloSecurityCheck{Name: "agent_state_permissions", OK: true, Severity: "high"}
 	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
 		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after the agent state directory can be inspected"
 		return check
 	}
 	fields := strings.Fields(strings.TrimSpace(diag.Stdout))
@@ -3950,7 +3955,9 @@ func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecur
 	diag := runRemoteDiagnostic(ctx, node, remoteStatPathCommand(keyPath))
 	check := soloSecurityCheck{Name: "tls_key_permissions", OK: true, Severity: "high"}
 	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
 		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after the TLS key path can be inspected"
 		return check
 	}
 	fields := strings.Fields(strings.TrimSpace(diag.Stdout))
@@ -3975,7 +3982,9 @@ func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecu
 	diag := runRemoteDiagnostic(ctx, node, remoteManagedContainerMountsCommand())
 	check := soloSecurityCheck{Name: "docker_socket_mounts", OK: true, Severity: "critical"}
 	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
 		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after Docker can be inspected"
 		return check
 	}
 	lines := splitNonFinalEmptyLines(diag.Stdout)
@@ -3999,7 +4008,9 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 	diag := runRemoteDiagnostic(ctx, node, remoteManagedContainerPrivilegesCommand())
 	check := soloSecurityCheck{Name: "privileged_containers", OK: true, Severity: "critical"}
 	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
 		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after Docker can be inspected"
 		return check
 	}
 	offenders := []string{}
@@ -4019,14 +4030,19 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 	return check
 }
 
-func soloPublicListeningPortsCheck(ctx context.Context, node config.Node) soloSecurityCheck {
-	diag := runRemoteDiagnostic(ctx, node, remoteListeningPortsCommand())
+func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string) soloSecurityCheck {
 	check := soloSecurityCheck{Name: "public_listening_ports", OK: true, Severity: "medium"}
-	if diag.Err != nil || diag.ExitCode != 0 {
-		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
-		return check
+	if portLines == nil {
+		diag := runRemoteDiagnostic(ctx, node, remoteListeningPortsCommand())
+		if diag.Err != nil || diag.ExitCode != 0 {
+			check.OK = false
+			check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+			check.NextAction = "rerun devopsellence node diagnose after listening ports can be inspected"
+			return check
+		}
+		portLines = splitNonFinalEmptyLines(diag.Stdout)
 	}
-	ports := unexpectedPublicListeningPorts(splitNonFinalEmptyLines(diag.Stdout))
+	ports := unexpectedPublicListeningPorts(portLines)
 	if len(ports) > 0 {
 		check.OK = false
 		check.Observed = "unexpected public listening ports: " + strings.Join(ports, ", ")
@@ -4097,7 +4113,7 @@ func isPublicListenHost(host string) bool {
 	if ip == nil {
 		return false
 	}
-	return !ip.IsLoopback()
+	return ip.IsGlobalUnicast() && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast()
 }
 
 func soloCheckFailed(checks []map[string]any, name string) bool {
@@ -4519,7 +4535,7 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			failed = true
 		}
 		results = append(results, versionResult)
-		for _, check := range soloNodeSecurityChecks(ctx, node) {
+		for _, check := range soloNodeSecurityChecks(ctx, node, nil) {
 			result := map[string]any{
 				"node":     name,
 				"check":    "security_" + check.Name,

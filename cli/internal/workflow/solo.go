@@ -1904,10 +1904,16 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	staleRevisions := map[string]map[string]bool{}
 	expectedRuntimeEnvironment := ""
 	expectedWorkloadRevision := ""
+	var current solo.State
+	var environmentID string
+	var currentRelease corerelease.Release
+	var hasCurrent bool
 	if workspaceRoot != "" && environmentName != "" {
-		current, stateErr := a.readSoloState()
+		var stateErr error
+		current, stateErr = a.readSoloState()
 		if stateErr == nil {
-			_, currentRelease, hasCurrent, releaseErr := current.CurrentRelease(workspaceRoot, environmentName)
+			var releaseErr error
+			environmentID, currentRelease, hasCurrent, releaseErr = current.CurrentRelease(workspaceRoot, environmentName)
 			if releaseErr != nil {
 				return releaseErr
 			}
@@ -2027,6 +2033,20 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
 		payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
 	}
+	if allSettled && hasCurrent && len(opts.Nodes) == 0 {
+		recovered, recoveredState, ok := soloRecoverSettledRunningDeployment(current, environmentID, currentRelease.ID)
+		if ok {
+			if err := a.writeSoloState(recoveredState); err != nil {
+				return err
+			}
+			payload["recovered_deployment"] = map[string]any{
+				"id":             recovered.ID,
+				"release_id":     recovered.ReleaseID,
+				"status":         recovered.Status,
+				"status_message": recovered.StatusMessage,
+			}
+		}
+	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
 		return err
 	}
@@ -2043,6 +2063,33 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		return ExitError{Code: 1, Err: RenderedError{Err: fmt.Errorf("status missing for current local deployment on %d node(s)", missingStatuses)}}
 	}
 	return nil
+}
+
+func soloRecoverSettledRunningDeployment(current solo.State, environmentID, releaseID string) (corerelease.Deployment, solo.State, bool) {
+	if strings.TrimSpace(environmentID) == "" || strings.TrimSpace(releaseID) == "" {
+		return corerelease.Deployment{}, current, false
+	}
+	var selected corerelease.Deployment
+	found := false
+	for _, deployment := range current.Deployments {
+		if deployment.EnvironmentID != environmentID || deployment.ReleaseID != releaseID || deployment.Status != corerelease.DeploymentStatusRunning {
+			continue
+		}
+		if !found || deployment.Sequence > selected.Sequence || (deployment.Sequence == selected.Sequence && deployment.CreatedAt > selected.CreatedAt) {
+			selected = deployment
+			found = true
+		}
+	}
+	if !found {
+		return corerelease.Deployment{}, current, false
+	}
+	selected.Status = corerelease.DeploymentStatusSettled
+	selected.StatusMessage = "release settled by status recovery"
+	selected.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := current.SaveDeployment(selected); err != nil {
+		return corerelease.Deployment{}, current, false
+	}
+	return selected, current, true
 }
 
 func soloStatusMismatchMessage(status soloNodeStatus, expectedDesiredStateRevision string, runtime soloRuntimeStatusResult, expectedRuntimeEnvironment, expectedWorkloadRevision, logicalEnvironment string) string {

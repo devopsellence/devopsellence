@@ -2300,6 +2300,13 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
+	_, attachment, _, err := current.Attachment(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	if _, err := releaseNodeForSnapshot(selected.Snapshot, attachment, current.Nodes); err != nil {
+		return err
+	}
 	nodes, err := a.resolveNodes(current, rollbackTargetNodeNames)
 	if err != nil {
 		return err

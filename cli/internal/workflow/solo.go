@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -5012,10 +5011,9 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 		return provenance
 	}
 	provenance.ConfigFieldPrefix = fmt.Sprintf("services.%s", serviceName)
-	if baseService, ok := base.Services[serviceName]; ok && !isGeneratedDefaultBaseService(base, serviceName, baseService) {
-		nonRuntimeEdited := hasNonRuntimeBaseServiceEdits(base, serviceName, baseService)
-		provenance.PortExplicit = hasNonDefaultHTTPPortConfig(baseService.Ports) || (nonRuntimeEdited && hasHTTPPortConfig(baseService.Ports))
-		provenance.HealthcheckPathExplicit = hasNonDefaultHealthcheckPathConfig(baseService.Healthcheck) || (nonRuntimeEdited && hasHealthcheckPathConfig(baseService.Healthcheck))
+	if baseService, ok := base.Services[serviceName]; ok {
+		provenance.PortExplicit = hasNonDefaultHTTPPortConfig(baseService.Ports)
+		provenance.HealthcheckPathExplicit = hasNonDefaultHealthcheckPathConfig(baseService.Healthcheck)
 	}
 	envName := strings.TrimSpace(environmentName)
 	if envName == "" {
@@ -5033,21 +5031,6 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 		}
 	}
 	return provenance
-}
-
-func isGeneratedDefaultBaseService(cfg config.ProjectConfig, serviceName string, service config.ServiceConfig) bool {
-	defaultService, ok := config.DefaultProjectConfig(cfg.Organization, cfg.Project, cfg.DefaultEnvironment).Services[serviceName]
-	return ok && reflect.DeepEqual(service, defaultService)
-}
-
-func hasNonRuntimeBaseServiceEdits(cfg config.ProjectConfig, serviceName string, service config.ServiceConfig) bool {
-	defaultService, ok := config.DefaultProjectConfig(cfg.Organization, cfg.Project, cfg.DefaultEnvironment).Services[serviceName]
-	if !ok {
-		return true
-	}
-	service.Ports = defaultService.Ports
-	service.Healthcheck = defaultService.Healthcheck
-	return !reflect.DeepEqual(service, defaultService)
 }
 
 func hasNonDefaultHTTPPortConfig(ports []config.ServicePort) bool {

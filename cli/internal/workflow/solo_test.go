@@ -7740,7 +7740,7 @@ func TestSoloInitKeepsGeneratedDefaultsLowConfidenceWithUnrelatedOverlay(t *test
 	}
 }
 
-func TestSoloInitTreatsEditedBaseDefaultRuntimeContractAsExplicit(t *testing.T) {
+func TestSoloInitKeepsEditedBaseDefaultRuntimeContractLowConfidence(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	web := cfg.Services["web"]
@@ -7762,11 +7762,11 @@ func TestSoloInitTreatsEditedBaseDefaultRuntimeContractAsExplicit(t *testing.T) 
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
-	if runtimeContract["port_source"] != "config" || runtimeContract["port_confidence"] != "high" || runtimeContract["healthcheck_path_source"] != "config" || runtimeContract["healthcheck_confidence"] != "high" {
-		t.Fatalf("runtime_contract = %#v, want edited base service default runtime contract values treated as explicit config", runtimeContract)
+	if runtimeContract["port_source"] != "default" || runtimeContract["port_confidence"] != "low" || runtimeContract["healthcheck_path_source"] != "default" || runtimeContract["healthcheck_confidence"] != "low" {
+		t.Fatalf("runtime_contract = %#v, want unrelated base service edits to keep default runtime contract values low confidence", runtimeContract)
 	}
-	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 0 {
-		t.Fatalf("runtime_contract.agent_hints = %#v, want no hints for explicit base config", hints)
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 2 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want port and healthcheck hints for generated/default runtime fields", hints)
 	}
 }
 

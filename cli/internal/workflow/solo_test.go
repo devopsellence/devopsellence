@@ -7704,7 +7704,7 @@ func TestSoloInitKeepsGeneratedDefaultConfigContractLowConfidence(t *testing.T) 
 	}
 }
 
-func TestSoloInitKeepsBaseDefaultRuntimeContractExplicitWithUnrelatedOverlay(t *testing.T) {
+func TestSoloInitKeepsGeneratedDefaultsLowConfidenceWithUnrelatedOverlay(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Environments = map[string]config.EnvironmentOverlay{
@@ -7732,11 +7732,11 @@ func TestSoloInitKeepsBaseDefaultRuntimeContractExplicitWithUnrelatedOverlay(t *
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
-	if runtimeContract["port_source"] != "config" || runtimeContract["port_confidence"] != "high" || runtimeContract["healthcheck_path_source"] != "config" || runtimeContract["healthcheck_confidence"] != "high" {
-		t.Fatalf("runtime_contract = %#v, want base default runtime contract values treated as explicit config with unrelated overlay", runtimeContract)
+	if runtimeContract["port_source"] != "default" || runtimeContract["port_confidence"] != "low" || runtimeContract["healthcheck_path_source"] != "default" || runtimeContract["healthcheck_confidence"] != "low" {
+		t.Fatalf("runtime_contract = %#v, want generated base defaults to stay low-confidence with unrelated overlay", runtimeContract)
 	}
-	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 0 {
-		t.Fatalf("runtime_contract.agent_hints = %#v, want no hints for explicit base config", hints)
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 2 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want default config hints", hints)
 	}
 }
 

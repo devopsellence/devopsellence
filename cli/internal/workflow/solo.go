@@ -2347,6 +2347,13 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
+	_, attachment, _, err := current.Attachment(workspaceRoot, environmentName)
+	if err != nil {
+		return err
+	}
+	if _, err := releaseNodeForSnapshot(selected.Snapshot, attachment, current.Nodes); err != nil {
+		return err
+	}
 	nodes, err := a.resolveNodes(current, rollbackTargetNodeNames)
 	if err != nil {
 		return err
@@ -3886,10 +3893,16 @@ type soloSecurityCheck struct {
 	NextAction string
 }
 
-func soloAgentVersionCheck(ctx context.Context, node config.Node) soloSecurityCheck {
+type soloRuntimeCheck struct {
+	OK         bool
+	Observed   string
+	NextAction string
+}
+
+func soloAgentVersionCheck(ctx context.Context, node config.Node) soloRuntimeCheck {
 	target := soloAgentTargetVersion()
 	diag := runRemoteDiagnostic(ctx, node, remoteAgentVersionCommand())
-	check := soloSecurityCheck{Name: "agent_version", OK: true}
+	check := soloRuntimeCheck{OK: true}
 	if diag.Err != nil || diag.ExitCode != 0 {
 		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
 		return check
@@ -3920,10 +3933,31 @@ func soloAgentVersionStatus(observed, target string) string {
 	if target == "" {
 		return "target_unknown"
 	}
-	if strings.Contains(observed, target) {
+	if soloAgentObservedVersion(observed) == target {
 		return "current"
 	}
 	return "mismatch"
+}
+
+func soloAgentObservedVersion(observed string) string {
+	fields := strings.Fields(strings.TrimSpace(observed))
+	for idx, field := range fields {
+		field = strings.Trim(field, "(),")
+		if field == "devopsellence" && idx+1 < len(fields) {
+			candidate := strings.Trim(fields[idx+1], "(),")
+			if releaseVersionPattern.MatchString(candidate) {
+				return candidate
+			}
+		}
+		if strings.HasPrefix(field, "devopsellence-agent/") {
+			candidate := strings.TrimPrefix(field, "devopsellence-agent/")
+			candidate = strings.Trim(candidate, "(),")
+			if releaseVersionPattern.MatchString(candidate) {
+				return candidate
+			}
+		}
+	}
+	return ""
 }
 
 func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string) map[string]any {

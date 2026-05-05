@@ -3904,18 +3904,26 @@ func soloAgentVersionCheck(ctx context.Context, node config.Node) soloRuntimeChe
 	diag := runRemoteDiagnostic(ctx, node, remoteAgentVersionCommand())
 	check := soloRuntimeCheck{OK: true}
 	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
 		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "run devopsellence node diagnose <node>"
 		return check
 	}
 	observed := strings.TrimSpace(diag.Stdout)
 	if observed == "" {
+		check.OK = false
 		check.Observed = "unknown: agent version not reported"
+		check.NextAction = "run devopsellence node diagnose <node>"
 		return check
 	}
 	check.Observed = observed
-	if soloAgentVersionStatus(observed, target) == "mismatch" {
+	switch soloAgentVersionStatus(observed, target) {
+	case "mismatch":
 		check.OK = false
 		check.NextAction = "run devopsellence agent upgrade <node>"
+	case "unknown":
+		check.OK = false
+		check.NextAction = "run devopsellence node diagnose <node>"
 	}
 	return check
 }
@@ -4523,7 +4531,8 @@ func (a *App) SoloAgentUpgrade(ctx context.Context, opts SoloAgentUpgradeOptions
 		return fmt.Errorf("node %q not found", opts.Node)
 	}
 
-	before := stringFromMap(collectRemoteText(ctx, node, remoteAgentVersionCommand()), "value")
+	beforeResult := collectRemoteText(ctx, node, remoteAgentVersionCommand())
+	before := stringFromMap(beforeResult, "value")
 	reporter := newSoloAgentReporter(a.Printer, opts.Node, "devopsellence agent upgrade")
 	defer reporter.Close()
 	if err := installSoloAgent(ctx, node, SoloAgentInstallOptions{
@@ -4533,16 +4542,34 @@ func (a *App) SoloAgentUpgrade(ctx context.Context, opts SoloAgentUpgradeOptions
 	}, reporter); err != nil {
 		return err
 	}
-	after := stringFromMap(collectRemoteText(ctx, node, remoteAgentVersionCommand()), "value")
+	afterResult := collectRemoteText(ctx, node, remoteAgentVersionCommand())
+	after := stringFromMap(afterResult, "value")
+	if afterResult["ok"] != true || strings.TrimSpace(after) == "" {
+		return fmt.Errorf("agent upgrade verification failed: %s", collectRemoteTextFailure(afterResult))
+	}
 	target := soloAgentTargetVersion()
-	return a.Printer.PrintResultEvent("devopsellence agent upgrade", map[string]any{
+	payload := map[string]any{
 		"node":             opts.Node,
 		"action":           "upgraded",
 		"previous_version": before,
 		"agent_version":    after,
 		"target_version":   target,
 		"version_status":   soloAgentVersionStatus(after, target),
-	})
+	}
+	if beforeResult["ok"] != true {
+		payload["previous_version_probe"] = beforeResult
+	}
+	return a.Printer.PrintResultEvent("devopsellence agent upgrade", payload)
+}
+
+func collectRemoteTextFailure(result map[string]any) string {
+	if message := stringFromMap(result, "error"); message != "" {
+		return message
+	}
+	if stringFromMap(result, "value") == "" {
+		return "remote command returned empty output"
+	}
+	return "remote command failed"
 }
 
 func (a *App) SoloAgentUninstall(ctx context.Context, opts SoloAgentUninstallOptions) error {

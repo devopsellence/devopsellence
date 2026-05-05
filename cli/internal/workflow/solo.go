@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -4999,6 +5000,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 
 type runtimeContractProvenance struct {
 	Created                 bool
+	GeneratedDefault        bool
 	PortExplicit            bool
 	HealthcheckPathExplicit bool
 	ConfigFieldPrefix       string
@@ -5010,8 +5012,9 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 	if !ok || created {
 		return provenance
 	}
+	provenance.GeneratedDefault = isGeneratedDefaultProjectConfig(base)
 	provenance.ConfigFieldPrefix = fmt.Sprintf("services.%s", serviceName)
-	if baseService, ok := base.Services[serviceName]; ok {
+	if baseService, ok := base.Services[serviceName]; ok && !provenance.GeneratedDefault {
 		provenance.PortExplicit = hasHTTPPortConfig(baseService.Ports)
 		provenance.HealthcheckPathExplicit = hasHealthcheckPathConfig(baseService.Healthcheck)
 	}
@@ -5027,6 +5030,10 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 		}
 	}
 	return provenance
+}
+
+func isGeneratedDefaultProjectConfig(cfg config.ProjectConfig) bool {
+	return reflect.DeepEqual(cfg, config.DefaultProjectConfig(cfg.Organization, cfg.Project, cfg.DefaultEnvironment))
 }
 
 func hasHTTPPortConfig(ports []config.ServicePort) bool {

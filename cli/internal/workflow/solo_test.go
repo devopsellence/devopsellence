@@ -7510,6 +7510,24 @@ func TestReleasedAgentVersionForInstall(t *testing.T) {
 	}
 }
 
+func TestSoloAgentVersionStatusComparesExactObservedVersion(t *testing.T) {
+	cases := []struct {
+		observed string
+		target   string
+		want     string
+	}{
+		{observed: "devopsellence v1.2.3 (commit abc, built now)", target: "v1.2.3", want: "current"},
+		{observed: "devopsellence v1.2.30 (commit abc, built now)", target: "v1.2.3", want: "mismatch"},
+		{observed: "devopsellence v2.0.0-rc.1 (commit abc, built now)", target: "v2.0.0", want: "mismatch"},
+		{observed: "devopsellence-agent/v1.2.3 (linux; amd64)", target: "v1.2.3", want: "current"},
+	}
+	for _, tc := range cases {
+		if got := soloAgentVersionStatus(tc.observed, tc.target); got != tc.want {
+			t.Fatalf("soloAgentVersionStatus(%q, %q) = %q, want %q", tc.observed, tc.target, got, tc.want)
+		}
+	}
+}
+
 func TestRemoteDockerCommandsSupportPasswordlessSudo(t *testing.T) {
 	for _, command := range []string{remoteDockerCheckCommand(), remoteDockerLoadCommand()} {
 		if !strings.Contains(command, "sudo -n docker info") {

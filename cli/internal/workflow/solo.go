@@ -4999,7 +4999,6 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 
 type runtimeContractProvenance struct {
 	Created                 bool
-	GeneratedDefault        bool
 	PortExplicit            bool
 	HealthcheckPathExplicit bool
 	ConfigFieldPrefix       string
@@ -5013,11 +5012,8 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 	}
 	provenance.ConfigFieldPrefix = fmt.Sprintf("services.%s", serviceName)
 	if baseService, ok := base.Services[serviceName]; ok {
-		provenance.GeneratedDefault = hasGeneratedDefaultRuntimeContract(baseService)
-		if !provenance.GeneratedDefault {
-			provenance.PortExplicit = hasHTTPPortConfig(baseService.Ports)
-			provenance.HealthcheckPathExplicit = hasHealthcheckPathConfig(baseService.Healthcheck)
-		}
+		provenance.PortExplicit = hasNonDefaultHTTPPortConfig(baseService.Ports)
+		provenance.HealthcheckPathExplicit = hasNonDefaultHealthcheckPathConfig(baseService.Healthcheck)
 	}
 	envName := strings.TrimSpace(environmentName)
 	if envName == "" {
@@ -5033,15 +5029,13 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 	return provenance
 }
 
-func hasGeneratedDefaultRuntimeContract(service config.ServiceConfig) bool {
-	if len(service.Ports) != 1 {
-		return false
+func hasNonDefaultHTTPPortConfig(ports []config.ServicePort) bool {
+	for _, port := range ports {
+		if strings.TrimSpace(port.Name) == "http" && port.Port > 0 && port.Port != config.DefaultWebPort {
+			return true
+		}
 	}
-	port := service.Ports[0]
-	if strings.TrimSpace(port.Name) != "http" || port.Port != config.DefaultWebPort {
-		return false
-	}
-	return service.Healthcheck != nil && strings.TrimSpace(service.Healthcheck.Path) == config.DefaultHealthcheckPath && service.Healthcheck.Port == config.DefaultWebPort
+	return false
 }
 
 func hasHTTPPortConfig(ports []config.ServicePort) bool {
@@ -5053,8 +5047,8 @@ func hasHTTPPortConfig(ports []config.ServicePort) bool {
 	return false
 }
 
-func hasHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
-	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != ""
+func hasNonDefaultHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
+	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != "" && strings.TrimSpace(healthcheck.Path) != config.DefaultHealthcheckPath
 }
 
 func hasHealthcheckPathOverlayConfig(healthcheck *config.HTTPHealthcheckOverlay) bool {

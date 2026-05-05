@@ -7764,8 +7764,8 @@ func TestSoloInitRuntimeContractTreatsBlankOverlayHealthcheckAsExplicitDefault(t
 	if contract["healthcheck_path"] != config.DefaultHealthcheckPath || contract["healthcheck_path_source"] != "config" || contract["healthcheck_confidence"] != "high" {
 		t.Fatalf("runtime_contract = %#v, want blank overlay path treated as explicit default config", contract)
 	}
-	if hints, ok := contract["agent_hints"].([]map[string]any); !ok || len(hints) != 0 {
-		t.Fatalf("runtime_contract.agent_hints = %#v, want no hints for explicit blank overlay reset", contract["agent_hints"])
+	if hints, ok := contract["agent_hints"].([]map[string]any); !ok || len(hints) != 1 || hints[0]["action"] != "inspect_app_port" {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want only port hint for explicit blank overlay healthcheck reset", contract["agent_hints"])
 	}
 }
 

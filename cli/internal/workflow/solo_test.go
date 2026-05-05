@@ -3681,8 +3681,15 @@ func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
 		t.Fatalf("security = %#v, want ok", security)
 	}
 	securityChecks := jsonArrayFromMap(t, security, "checks")
-	if len(securityChecks) != 6 {
-		t.Fatalf("security checks = %#v, want baseline hardening checks", securityChecks)
+	securityNames := map[string]bool{}
+	for _, item := range securityChecks {
+		check := jsonMapFromAny(t, item)
+		securityNames[stringValueAny(check["name"])] = true
+	}
+	for _, want := range []string{"ssh_password_auth", "agent_state_permissions", "tls_key_permissions", "docker_socket_mounts", "privileged_containers", "public_listening_ports"} {
+		if !securityNames[want] {
+			t.Fatalf("security checks = %#v, missing %s", securityChecks, want)
+		}
 	}
 }
 
@@ -3730,6 +3737,19 @@ func TestSoloNodeDiagnoseReportsSecurityFindings(t *testing.T) {
 	}
 	if findings["docker_socket_mounts"]["ok"] != false || !strings.Contains(stringValueAny(findings["docker_socket_mounts"]["observed"]), "/var/run/docker.sock") {
 		t.Fatalf("docker_socket_mounts = %#v, want socket finding", findings["docker_socket_mounts"])
+	}
+}
+
+func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 10.0.0.5:5432 0.0.0.0:*",
+		"LISTEN 0 4096 192.168.1.10:6379 0.0.0.0:*",
+		"LISTEN 0 4096 127.0.0.1:9000 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines)
+	if !reflect.DeepEqual(ports, []string{"8080"}) {
+		t.Fatalf("unexpected ports = %#v, want only wildcard public port", ports)
 	}
 }
 

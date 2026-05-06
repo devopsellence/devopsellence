@@ -4013,7 +4013,7 @@ func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
 
 func TestUnexpectedPublicListeningPortsAllowsDevopsellenceACMEBackend(t *testing.T) {
 	lines := []string{
-		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=9))",
 		"LISTEN 0 4096 0.0.0.0:15981 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=10))",
 	}
 	ports := unexpectedPublicListeningPorts(lines, 22)
@@ -4021,8 +4021,18 @@ func TestUnexpectedPublicListeningPortsAllowsDevopsellenceACMEBackend(t *testing
 		t.Fatalf("unexpected ports = %#v, want only non-ACME devopsellence port flagged", ports)
 	}
 	details := expectedPublicListeningPortDetails(lines)
-	if len(details) != 1 || !strings.Contains(details[0], "ACME HTTP-01 backend") {
+	if len(details) != 1 || !strings.Contains(details[0], "ACME HTTP-01 listener") {
 		t.Fatalf("expected details = %#v, want ACME explanation", details)
+	}
+}
+
+func TestUnexpectedPublicListeningPortsFlagsACMEPortWithoutProcessMetadata(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 22)
+	if !reflect.DeepEqual(ports, []string{"15980"}) {
+		t.Fatalf("unexpected ports = %#v, want ACME port flagged without process metadata", ports)
 	}
 }
 

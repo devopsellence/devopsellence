@@ -53,18 +53,21 @@ func TestStateStoreWithLockSerializesCallers(t *testing.T) {
 	<-entered
 
 	var ran atomic.Bool
+	attempting := make(chan struct{})
 	blocked := make(chan error, 1)
 	go func() {
+		close(attempting)
 		blocked <- store.WithLock(func() error {
 			ran.Store(true)
 			return nil
 		})
 	}()
+	<-attempting
 
 	select {
 	case err := <-blocked:
 		t.Fatalf("second lock completed early: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(250 * time.Millisecond):
 	}
 	if ran.Load() {
 		t.Fatal("second lock callback ran before first lock released")

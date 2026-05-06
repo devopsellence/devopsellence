@@ -411,7 +411,7 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if opts.DryRun {
 		return a.soloDeploy(ctx, opts)
 	}
-	return a.withSoloStateLock(func() error {
+	return a.withSoloStateLockProgress("devopsellence deploy", func() error {
 		return a.soloDeploy(ctx, opts)
 	})
 }
@@ -1158,6 +1158,17 @@ func (a *App) withSoloStateLock(fn func() error) error {
 		return fmt.Errorf("solo state store is required")
 	}
 	return a.SoloState.WithLock(fn)
+}
+
+func (a *App) withSoloStateLockProgress(operation string, fn func() error) error {
+	if err := a.Printer.PrintEvent(output.EventProgress, map[string]any{
+		"operation": operation,
+		"step":      "state_lock_wait",
+		"message":   "Waiting for solo state lock...",
+	}); err != nil {
+		return err
+	}
+	return a.withSoloStateLock(fn)
 }
 
 func (a *App) writeSoloState(current solo.State) error {
@@ -2632,7 +2643,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if opts.DryRun {
 		return a.soloReleaseRollback(ctx, opts)
 	}
-	return a.withSoloStateLock(func() error {
+	return a.withSoloStateLockProgress("devopsellence release rollback", func() error {
 		return a.soloReleaseRollback(ctx, opts)
 	})
 }
@@ -4696,11 +4707,11 @@ func expectedPublicListeningPortDetails(lines []string) []string {
 	if !seenACME {
 		return nil
 	}
-	return []string{"15980 is the devopsellence ACME HTTP-01 backend reached through Envoy on port 80"}
+	return []string{"15980 is the devopsellence agent ACME HTTP-01 listener used for auto TLS challenges"}
 }
 
 func expectedDevopsellenceACMEListener(line, port string) bool {
-	return port == "15980"
+	return port == "15980" && strings.Contains(strings.ToLower(line), "devopsellence")
 }
 
 func publicPortsFromListeningLine(line string) []string {
@@ -8393,7 +8404,7 @@ func withRemoteLineLimit(command string, limit int) string {
 }
 
 func remoteListeningPortsCommand() string {
-	return withRemoteLineLimit("if command -v ss >/dev/null 2>&1; then ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi", soloDiagnosePortsLineLimit)
+	return withRemoteLineLimit("if command -v ss >/dev/null 2>&1; then sudo -n ss -ltnp || ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then sudo -n netstat -ltnp || netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi", soloDiagnosePortsLineLimit)
 }
 
 func remoteAgentVersionCommand() string {

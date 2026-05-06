@@ -152,11 +152,13 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			if err := app.SetMode(mode); err != nil {
 				return ExitError{Code: 1, Err: err}
 			}
-			return app.Printer.PrintJSON(map[string]any{
+			payload := map[string]any{
 				"schema_version": outputSchemaVersion,
 				"mode":           string(mode),
 				"workspace_key":  app.modeWorkspaceKey(),
-			})
+			}
+			app.addLocalStateMetadata(payload)
+			return app.Printer.PrintJSON(payload)
 		},
 	})
 	root.AddCommand(modeCommand)

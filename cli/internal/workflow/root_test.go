@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/devopsellence/cli/internal/solo"
+	"github.com/devopsellence/cli/internal/state"
 	cliversion "github.com/devopsellence/cli/internal/version"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
@@ -36,6 +37,32 @@ func TestRootVersionCommand(t *testing.T) {
 				t.Fatalf("version = %v, want non-empty string", payload["version"])
 			}
 		})
+	}
+}
+
+func TestRootModeUseIncludesLocalStateMetadata(t *testing.T) {
+	stateHome := filepath.Join(t.TempDir(), "devopsellence-state")
+	t.Setenv(state.HomeEnv, stateHome)
+	t.Setenv(state.FallbackHomeEnv, filepath.Join(t.TempDir(), "xdg-state"))
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"mode", "use", "solo"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["state_home_env"] != state.HomeEnv || payload["state_home_fallback_env"] != state.FallbackHomeEnv {
+		t.Fatalf("state env metadata = %#v", payload)
+	}
+	if payload["workspace_state_path"] != filepath.Join(stateHome, "devopsellence", "workspace.json") {
+		t.Fatalf("workspace_state_path = %#v", payload["workspace_state_path"])
+	}
+	if payload["solo_state_path"] != filepath.Join(stateHome, "devopsellence", "solo", "state.json") {
+		t.Fatalf("solo_state_path = %#v", payload["solo_state_path"])
 	}
 }
 

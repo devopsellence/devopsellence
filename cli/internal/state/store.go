@@ -11,18 +11,35 @@ type Store struct {
 	Path string
 }
 
+const (
+	HomeEnv         = "DEVOPSELLENCE_STATE_HOME"
+	FallbackHomeEnv = "XDG_STATE_HOME"
+)
+
 func New(path string) *Store {
 	return &Store{Path: path}
 }
 
-func DefaultPath(rel string) string {
-	base := os.Getenv("XDG_STATE_HOME")
+func DefaultHome() string {
+	base := os.Getenv(HomeEnv)
+	if base != "" {
+		return base
+	}
+	base = os.Getenv(FallbackHomeEnv)
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return rel
+			return ""
 		}
 		base = filepath.Join(home, ".local", "state")
+	}
+	return base
+}
+
+func DefaultPath(rel string) string {
+	base := DefaultHome()
+	if base == "" {
+		return rel
 	}
 	return filepath.Join(base, rel)
 }

@@ -3478,6 +3478,7 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 }
 
 func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) error {
+	nodeName := strings.TrimSpace(opts.Node)
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -3495,17 +3496,17 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 		return fmt.Errorf("environment %s has no attached nodes", environmentName)
 	}
 	next := cloneSoloState(current)
-	if _, changed, err := next.DetachNode(workspaceRoot, environmentName, opts.Node); err != nil {
+	if _, changed, err := next.DetachNode(workspaceRoot, environmentName, nodeName); err != nil {
 		return err
 	} else if !changed {
-		return fmt.Errorf("node %q is not attached to %s", opts.Node, environmentName)
+		return fmt.Errorf("node %q is not attached to %s", nodeName, environmentName)
 	}
-	if conflicts := soloNodeRemoteCleanupConflicts(next, opts.Node); len(conflicts) > 0 {
-		return ExitError{Code: 1, Err: fmt.Errorf("remote cleanup for node %q refused: %s. These node records point at the same provider target or SSH endpoint; use the attached node record or remove the stale duplicate before detaching so cleanup cannot remove unrelated workloads", opts.Node, strings.Join(conflicts, "; "))}
+	if conflicts := soloNodeRemoteCleanupConflicts(next, nodeName); len(conflicts) > 0 {
+		return ExitError{Code: 1, Err: fmt.Errorf("remote cleanup for node %q refused: %s. These node records point at the same provider target or SSH endpoint; use the attached node record or remove the stale duplicate before detaching so cleanup cannot remove unrelated workloads", nodeName, strings.Join(conflicts, "; "))}
 	}
 	remainingNodeNames := make([]string, 0, len(nodeNamesBefore))
 	for _, name := range nodeNamesBefore {
-		if name != opts.Node {
+		if name != nodeName {
 			remainingNodeNames = append(remainingNodeNames, name)
 		}
 	}
@@ -3515,8 +3516,8 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	}
 	warnings := []string{}
 	remoteCleanup := "published"
-	if _, err := a.republishNodes(ctx, next, []string{opts.Node}); err != nil {
-		if next.NodeHasAttachments(opts.Node) || !soloRepublishMissingAgentError(err) {
+	if _, err := a.republishNodes(ctx, next, []string{nodeName}); err != nil {
+		if next.NodeHasAttachments(nodeName) || !soloRepublishMissingAgentError(err) {
 			return err
 		}
 		remoteCleanup = "skipped_missing_agent"
@@ -3528,7 +3529,7 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 
 	payload := map[string]any{
 		"schema_version": outputSchemaVersion,
-		"node":           opts.Node,
+		"node":           nodeName,
 		"environment":    environmentName,
 		"changed":        true,
 		"remote_cleanup": remoteCleanup,

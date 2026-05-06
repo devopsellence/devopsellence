@@ -5139,6 +5139,49 @@ func TestSoloNodeDetachRepublishesEmptyDesiredStateForLastAttachment(t *testing.
 	}
 }
 
+func TestSoloNodeDetachTrimsNodeNameBeforeRepublish(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if _, err := config.Write(workspaceRoot, config.DefaultProjectConfig("solo", "app-a", "production")); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, nil)
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: " node-a "}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := decodeJSONOutput(t, &stdout)
+	if got := stringValueAny(payload["node"]); got != "node-a" {
+		t.Fatalf("node = %q, want trimmed node-a", got)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.NodeHasAttachments("node-a") {
+		t.Fatalf("node-a attachment remains after detach: %#v", loaded.Attachments)
+	}
+}
+
 func TestSoloNodeDetachRefusesRemoteCleanupWhenDuplicateHostHasAttachments(t *testing.T) {
 	workspaceDocs := t.TempDir()
 	workspaceDogfood := t.TempDir()

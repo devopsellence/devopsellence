@@ -3838,6 +3838,9 @@ func TestRemoteManagedContainerSecurityCommandsUseBoundedOutputMarker(t *testing
 		if strings.Contains(command, "head -n 100") {
 			t.Fatalf("command = %q, want no silent head truncation", command)
 		}
+		if strings.Contains(command, "ps -aq --filter label=devopsellence.managed=true 2>&1") || strings.Contains(command, "$ids 2>&1") {
+			t.Fatalf("command = %q, want stderr captured separately from IDs/inspect output", command)
+		}
 	}
 }
 
@@ -3900,6 +3903,22 @@ func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
 	if check.OK || !strings.Contains(check.NextAction, "other read/write") {
 		t.Fatalf("agent state check = %#v, want other-read finding", check)
+	}
+}
+
+func TestSoloStatFieldsPreservesWhitespacePath(t *testing.T) {
+	fields := soloStatFields("750\troot\troot\t/var/lib/dev ops")
+	if len(fields) != 4 || fields[0] != "750" || fields[1] != "root" || fields[2] != "root" || fields[3] != "/var/lib/dev ops" {
+		t.Fatalf("fields = %#v, want tab-delimited stat fields with intact path", fields)
+	}
+}
+
+func TestSoloAgentStatePermissionsQuotesRemediationPath(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_STAT", "755 root root /var/lib/dev ops")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root", AgentStateDir: "/var/lib/dev ops"})
+	if check.OK || !strings.Contains(check.NextAction, "'/var/lib/dev ops'") {
+		t.Fatalf("agent state check = %#v, want shell-quoted remediation path", check)
 	}
 }
 
@@ -8434,6 +8453,11 @@ fi
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
   tls_stat="${DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT:-missing}"
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$tls_stat"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && -n "${DEVOPSELLENCE_FAKE_SSH_STAT:-}" ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$DEVOPSELLENCE_FAKE_SSH_STAT"
   exit 0
 fi
 

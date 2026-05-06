@@ -3883,7 +3883,7 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 		check.NextAction = "rerun devopsellence node diagnose after the agent state directory can be inspected"
 		return check
 	}
-	fields := strings.Fields(strings.TrimSpace(diag.Stdout))
+	fields := soloStatFields(diag.Stdout)
 	if len(fields) == 0 || fields[0] == "missing" {
 		check.OK = false
 		check.Observed = stateDir + " missing"
@@ -3900,17 +3900,17 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 	}
 	if len(fields) >= 2 && fields[1] != "root" {
 		check.OK = false
-		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + stateDir
+		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + shellQuote(stateDir)
 		return check
 	}
 	if len(fields) >= 3 && fields[2] != "root" {
 		check.OK = false
-		check.NextAction = "restore root group ownership on the agent state directory, for example chown root:root " + stateDir
+		check.NextAction = "restore root group ownership on the agent state directory, for example chown root:root " + shellQuote(stateDir)
 		return check
 	}
 	if mode&0o026 != 0 {
 		check.OK = false
-		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + stateDir
+		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + shellQuote(stateDir)
 	}
 	return check
 }
@@ -3925,7 +3925,7 @@ func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecur
 		check.NextAction = "rerun devopsellence node diagnose after the TLS key path can be inspected"
 		return check
 	}
-	fields := strings.Fields(strings.TrimSpace(diag.Stdout))
+	fields := soloStatFields(diag.Stdout)
 	if len(fields) == 0 || fields[0] == "missing" {
 		check.Observed = keyPath + " not present"
 		return check
@@ -3940,9 +3940,20 @@ func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecur
 	}
 	if mode&0o037 != 0 {
 		check.OK = false
-		check.NextAction = "restrict the TLS private key file to the agent or Envoy group, for example chmod 640 " + keyPath
+		check.NextAction = "restrict the TLS private key file to the agent or Envoy group, for example chmod 640 " + shellQuote(keyPath)
 	}
 	return check
+}
+
+func soloStatFields(output string) []string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil
+	}
+	if strings.Contains(output, "\t") {
+		return strings.SplitN(output, "\t", 4)
+	}
+	return strings.Fields(output)
 }
 
 func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecurityCheck {
@@ -7601,27 +7612,31 @@ func remoteSSHPasswordAuthCommand() string {
 
 func remoteStatPathCommand(target string) string {
 	quoted := shellQuote(target)
-	return fmt.Sprintf("if [ -e %[1]s ]; then stat -c '%%a %%U %%G %%n' %[1]s; elif command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then sudo -n stat -c '%%a %%U %%G %%n' %[1]s; else echo missing; fi", quoted)
+	return fmt.Sprintf("if [ -e %[1]s ]; then stat -c '%%a\\t%%U\\t%%G\\t%%n' %[1]s; elif command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then sudo -n stat -c '%%a\\t%%U\\t%%G\\t%%n' %[1]s; else echo missing; fi", quoted)
 }
 
 func remoteManagedContainerMountsCommand() string {
 	script := fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>&1)
+ps_stderr=$(mktemp)
+inspect_stderr=$(mktemp)
+trap 'rm -f "$ps_stderr" "$inspect_stderr"' EXIT
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>"$ps_stderr")
 ps_status=$?
 if [ "$ps_status" -ne 0 ]; then
   echo "Failed to list managed containers" >&2
-  printf '%%s\n' "$ids" >&2
+  cat "$ps_stderr" >&2
   exit "$ps_status"
 fi
 id_count=$(printf '%%s\n' "$ids" | awk 'NF { c++ } END { print c+0 }')
 ids=$(printf '%%s\n' "$ids" | awk 'NF { print; if (++c >= %d) exit }')
 if [ -z "$ids" ]; then exit 0; fi
 if [ "$id_count" -gt %d ]; then printf '%%s\n' %s; fi
-inspect_out=$($docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids 2>&1)
+inspect_out=$($docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids 2>"$inspect_stderr")
 inspect_status=$?
 if [ "$inspect_status" -ne 0 ]; then
   echo "Failed to inspect managed container mounts" >&2
   printf '%%s\n' "$inspect_out" >&2
+  cat "$inspect_stderr" >&2
   exit "$inspect_status"
 fi
 printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'`, soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit, shellQuote(soloDiagnoseTruncatedMarker), shellQuote(soloDiagnoseTruncatedMarker), soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit+1)
@@ -7630,22 +7645,26 @@ printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { prin
 
 func remoteManagedContainerPrivilegesCommand() string {
 	script := fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>&1)
+ps_stderr=$(mktemp)
+inspect_stderr=$(mktemp)
+trap 'rm -f "$ps_stderr" "$inspect_stderr"' EXIT
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>"$ps_stderr")
 ps_status=$?
 if [ "$ps_status" -ne 0 ]; then
   echo "Failed to list managed containers" >&2
-  printf '%%s\n' "$ids" >&2
+  cat "$ps_stderr" >&2
   exit "$ps_status"
 fi
 id_count=$(printf '%%s\n' "$ids" | awk 'NF { c++ } END { print c+0 }')
 ids=$(printf '%%s\n' "$ids" | awk 'NF { print; if (++c >= %d) exit }')
 if [ -z "$ids" ]; then exit 0; fi
 if [ "$id_count" -gt %d ]; then printf '%%s\n' %s; fi
-inspect_out=$($docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids 2>&1)
+inspect_out=$($docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids 2>"$inspect_stderr")
 inspect_status=$?
 if [ "$inspect_status" -ne 0 ]; then
   echo "Failed to inspect managed container privileges" >&2
   printf '%%s\n' "$inspect_out" >&2
+  cat "$inspect_stderr" >&2
   exit "$inspect_status"
 fi
 printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'`, soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit, shellQuote(soloDiagnoseTruncatedMarker), shellQuote(soloDiagnoseTruncatedMarker), soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit+1)

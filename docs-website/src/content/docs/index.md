@@ -32,6 +32,8 @@ not require npm or `npx`.
   one VM.
 - [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app
   example that maps a Kamal-style deployment to devopsellence solo.
+- [Flue agents on Node.js](/examples/flue-node-solo/) for deploying an
+  experimental Flue webhook agent server as an ordinary containerized service.
 - [AI operator model](/concepts/agent-primary/) for the product thesis: a CLI
   that gives AI operators structured feedback, safe boundaries, and facts they
   can compose with the user's tools.

@@ -7731,7 +7731,13 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 EOF_SSHD
   if [ -f /etc/ssh/sshd_config ] && ! run_root grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
-    printf '\nInclude /etc/ssh/sshd_config.d/*.conf\n' | run_root tee -a /etc/ssh/sshd_config >/dev/null
+    tmp_sshd_config="$(mktemp)"
+    {
+      printf 'Include /etc/ssh/sshd_config.d/*.conf\n'
+      run_root cat /etc/ssh/sshd_config
+    } >"$tmp_sshd_config"
+    run_root cp "$tmp_sshd_config" /etc/ssh/sshd_config
+    rm -f "$tmp_sshd_config"
   fi
   run_root "$SSHD_BIN" -t
   if ! run_root "$SSHD_BIN" -T | grep -qi '^passwordauthentication no$'; then

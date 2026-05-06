@@ -3498,6 +3498,9 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 
 func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) error {
 	nodeName := strings.TrimSpace(opts.Node)
+	if nodeName == "" {
+		return ExitError{Code: 2, Err: errors.New("missing required option: --node")}
+	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -7814,9 +7817,9 @@ fi
 harden_sshd_password_auth
 
 run_root mkdir -p "$STATE_DIR" "$STATE_DIR/envoy"
-# The parent must remain traversable so Envoy can open the bind-mounted
+# The parent must remain executable so Envoy can open the bind-mounted
 # bootstrap/socket directory; sensitive state files are written 0600/0640.
-run_root chmod 751 "$STATE_DIR"
+run_root chmod 711 "$STATE_DIR"
 TMP_BIN="$(mktemp)"
 TMP_SUMS="$(mktemp)"
 cleanup() {

@@ -71,7 +71,7 @@ func TestReportTightensExistingDirectoryPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
 	}
-	if info.Mode().Perm() != 0o751 {
+	if info.Mode().Perm() != 0o711 {
 		t.Fatalf("unexpected dir permissions: %v", info.Mode().Perm())
 	}
 }

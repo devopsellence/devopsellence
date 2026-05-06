@@ -8,8 +8,10 @@ Use this checklist as a menu, not a bureaucracy. For PR-focused probes, run only
 - [ ] Record branch, SHA, PR, target version, and validation mode.
 - [ ] Confirm whether this is local-build validation or official-artifact validation.
 - [ ] Record node strategy: existing approved node, zirk VM, provider VM, or user-provided SSH host.
+- [ ] Prefer a run-scoped zirk VM when available; do not treat Hetzner/provider quota as a blocker if zirk satisfies the disposable-node requirement.
 - [ ] Record cleanup plan before creating/deleting resources.
 - [ ] Confirm no secrets will be printed or persisted in reports.
+- [ ] For GitHub release dispatch, use a branch name or full commit SHA for `source_ref`; short SHAs can fail checkout as missing branch/tag names.
 
 Useful commands:
 
@@ -20,6 +22,20 @@ gh pr view <number> --json number,url,headRefOid,reviewDecision,statusCheckRollu
 devopsellence --version || true
 devopsellence mode show || true
 devopsellence context show || true
+```
+
+Useful zirk disposable-node flow:
+
+```sh
+zirk create --flavor small <node>
+zirk show <node>
+zirk exec <node> "mkdir -p /root/.ssh"
+zirk exec <node> "echo '<public-key>' >> /root/.ssh/authorized_keys"
+zirk exec <node> "chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys"
+ssh -i <key> -o StrictHostKeyChecking=accept-new root@<ip> true
+# cleanup proof
+zirk delete --force <node>
+zirk show <node>; echo $?
 ```
 
 ## 1. Official Artifact Reality
@@ -41,6 +57,7 @@ Do not treat `cli/scripts/release-local.sh` as proof of node-agent behavior; it 
 - [ ] Run `doctor` before deploy.
 - [ ] Deploy a fresh revision.
 - [ ] Verify CLI-reported status and runtime endpoint health.
+- [ ] Verify `doctor` includes a passing `agent_status_report` runtime check.
 - [ ] Verify logs and exec for the deployed service.
 
 Useful commands:
@@ -53,6 +70,22 @@ devopsellence status
 devopsellence logs --node <node> --lines 100
 devopsellence exec <service> -- <command>
 curl -fsS <url>/up
+```
+
+Status/permission evidence to capture on solo nodes:
+
+```sh
+devopsellence node exec <node> -- sh -lc 'stat -c "%a %U %G %n" /var/lib/devopsellence /var/lib/devopsellence/private /var/lib/devopsellence/status.json /var/lib/devopsellence/private/disk-care-state.json /var/lib/devopsellence/desired-state-override.json'
+```
+
+Expected shape:
+
+```text
+711 root root /var/lib/devopsellence
+700 root root /var/lib/devopsellence/private
+640 root root /var/lib/devopsellence/status.json
+600 root root /var/lib/devopsellence/private/disk-care-state.json
+600 root root /var/lib/devopsellence/desired-state-override.json
 ```
 
 ## 3. TLS Auto / ACME
@@ -210,6 +243,19 @@ devopsellence node diagnose <node>
 devopsellence release list --limit 5
 devopsellence exec <service> -- <command>
 ```
+
+Timeout trap for deploy/status hangs:
+
+```sh
+devopsellence status
+devopsellence node diagnose <node>
+devopsellence node logs <node> --lines 200
+devopsellence node exec <node> -- systemctl cat devopsellence-agent
+devopsellence node exec <node> -- find /var/lib/devopsellence -maxdepth 3 -printf '%m %u %g %p\n'
+devopsellence node exec <node> -- docker ps --format '{{.Names}} {{.Status}} {{.Ports}}'
+```
+
+Interpretation: compare the CLI-expected root `status.json` with the agent's effective `--auth-state-path` and any private status file. A green `doctor` with broken `status` is a product bug, not a passing preflight.
 
 ## 13. Report and Ratchet
 

@@ -22,6 +22,7 @@ Terminology: "AI agent" means the coding/operator agent doing the dogfood run. "
 - For release/RC validation, use **official CLI and agent artifacts from the exact commit/version**. A local CLI build does not prove the deployed node agent is current.
 - Keep secrets out of terminal history, command logs, reports, PR bodies, and chat. Use stdin and redact values as `[REDACTED]`.
 - Reuse existing dogfood nodes when the user approves and that better matches the scenario; otherwise prefer run-scoped disposable resources.
+- Treat zirk as the preferred run-scoped disposable VM path when it is available and approved. Do not block on public-provider quota if zirk can provide a clean VM for the scenario.
 - Record every meaningful command and outcome in `commands.log` as the run proceeds.
 - Every material finding must ratchet into at least one durable artifact: regression test, product issue, docs update, skill update, or follow-up PR.
 
@@ -76,6 +77,7 @@ Use when a user reports a solo-mode bug. Reproduce with evidence, isolate root c
    - Check `devopsellence --version` and, for live nodes, `/usr/local/bin/devopsellence-agent --version` or equivalent.
    - Identify the node strategy: existing approved node, zirk VM, provider-created VM, or user-provided SSH host.
    - Record resource names, expected cost/blast radius, approval state, and cleanup command before provisioning or destructive cleanup.
+   - For GitHub release workflow dispatch, prefer a branch name or full commit SHA as `source_ref`; short SHAs can be interpreted as missing branch/tag names by checkout.
 
 3. Prepare solo apps/environments.
    - At minimum use one app in `production`.
@@ -87,6 +89,14 @@ Use when a user reports a solo-mode bug. Reproduce with evidence, isolate root c
    - Use `references/checklist.md` as the scenario checklist.
    - Prefer structured CLI output when available.
    - Verify runtime truth with curls, SSH/Docker observations, status/logs, and node-agent logs when appropriate.
+   - If deploy/status appears hung or times out, immediately collect the timeout trap before changing code or restarting:
+     - `devopsellence status`
+     - `devopsellence node diagnose <node>`
+     - `devopsellence node logs <node> --lines 200`
+     - `devopsellence node exec <node> -- systemctl cat devopsellence-agent`
+     - `devopsellence node exec <node> -- find /var/lib/devopsellence -maxdepth 3 -printf '%m %u %g %p\n'`
+     - `devopsellence node exec <node> -- docker ps --format '{{.Names}} {{.Status}} {{.Ports}}'`
+     - Compare the CLI-expected status path, usually `/var/lib/devopsellence/status.json`, with any private status path such as `/var/lib/devopsellence/private/status.json`.
 
 5. Expert pass and fixes.
    - Only after blind/operator evidence is captured, inspect implementation, tests, state files, desired-state payloads, and node logs.
@@ -114,6 +124,8 @@ Treat these as the core solo readiness surfaces:
 - **Dry-run boundary:** deploy/rollback dry-run must not build, publish, SSH, mutate release state, or write local state.
 - **DNS honesty:** bad hostnames should produce clear structured missing-IP evidence rather than false readiness.
 - **Diagnostics:** `status`, `logs`, `exec`, `node logs`, `node diagnose`, and `release list` should target the selected logical environment even when runtime environment names are project-scoped.
+- **Status-path honesty:** `doctor` and `node diagnose` must fail loudly if the agent is active but the CLI cannot read a fresh status report from the expected root status path. A green doctor is not enough unless `status` also works.
+- **State permission split:** verify the solo state parent is traversable for Envoy/status access while sensitive agent state stays private: parent `0711`, private child `0700`, root `status.json` present, auth/disk-care under private.
 - **Cleanup/recovery:** detach/remove one co-hosted project without breaking others; restart agent; reboot node; verify all expected endpoints after recovery.
 
 ## Release Blockers

@@ -2347,6 +2347,57 @@ func TestSoloDoctorScopesRuntimeChecksToCurrentEnvironment(t *testing.T) {
 	}
 }
 
+func TestSoloDoctorFailsWhenAgentStatusReportMissingAtExpectedPath(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: soloStatusMissingSentinel + "\n"}})
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want missing status report failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %#v, want false", payload["ok"])
+	}
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "agent_status_report" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["detail"]), "/var/lib/devopsellence/status.json") {
+				t.Fatalf("agent_status_report = %#v, want expected status path failure", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want agent_status_report", checks)
+}
+
 func TestSoloDoctorReportsSecurityFindings(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
@@ -8680,7 +8731,7 @@ func TestSoloReleaseRollbackRolloutFailurePreservesCurrentRelease(t *testing.T) 
 		t.Fatalf("healthchecks = %#v, want selected release snapshot healthcheck", healthchecks)
 	}
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 4 || steps[0] != "devopsellence status --env 'production'" || steps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || !strings.Contains(steps[1], "returns HTTP 2xx") {
+	if len(steps) != 5 || steps[0] != "devopsellence status --env 'production'" || steps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || steps[4] != "devopsellence node diagnose 'node-a'" || !strings.Contains(steps[1], "returns HTTP 2xx") {
 		t.Fatalf("next_steps = %#v, want env-scoped healthcheck remediation", steps)
 	}
 }
@@ -8721,7 +8772,7 @@ func TestSoloReleaseRollbackTimeoutPreservesCurrentRelease(t *testing.T) {
 	}
 	fields := timeoutErr.ErrorFields()
 	steps := fields["next_steps"].([]string)
-	if fields["environment"] != "production" || len(steps) != 3 || steps[0] != "devopsellence status --env 'production'" || steps[1] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" {
+	if fields["environment"] != "production" || len(steps) != 4 || steps[0] != "devopsellence status --env 'production'" || steps[1] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || steps[3] != "devopsellence node diagnose 'node-a'" {
 		t.Fatalf("fields = %#v, want env-scoped timeout guidance", fields)
 	}
 	updatedState, readErr := soloState.Read()
@@ -8874,7 +8925,7 @@ func TestSoloDeployRolloutFailureIncludesHealthcheckContext(t *testing.T) {
 		t.Fatalf("healthchecks = %#v, want web healthcheck context", healthchecks)
 	}
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 4 || steps[0] != "devopsellence status --env 'production'" || steps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || !strings.Contains(steps[1], "returns HTTP 2xx on healthcheck path '/up' port 3000") {
+	if len(steps) != 5 || steps[0] != "devopsellence status --env 'production'" || steps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || steps[4] != "devopsellence node diagnose 'node-a'" || !strings.Contains(steps[1], "returns HTTP 2xx on healthcheck path '/up' port 3000") {
 		t.Fatalf("next_steps = %#v, want healthcheck remediation before logs", steps)
 	}
 	loaded, err := soloState.Read()
@@ -8954,7 +9005,7 @@ func TestSoloDeployRolloutFailureDoesNotPrescribeHealthcheckForImagePull(t *test
 		t.Fatalf("fields = %#v, want healthcheck context", fields)
 	}
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 3 || strings.Contains(strings.Join(steps, "\n"), "returns HTTP 2xx") {
+	if len(steps) != 4 || strings.Contains(strings.Join(steps, "\n"), "returns HTTP 2xx") {
 		t.Fatalf("next_steps = %#v, want log diagnostics without healthcheck remediation", steps)
 	}
 }
@@ -9042,8 +9093,8 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	}
 	fields := rolloutErr.ErrorFields()
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 3 || steps[1] != "devopsellence logs --node 'node-a' --lines 100" || steps[2] != "devopsellence node logs 'node-a' --lines 100" {
-		t.Fatalf("next_steps = %#v, want status, workload logs, and node logs commands", steps)
+	if len(steps) != 4 || steps[1] != "devopsellence logs --node 'node-a' --lines 100" || steps[2] != "devopsellence node logs 'node-a' --lines 100" || steps[3] != "devopsellence node diagnose 'node-a'" {
+		t.Fatalf("next_steps = %#v, want status, workload logs, node logs, and diagnose commands", steps)
 	}
 }
 
@@ -9137,8 +9188,8 @@ func TestWaitForSoloRolloutTimesOutWhenExpectedRevisionNeverSettles(t *testing.T
 	}
 	fields := timeoutErr.ErrorFields()
 	steps := fields["next_steps"].([]string)
-	if len(steps) != 3 || steps[1] != "devopsellence logs --node 'node-a' --lines 100" || steps[2] != "devopsellence node logs 'node-a' --lines 100" {
-		t.Fatalf("next_steps = %#v, want status, workload logs, and node logs commands", steps)
+	if len(steps) != 4 || steps[1] != "devopsellence logs --node 'node-a' --lines 100" || steps[2] != "devopsellence node logs 'node-a' --lines 100" || steps[3] != "devopsellence node diagnose 'node-a'" {
+		t.Fatalf("next_steps = %#v, want status, workload logs, node logs, and diagnose commands", steps)
 	}
 }
 
@@ -10419,6 +10470,8 @@ if [[ "$command" == *"status.json"* ]]; then
     else
       cat "$base.stdout"
     fi
+  elif [[ ! -f "$base.stderr" && ! -f "$base.code" ]]; then
+    printf '{"time":"2099-01-01T00:00:00Z","revision":"fake-revision","phase":"settled","environments":[{"name":"production","revision":"fake-revision","phase":"settled","services":[{"name":"web","state":"running"}]}]}\n'
   fi
   if [[ -f "$base.stderr" ]]; then
     cat "$base.stderr" >&2

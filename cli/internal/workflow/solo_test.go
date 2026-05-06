@@ -4418,7 +4418,9 @@ func TestSoloAgentUpgradeHardensProviderNodeSSH(t *testing.T) {
 		`run_root "$SSHD_BIN" -t`,
 		`run_root "$SSHD_BIN" -T`,
 		`awk 'tolower($1) == "passwordauthentication"`,
-		"run_root cp \"$tmp_sshd_config\" /etc/ssh/sshd_config",
+		"mktemp /etc/ssh/sshd_config.devopsellence.",
+		"run_root cp -p /etc/ssh/sshd_config \"$tmp_sshd_config\"",
+		"run_root mv \"$tmp_sshd_config\" /etc/ssh/sshd_config",
 		"not effective according to sshd -T",
 		"systemctl reload ssh",
 	} {

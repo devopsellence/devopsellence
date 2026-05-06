@@ -3502,7 +3502,7 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 		return fmt.Errorf("node %q is not attached to %s", nodeName, environmentName)
 	}
 	if conflicts := soloNodeRemoteCleanupConflicts(next, nodeName); len(conflicts) > 0 {
-		return ExitError{Code: 1, Err: fmt.Errorf("remote cleanup for node %q refused: %s. These node records point at the same provider target or SSH endpoint; use the attached node record or remove the stale duplicate before detaching so cleanup cannot remove unrelated workloads", nodeName, strings.Join(conflicts, "; "))}
+		return ExitError{Code: 1, Err: fmt.Errorf("remote cleanup for node %q refused: %s. These node records point at the same provider target or SSH endpoint; keep the duplicate records attached until they can be consolidated so cleanup cannot remove unrelated workloads", nodeName, strings.Join(conflicts, "; "))}
 	}
 	remainingNodeNames := make([]string, 0, len(nodeNamesBefore))
 	for _, name := range nodeNamesBefore {
@@ -7721,7 +7721,7 @@ run_root() {
 
 harden_sshd_password_auth() {
   [ "$HARDEN_SSH" = "true" ] || return 0
-  SSHD_BIN="$(run_root sh -c 'command -v sshd || { [ -x /usr/sbin/sshd ] && printf %%s /usr/sbin/sshd; } || { [ -x /usr/bin/sshd ] && printf %%s /usr/bin/sshd; }')"
+  SSHD_BIN="$(run_root sh -c 'command -v sshd || { [ -x /usr/sbin/sshd ] && printf %%s /usr/sbin/sshd; } || { [ -x /usr/bin/sshd ] && printf %%s /usr/bin/sshd; } || true')"
   [ -n "$SSHD_BIN" ] || return 0
   [ -d /etc/ssh ] || return 0
   echo "progress: hardening SSH password authentication"
@@ -7731,13 +7731,13 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 EOF_SSHD
   if [ -f /etc/ssh/sshd_config ] && ! run_root grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
-    tmp_sshd_config="$(mktemp)"
-    {
-      printf 'Include /etc/ssh/sshd_config.d/*.conf\n'
-      run_root cat /etc/ssh/sshd_config
-    } >"$tmp_sshd_config"
-    run_root cp "$tmp_sshd_config" /etc/ssh/sshd_config
-    rm -f "$tmp_sshd_config"
+    tmp_sshd_config="$(run_root mktemp /etc/ssh/sshd_config.devopsellence.XXXXXX)"
+    run_root cp -p /etc/ssh/sshd_config "$tmp_sshd_config"
+    run_root sh -c '{
+      echo "Include /etc/ssh/sshd_config.d/*.conf"
+      cat /etc/ssh/sshd_config
+    } >"$1"' sh "$tmp_sshd_config"
+    run_root mv "$tmp_sshd_config" /etc/ssh/sshd_config
   fi
   run_root "$SSHD_BIN" -t
   if ! run_root "$SSHD_BIN" -T | awk 'tolower($1) == "passwordauthentication" && tolower($2) == "no" { found = 1 } END { exit(found ? 0 : 1) }'; then

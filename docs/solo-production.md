@@ -46,8 +46,8 @@ devopsellence status
 Read `rollout_contract` in the dry-run or final result:
 
 - web services use health-gated cutover;
-- non-web services use reconcile replacement without a health-gated traffic
-  cutover.
+- non-web services stop existing containers before starting replacements, so
+  operators should expect interruption for workers and other non-web services.
 
 Release tasks run as one-shot tasks and may change data before app rollout. They
 are not represented in `rollout_contract`; treat them as migration/data-change
@@ -106,7 +106,8 @@ devopsellence support bundle
 ```
 
 These commands should preserve the agent-primary contract: machine-readable
-evidence, stable failures, and next safe actions. `support bundle` is the
-redacted sharing path; workload and node logs are raw operational output and
-should be handled as sensitive. SSH, Docker, files, and logs remain valid escape
-hatches when the structured surface is not enough.
+evidence, stable failures, and next safe actions. `support bundle` redacts
+secrets, but it still includes infrastructure identifiers such as workspace
+paths and node host/user/port details. Workload and node logs are raw
+operational output and should be handled as sensitive. SSH, Docker, files, and
+logs remain valid escape hatches when the structured surface is not enough.

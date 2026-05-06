@@ -3662,11 +3662,8 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	ports := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
 	payload["ports"] = ports
 	portLines, _ := ports["lines"].([]string)
-	if ports["ok"] != true {
-		portLines = nil
-	}
 	portsTruncated, _ := ports["truncated"].(bool)
-	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated)
+	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated, ports)
 	payload["security"] = security
 	if !diagnosticSectionsOK(agent, dockerSnapshot, ports) {
 		diagnoseOK = false
@@ -3806,20 +3803,20 @@ type soloSecurityCheck struct {
 	NextAction string
 }
 
-func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) map[string]any {
-	checks := soloNodeSecurityChecks(ctx, node, portLines, portsTruncated)
+func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) map[string]any {
+	checks := soloNodeSecurityChecks(ctx, node, portLines, portsTruncated, portDiagnostic)
 	items, ok := soloNodeSecurityCheckItems(checks)
 	return map[string]any{"ok": ok, "checks": items}
 }
 
-func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) []soloSecurityCheck {
+func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) []soloSecurityCheck {
 	return []soloSecurityCheck{
 		soloSSHPasswordAuthCheck(ctx, node),
 		soloAgentStatePermissionsCheck(ctx, node),
 		soloTLSKeyPermissionsCheck(ctx, node),
 		soloDockerSocketMountsCheck(ctx, node),
 		soloPrivilegedContainersCheck(ctx, node),
-		soloPublicListeningPortsCheck(ctx, node, portLines, portsTruncated),
+		soloPublicListeningPortsCheck(ctx, node, portLines, portsTruncated, portDiagnostic),
 	}
 }
 
@@ -4021,8 +4018,14 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 	return check
 }
 
-func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) soloSecurityCheck {
+func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) soloSecurityCheck {
 	check := soloSecurityCheck{Name: "public_listening_ports", OK: true, Severity: "medium"}
+	if portDiagnostic != nil && portDiagnostic["ok"] != true {
+		check.OK = false
+		check.Observed = "unknown: " + remoteDiagnosticResultMessage(portDiagnostic)
+		check.NextAction = "rerun devopsellence node diagnose after listening ports can be inspected"
+		return check
+	}
 	if portLines == nil {
 		diag := runRemoteDiagnostic(ctx, node, remoteListeningPortsCommand())
 		if diag.Err != nil || diag.ExitCode != 0 {
@@ -4054,6 +4057,33 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 	}
 	check.Observed = "only expected public ports detected"
 	return check
+}
+
+func remoteDiagnosticResultMessage(result map[string]any) string {
+	if message := diagnosticStringValue(result["error"]); strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	if message := diagnosticStringValue(result["stderr"]); strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	if code, ok := result["exit_code"]; ok {
+		return fmt.Sprintf("command exited with code %v", code)
+	}
+	return "diagnostic failed"
+}
+
+func diagnosticStringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprint(typed)
+	}
 }
 
 func listenOutputHasTruncationMarker(lines []string) bool {
@@ -4523,9 +4553,13 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			{name: "docker", cmd: remoteDockerCheckCommand()},
 			{name: "agent", cmd: "systemctl is-active --quiet devopsellence-agent"},
 		}
+		sshOK := true
 		for _, check := range checks {
 			out, err := solo.RunSSH(ctx, node, check.cmd, nil)
 			ok := err == nil
+			if check.name == "ssh" {
+				sshOK = ok
+			}
 			result := map[string]any{"node": name, "check": check.name, "ok": ok}
 			if ok {
 				if detail := strings.TrimSpace(out); detail != "" {
@@ -4537,17 +4571,14 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			}
 			results = append(results, result)
 		}
-		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false) {
-			result := map[string]any{
-				"node":     name,
-				"check":    "security_" + check.Name,
-				"ok":       check.OK,
-				"severity": check.Severity,
-				"detail":   check.Observed,
+		if !sshOK {
+			for _, check := range soloSkippedSecurityChecksAfterSSHFailure() {
+				results = append(results, soloRuntimeSecurityCheckResult(name, check))
 			}
-			if check.NextAction != "" {
-				result["next_action"] = check.NextAction
-			}
+			continue
+		}
+		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false, nil) {
+			result := soloRuntimeSecurityCheckResult(name, check)
 			if !check.OK {
 				failed = true
 			}
@@ -4555,6 +4586,31 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 		}
 	}
 	return results, failed, nil
+}
+
+func soloSkippedSecurityChecksAfterSSHFailure() []soloSecurityCheck {
+	return []soloSecurityCheck{
+		{Name: "ssh_password_auth", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "agent_state_permissions", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "tls_key_permissions", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "docker_socket_mounts", OK: false, Severity: "critical", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "privileged_containers", OK: false, Severity: "critical", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "public_listening_ports", OK: false, Severity: "medium", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+	}
+}
+
+func soloRuntimeSecurityCheckResult(nodeName string, check soloSecurityCheck) map[string]any {
+	result := map[string]any{
+		"node":     nodeName,
+		"check":    "security_" + check.Name,
+		"ok":       check.OK,
+		"severity": check.Severity,
+		"detail":   check.Observed,
+	}
+	if check.NextAction != "" {
+		result["next_action"] = check.NextAction
+	}
+	return result
 }
 
 func (a *App) runSoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {

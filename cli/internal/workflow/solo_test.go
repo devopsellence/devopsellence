@@ -897,6 +897,10 @@ func TestSoloNodeCreateAttachRollsBackExistingSSHStateWhenRepublishFails(t *test
 set -euo pipefail
 command="${!#}"
 if [[ "$command" == "true" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" ]]; then
+    printf 'ssh connect failed\n' >&2
+    exit 255
+  fi
   exit 0
 fi
 if [[ "$command" == *"docker image inspect"* ]]; then
@@ -2354,6 +2358,59 @@ func TestSoloDoctorReportsSecurityFindings(t *testing.T) {
 		}
 	}
 	t.Fatalf("runtime_checks = %#v, want security_ssh_password_auth", checks)
+}
+
+func TestSoloDoctorSkipsSecurityDiagnosticsWhenSSHFails(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	commandLog := filepath.Join(t.TempDir(), "ssh-commands.log")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG", commandLog)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL", "1")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want ssh failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "security_ssh_password_auth" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["detail"]), "skipped") || strings.Contains(stringValueAny(check["detail"]), "yes") {
+				commands, _ := os.ReadFile(commandLog)
+				t.Fatalf("security_ssh_password_auth = %#v, want skipped security check; commands:\n%s", check, commands)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want skipped security_ssh_password_auth", checks)
 }
 
 func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
@@ -3861,19 +3918,19 @@ func TestSoloDockerSecurityChecksFailWhenInspectErrors(t *testing.T) {
 }
 
 func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
-	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true)
+	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true, nil)
 	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {
 		t.Fatalf("truncated check = %#v, want failed truncated finding", truncated)
 	}
 	if !strings.Contains(truncated.NextAction, "ss -ltnp") || strings.Contains(truncated.NextAction, "rerun listening-port diagnostics") {
 		t.Fatalf("truncated next action = %q, want direct node inspection guidance", truncated.NextAction)
 	}
-	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false)
+	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false, nil)
 	if marker.OK || !strings.Contains(marker.Observed, "truncated") {
 		t.Fatalf("marker check = %#v, want failed truncated finding", marker)
 	}
 
-	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false)
+	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false, nil)
 	if unavailable.OK || !strings.Contains(unavailable.Observed, "not inspected") {
 		t.Fatalf("unavailable check = %#v, want failed unknown finding", unavailable)
 	}
@@ -8354,8 +8411,15 @@ func installFakeSoloCommands(t *testing.T, statusResponses []fakeSSHResponse) st
 	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
 set -euo pipefail
 command="${!#}"
+if [[ -n "${DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG:-}" ]]; then
+  printf '%s\n' "$command" >>"$DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG"
+fi
 
 if [[ "$command" == "true" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" ]]; then
+    printf 'ssh connect failed\n' >&2
+    exit 255
+  fi
   exit 0
 fi
 
@@ -8403,6 +8467,11 @@ fi
 exec_marker=""
 if [[ "$command" =~ (__DEVOPSELLENCE_EXEC_EXIT_CODE__[0-9a-f]+__) ]]; then
   exec_marker="${BASH_REMATCH[1]}"
+fi
+
+if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" && "$command" == *"true"* ]]; then
+  printf 'ssh connect failed\n' >&2
+  exit 255
 fi
 
 if [[ -n "$exec_marker" && "$command" == *"svc-production-web-abc"* ]]; then

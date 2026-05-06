@@ -2064,7 +2064,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
 		appendPayloadWarning(soloPublicURLWarning(cfg, environmentName))
 	}
-	if allSettled && hasCurrent && hasRecoveryCandidate && len(opts.Nodes) == 0 {
+	if allSettled && hasCurrent && hasRecoveryCandidate && len(opts.Nodes) == 0 && soloRecoveryTargetsChecked(recoveryTargets, recoveryChecked) {
 		var recovered corerelease.Deployment
 		recoveredOK := false
 		if err := a.updateSoloState(func(recoveryState *solo.State) error {
@@ -2169,6 +2169,18 @@ func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, rel
 
 func soloRecoveryRuntimeSettled(runtime soloRuntimeStatusResult) bool {
 	return runtime.State == "" || runtime.State == "settled"
+}
+
+func soloRecoveryTargetsChecked(targets, checked map[string]bool) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	for nodeName := range targets {
+		if !checked[nodeName] {
+			return false
+		}
+	}
+	return true
 }
 
 func soloDeploymentTargetSet(deployment corerelease.Deployment, nodes map[string]config.Node) map[string]bool {

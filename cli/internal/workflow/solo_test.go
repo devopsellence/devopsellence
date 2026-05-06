@@ -6258,6 +6258,18 @@ func TestSoloRecoverSettledRunningDeploymentSkipsEmptyAttachedTargetIntersection
 	}
 }
 
+func TestSoloRecoveryTargetsCheckedRequiresEveryTarget(t *testing.T) {
+	if soloRecoveryTargetsChecked(map[string]bool{}, map[string]bool{"node-a": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = true for empty targets, want false")
+	}
+	if soloRecoveryTargetsChecked(map[string]bool{"node-a": true, "node-b": true}, map[string]bool{"node-a": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = true for unchecked target, want false")
+	}
+	if !soloRecoveryTargetsChecked(map[string]bool{"node-a": true, "node-b": true}, map[string]bool{"node-a": true, "node-b": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = false for checked targets, want true")
+	}
+}
+
 func TestSoloRecoverSettledRunningDeploymentRequiresFallbackTargets(t *testing.T) {
 	current := solo.State{}
 	deployment := corerelease.Deployment{

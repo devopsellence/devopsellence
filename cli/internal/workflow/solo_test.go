@@ -7269,6 +7269,28 @@ func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 	}
 }
 
+func TestSoloRollbackScopedStateKeepsReleaseTaskOnTargetNode(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	current := soloReleaseWorkflowState(workspaceRoot)
+	key := workspaceRoot + "\nproduction"
+	previous := current.Releases["rel-1"]
+	previous.TargetNodeIDs = []string{"node-b"}
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "web"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-1"] = previous
+	current.Current[key] = "rel-1"
+
+	scoped := soloStateScopedToRollbackTargets(current, key, []string{"node-b"})
+	_, releaseNodes, _, _, err := soloNodeDesiredStateInputs(scoped, "node-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if releaseNodes[key] != "node-b" {
+		t.Fatalf("releaseNodes = %#v, want release task on rollback target node-b", releaseNodes)
+	}
+}
+
 func TestSoloReleaseRollbackRepublishFailureDoesNotSwitchCurrentRelease(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")

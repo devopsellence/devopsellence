@@ -640,9 +640,9 @@ func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
 			item["health_gated"] = true
 			item["operator_note"] = "web traffic moves after the replacement passes its healthcheck"
 		} else {
-			item["strategy"] = "reconcile_replace"
+			item["strategy"] = "stop_old_before_start_new"
 			item["health_gated"] = false
-			item["operator_note"] = "non-web services are reconciled without health-gated traffic cutover; stale containers are stopped and removed as replacement state converges"
+			item["operator_note"] = "non-web service hash changes stop and remove old containers before starting the replacement; this path is not health-gated"
 		}
 		contracts = append(contracts, item)
 	}
@@ -2086,7 +2086,14 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
 	}
 	if allSettled && hasCurrent && len(opts.Nodes) == 0 {
-		recovered, recoveredState, ok := soloRecoverSettledRunningDeployment(current, environmentID, currentRelease.ID, recoveryChecked, recoveryRevisions)
+		recoveryState, err := a.readSoloState()
+		if err != nil {
+			return err
+		}
+		recovered, recoveredState, ok, err := soloRecoverSettledRunningDeployment(recoveryState, environmentID, currentRelease.ID, recoveryChecked, recoveryRevisions)
+		if err != nil {
+			return err
+		}
 		if ok {
 			if err := a.writeSoloState(recoveredState); err != nil {
 				return err
@@ -2098,12 +2105,12 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				"status":         recovered.Status,
 				"status_message": recovered.StatusMessage,
 			}
-			payload["current_deployment"] = soloStatusDeploymentPayload(recovered)
+			payload["current_deployment"] = soloStatusDeploymentPayload(current, recovered)
 		}
 	}
 	if hasCurrent && payload["current_deployment"] == nil {
 		if deployment, ok := soloLatestDeploymentForEnvironment(current, environmentID); ok {
-			payload["current_deployment"] = soloStatusDeploymentPayload(deployment)
+			payload["current_deployment"] = soloStatusDeploymentPayload(current, deployment)
 		}
 	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
@@ -2135,25 +2142,13 @@ func soloStatusReleasePayload(release corerelease.Release) map[string]any {
 }
 
 func soloLatestRunningDeployment(current solo.State, environmentID, releaseID string) (corerelease.Deployment, bool) {
-	if strings.TrimSpace(environmentID) == "" || strings.TrimSpace(releaseID) == "" {
-		return corerelease.Deployment{}, false
-	}
-	var selected corerelease.Deployment
-	found := false
-	for _, deployment := range current.Deployments {
-		if deployment.EnvironmentID != environmentID || deployment.ReleaseID != releaseID || deployment.Status != corerelease.DeploymentStatusRunning {
-			continue
-		}
-		if !found || deployment.Sequence > selected.Sequence || (deployment.Sequence == selected.Sequence && deployment.CreatedAt > selected.CreatedAt) {
-			selected = deployment
-			found = true
-		}
-	}
-	return selected, found
+	return soloLatestDeploymentMatching(current, func(deployment corerelease.Deployment) bool {
+		return deployment.EnvironmentID == environmentID && deployment.ReleaseID == releaseID && deployment.Status == corerelease.DeploymentStatusRunning
+	})
 }
 
-func soloStatusDeploymentPayload(deployment corerelease.Deployment) map[string]any {
-	return map[string]any{
+func soloStatusDeploymentPayload(current solo.State, deployment corerelease.Deployment) map[string]any {
+	payload := map[string]any{
 		"id":             deployment.ID,
 		"release_id":     deployment.ReleaseID,
 		"kind":           deployment.Kind,
@@ -2164,12 +2159,11 @@ func soloStatusDeploymentPayload(deployment corerelease.Deployment) map[string]a
 		"finished_at":    deployment.FinishedAt,
 		"target_nodes":   deployment.TargetNodeIDs,
 	}
-}
-
-func soloLatestDeploymentForRelease(current solo.State, environmentID, releaseID string) (corerelease.Deployment, bool) {
-	return soloLatestDeploymentMatching(current, func(deployment corerelease.Deployment) bool {
-		return deployment.EnvironmentID == environmentID && deployment.ReleaseID == releaseID
-	})
+	if release, ok := current.Releases[deployment.ReleaseID]; ok {
+		payload["release_revision"] = release.Revision
+		payload["image"] = release.Image.Reference
+	}
+	return payload
 }
 
 func soloLatestDeploymentForEnvironment(current solo.State, environmentID string) (corerelease.Deployment, bool) {
@@ -2193,10 +2187,10 @@ func soloLatestDeploymentMatching(current solo.State, match func(corerelease.Dep
 	return selected, found
 }
 
-func soloRecoverSettledRunningDeployment(current solo.State, environmentID, releaseID string, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, solo.State, bool) {
+func soloRecoverSettledRunningDeployment(current solo.State, environmentID, releaseID string, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, solo.State, bool, error) {
 	selected, found := soloLatestRunningDeployment(current, environmentID, releaseID)
 	if !found {
-		return corerelease.Deployment{}, current, false
+		return corerelease.Deployment{}, current, false, nil
 	}
 	for _, nodeName := range selected.TargetNodeIDs {
 		nodeName = strings.TrimSpace(nodeName)
@@ -2204,7 +2198,7 @@ func soloRecoverSettledRunningDeployment(current solo.State, environmentID, rele
 			continue
 		}
 		if !checkedTargets[nodeName] {
-			return corerelease.Deployment{}, current, false
+			return corerelease.Deployment{}, current, false, nil
 		}
 	}
 	selected.Status = corerelease.DeploymentStatusSettled
@@ -2214,9 +2208,9 @@ func soloRecoverSettledRunningDeployment(current solo.State, environmentID, rele
 		selected.PublicationResult = soloDeploymentPublicationResult(revisions, nil)
 	}
 	if err := current.SaveDeployment(selected); err != nil {
-		return corerelease.Deployment{}, current, false
+		return corerelease.Deployment{}, current, false, err
 	}
-	return selected, current, true
+	return selected, current, true, nil
 }
 
 func soloDeploymentTargetSet(deployment corerelease.Deployment, nodes map[string]config.Node) map[string]bool {
@@ -4730,6 +4724,10 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		return fmt.Errorf("agent install verification failed: %s", collectRemoteTextFailure(agentVersionProbe))
 	}
 	target := soloAgentTargetVersion()
+	versionStatus := soloAgentVersionStatus(agentVersion, target)
+	if versionStatus == "unknown" {
+		return fmt.Errorf("agent install verification failed: %s", agentVersion)
+	}
 	activeProbe := collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent")
 	return a.Printer.PrintResultEvent("devopsellence agent install", map[string]any{
 		"node":                  opts.Node,
@@ -4737,7 +4735,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		"agent_version":         agentVersion,
 		"agent_version_probe":   agentVersionProbe,
 		"target_version":        target,
-		"version_status":        soloAgentVersionStatus(agentVersion, target),
+		"version_status":        versionStatus,
 		"agent_active":          stringFromMap(activeProbe, "value") == "active",
 		"agent_active_check":    activeProbe,
 		"agent_active_check_ok": activeProbe["ok"] == true,

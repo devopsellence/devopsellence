@@ -7740,7 +7740,11 @@ EOF_SSHD
     run_root mv "$tmp_sshd_config" /etc/ssh/sshd_config
   fi
   run_root "$SSHD_BIN" -t
-  if ! run_root "$SSHD_BIN" -T | awk 'tolower($1) == "passwordauthentication" && tolower($2) == "no" { found = 1 } END { exit(found ? 0 : 1) }'; then
+  if ! run_root "$SSHD_BIN" -T | awk '
+    tolower($1) == "passwordauthentication" { password = tolower($2) }
+    tolower($1) == "kbdinteractiveauthentication" { keyboard = tolower($2) }
+    END { exit(password == "no" && keyboard == "no" ? 0 : 1) }
+  '; then
     echo "SSH password hardening was written but is not effective according to sshd -T" >&2
     return 1
   fi

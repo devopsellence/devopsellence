@@ -4417,7 +4417,8 @@ func TestSoloAgentUpgradeHardensProviderNodeSSH(t *testing.T) {
 		"/usr/sbin/sshd",
 		`run_root "$SSHD_BIN" -t`,
 		`run_root "$SSHD_BIN" -T`,
-		`awk 'tolower($1) == "passwordauthentication"`,
+		`password = tolower($2)`,
+		`keyboard = tolower($2)`,
 		"mktemp /etc/ssh/sshd_config.devopsellence.",
 		"run_root cp -p /etc/ssh/sshd_config \"$tmp_sshd_config\"",
 		"run_root mv \"$tmp_sshd_config\" /etc/ssh/sshd_config",
@@ -9198,7 +9199,8 @@ func TestSoloAgentInstallScriptCanHardenSSHPasswordAuthentication(t *testing.T) 
 		"KbdInteractiveAuthentication no",
 		`run_root "$SSHD_BIN" -t`,
 		`run_root "$SSHD_BIN" -T`,
-		`awk 'tolower($1) == "passwordauthentication"`,
+		`password = tolower($2)`,
+		`keyboard = tolower($2)`,
 		"systemctl reload ssh",
 	} {
 		if !strings.Contains(script, want) {

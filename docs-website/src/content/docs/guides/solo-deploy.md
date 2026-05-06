@@ -41,3 +41,6 @@ devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
 devopsellence node create prod-1 --provider hetzner --install --attach
 devopsellence doctor
 ```
+
+For CloudStack, create the VM through CloudStack and add it as an existing SSH
+node. See [CloudStack VMs](/guides/cloudstack-vms/).

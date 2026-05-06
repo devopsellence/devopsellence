@@ -640,9 +640,9 @@ func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
 			item["health_gated"] = true
 			item["operator_note"] = "web traffic moves after the replacement passes its healthcheck"
 		} else {
-			item["strategy"] = "stop_old_before_start_new"
+			item["strategy"] = "reconcile_replace"
 			item["health_gated"] = false
-			item["operator_note"] = "non-web services are restarted without concurrent old/new overlap"
+			item["operator_note"] = "non-web services are reconciled without health-gated traffic cutover; stale containers are stopped and removed as replacement state converges"
 		}
 		contracts = append(contracts, item)
 	}

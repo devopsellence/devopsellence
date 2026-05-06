@@ -5220,8 +5220,8 @@ func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 		contract := jsonMapFromAny(t, item)
 		byService[stringValueAny(contract["service"])] = contract
 	}
-	if byService["web"]["strategy"] != "health_gated_cutover" || byService["worker"]["strategy"] != "stop_old_before_start_new" {
-		t.Fatalf("rollout_contract = %#v, want web health-gated and worker stop/start", contracts)
+	if byService["web"]["strategy"] != "health_gated_cutover" || byService["worker"]["strategy"] != "reconcile_replace" {
+		t.Fatalf("rollout_contract = %#v, want web health-gated and worker reconcile replace", contracts)
 	}
 }
 

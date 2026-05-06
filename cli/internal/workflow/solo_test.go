@@ -5183,7 +5183,7 @@ func TestSoloNodeDetachRefusesRemoteCleanupWhenDuplicateHostHasAttachments(t *te
 	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
 		t.Fatalf("error = %#v, want ExitError code 1", err)
 	}
-	for _, want := range []string{"remote cleanup", "docs-1", "same host", "unrelated workloads"} {
+	for _, want := range []string{"remote cleanup", "docs-1", "same provider target or SSH endpoint", "unrelated workloads"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want substring %q", err.Error(), want)
 		}
@@ -5200,6 +5200,50 @@ func TestSoloNodeDetachRefusesRemoteCleanupWhenDuplicateHostHasAttachments(t *te
 	}
 	if !loaded.NodeHasAttachments("docs-1") {
 		t.Fatalf("docs-1 attachment was removed after refused detach: %#v", loaded.Attachments)
+	}
+}
+
+func TestSoloNodesShareRemoteCleanupTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a    config.Node
+		b    config.Node
+		want bool
+	}{
+		{
+			name: "same provider target",
+			a:    config.Node{Provider: "hetzner", ProviderServerID: "srv-1", Host: "203.0.113.10", Port: 22},
+			b:    config.Node{Provider: " HETZNER ", ProviderServerID: "srv-1", Host: "203.0.113.11", Port: 2222},
+			want: true,
+		},
+		{
+			name: "same ssh endpoint",
+			a:    config.Node{Host: "203.0.113.10", Port: 22},
+			b:    config.Node{Host: " 203.0.113.10 ", Port: 0},
+			want: true,
+		},
+		{
+			name: "same host different ssh port",
+			a:    config.Node{Host: "203.0.113.10", Port: 22},
+			b:    config.Node{Host: "203.0.113.10", Port: 2222},
+			want: false,
+		},
+		{
+			name: "different provider target same stale host",
+			a:    config.Node{Provider: "hetzner", ProviderServerID: "srv-1", Host: "203.0.113.10", Port: 22},
+			b:    config.Node{Provider: "hetzner", ProviderServerID: "srv-2", Host: "203.0.113.10", Port: 2222},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := soloNodesShareRemoteCleanupTarget(tt.a, tt.b); got != tt.want {
+				t.Fatalf("soloNodesShareRemoteCleanupTarget() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

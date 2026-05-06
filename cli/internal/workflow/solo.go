@@ -3501,7 +3501,7 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 		return fmt.Errorf("node %q is not attached to %s", opts.Node, environmentName)
 	}
 	if conflicts := soloNodeRemoteCleanupConflicts(next, opts.Node); len(conflicts) > 0 {
-		return ExitError{Code: 1, Err: fmt.Errorf("remote cleanup for node %q refused: %s. These node records point at the same host; use the attached node record or remove the stale duplicate before detaching so cleanup cannot remove unrelated workloads", opts.Node, strings.Join(conflicts, "; "))}
+		return ExitError{Code: 1, Err: fmt.Errorf("remote cleanup for node %q refused: %s. These node records point at the same provider target or SSH endpoint; use the attached node record or remove the stale duplicate before detaching so cleanup cannot remove unrelated workloads", opts.Node, strings.Join(conflicts, "; "))}
 	}
 	remainingNodeNames := make([]string, 0, len(nodeNamesBefore))
 	for _, name := range nodeNamesBefore {
@@ -3573,7 +3573,14 @@ func soloNodesShareRemoteCleanupTarget(a, b config.Node) bool {
 	}
 	aHost := strings.TrimSpace(strings.ToLower(a.Host))
 	bHost := strings.TrimSpace(strings.ToLower(b.Host))
-	return aHost != "" && aHost == bHost
+	return aHost != "" && aHost == bHost && normalizedSoloNodePort(a.Port) == normalizedSoloNodePort(b.Port)
+}
+
+func normalizedSoloNodePort(port int) int {
+	if port == 0 {
+		return 22
+	}
+	return port
 }
 
 func soloRepublishMissingAgentError(err error) bool {

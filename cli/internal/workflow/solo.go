@@ -7656,7 +7656,7 @@ func installSoloAgent(ctx context.Context, node config.Node, opts SoloAgentInsta
 }
 
 func soloAgentInstallShouldHardenSSH(node config.Node) bool {
-	return strings.TrimSpace(node.Provider) != ""
+	return strings.TrimSpace(node.Provider) != "" && strings.TrimSpace(node.ProviderServerID) != ""
 }
 
 func runSoloAgentInstallScript(ctx context.Context, node config.Node, script string, reporter soloInstallReporter) error {
@@ -7729,8 +7729,23 @@ harden_sshd_password_auth() {
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 EOF_SSHD
+  if [ -f /etc/ssh/sshd_config ] && ! run_root grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
+    tmp_sshd_config="$(mktemp)"
+    {
+      printf 'Include /etc/ssh/sshd_config.d/*.conf\n'
+      run_root cat /etc/ssh/sshd_config
+    } >"$tmp_sshd_config"
+    run_root cp "$tmp_sshd_config" /etc/ssh/sshd_config
+    rm -f "$tmp_sshd_config"
+  fi
   run_root sshd -t
-  run_root systemctl reload ssh || run_root systemctl reload sshd || run_root systemctl restart ssh || run_root systemctl restart sshd
+  if ! run_root sshd -T | grep -qi '^passwordauthentication no$'; then
+    echo "warning: SSH password hardening was written but is not effective according to sshd -T" >&2
+    return 0
+  fi
+  if ! run_root systemctl reload ssh && ! run_root systemctl reload sshd; then
+    echo "warning: SSH password hardening was written but sshd reload failed; reload sshd or reboot to apply it" >&2
+  fi
 }
 
 docker_ready() {

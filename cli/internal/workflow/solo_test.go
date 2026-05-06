@@ -4412,11 +4412,49 @@ func TestSoloAgentUpgradeHardensProviderNodeSSH(t *testing.T) {
 		"PasswordAuthentication no",
 		"KbdInteractiveAuthentication no",
 		"/etc/ssh/sshd_config.d/60-devopsellence-hardening.conf",
+		"Include /etc/ssh/sshd_config.d/*.conf",
 		"sshd -t",
+		"sshd -T",
+		"systemctl reload ssh",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, "systemctl restart ssh") || strings.Contains(script, "systemctl restart sshd") {
+		t.Fatalf("install script should not restart sshd over the active SSH session:\n%s", script)
+	}
+}
+
+func TestSoloAgentInstallShouldHardenSSHRequiresCompleteProviderMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		node config.Node
+		want bool
+	}{
+		{
+			name: "manual node",
+			node: config.Node{Host: "203.0.113.10", User: "root"},
+		},
+		{
+			name: "provider without server id",
+			node: config.Node{Host: "203.0.113.10", User: "root", Provider: "hetzner"},
+		},
+		{
+			name: "complete provider metadata",
+			node: config.Node{Host: "203.0.113.10", User: "root", Provider: "hetzner", ProviderServerID: "123"},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := soloAgentInstallShouldHardenSSH(tt.node); got != tt.want {
+				t.Fatalf("soloAgentInstallShouldHardenSSH() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

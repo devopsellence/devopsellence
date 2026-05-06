@@ -1865,12 +1865,16 @@ func soloAttachmentHasReleaseState(current solo.State, attachment solo.Attachmen
 }
 
 func releaseNodeForSnapshot(snapshot desiredstate.DeploySnapshot, attachment solo.AttachmentRecord, nodes map[string]config.Node) (string, error) {
+	return releaseNodeForSnapshotTargets(snapshot, attachment.NodeNames, nodes)
+}
+
+func releaseNodeForSnapshotTargets(snapshot desiredstate.DeploySnapshot, nodeNames []string, nodes map[string]config.Node) (string, error) {
 	if snapshot.ReleaseTask == nil {
 		return "", nil
 	}
-	nodeNames := append([]string(nil), attachment.NodeNames...)
-	sort.Strings(nodeNames)
-	for _, nodeName := range nodeNames {
+	sortedNames := append([]string(nil), nodeNames...)
+	sort.Strings(sortedNames)
+	for _, nodeName := range sortedNames {
 		node, ok := nodes[nodeName]
 		if ok && soloNodeCanRunKind(node, snapshot.ReleaseServiceKind) {
 			return nodeName, nil
@@ -2300,11 +2304,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
-	_, attachment, _, err := current.Attachment(workspaceRoot, environmentName)
-	if err != nil {
-		return err
-	}
-	if _, err := releaseNodeForSnapshot(selected.Snapshot, attachment, current.Nodes); err != nil {
+	if _, err := releaseNodeForSnapshotTargets(selected.Snapshot, rollbackTargetNodeNames, current.Nodes); err != nil {
 		return err
 	}
 	nodes, err := a.resolveNodes(current, rollbackTargetNodeNames)

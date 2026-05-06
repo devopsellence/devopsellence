@@ -4372,6 +4372,52 @@ func TestSoloAgentUpgradeReinstallsAgent(t *testing.T) {
 	if !strings.Contains(string(scriptBytes), "AGENT_VERSION='v2.0.0'") {
 		t.Fatalf("install script missing pinned version:\n%s", string(scriptBytes))
 	}
+	if strings.Contains(string(scriptBytes), "HARDEN_SSH='true'") {
+		t.Fatalf("manual node install script unexpectedly enables SSH hardening:\n%s", string(scriptBytes))
+	}
+}
+
+func TestSoloAgentUpgradeHardensProviderNodeSSH(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v2.0.0 (commit new, built now)")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Provider: "hetzner", ProviderServerID: "123"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentUpgrade(context.Background(), SoloAgentUpgradeOptions{Node: "node-a", BaseURL: "https://example.test"}); err != nil {
+		t.Fatalf("SoloAgentUpgrade() error = %v", err)
+	}
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read install script: %v", err)
+	}
+	script := string(scriptBytes)
+	for _, want := range []string{
+		"HARDEN_SSH='true'",
+		"harden_sshd_password_auth",
+		"PasswordAuthentication no",
+		"KbdInteractiveAuthentication no",
+		"/etc/ssh/sshd_config.d/60-devopsellence-hardening.conf",
+		"sshd -t",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q:\n%s", want, script)
+		}
+	}
 }
 
 func TestSoloAgentInstallReportsVerification(t *testing.T) {
@@ -8999,6 +9045,24 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 		"BASE_URL='https://example.test'",
 		"$BASE_URL/agent/download",
 		"$BASE_URL/agent/checksums",
+		"HARDEN_SSH='false'",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestSoloAgentInstallScriptCanHardenSSHPasswordAuthentication(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test", HardenSSH: true})
+	for _, want := range []string{
+		"HARDEN_SSH='true'",
+		"progress: hardening SSH password authentication",
+		"/etc/ssh/sshd_config.d/60-devopsellence-hardening.conf",
+		"PasswordAuthentication no",
+		"KbdInteractiveAuthentication no",
+		"sshd -t",
+		"systemctl reload ssh",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q", want)

@@ -7633,6 +7633,7 @@ func installSoloAgent(ctx context.Context, node config.Node, opts SoloAgentInsta
 		return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
 			StateDir:        firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 			LocalBinaryPath: remotePath,
+			HardenSSH:       soloAgentInstallShouldHardenSSH(node),
 		}), reporter)
 	}
 
@@ -7642,7 +7643,12 @@ func installSoloAgent(ctx context.Context, node config.Node, opts SoloAgentInsta
 		StateDir:     firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 		BaseURL:      baseURL,
 		AgentVersion: releasedAgentVersionForInstall(),
+		HardenSSH:    soloAgentInstallShouldHardenSSH(node),
 	}), reporter)
+}
+
+func soloAgentInstallShouldHardenSSH(node config.Node) bool {
+	return strings.TrimSpace(node.Provider) != ""
 }
 
 func runSoloAgentInstallScript(ctx context.Context, node config.Node, script string, reporter soloInstallReporter) error {
@@ -7658,6 +7664,7 @@ type soloAgentInstallScriptOptions struct {
 	BaseURL         string
 	AgentVersion    string
 	LocalBinaryPath string
+	HardenSSH       bool
 }
 
 // Accept stable tags, semver-style prereleases, and workflow-generated
@@ -7676,6 +7683,10 @@ func soloAgentInstallScript(opts soloAgentInstallScriptOptions) string {
 	agentVersion := strings.TrimSpace(opts.AgentVersion)
 	localBinary := strings.TrimSpace(opts.LocalBinaryPath)
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
+	hardenSSH := "false"
+	if opts.HardenSSH {
+		hardenSSH = "true"
+	}
 	return fmt.Sprintf(`set -euo pipefail
 
 STATE_DIR=%s
@@ -7684,6 +7695,7 @@ SERVICE_FILE=/etc/systemd/system/devopsellence-agent.service
 BASE_URL=%s
 AGENT_VERSION=%s
 LOCAL_BINARY=%s
+HARDEN_SSH=%s
 
 if [ "$(id -u)" -ne 0 ]; then
   SUDO=sudo
@@ -7697,6 +7709,20 @@ run_root() {
   else
     "$@"
   fi
+}
+
+harden_sshd_password_auth() {
+  [ "$HARDEN_SSH" = "true" ] || return 0
+  command -v sshd >/dev/null 2>&1 || return 0
+  [ -d /etc/ssh ] || return 0
+  echo "progress: hardening SSH password authentication"
+  run_root mkdir -p /etc/ssh/sshd_config.d
+  run_root tee /etc/ssh/sshd_config.d/60-devopsellence-hardening.conf >/dev/null <<'EOF_SSHD'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF_SSHD
+  run_root sshd -t
+  run_root systemctl reload ssh || run_root systemctl reload sshd || run_root systemctl restart ssh || run_root systemctl restart sshd
 }
 
 docker_ready() {
@@ -7743,6 +7769,7 @@ if ! docker_ready; then
   echo "Docker Engine is unavailable after install/start" >&2
   exit 1
 fi
+harden_sshd_password_auth
 
 run_root mkdir -p "$STATE_DIR" "$STATE_DIR/envoy"
 TMP_BIN="$(mktemp)"
@@ -7807,7 +7834,7 @@ run_root systemctl stop devopsellence-agent || true
 run_root systemctl enable --now devopsellence-agent
 echo "progress: checking devopsellence-agent service"
 run_root systemctl is-active --quiet devopsellence-agent
-`, shellQuote(stateDir), shellQuote(baseURL), shellQuote(agentVersion), shellQuote(localBinary), systemdQuoteArg(authStatePath), systemdQuoteArg(overridePath), systemdQuoteArg(envoyBootstrapPath))
+`, shellQuote(stateDir), shellQuote(baseURL), shellQuote(agentVersion), shellQuote(localBinary), shellQuote(hardenSSH), systemdQuoteArg(authStatePath), systemdQuoteArg(overridePath), systemdQuoteArg(envoyBootstrapPath))
 }
 
 type soloAgentUninstallScriptOptions struct {

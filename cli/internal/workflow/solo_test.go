@@ -4413,8 +4413,10 @@ func TestSoloAgentUpgradeHardensProviderNodeSSH(t *testing.T) {
 		"KbdInteractiveAuthentication no",
 		"/etc/ssh/sshd_config.d/60-devopsellence-hardening.conf",
 		"Include /etc/ssh/sshd_config.d/*.conf",
+		"run_root sh -c 'command -v sshd",
 		"sshd -t",
 		"sshd -T",
+		"not effective according to sshd -T",
 		"systemctl reload ssh",
 	} {
 		if !strings.Contains(script, want) {

@@ -7721,7 +7721,7 @@ run_root() {
 
 harden_sshd_password_auth() {
   [ "$HARDEN_SSH" = "true" ] || return 0
-  command -v sshd >/dev/null 2>&1 || return 0
+  run_root sh -c 'command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || [ -x /usr/bin/sshd ]' || return 0
   [ -d /etc/ssh ] || return 0
   echo "progress: hardening SSH password authentication"
   run_root mkdir -p /etc/ssh/sshd_config.d
@@ -7740,8 +7740,8 @@ EOF_SSHD
   fi
   run_root sshd -t
   if ! run_root sshd -T | grep -qi '^passwordauthentication no$'; then
-    echo "warning: SSH password hardening was written but is not effective according to sshd -T" >&2
-    return 0
+    echo "SSH password hardening was written but is not effective according to sshd -T" >&2
+    return 1
   fi
   if ! run_root systemctl reload ssh && ! run_root systemctl reload sshd; then
     echo "warning: SSH password hardening was written but sshd reload failed; reload sshd or reboot to apply it" >&2

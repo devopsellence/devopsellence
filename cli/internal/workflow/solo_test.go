@@ -5507,6 +5507,59 @@ func TestSoloStatusComparesRemoteStatusToPublishedDesiredStateRevision(t *testin
 	}
 }
 
+func TestSoloStatusReportsInFlightRollbackDeployment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	environmentID, currentRelease, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	rollbackRelease := current.Releases["rel-1"]
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_rollback",
+		EnvironmentID: environmentID,
+		ReleaseID:     rollbackRelease.ID,
+		Kind:          corerelease.DeploymentKindRollback,
+		Sequence:      8,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"bbb2222","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	releasePayload := jsonMapFromAny(t, payload["current_release"])
+	if releasePayload["id"] != currentRelease.ID {
+		t.Fatalf("current_release = %#v, want existing current release", releasePayload)
+	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_rollback" || currentDeployment["release_id"] != rollbackRelease.ID || currentDeployment["kind"] != corerelease.DeploymentKindRollback {
+		t.Fatalf("current_deployment = %#v, want in-flight rollback deployment", currentDeployment)
+	}
+}
+
 func TestSoloStatusAcceptsExpectedRevisionWhenStatusTimePredatesLocalDeploymentClock(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -5739,7 +5792,7 @@ func TestSoloStatusRecoversInterruptedRunningDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	statusJSON := fmt.Sprintf(`{"revision":"shortsha","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
+	statusJSON := fmt.Sprintf(`{"revision":"desired-state-hash","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
 	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
 
 	var stdout bytes.Buffer
@@ -5752,12 +5805,86 @@ func TestSoloStatusRecoversInterruptedRunningDeployment(t *testing.T) {
 	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
 		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
 	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_interrupted" || currentDeployment["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("current_deployment = %#v, want recovered settled deployment", currentDeployment)
+	}
 	updated, err := soloState.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusSettled || updated.Deployments["dep_interrupted"].FinishedAt == "" {
-		t.Fatalf("deployment = %#v, want persisted recovery", updated.Deployments["dep_interrupted"])
+	recoveredDeployment := updated.Deployments["dep_interrupted"]
+	if recoveredDeployment.Status != corerelease.DeploymentStatusSettled || recoveredDeployment.FinishedAt == "" {
+		t.Fatalf("deployment = %#v, want persisted recovery", recoveredDeployment)
+	}
+	if recoveredDeployment.PublicationResult == nil || len(recoveredDeployment.PublicationResult.NodeResults) != 1 || recoveredDeployment.PublicationResult.NodeResults[0].Revision != "desired-state-hash" {
+		t.Fatalf("publication_result = %#v, want recovered desired-state revision", recoveredDeployment.PublicationResult)
+	}
+}
+
+func TestSoloStatusDoesNotRecoverUncheckedInterruptedDeploymentTarget(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_interrupted",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a", "node-b"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"desired-state-hash","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["recovered_deployment"] != nil {
+		t.Fatalf("payload = %#v, want no recovery for unchecked target", payload)
+	}
+	updated, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
+		t.Fatalf("deployment = %#v, want running deployment preserved", updated.Deployments["dep_interrupted"])
 	}
 }
 
@@ -6862,6 +6989,39 @@ func TestSoloReleaseRollbackReportsMigrationContract(t *testing.T) {
 	}
 }
 
+func TestSoloReleaseRollbackWarnsWhenOnlyCurrentReleaseHasTask(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	active := current.Releases["rel-2"]
+	active.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:bbb2222", Command: []string{"bin/migrate"}}
+	active.Snapshot.ReleaseService = "web"
+	active.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-2"] = active
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	contract := jsonMapFromAny(t, payload["rollback_contract"])
+	if contract["current_release_task"] != true || contract["selected_release_task"] != false || contract["selected_release_task_reruns"] != false {
+		t.Fatalf("rollback_contract = %#v, want current-task-only warning", contract)
+	}
+	if !strings.Contains(stringValueAny(contract["operator_responsibility"]), "backup") {
+		t.Fatalf("rollback_contract = %#v, want backup responsibility", contract)
+	}
+}
+
 func TestSoloReleaseRollbackDryRunValidatesReleaseTaskPlacement(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -6883,6 +7043,36 @@ func TestSoloReleaseRollbackDryRunValidatesReleaseTaskPlacement(t *testing.T) {
 	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true})
 	if err == nil {
 		t.Fatal("SoloReleaseRollback() error = nil, want release task placement failure")
+	}
+	if !strings.Contains(err.Error(), "requires at least one attached node labeled") || !strings.Contains(err.Error(), "worker") {
+		t.Fatalf("error = %v, want release task placement guidance", err)
+	}
+}
+
+func TestSoloReleaseRollbackValidatesReleaseTaskPlacementAgainstTargets(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	worker := current.Nodes["node-b"]
+	worker.Labels = []string{config.DefaultWorkerRole}
+	current.Nodes["node-b"] = worker
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "worker"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWorker
+	current.Releases["rel-1"] = previous
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{Printer: output.New(io.Discard, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true})
+	if err == nil {
+		t.Fatal("SoloReleaseRollback() error = nil, want release task target placement failure")
 	}
 	if !strings.Contains(err.Error(), "requires at least one attached node labeled") || !strings.Contains(err.Error(), "worker") {
 		t.Fatalf("error = %v, want release task placement guidance", err)

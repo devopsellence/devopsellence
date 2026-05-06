@@ -6069,7 +6069,62 @@ func TestSoloStatusRecoversInterruptedRunningDeployment(t *testing.T) {
 	}
 }
 
-func TestSoloStatusDoesNotRecoverUncheckedInterruptedDeploymentTarget(t *testing.T) {
+func TestSoloStatusRecoversInterruptedRunningDeploymentWithMinimalStatus(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_interrupted",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"shortsha","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	recovered := jsonMapFromAny(t, payload["recovered_deployment"])
+	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
+	}
+}
+
+func TestSoloStatusRecoversInterruptedDeploymentWhenStaleTargetDetached(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
@@ -6123,15 +6178,48 @@ func TestSoloStatusDoesNotRecoverUncheckedInterruptedDeploymentTarget(t *testing
 		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
-	if payload["recovered_deployment"] != nil {
-		t.Fatalf("payload = %#v, want no recovery for unchecked target", payload)
+	recovered := jsonMapFromAny(t, payload["recovered_deployment"])
+	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
 	}
 	updated, err := soloState.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
-		t.Fatalf("deployment = %#v, want running deployment preserved", updated.Deployments["dep_interrupted"])
+	if updated.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusSettled {
+		t.Fatalf("deployment = %#v, want settled deployment", updated.Deployments["dep_interrupted"])
+	}
+}
+
+func TestSoloRecoverSettledRunningDeploymentIgnoresDetachedTargets(t *testing.T) {
+	current := solo.State{}
+	deployment := corerelease.Deployment{
+		ID:            "dep_interrupted",
+		EnvironmentID: "env",
+		ReleaseID:     "rel",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a", "node-old"},
+		Status:        corerelease.DeploymentStatusRunning,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, ok, err := soloRecoverSettledRunningDeployment(
+		&current,
+		"env",
+		"rel",
+		map[string]config.Node{"node-a": {Host: "203.0.113.10"}},
+		map[string]bool{"node-a": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || recovered.Status != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered = %#v ok=%v, want settled recovery from attached target", recovered, ok)
 	}
 }
 

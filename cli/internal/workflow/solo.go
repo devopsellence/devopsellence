@@ -2001,7 +2001,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
 		runtime := soloRuntimeEnvironmentStatus(result.Status, expectedRuntimeEnvironment, expectedWorkloadRevision)
 		statusMatches := soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name])
-		if hasRecoveryCandidate && recoveryTargets[name] && statusMatches && strings.TrimSpace(result.Status.Phase) == "settled" && runtime.State == "settled" {
+		if hasRecoveryCandidate && recoveryTargets[name] && statusMatches && strings.TrimSpace(result.Status.Phase) == "settled" && soloRecoveryRuntimeSettled(runtime) {
 			recoveryChecked[name] = true
 			if revision := strings.TrimSpace(result.Status.Revision); revision != "" && len(cohostedRevisions[name]) == 0 {
 				recoveryRevisions[name] = revision
@@ -2144,11 +2144,15 @@ func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, rel
 	return selected, true, nil
 }
 
+func soloRecoveryRuntimeSettled(runtime soloRuntimeStatusResult) bool {
+	return runtime.State == "" || runtime.State == "settled"
+}
+
 func soloDeploymentTargetSet(deployment corerelease.Deployment, nodes map[string]config.Node) map[string]bool {
 	targets := map[string]bool{}
 	for _, nodeName := range deployment.TargetNodeIDs {
 		nodeName = strings.TrimSpace(nodeName)
-		if nodeName != "" {
+		if _, ok := nodes[nodeName]; nodeName != "" && ok {
 			targets[nodeName] = true
 		}
 	}

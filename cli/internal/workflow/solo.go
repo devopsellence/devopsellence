@@ -3500,6 +3500,9 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	} else if !changed {
 		return fmt.Errorf("node %q is not attached to %s", opts.Node, environmentName)
 	}
+	if conflicts := soloNodeRemoteCleanupConflicts(next, opts.Node); len(conflicts) > 0 {
+		return ExitError{Code: 1, Err: fmt.Errorf("remote cleanup for node %q refused: %s. These node records point at the same host; use the attached node record or remove the stale duplicate before detaching so cleanup cannot remove unrelated workloads", opts.Node, strings.Join(conflicts, "; "))}
+	}
 	remainingNodeNames := make([]string, 0, len(nodeNamesBefore))
 	for _, name := range nodeNamesBefore {
 		if name != opts.Node {
@@ -3535,6 +3538,42 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	}
 	return a.Printer.PrintJSON(payload)
 
+}
+
+func soloNodeRemoteCleanupConflicts(current solo.State, nodeName string) []string {
+	nodeName = strings.TrimSpace(nodeName)
+	node, ok := current.Nodes[nodeName]
+	if !ok {
+		return nil
+	}
+	conflicts := []string{}
+	for otherName, otherNode := range current.Nodes {
+		if otherName == nodeName || !soloNodesShareRemoteCleanupTarget(node, otherNode) || !current.NodeHasAttachments(otherName) {
+			continue
+		}
+		attachments := current.AttachmentsForNode(otherName)
+		descriptions := make([]string, 0, len(attachments))
+		for _, attachment := range attachments {
+			descriptions = append(descriptions, fmt.Sprintf("%s:%s", attachment.WorkspaceKey, attachment.Environment))
+		}
+		sort.Strings(descriptions)
+		conflicts = append(conflicts, fmt.Sprintf("%s has attached environments [%s]", otherName, strings.Join(descriptions, ", ")))
+	}
+	sort.Strings(conflicts)
+	return conflicts
+}
+
+func soloNodesShareRemoteCleanupTarget(a, b config.Node) bool {
+	aProvider := strings.TrimSpace(strings.ToLower(a.Provider))
+	bProvider := strings.TrimSpace(strings.ToLower(b.Provider))
+	aProviderID := strings.TrimSpace(a.ProviderServerID)
+	bProviderID := strings.TrimSpace(b.ProviderServerID)
+	if aProvider != "" && aProviderID != "" && aProvider == bProvider && aProviderID == bProviderID {
+		return true
+	}
+	aHost := strings.TrimSpace(strings.ToLower(a.Host))
+	bHost := strings.TrimSpace(strings.ToLower(b.Host))
+	return aHost != "" && aHost == bHost
 }
 
 func soloRepublishMissingAgentError(err error) bool {

@@ -5093,6 +5093,70 @@ func TestSoloNodeDetachRepublishesEmptyDesiredStateForLastAttachment(t *testing.
 	}
 }
 
+func TestSoloNodeDetachRefusesRemoteCleanupWhenDuplicateHostHasAttachments(t *testing.T) {
+	workspaceDocs := t.TempDir()
+	workspaceDogfood := t.TempDir()
+	if _, err := config.Write(workspaceDocs, config.DefaultProjectConfig("solo", "docs", "production")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Write(workspaceDogfood, config.DefaultProjectConfig("solo", "dogfood", "production")); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"docs-1":           {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+			"docs-df-existing": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceDocs, "production", "docs-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceDogfood, "production", "docs-df-existing"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	revisionPath := installFakeSoloCommands(t, nil)
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceDogfood,
+	}
+	err := app.SoloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: "docs-df-existing"})
+	if err == nil {
+		t.Fatal("expected duplicate-host detach refusal")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	for _, want := range []string{"remote cleanup", "docs-1", "same host", "unrelated workloads"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want substring %q", err.Error(), want)
+		}
+	}
+	if _, err := os.Stat(revisionPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("desired state file stat err = %v, want not exist", err)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.NodeHasAttachments("docs-df-existing") {
+		t.Fatalf("docs-df-existing attachment was removed after refused detach: %#v", loaded.Attachments)
+	}
+	if !loaded.NodeHasAttachments("docs-1") {
+		t.Fatalf("docs-1 attachment was removed after refused detach: %#v", loaded.Attachments)
+	}
+}
+
 func TestNodeRemoveForManualNodeForgetsLocalState(t *testing.T) {
 	t.Parallel()
 

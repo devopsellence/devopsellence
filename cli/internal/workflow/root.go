@@ -1161,6 +1161,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Long: strings.Join([]string{
 			"Upgrade the agent on a solo node over SSH.",
 			"This reinstalls the agent binary and systemd service using the same release source as agent install.",
+			"It writes newline-delimited JSON progress events to stdout followed by a final result event.",
 		}, "\n"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -7204,7 +7204,28 @@ func temporaryDNSHostname(_ *config.ProjectConfig, ip string) string {
 }
 
 func temporaryDNSCommand(cfg *config.ProjectConfig, hostname string, environment ...string) string {
-	return "devopsellence ingress set" + soloEnvFlag(firstNonEmpty(environment...)) + " --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
+	return "devopsellence ingress set" + soloEnvFlag(firstNonEmpty(environment...)) + temporaryDNSServiceFlag(cfg) + " --host " + shellQuote(hostname) + " --tls-mode " + shellQuote(temporaryDNSTLSMode(cfg))
+}
+
+func temporaryDNSServiceFlag(cfg *config.ProjectConfig) string {
+	if cfg == nil || cfg.Ingress == nil {
+		return ""
+	}
+	services := map[string]bool{}
+	for _, rule := range cfg.Ingress.Rules {
+		serviceName := strings.TrimSpace(rule.Target.Service)
+		if serviceName == "" {
+			continue
+		}
+		services[serviceName] = true
+	}
+	if len(services) != 1 {
+		return ""
+	}
+	for serviceName := range services {
+		return " --service " + shellQuote(serviceName)
+	}
+	return ""
 }
 
 func temporaryDNSTLSMode(cfg *config.ProjectConfig) string {

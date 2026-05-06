@@ -2029,15 +2029,14 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		}
 		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
 		runtime := soloRuntimeEnvironmentStatus(result.Status, expectedRuntimeEnvironment, expectedWorkloadRevision)
-		recoveryMatch := false
-		if hasRecoveryCandidate && recoveryTargets[name] && strings.TrimSpace(result.Status.Phase) == "settled" && runtime.State == "settled" {
+		statusMatches := soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name])
+		if hasRecoveryCandidate && recoveryTargets[name] && statusMatches && strings.TrimSpace(result.Status.Phase) == "settled" && runtime.State == "settled" {
 			recoveryChecked[name] = true
 			if revision := strings.TrimSpace(result.Status.Revision); revision != "" && len(cohostedRevisions[name]) == 0 {
 				recoveryRevisions[name] = revision
 			}
-			recoveryMatch = recoveryCandidate.PublicationResult == nil && strings.TrimSpace(result.Status.Revision) != "" && len(cohostedRevisions[name]) == 0
 		}
-		if expectedRevision != "" && !soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name]) && !recoveryMatch {
+		if expectedRevision != "" && !statusMatches {
 			allSettled = false
 			message := soloStatusMismatchMessage(result.Status, expectedRevision, runtime, expectedRuntimeEnvironment, expectedWorkloadRevision, environmentName)
 			if runtime.State == "error" {

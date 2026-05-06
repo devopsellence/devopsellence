@@ -25,5 +25,5 @@ For local experiments without a real hostname, `sslip.io` can be useful when a
 node has one public IP:
 
 ```bash
-devopsellence ingress set --host '203.0.113.10.sslip.io' --tls-mode auto
+devopsellence ingress set --service web --host '203.0.113.10.sslip.io' --tls-mode auto
 ```

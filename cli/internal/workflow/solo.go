@@ -925,6 +925,7 @@ func soloRolloutNextSteps(environment string, nodes []string, healthchecks []map
 	for _, node := range nodes {
 		steps = append(steps, "devopsellence logs"+envFlag+" --node "+shellQuote(node)+" --lines 100")
 		steps = append(steps, "devopsellence node logs "+shellQuote(node)+" --lines 100")
+		steps = append(steps, "devopsellence node diagnose "+shellQuote(node))
 	}
 	return steps
 }
@@ -4216,6 +4217,9 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 		payload["ok"] = false
 	} else if statusResult.Missing {
 		payload["status_missing"] = true
+		payload["status_path"] = path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "status.json")
+		diagnoseOK = false
+		payload["ok"] = false
 	} else {
 		var statusPayload any
 		if err := json.Unmarshal(statusResult.Raw, &statusPayload); err == nil {
@@ -4371,6 +4375,46 @@ func soloAgentVersionCheck(ctx context.Context, node config.Node) soloRuntimeChe
 		check.OK = false
 		check.NextAction = "run devopsellence node diagnose <node>"
 	}
+	return check
+}
+
+func soloAgentStatusReportCheck(ctx context.Context, node config.Node) soloRuntimeCheck {
+	statusPath := path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "status.json")
+	result, err := readNodeStatus(ctx, node)
+	check := soloRuntimeCheck{OK: true}
+	if err != nil {
+		check.OK = false
+		check.Observed = "unknown: read " + statusPath + ": " + err.Error()
+		check.NextAction = "run devopsellence node diagnose <node> and inspect the agent status path"
+		return check
+	}
+	if result.Missing {
+		check.OK = false
+		check.Observed = "missing expected status report at " + statusPath
+		check.NextAction = "reinstall or restart the agent, then rerun devopsellence doctor"
+		return check
+	}
+	if strings.TrimSpace(result.Status.Time) == "" {
+		check.OK = false
+		check.Observed = "status report at " + statusPath + " is missing time"
+		check.NextAction = "run devopsellence node diagnose <node> and inspect the agent status writer"
+		return check
+	}
+	statusTime, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(result.Status.Time))
+	if err != nil {
+		check.OK = false
+		check.Observed = "status report at " + statusPath + " has invalid time " + shellQuote(result.Status.Time)
+		check.NextAction = "run devopsellence node diagnose <node> and inspect the agent status writer"
+		return check
+	}
+	age := time.Since(statusTime)
+	if age < -2*time.Minute {
+		check.OK = false
+		check.Observed = fmt.Sprintf("status report at %s is from the future: time=%s", statusPath, result.Status.Time)
+		check.NextAction = "check node clock skew, then rerun devopsellence doctor"
+		return check
+	}
+	check.Observed = fmt.Sprintf("status report at %s: phase=%s time=%s age=%s", statusPath, firstNonEmpty(result.Status.Phase, "unknown"), result.Status.Time, age.Round(time.Second))
 	return check
 }
 
@@ -5315,6 +5359,7 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 		}
 		if !sshOK {
 			results = append(results, soloRuntimeAgentVersionCheckResult(name, soloRuntimeCheck{OK: false, Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"}))
+			results = append(results, soloRuntimeStatusReportCheckResult(name, soloRuntimeCheck{OK: false, Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"}))
 			for _, check := range soloSkippedSecurityChecksAfterSSHFailure() {
 				results = append(results, soloRuntimeSecurityCheckResult(name, check))
 			}
@@ -5326,6 +5371,11 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			failed = true
 		}
 		results = append(results, versionResult)
+		statusReportCheck := soloAgentStatusReportCheck(ctx, node)
+		if !statusReportCheck.OK {
+			failed = true
+		}
+		results = append(results, soloRuntimeStatusReportCheckResult(name, statusReportCheck))
 		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false, nil) {
 			result := soloRuntimeSecurityCheckResult(name, check)
 			if !check.OK {
@@ -5341,6 +5391,19 @@ func soloRuntimeAgentVersionCheckResult(nodeName string, check soloRuntimeCheck)
 	result := map[string]any{
 		"node":   nodeName,
 		"check":  "agent_version",
+		"ok":     check.OK,
+		"detail": check.Observed,
+	}
+	if check.NextAction != "" {
+		result["next_action"] = check.NextAction
+	}
+	return result
+}
+
+func soloRuntimeStatusReportCheckResult(nodeName string, check soloRuntimeCheck) map[string]any {
+	result := map[string]any{
+		"node":   nodeName,
+		"check":  "agent_status_report",
 		"ok":     check.OK,
 		"detail": check.Observed,
 	}

@@ -2007,8 +2007,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		}
 		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
 		runtime := soloRuntimeEnvironmentStatus(result.Status, expectedRuntimeEnvironment, expectedWorkloadRevision)
-		statusMatches := soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name])
-		if hasRecoveryCandidate && recoveryTargets[name] && statusMatches && strings.TrimSpace(result.Status.Phase) == "settled" && runtime.State == "settled" {
+		statusMatches := soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, runtime, cohostedRevisions[name], staleRevisions[name])
+		if hasRecoveryCandidate && recoveryTargets[name] && statusMatches && strings.TrimSpace(result.Status.Phase) == "settled" && soloRecoveryRuntimeSettled(runtime) {
 			recoveryChecked[name] = true
 			if revision := strings.TrimSpace(result.Status.Revision); revision != "" && len(cohostedRevisions[name]) == 0 {
 				recoveryRevisions[name] = revision
@@ -2055,37 +2055,36 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		"environment":    environmentName,
 		"nodes":          jsonResults,
 	}
-	if hasCurrent {
-		payload["current_release"] = soloStatusReleasePayload(currentRelease)
+	appendPayloadWarning := func(message string) {
+		warnings, _ := payload["warnings"].([]string)
+		payload["warnings"] = append(warnings, message)
 	}
 	if len(verifiedPublicURLs) > 0 {
 		if allSettled {
 			payload["public_urls"] = verifiedPublicURLs
 		} else {
 			payload["configured_public_urls"] = verifiedPublicURLs
-			payload["warnings"] = []string{"public URLs are configured, but one or more nodes are not settled; check `devopsellence status" + soloEnvFlag(environmentName) + "` before testing reachability"}
+			appendPayloadWarning("public URLs are configured, but one or more nodes are not settled; check `devopsellence status" + soloEnvFlag(environmentName) + "` before testing reachability")
 		}
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
-		payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
+		appendPayloadWarning(soloPublicURLWarning(cfg, environmentName))
 	}
-	if allSettled && hasCurrent && len(opts.Nodes) == 0 {
+	if allSettled && hasCurrent && hasRecoveryCandidate && len(opts.Nodes) == 0 && soloRecoveryTargetsChecked(recoveryTargets, recoveryChecked) {
 		var recovered corerelease.Deployment
 		var recoveredState solo.State
 		recoveredOK := false
 		if err := a.updateSoloState(func(recoveryState *solo.State) error {
 			var err error
-			recovered, recoveredOK, err = soloRecoverSettledRunningDeployment(recoveryState, environmentID, statusRelease.ID, recoveryChecked, recoveryRevisions)
-			if err != nil || !recoveredOK {
-				return err
+			recovered, recoveredOK, err = soloRecoverSettledRunningDeployment(recoveryState, environmentID, statusRelease.ID, nodes, recoveryChecked, recoveryRevisions)
+			if err == nil && recoveredOK {
+				recoveredState = *recoveryState
 			}
-			recoveredState = *recoveryState
 			return err
 		}); err != nil {
-			return err
-		}
-		if recoveredOK {
+			appendPayloadWarning("remote status is settled, but local deployment recovery could not be persisted: " + err.Error())
+		} else if recoveredOK {
 			current = recoveredState
 			payload["recovered_deployment"] = map[string]any{
 				"id":             recovered.ID,
@@ -2094,6 +2093,13 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				"status_message": recovered.StatusMessage,
 			}
 		}
+	}
+	if hasCurrent {
+		releasePayload := currentRelease
+		if _, release, ok, err := current.CurrentRelease(workspaceRoot, environmentName); err == nil && ok {
+			releasePayload = release
+		}
+		payload["current_release"] = soloStatusReleasePayload(releasePayload)
 	}
 	if hasCurrent && payload["current_deployment"] == nil {
 		if deployment, ok := soloLatestDeploymentForEnvironment(current, environmentID); ok {
@@ -2172,7 +2178,7 @@ func soloLatestDeploymentMatching(current solo.State, match func(corerelease.Dep
 		if !match(deployment) {
 			continue
 		}
-		if !found || deployment.Sequence > selected.Sequence || (deployment.Sequence == selected.Sequence && deployment.CreatedAt > selected.CreatedAt) {
+		if !found || soloDeploymentSortsAfter(deployment, selected) {
 			selected = deployment
 			found = true
 		}
@@ -2180,16 +2186,39 @@ func soloLatestDeploymentMatching(current solo.State, match func(corerelease.Dep
 	return selected, found
 }
 
-func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, releaseID string, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, bool, error) {
+func soloDeploymentSortsAfter(candidate, selected corerelease.Deployment) bool {
+	if candidate.Sequence != selected.Sequence {
+		return candidate.Sequence > selected.Sequence
+	}
+	candidateCreatedAt, candidateOK := parseSoloDeploymentCreatedAt(candidate.CreatedAt)
+	selectedCreatedAt, selectedOK := parseSoloDeploymentCreatedAt(selected.CreatedAt)
+	if candidateOK && selectedOK && !candidateCreatedAt.Equal(selectedCreatedAt) {
+		return candidateCreatedAt.After(selectedCreatedAt)
+	}
+	if candidateOK != selectedOK {
+		return candidateOK
+	}
+	return candidate.ID > selected.ID
+}
+
+func parseSoloDeploymentCreatedAt(value string) (time.Time, bool) {
+	createdAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return createdAt, true
+}
+
+func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, releaseID string, nodes map[string]config.Node, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, bool, error) {
 	selected, found := soloLatestRunningDeployment(*current, environmentID, releaseID)
 	if !found {
 		return corerelease.Deployment{}, false, nil
 	}
-	for _, nodeName := range selected.TargetNodeIDs {
-		nodeName = strings.TrimSpace(nodeName)
-		if nodeName == "" {
-			continue
-		}
+	targets := soloDeploymentTargetSet(selected, nodes)
+	if len(targets) == 0 {
+		return corerelease.Deployment{}, false, nil
+	}
+	for nodeName := range targets {
 		if !checkedTargets[nodeName] {
 			return corerelease.Deployment{}, false, nil
 		}
@@ -2212,15 +2241,36 @@ func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, rel
 	return selected, true, nil
 }
 
+func soloRecoveryRuntimeSettled(runtime soloRuntimeStatusResult) bool {
+	return runtime.State == "" || runtime.State == "settled"
+}
+
+func soloRecoveryTargetsChecked(targets, checked map[string]bool) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	for nodeName := range targets {
+		if !checked[nodeName] {
+			return false
+		}
+	}
+	return true
+}
+
 func soloDeploymentTargetSet(deployment corerelease.Deployment, nodes map[string]config.Node) map[string]bool {
 	targets := map[string]bool{}
+	hasExplicitTargets := false
 	for _, nodeName := range deployment.TargetNodeIDs {
 		nodeName = strings.TrimSpace(nodeName)
-		if nodeName != "" {
+		if nodeName == "" {
+			continue
+		}
+		hasExplicitTargets = true
+		if _, ok := nodes[nodeName]; nodeName != "" && ok {
 			targets[nodeName] = true
 		}
 	}
-	if len(targets) > 0 {
+	if hasExplicitTargets {
 		return targets
 	}
 	for nodeName := range nodes {
@@ -2359,8 +2409,7 @@ func soloCohostedStatusRevisions(current solo.State, release corerelease.Release
 	return cohosted
 }
 
-func soloNodeStatusMatchesExpectedRelease(status soloNodeStatus, expectedDesiredStateRevision, expectedRuntimeEnvironment, expectedWorkloadRevision string, cohostedDesiredStateRevisions, staleDesiredStateRevisions map[string]bool) bool {
-	runtime := soloRuntimeEnvironmentStatus(status, expectedRuntimeEnvironment, expectedWorkloadRevision)
+func soloNodeStatusMatchesExpectedRelease(status soloNodeStatus, expectedDesiredStateRevision string, runtime soloRuntimeStatusResult, cohostedDesiredStateRevisions, staleDesiredStateRevisions map[string]bool) bool {
 	if runtime.State != "" {
 		if runtime.State != "settled" {
 			return false
@@ -3898,7 +3947,7 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	payload["ports"] = ports
 	portLines, _ := ports["lines"].([]string)
 	portsTruncated, _ := ports["truncated"].(bool)
-	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated)
+	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated, ports)
 	payload["security"] = security
 	if !diagnosticSectionsOK(agent, dockerSnapshot, ports) {
 		diagnoseOK = false
@@ -4117,20 +4166,20 @@ func soloAgentObservedVersion(observed string) string {
 	return ""
 }
 
-func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) map[string]any {
-	checks := soloNodeSecurityChecks(ctx, node, portLines, portsTruncated)
+func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) map[string]any {
+	checks := soloNodeSecurityChecks(ctx, node, portLines, portsTruncated, portDiagnostic)
 	items, ok := soloNodeSecurityCheckItems(checks)
 	return map[string]any{"ok": ok, "checks": items}
 }
 
-func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) []soloSecurityCheck {
+func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) []soloSecurityCheck {
 	return []soloSecurityCheck{
 		soloSSHPasswordAuthCheck(ctx, node),
 		soloAgentStatePermissionsCheck(ctx, node),
 		soloTLSKeyPermissionsCheck(ctx, node),
 		soloDockerSocketMountsCheck(ctx, node),
 		soloPrivilegedContainersCheck(ctx, node),
-		soloPublicListeningPortsCheck(ctx, node, portLines, portsTruncated),
+		soloPublicListeningPortsCheck(ctx, node, portLines, portsTruncated, portDiagnostic),
 	}
 }
 
@@ -4194,7 +4243,7 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 		check.NextAction = "rerun devopsellence node diagnose after the agent state directory can be inspected"
 		return check
 	}
-	fields := strings.Fields(strings.TrimSpace(diag.Stdout))
+	fields := soloStatFields(diag.Stdout)
 	if len(fields) == 0 || fields[0] == "missing" {
 		check.OK = false
 		check.Observed = stateDir + " missing"
@@ -4211,17 +4260,17 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 	}
 	if len(fields) >= 2 && fields[1] != "root" {
 		check.OK = false
-		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + stateDir
+		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + shellQuote(stateDir)
 		return check
 	}
 	if len(fields) >= 3 && fields[2] != "root" {
 		check.OK = false
-		check.NextAction = "restore root group ownership on the agent state directory, for example chown root:root " + stateDir
+		check.NextAction = "restore root group ownership on the agent state directory, for example chown root:root " + shellQuote(stateDir)
 		return check
 	}
 	if mode&0o026 != 0 {
 		check.OK = false
-		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + stateDir
+		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + shellQuote(stateDir)
 	}
 	return check
 }
@@ -4236,7 +4285,7 @@ func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecur
 		check.NextAction = "rerun devopsellence node diagnose after the TLS key path can be inspected"
 		return check
 	}
-	fields := strings.Fields(strings.TrimSpace(diag.Stdout))
+	fields := soloStatFields(diag.Stdout)
 	if len(fields) == 0 || fields[0] == "missing" {
 		check.Observed = keyPath + " not present"
 		return check
@@ -4251,9 +4300,20 @@ func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecur
 	}
 	if mode&0o037 != 0 {
 		check.OK = false
-		check.NextAction = "restrict the TLS private key file to the agent or Envoy group, for example chmod 640 " + keyPath
+		check.NextAction = "restrict the TLS private key file to the agent or Envoy group, for example chmod 640 " + shellQuote(keyPath)
 	}
 	return check
+}
+
+func soloStatFields(output string) []string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil
+	}
+	if strings.Contains(output, "\t") {
+		return strings.SplitN(output, "\t", 4)
+	}
+	return strings.Fields(output)
 }
 
 func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecurityCheck {
@@ -4266,9 +4326,15 @@ func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecu
 		return check
 	}
 	lines := splitNonFinalEmptyLines(diag.Stdout)
+	if listenOutputHasTruncationMarker(lines) {
+		check.OK = false
+		check.Observed = "unknown: managed container mount output was truncated"
+		check.NextAction = "rerun devopsellence node diagnose after managed containers can be inspected completely"
+		return check
+	}
 	offenders := []string{}
 	for _, line := range lines {
-		if strings.Contains(line, "/var/run/docker.sock") {
+		if managedDockerSocketMountLine(line) {
 			offenders = append(offenders, strings.TrimSpace(line))
 		}
 	}
@@ -4282,6 +4348,10 @@ func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecu
 	return check
 }
 
+func managedDockerSocketMountLine(line string) bool {
+	return strings.Contains(line, "/var/run/docker.sock") || strings.Contains(line, "/run/docker.sock")
+}
+
 func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSecurityCheck {
 	diag := runRemoteDiagnostic(ctx, node, remoteManagedContainerPrivilegesCommand())
 	check := soloSecurityCheck{Name: "privileged_containers", OK: true, Severity: "critical"}
@@ -4291,8 +4361,15 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 		check.NextAction = "rerun devopsellence node diagnose after Docker can be inspected"
 		return check
 	}
+	lines := splitNonFinalEmptyLines(diag.Stdout)
+	if listenOutputHasTruncationMarker(lines) {
+		check.OK = false
+		check.Observed = "unknown: managed container privilege output was truncated"
+		check.NextAction = "rerun devopsellence node diagnose after managed containers can be inspected completely"
+		return check
+	}
 	offenders := []string{}
-	for _, line := range splitNonFinalEmptyLines(diag.Stdout) {
+	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && fields[1] == "true" {
 			offenders = append(offenders, fields[0])
@@ -4308,8 +4385,14 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 	return check
 }
 
-func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) soloSecurityCheck {
+func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) soloSecurityCheck {
 	check := soloSecurityCheck{Name: "public_listening_ports", OK: true, Severity: "medium"}
+	if portDiagnostic != nil && portDiagnostic["ok"] != true {
+		check.OK = false
+		check.Observed = "unknown: " + remoteDiagnosticResultMessage(portDiagnostic)
+		check.NextAction = "rerun devopsellence node diagnose after listening ports can be inspected"
+		return check
+	}
 	if portLines == nil {
 		diag := runRemoteDiagnostic(ctx, node, remoteListeningPortsCommand())
 		if diag.Err != nil || diag.ExitCode != 0 {
@@ -4323,7 +4406,7 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 	if portsTruncated || listenOutputHasTruncationMarker(portLines) {
 		check.OK = false
 		check.Observed = "unknown: listening port output was truncated"
-		check.NextAction = "rerun listening-port diagnostics with complete output before trusting public port hardening"
+		check.NextAction = "inspect listening ports directly on the node with ss -ltnp or netstat -ltnp before trusting public port hardening"
 		return check
 	}
 	if !listeningPortsInspectable(portLines) {
@@ -4332,7 +4415,7 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 		check.NextAction = "install ss or netstat on the node, then rerun devopsellence node diagnose"
 		return check
 	}
-	ports := unexpectedPublicListeningPorts(portLines)
+	ports := unexpectedPublicListeningPorts(portLines, node.Port)
 	if len(ports) > 0 {
 		check.OK = false
 		check.Observed = "unexpected public listening ports: " + strings.Join(ports, ", ")
@@ -4341,6 +4424,33 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 	}
 	check.Observed = "only expected public ports detected"
 	return check
+}
+
+func remoteDiagnosticResultMessage(result map[string]any) string {
+	if message := diagnosticStringValue(result["error"]); strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	if message := diagnosticStringValue(result["stderr"]); strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	if code, ok := result["exit_code"]; ok {
+		return fmt.Sprintf("command exited with code %v", code)
+	}
+	return "diagnostic failed"
+}
+
+func diagnosticStringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprint(typed)
+	}
 }
 
 func listenOutputHasTruncationMarker(lines []string) bool {
@@ -4373,8 +4483,11 @@ func hasListenAddress(line string) bool {
 	return false
 }
 
-func unexpectedPublicListeningPorts(lines []string) []string {
-	expected := map[string]bool{"22": true, "80": true, "443": true}
+func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
+	if sshPort == 0 {
+		sshPort = 22
+	}
+	expected := map[string]bool{strconv.Itoa(sshPort): true, "80": true, "443": true}
 	seen := map[string]bool{}
 	for _, line := range lines {
 		for _, port := range publicPortsFromListeningLine(line) {
@@ -4891,9 +5004,13 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			{name: "docker", cmd: remoteDockerCheckCommand()},
 			{name: "agent", cmd: "systemctl is-active --quiet devopsellence-agent"},
 		}
+		sshOK := true
 		for _, check := range checks {
 			out, err := solo.RunSSH(ctx, node, check.cmd, nil)
 			ok := err == nil
+			if check.name == "ssh" {
+				sshOK = ok
+			}
 			result := map[string]any{"node": name, "check": check.name, "ok": ok}
 			if ok {
 				if detail := strings.TrimSpace(out); detail != "" {
@@ -4905,31 +5022,21 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			}
 			results = append(results, result)
 		}
+		if !sshOK {
+			results = append(results, soloRuntimeAgentVersionCheckResult(name, soloRuntimeCheck{OK: false, Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"}))
+			for _, check := range soloSkippedSecurityChecksAfterSSHFailure() {
+				results = append(results, soloRuntimeSecurityCheckResult(name, check))
+			}
+			continue
+		}
 		versionCheck := soloAgentVersionCheck(ctx, node)
-		versionResult := map[string]any{
-			"node":   name,
-			"check":  "agent_version",
-			"ok":     versionCheck.OK,
-			"detail": versionCheck.Observed,
-		}
-		if versionCheck.NextAction != "" {
-			versionResult["next_action"] = versionCheck.NextAction
-		}
+		versionResult := soloRuntimeAgentVersionCheckResult(name, versionCheck)
 		if !versionCheck.OK {
 			failed = true
 		}
 		results = append(results, versionResult)
-		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false) {
-			result := map[string]any{
-				"node":     name,
-				"check":    "security_" + check.Name,
-				"ok":       check.OK,
-				"severity": check.Severity,
-				"detail":   check.Observed,
-			}
-			if check.NextAction != "" {
-				result["next_action"] = check.NextAction
-			}
+		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false, nil) {
+			result := soloRuntimeSecurityCheckResult(name, check)
 			if !check.OK {
 				failed = true
 			}
@@ -4937,6 +5044,44 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 		}
 	}
 	return results, failed, nil
+}
+
+func soloRuntimeAgentVersionCheckResult(nodeName string, check soloRuntimeCheck) map[string]any {
+	result := map[string]any{
+		"node":   nodeName,
+		"check":  "agent_version",
+		"ok":     check.OK,
+		"detail": check.Observed,
+	}
+	if check.NextAction != "" {
+		result["next_action"] = check.NextAction
+	}
+	return result
+}
+
+func soloSkippedSecurityChecksAfterSSHFailure() []soloSecurityCheck {
+	return []soloSecurityCheck{
+		{Name: "ssh_password_auth", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "agent_state_permissions", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "tls_key_permissions", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "docker_socket_mounts", OK: false, Severity: "critical", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "privileged_containers", OK: false, Severity: "critical", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "public_listening_ports", OK: false, Severity: "medium", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+	}
+}
+
+func soloRuntimeSecurityCheckResult(nodeName string, check soloSecurityCheck) map[string]any {
+	result := map[string]any{
+		"node":     nodeName,
+		"check":    "security_" + check.Name,
+		"ok":       check.OK,
+		"severity": check.Severity,
+		"detail":   check.Observed,
+	}
+	if check.NextAction != "" {
+		result["next_action"] = check.NextAction
+	}
+	return result
 }
 
 func (a *App) runSoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
@@ -7998,21 +8143,63 @@ func remoteSSHPasswordAuthCommand() string {
 
 func remoteStatPathCommand(target string) string {
 	quoted := shellQuote(target)
-	return fmt.Sprintf("if [ -e %[1]s ]; then stat -c '%%a %%U %%G %%n' %[1]s; elif command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then sudo -n stat -c '%%a %%U %%G %%n' %[1]s; else echo missing; fi", quoted)
+	return fmt.Sprintf("format='%%a	%%U	%%G	%%n'; if stat -c \"$format\" %[1]s 2>/dev/null; then exit 0; fi; if command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then exec sudo -n stat -c \"$format\" %[1]s; fi; if [ -e %[1]s ]; then exec stat -c \"$format\" %[1]s; fi; echo missing", quoted)
 }
 
 func remoteManagedContainerMountsCommand() string {
-	return `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true | head -n 100)
+	script := fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+ps_stderr=$(mktemp)
+inspect_stderr=$(mktemp)
+trap 'rm -f "$ps_stderr" "$inspect_stderr"' EXIT
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>"$ps_stderr")
+ps_status=$?
+if [ "$ps_status" -ne 0 ]; then
+  echo "Failed to list managed containers" >&2
+  cat "$ps_stderr" >&2
+  exit "$ps_status"
+fi
+id_count=$(printf '%%s\n' "$ids" | awk 'NF { c++ } END { print c+0 }')
+ids=$(printf '%%s\n' "$ids" | awk 'NF { print; if (++c >= %d) exit }')
 if [ -z "$ids" ]; then exit 0; fi
-$docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids | sed 's#^/##' | grep '/var/run/docker.sock' | head -n 100 || true`
+if [ "$id_count" -gt %d ]; then printf '%%s\n' %s; fi
+inspect_out=$($docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids 2>"$inspect_stderr")
+inspect_status=$?
+if [ "$inspect_status" -ne 0 ]; then
+  echo "Failed to inspect managed container mounts" >&2
+  printf '%%s\n' "$inspect_out" >&2
+  cat "$inspect_stderr" >&2
+  exit "$inspect_status"
+fi
+printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'`, soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit, shellQuote(soloDiagnoseTruncatedMarker), shellQuote(soloDiagnoseTruncatedMarker), soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit+1)
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container mount diagnostics' >&2; exit 1"
 }
 
 func remoteManagedContainerPrivilegesCommand() string {
-	return `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true | head -n 100)
+	script := fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+ps_stderr=$(mktemp)
+inspect_stderr=$(mktemp)
+trap 'rm -f "$ps_stderr" "$inspect_stderr"' EXIT
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>"$ps_stderr")
+ps_status=$?
+if [ "$ps_status" -ne 0 ]; then
+  echo "Failed to list managed containers" >&2
+  cat "$ps_stderr" >&2
+  exit "$ps_status"
+fi
+id_count=$(printf '%%s\n' "$ids" | awk 'NF { c++ } END { print c+0 }')
+ids=$(printf '%%s\n' "$ids" | awk 'NF { print; if (++c >= %d) exit }')
 if [ -z "$ids" ]; then exit 0; fi
-$docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids | sed 's#^/##' | awk '$2 == "true" { print }' | head -n 100`
+if [ "$id_count" -gt %d ]; then printf '%%s\n' %s; fi
+inspect_out=$($docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids 2>"$inspect_stderr")
+inspect_status=$?
+if [ "$inspect_status" -ne 0 ]; then
+  echo "Failed to inspect managed container privileges" >&2
+  printf '%%s\n' "$inspect_out" >&2
+  cat "$inspect_stderr" >&2
+  exit "$inspect_status"
+fi
+printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'`, soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit, shellQuote(soloDiagnoseTruncatedMarker), shellQuote(soloDiagnoseTruncatedMarker), soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit+1)
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container privilege diagnostics' >&2; exit 1"
 }
 
 func desiredStateOverridePath(node config.Node) string {

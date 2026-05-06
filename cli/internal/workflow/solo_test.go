@@ -3740,6 +3740,41 @@ func TestSoloNodeDiagnoseReportsSecurityFindings(t *testing.T) {
 	}
 }
 
+func TestSoloNodeDiagnoseSecurityReportsPortDiagnosticError(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PORTS_FAIL", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloNodeDiagnose() error = nil, want port diagnostic failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	security := jsonMapFromAny(t, payload["security"])
+	checks := jsonArrayFromMap(t, security, "checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["name"] == "public_listening_ports" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["observed"]), "ports failed") {
+				t.Fatalf("public_listening_ports = %#v, want concrete port diagnostic error", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("security checks = %#v, want public_listening_ports", checks)
+}
+
 func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
 	lines := []string{
 		"LISTEN 0 4096 10.0.0.5:5432 0.0.0.0:*",
@@ -3792,6 +3827,17 @@ func TestSoloDockerSecurityChecksFailWhenManagedContainerOutputTruncated(t *test
 	privileged := soloPrivilegedContainersCheck(context.Background(), node)
 	if privileged.OK || !strings.Contains(privileged.Observed, "truncated") {
 		t.Fatalf("privileged check = %#v, want failed truncated finding", privileged)
+	}
+}
+
+func TestRemoteManagedContainerSecurityCommandsUseBoundedOutputMarker(t *testing.T) {
+	for _, command := range []string{remoteManagedContainerMountsCommand(), remoteManagedContainerPrivilegesCommand()} {
+		if !strings.Contains(command, soloDiagnoseTruncatedMarker) {
+			t.Fatalf("command = %q, want truncation marker", command)
+		}
+		if strings.Contains(command, "head -n 100") {
+			t.Fatalf("command = %q, want no silent head truncation", command)
+		}
 	}
 }
 
@@ -8451,6 +8497,10 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"systemctl
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && ( "$command" == *"ss -ltn"* || "$command" == *"netstat -ltn"* ) ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_PORTS_FAIL:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\nports failed\n'
+    exit 0
+  fi
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nLISTEN 0 4096 0.0.0.0:80 0.0.0.0:*\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi

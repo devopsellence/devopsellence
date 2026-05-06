@@ -3662,6 +3662,9 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	ports := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
 	payload["ports"] = ports
 	portLines, _ := ports["lines"].([]string)
+	if ports["ok"] != true {
+		portLines = nil
+	}
 	portsTruncated, _ := ports["truncated"].(bool)
 	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated)
 	payload["security"] = security
@@ -7610,7 +7613,7 @@ if [ "$ps_status" -ne 0 ]; then
   printf '%s\n' "$ids" >&2
   exit "$ps_status"
 fi
-ids=$(printf '%s\n' "$ids" | sed '/^$/d' | head -n 100)
+ids=$(printf '%s\n' "$ids" | sed '/^$/d')
 if [ -z "$ids" ]; then exit 0; fi
 inspect_out=$($docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids 2>&1)
 inspect_status=$?
@@ -7619,8 +7622,8 @@ if [ "$inspect_status" -ne 0 ]; then
   printf '%s\n' "$inspect_out" >&2
   exit "$inspect_status"
 fi
-printf '%s\n' "$inspect_out" | sed 's#^/##' | head -n 100`
-	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container mount diagnostics' >&2; exit 1"
+printf '%s\n' "$inspect_out" | sed 's#^/##'`
+	return withRemoteLineLimit(script, soloDiagnoseDockerItemLimit)
 }
 
 func remoteManagedContainerPrivilegesCommand() string {
@@ -7632,7 +7635,7 @@ if [ "$ps_status" -ne 0 ]; then
   printf '%s\n' "$ids" >&2
   exit "$ps_status"
 fi
-ids=$(printf '%s\n' "$ids" | sed '/^$/d' | head -n 100)
+ids=$(printf '%s\n' "$ids" | sed '/^$/d')
 if [ -z "$ids" ]; then exit 0; fi
 inspect_out=$($docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids 2>&1)
 inspect_status=$?
@@ -7641,8 +7644,8 @@ if [ "$inspect_status" -ne 0 ]; then
   printf '%s\n' "$inspect_out" >&2
   exit "$inspect_status"
 fi
-printf '%s\n' "$inspect_out" | sed 's#^/##' | head -n 100`
-	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container privilege diagnostics' >&2; exit 1"
+printf '%s\n' "$inspect_out" | sed 's#^/##'`
+	return withRemoteLineLimit(script, soloDiagnoseDockerItemLimit)
 }
 
 func desiredStateOverridePath(node config.Node) string {

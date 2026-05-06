@@ -897,6 +897,10 @@ func TestSoloNodeCreateAttachRollsBackExistingSSHStateWhenRepublishFails(t *test
 set -euo pipefail
 command="${!#}"
 if [[ "$command" == "true" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" ]]; then
+    printf 'ssh connect failed\n' >&2
+    exit 255
+  fi
   exit 0
 fi
 if [[ "$command" == *"docker image inspect"* ]]; then
@@ -2408,6 +2412,59 @@ func TestSoloDoctorReportsAgentVersionSkew(t *testing.T) {
 	t.Fatalf("runtime_checks = %#v, want agent_version", checks)
 }
 
+func TestSoloDoctorSkipsSecurityDiagnosticsWhenSSHFails(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	commandLog := filepath.Join(t.TempDir(), "ssh-commands.log")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG", commandLog)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL", "1")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want ssh failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "security_ssh_password_auth" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["detail"]), "skipped") || strings.Contains(stringValueAny(check["detail"]), "yes") {
+				commands, _ := os.ReadFile(commandLog)
+				t.Fatalf("security_ssh_password_auth = %#v, want skipped security check; commands:\n%s", check, commands)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want skipped security_ssh_password_auth", checks)
+}
+
 func TestSoloDoctorFailsWhenAgentVersionUnknown(t *testing.T) {
 	originalVersion := cliversion.Version
 	t.Cleanup(func() { cliversion.Version = originalVersion })
@@ -3849,6 +3906,41 @@ func TestSoloNodeDiagnoseReportsSecurityFindings(t *testing.T) {
 	}
 }
 
+func TestSoloNodeDiagnoseSecurityReportsPortDiagnosticError(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PORTS_FAIL", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloNodeDiagnose() error = nil, want port diagnostic failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	security := jsonMapFromAny(t, payload["security"])
+	checks := jsonArrayFromMap(t, security, "checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["name"] == "public_listening_ports" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["observed"]), "ports failed") {
+				t.Fatalf("public_listening_ports = %#v, want concrete port diagnostic error", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("security checks = %#v, want public_listening_ports", checks)
+}
+
 func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
 	lines := []string{
 		"LISTEN 0 4096 10.0.0.5:5432 0.0.0.0:*",
@@ -3857,9 +3949,22 @@ func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
 		"LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:*",
 		"tcp6       0      0 :::9090                 :::*                    LISTEN      1234/demo",
 	}
-	ports := unexpectedPublicListeningPorts(lines)
+	ports := unexpectedPublicListeningPorts(lines, 22)
 	if !reflect.DeepEqual(ports, []string{"8080", "9090"}) {
 		t.Fatalf("unexpected ports = %#v, want wildcard public ports only", ports)
+	}
+}
+
+func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 2222)
+	if !reflect.DeepEqual(ports, []string{"22"}) {
+		t.Fatalf("unexpected ports = %#v, want default SSH port flagged when node uses 2222", ports)
 	}
 }
 
@@ -3875,17 +3980,77 @@ func TestSplitListenAddressSupportsIPv6AnyNotation(t *testing.T) {
 	}
 }
 
+func TestSoloDockerSecurityChecksFailWhenManagedContainerOutputTruncated(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "truncated") {
+		t.Fatalf("docker socket check = %#v, want failed truncated finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), node)
+	if privileged.OK || !strings.Contains(privileged.Observed, "truncated") {
+		t.Fatalf("privileged check = %#v, want failed truncated finding", privileged)
+	}
+}
+
+func TestSoloDockerSocketMountsRejectsRunSocketPath(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_RUN_SOCKET_MOUNT", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "/run/docker.sock") {
+		t.Fatalf("docker socket check = %#v, want /run/docker.sock finding", mounts)
+	}
+}
+
+func TestRemoteManagedContainerSecurityCommandsUseBoundedOutputMarker(t *testing.T) {
+	for _, command := range []string{remoteManagedContainerMountsCommand(), remoteManagedContainerPrivilegesCommand()} {
+		if !strings.Contains(command, soloDiagnoseTruncatedMarker) {
+			t.Fatalf("command = %q, want truncation marker", command)
+		}
+		if strings.Contains(command, "head -n 100") {
+			t.Fatalf("command = %q, want no silent head truncation", command)
+		}
+		if strings.Contains(command, "ps -aq --filter label=devopsellence.managed=true 2>&1") || strings.Contains(command, "$ids 2>&1") {
+			t.Fatalf("command = %q, want stderr captured separately from IDs/inspect output", command)
+		}
+	}
+}
+
+func TestSoloDockerSecurityChecksFailWhenInspectErrors(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "inspect failed") {
+		t.Fatalf("docker socket check = %#v, want failed inspect finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), node)
+	if privileged.OK || !strings.Contains(privileged.Observed, "inspect failed") {
+		t.Fatalf("privileged check = %#v, want failed inspect finding", privileged)
+	}
+}
+
 func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
-	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true)
+	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true, nil)
 	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {
 		t.Fatalf("truncated check = %#v, want failed truncated finding", truncated)
 	}
-	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false)
+	if !strings.Contains(truncated.NextAction, "ss -ltnp") || strings.Contains(truncated.NextAction, "rerun listening-port diagnostics") {
+		t.Fatalf("truncated next action = %q, want direct node inspection guidance", truncated.NextAction)
+	}
+	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false, nil)
 	if marker.OK || !strings.Contains(marker.Observed, "truncated") {
 		t.Fatalf("marker check = %#v, want failed truncated finding", marker)
 	}
 
-	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false)
+	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false, nil)
 	if unavailable.OK || !strings.Contains(unavailable.Observed, "not inspected") {
 		t.Fatalf("unavailable check = %#v, want failed unknown finding", unavailable)
 	}
@@ -3918,6 +4083,34 @@ func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	}
 }
 
+func TestSoloStatFieldsPreservesWhitespacePath(t *testing.T) {
+	fields := soloStatFields("750\troot\troot\t/var/lib/dev ops")
+	if len(fields) != 4 || fields[0] != "750" || fields[1] != "root" || fields[2] != "root" || fields[3] != "/var/lib/dev ops" {
+		t.Fatalf("fields = %#v, want tab-delimited stat fields with intact path", fields)
+	}
+}
+
+func TestRemoteStatPathCommandRetriesWithSudoAfterDirectStat(t *testing.T) {
+	command := remoteStatPathCommand("/var/lib/dev ops")
+	direct := strings.Index(command, "stat -c \"$format\" '/var/lib/dev ops' 2>/dev/null")
+	sudo := strings.Index(command, "sudo -n stat -c \"$format\" '/var/lib/dev ops'")
+	if direct < 0 || sudo < 0 || sudo < direct {
+		t.Fatalf("command = %q, want direct stat followed by sudo retry", command)
+	}
+	if !strings.Contains(command, "%a\t%U\t%G\t%n") {
+		t.Fatalf("command = %q, want tab-delimited stat format", command)
+	}
+}
+
+func TestSoloAgentStatePermissionsQuotesRemediationPath(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_STAT", "755 root root /var/lib/dev ops")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root", AgentStateDir: "/var/lib/dev ops"})
+	if check.OK || !strings.Contains(check.NextAction, "'/var/lib/dev ops'") {
+		t.Fatalf("agent state check = %#v, want shell-quoted remediation path", check)
+	}
+}
+
 func TestSoloAgentStatePermissionsRejectsNonRootGroup(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "750 root docker /var/lib/devopsellence")
@@ -3942,6 +4135,21 @@ func TestSoloTLSKeyPermissionsFailWhenModeUnparseable(t *testing.T) {
 	check := soloTLSKeyPermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
 	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
 		t.Fatalf("tls key check = %#v, want failed unknown mode finding", check)
+	}
+}
+
+func TestSoloManagedContainerSecurityChecksFailClosedOnInspectErrors(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR", "1")
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if mounts.OK || !strings.Contains(mounts.Observed, "unknown") || !strings.Contains(mounts.Observed, "inspect failed") || !strings.Contains(mounts.NextAction, "Docker can be inspected") {
+		t.Fatalf("docker socket mounts check = %#v, want failed unknown inspect finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if privileged.OK || !strings.Contains(privileged.Observed, "unknown") || !strings.Contains(privileged.Observed, "inspect failed") || !strings.Contains(privileged.NextAction, "Docker can be inspected") {
+		t.Fatalf("privileged containers check = %#v, want failed unknown inspect finding", privileged)
 	}
 }
 
@@ -5803,6 +6011,53 @@ func TestSoloStatusFailsWhenCurrentDeploymentStatusIsMissing(t *testing.T) {
 	}
 }
 
+func TestSoloStatusDoesNotWriteStateWithoutRecoveryCandidate(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := t.TempDir()
+	soloState := solo.NewStateStore(filepath.Join(stateDir, "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(stateDir, 0o700)
+		_ = os.Chmod(soloState.Path, 0o600)
+	})
+	if err := os.Chmod(soloState.Path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"shortsha","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if warnings, ok := payload["warnings"]; ok {
+		t.Fatalf("warnings = %#v, want no state-write recovery warning", warnings)
+	}
+}
+
 func TestSoloStatusRecoversInterruptedRunningDeployment(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -5879,7 +6134,62 @@ func TestSoloStatusRecoversInterruptedRunningDeployment(t *testing.T) {
 	}
 }
 
-func TestSoloStatusDoesNotRecoverUncheckedInterruptedDeploymentTarget(t *testing.T) {
+func TestSoloStatusRecoversInterruptedRunningDeploymentWithMinimalStatus(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_interrupted",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"shortsha","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	recovered := jsonMapFromAny(t, payload["recovered_deployment"])
+	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
+	}
+}
+
+func TestSoloStatusRecoversInterruptedDeploymentWhenStaleTargetDetached(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	if _, err := config.Write(workspaceRoot, cfg); err != nil {
@@ -5933,15 +6243,168 @@ func TestSoloStatusDoesNotRecoverUncheckedInterruptedDeploymentTarget(t *testing
 		t.Fatalf("SoloStatus() error = %v", err)
 	}
 	payload := decodeJSONOutput(t, &stdout)
-	if payload["recovered_deployment"] != nil {
-		t.Fatalf("payload = %#v, want no recovery for unchecked target", payload)
+	recovered := jsonMapFromAny(t, payload["recovered_deployment"])
+	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
 	}
 	updated, err := soloState.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
-		t.Fatalf("deployment = %#v, want running deployment preserved", updated.Deployments["dep_interrupted"])
+	if updated.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusSettled {
+		t.Fatalf("deployment = %#v, want settled deployment", updated.Deployments["dep_interrupted"])
+	}
+}
+
+func TestSoloRecoverSettledRunningDeploymentIgnoresDetachedTargets(t *testing.T) {
+	current := solo.State{}
+	deployment := corerelease.Deployment{
+		ID:            "dep_interrupted",
+		EnvironmentID: "env",
+		ReleaseID:     "rel",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a", "node-old"},
+		Status:        corerelease.DeploymentStatusRunning,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, ok, err := soloRecoverSettledRunningDeployment(
+		&current,
+		"env",
+		"rel",
+		map[string]config.Node{"node-a": {Host: "203.0.113.10"}},
+		map[string]bool{"node-a": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || recovered.Status != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered = %#v ok=%v, want settled recovery from attached target", recovered, ok)
+	}
+}
+
+func TestSoloRecoverSettledRunningDeploymentSkipsEmptyAttachedTargetIntersection(t *testing.T) {
+	current := solo.State{}
+	deployment := corerelease.Deployment{
+		ID:            "dep_interrupted",
+		EnvironmentID: "env",
+		ReleaseID:     "rel",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-old"},
+		Status:        corerelease.DeploymentStatusRunning,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, ok, err := soloRecoverSettledRunningDeployment(
+		&current,
+		"env",
+		"rel",
+		map[string]config.Node{"node-a": {Host: "203.0.113.10"}},
+		map[string]bool{"node-a": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("recovered = %#v, want no recovery when explicit targets are detached", recovered)
+	}
+	if current.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
+		t.Fatalf("deployment = %#v, want running status preserved", current.Deployments["dep_interrupted"])
+	}
+}
+
+func TestSoloRecoveryTargetsCheckedRequiresEveryTarget(t *testing.T) {
+	if soloRecoveryTargetsChecked(map[string]bool{}, map[string]bool{"node-a": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = true for empty targets, want false")
+	}
+	if soloRecoveryTargetsChecked(map[string]bool{"node-a": true, "node-b": true}, map[string]bool{"node-a": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = true for unchecked target, want false")
+	}
+	if !soloRecoveryTargetsChecked(map[string]bool{"node-a": true, "node-b": true}, map[string]bool{"node-a": true, "node-b": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = false for checked targets, want true")
+	}
+}
+
+func TestSoloRecoverSettledRunningDeploymentRequiresFallbackTargets(t *testing.T) {
+	current := solo.State{}
+	deployment := corerelease.Deployment{
+		ID:            "dep_interrupted",
+		EnvironmentID: "env",
+		ReleaseID:     "rel",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		Status:        corerelease.DeploymentStatusRunning,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, ok, err := soloRecoverSettledRunningDeployment(
+		&current,
+		"env",
+		"rel",
+		map[string]config.Node{
+			"node-a": {Host: "203.0.113.10"},
+			"node-b": {Host: "203.0.113.11"},
+		},
+		map[string]bool{"node-a": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("recovered = %#v, want no recovery until every fallback target is checked", recovered)
+	}
+	if current.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
+		t.Fatalf("deployment = %#v, want running status preserved", current.Deployments["dep_interrupted"])
+	}
+}
+
+func TestSoloLatestRunningDeploymentComparesCreatedAtAsTime(t *testing.T) {
+	current := solo.State{}
+	for _, deployment := range []corerelease.Deployment{
+		{
+			ID:            "dep_late_offset",
+			EnvironmentID: "env",
+			ReleaseID:     "rel",
+			Kind:          corerelease.DeploymentKindDeploy,
+			Sequence:      7,
+			Status:        corerelease.DeploymentStatusRunning,
+			CreatedAt:     "2026-05-06T00:30:00-01:00",
+		},
+		{
+			ID:            "dep_early_utc",
+			EnvironmentID: "env",
+			ReleaseID:     "rel",
+			Kind:          corerelease.DeploymentKindDeploy,
+			Sequence:      7,
+			Status:        corerelease.DeploymentStatusRunning,
+			CreatedAt:     "2026-05-06T01:00:00Z",
+		},
+	} {
+		if err := current.SaveDeployment(deployment); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	selected, ok := soloLatestRunningDeployment(current, "env", "rel")
+	if !ok {
+		t.Fatal("soloLatestRunningDeployment() ok = false, want true")
+	}
+	if selected.ID != "dep_late_offset" {
+		t.Fatalf("selected.ID = %q, want dep_late_offset", selected.ID)
 	}
 }
 
@@ -8886,8 +9349,15 @@ func installFakeSoloCommands(t *testing.T, statusResponses []fakeSSHResponse) st
 	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
 set -euo pipefail
 command="${!#}"
+if [[ -n "${DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG:-}" ]]; then
+  printf '%s\n' "$command" >>"$DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG"
+fi
 
 if [[ "$command" == "true" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" ]]; then
+    printf 'ssh connect failed\n' >&2
+    exit 255
+  fi
   exit 0
 fi
 
@@ -8935,6 +9405,11 @@ fi
 exec_marker=""
 if [[ "$command" =~ (__DEVOPSELLENCE_EXEC_EXIT_CODE__[0-9a-f]+__) ]]; then
   exec_marker="${BASH_REMATCH[1]}"
+fi
+
+if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" && "$command" == *"true"* ]]; then
+  printf 'ssh connect failed\n' >&2
+  exit 255
 fi
 
 if [[ -n "$exec_marker" && "$command" == *"svc-production-web-abc"* ]]; then
@@ -9000,6 +9475,11 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"*
   exit 0
 fi
 
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && -n "${DEVOPSELLENCE_FAKE_SSH_STAT:-}" ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$DEVOPSELLENCE_FAKE_SSH_STAT"
+  exit 0
+fi
+
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
   state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-751 root root /var/lib/devopsellence}"
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$state_stat"
@@ -9007,7 +9487,13 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"*
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *"Mounts"* ]]; then
-  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT:-}" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_RUN_SOCKET_MOUNT:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /run/docker.sock:/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT:-}" ]]; then
     printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /var/run/docker.sock:/var/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
   else
     printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web app_storage:/app/storage\n__DEVOPSELLENCE_STDERR__\n'
@@ -9016,7 +9502,13 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect -
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *".HostConfig.Privileged"* ]]; then
-  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web false\n__DEVOPSELLENCE_STDERR__\n'
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  else
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web false\n__DEVOPSELLENCE_STDERR__\n'
+  fi
   exit 0
 fi
 
@@ -9060,6 +9552,10 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"devopsell
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && ( "$command" == *"ss -ltn"* || "$command" == *"netstat -ltn"* ) ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_PORTS_FAIL:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\nports failed\n'
+    exit 0
+  fi
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nLISTEN 0 4096 0.0.0.0:80 0.0.0.0:*\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi

@@ -46,6 +46,7 @@ export default defineConfig({
             { label: "Secrets", link: "/guides/secrets/" },
             { label: "Ingress and TLS", link: "/guides/ingress-tls/" },
             { label: "Rollback", link: "/guides/rollback/" },
+            { label: "Backup and restore", link: "/guides/backup-restore/" },
             { label: "Troubleshooting", link: "/guides/troubleshooting/" },
             { label: "Cleanup", link: "/guides/cleanup/" },
           ],

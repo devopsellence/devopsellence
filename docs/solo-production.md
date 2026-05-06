@@ -91,6 +91,8 @@ Backups should stay aligned with devopsellence's north star: ordinary tools,
 explicit restore drills, and app-owned data services running on familiar VMs.
 devopsellence can make backups visible in plans and diagnostics over time, but
 rollback should not pretend to recover data it did not back up and restore.
+The public docs guide this as an ordinary restic-backed service using existing
+`secret`, `deploy`, `logs`, and `exec` primitives.
 
 ## diagnosis
 

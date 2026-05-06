@@ -4696,6 +4696,10 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		return fmt.Errorf("agent install verification failed: %s", collectRemoteTextFailure(agentVersionProbe))
 	}
 	target := soloAgentTargetVersion()
+	versionStatus := soloAgentVersionStatus(agentVersion, target)
+	if versionStatus == "unknown" {
+		return fmt.Errorf("agent install verification failed: %s", agentVersion)
+	}
 	activeProbe := collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent")
 	return a.Printer.PrintResultEvent("devopsellence agent install", map[string]any{
 		"node":                  opts.Node,
@@ -4703,7 +4707,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		"agent_version":         agentVersion,
 		"agent_version_probe":   agentVersionProbe,
 		"target_version":        target,
-		"version_status":        soloAgentVersionStatus(agentVersion, target),
+		"version_status":        versionStatus,
 		"agent_active":          stringFromMap(activeProbe, "value") == "active",
 		"agent_active_check":    activeProbe,
 		"agent_active_check_ok": activeProbe["ok"] == true,

@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/desiredstate"
@@ -31,6 +33,57 @@ func TestCanonicalWorkspaceKeyResolvesSymlinks(t *testing.T) {
 	}
 	if got != realRoot {
 		t.Fatalf("CanonicalWorkspaceKey() = %q, want %q", got, realRoot)
+	}
+}
+
+func TestStateStoreWithLockSerializesCallers(t *testing.T) {
+	t.Parallel()
+
+	store := NewStateStore(filepath.Join(t.TempDir(), "state.json"))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- store.WithLock(func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	var ran atomic.Bool
+	waiting := make(chan struct{})
+	blocked := make(chan error, 1)
+	go func() {
+		blocked <- store.WithLockNotify(func() error {
+			ran.Store(true)
+			return nil
+		}, func() error {
+			close(waiting)
+			return nil
+		})
+	}()
+	<-waiting
+
+	select {
+	case err := <-blocked:
+		t.Fatalf("second lock completed early: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	if ran.Load() {
+		t.Fatal("second lock callback ran before first lock released")
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-blocked; err != nil {
+		t.Fatal(err)
+	}
+	if !ran.Load() {
+		t.Fatal("second lock callback did not run")
 	}
 }
 

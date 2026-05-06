@@ -4011,6 +4011,31 @@ func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
 	}
 }
 
+func TestUnexpectedPublicListeningPortsAllowsDevopsellenceACMEBackend(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=9))",
+		"LISTEN 0 4096 0.0.0.0:15981 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=10))",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 22)
+	if !reflect.DeepEqual(ports, []string{"15981"}) {
+		t.Fatalf("unexpected ports = %#v, want only non-ACME devopsellence port flagged", ports)
+	}
+	details := expectedPublicListeningPortDetails(lines)
+	if len(details) != 1 || !strings.Contains(details[0], "ACME HTTP-01 listener") {
+		t.Fatalf("expected details = %#v, want ACME explanation", details)
+	}
+}
+
+func TestUnexpectedPublicListeningPortsFlagsACMEPortWithoutProcessMetadata(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 22)
+	if !reflect.DeepEqual(ports, []string{"15980"}) {
+		t.Fatalf("unexpected ports = %#v, want ACME port flagged without process metadata", ports)
+	}
+}
+
 func TestSplitListenAddressSupportsIPv6AnyNotation(t *testing.T) {
 	host, port, ok := splitListenAddress(":::80")
 	if !ok || host != "::" || port != "80" {
@@ -5002,6 +5027,69 @@ func TestSoloNodeDetachRepublishesRemainingCohostedDesiredState(t *testing.T) {
 	}
 	if nodes, err := loaded.AttachedNodeNames(workspaceB, "production"); err != nil || !reflect.DeepEqual(nodes, []string{"node-a"}) {
 		t.Fatalf("workspace B attached nodes = %#v err=%v, want node-a preserved", nodes, err)
+	}
+}
+
+func TestSoloNodeDetachRepublishesEmptyDesiredStateForLastAttachment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if _, err := config.Write(workspaceRoot, config.DefaultProjectConfig("solo", "app-a", "production")); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+		Snapshots:   map[string]desiredstate.DeploySnapshot{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[key] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceRoot,
+		WorkspaceKey:  workspaceRoot,
+		Environment:   "production",
+		Revision:      "aaa1111",
+		Image:         "app-a:aaa1111",
+		Services:      []desiredstate.ServiceJSON{{Name: "web", Kind: config.ServiceKindWeb, Image: "app-a:aaa1111"}},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, nil)
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: "node-a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := decodeJSONOutput(t, &stdout)
+	if got := stringValueAny(payload["remote_cleanup"]); got != "published" {
+		t.Fatalf("remote_cleanup = %q, want published", got)
+	}
+	data, err := os.ReadFile(os.Getenv("DEVOPSELLENCE_FAKE_SSH_REVISION_FILE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published desiredstate.DesiredStateJSON
+	if err := json.Unmarshal(data, &published); err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Environments) != 0 {
+		t.Fatalf("published environments = %#v, want empty cleanup desired state", published.Environments)
+	}
+	if strings.Contains(string(data), "aaa1111") {
+		t.Fatalf("published desired state still contains detached revision: %s", data)
 	}
 }
 

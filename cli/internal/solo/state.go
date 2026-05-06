@@ -170,14 +170,16 @@ func writeFileAtomicPrivate(path string, data []byte) error {
 }
 
 func (s *StateStore) Update(fn func(*State) error) error {
-	current, err := s.Read()
-	if err != nil {
-		return err
-	}
-	if err := fn(&current); err != nil {
-		return err
-	}
-	return s.Write(current)
+	return s.WithLock(func() error {
+		current, err := s.Read()
+		if err != nil {
+			return err
+		}
+		if err := fn(&current); err != nil {
+			return err
+		}
+		return s.Write(current)
+	})
 }
 
 func validateStateSchemaVersion(version int) error {

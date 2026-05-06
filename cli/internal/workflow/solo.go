@@ -408,6 +408,15 @@ func expandSoloSSHKeyPath(path string) (string, error) {
 }
 
 func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
+	if opts.DryRun {
+		return a.soloDeploy(ctx, opts)
+	}
+	return a.withSoloStateLockProgress("devopsellence deploy", func() error {
+		return a.soloDeploy(ctx, opts)
+	})
+}
+
+func (a *App) soloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	stream := a.Printer.Stream("devopsellence deploy")
 	if err := stream.Event("started", map[string]any{}); err != nil {
 		return err
@@ -1142,6 +1151,26 @@ func (a *App) readSoloState() (solo.State, error) {
 		return solo.State{}, fmt.Errorf("solo state store is required")
 	}
 	return a.SoloState.Read()
+}
+
+func (a *App) withSoloStateLock(fn func() error) error {
+	if a.SoloState == nil {
+		return fmt.Errorf("solo state store is required")
+	}
+	return a.SoloState.WithLock(fn)
+}
+
+func (a *App) withSoloStateLockProgress(operation string, fn func() error) error {
+	if a.SoloState == nil {
+		return fmt.Errorf("solo state store is required")
+	}
+	return a.SoloState.WithLockNotify(fn, func() error {
+		return a.Printer.PrintEvent(output.EventProgress, map[string]any{
+			"operation": operation,
+			"step":      "state_lock_wait",
+			"message":   "Waiting for solo state lock...",
+		})
+	})
 }
 
 func (a *App) writeSoloState(current solo.State) error {
@@ -2613,6 +2642,15 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 }
 
 func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackOptions) error {
+	if opts.DryRun {
+		return a.soloReleaseRollback(ctx, opts)
+	}
+	return a.withSoloStateLockProgress("devopsellence release rollback", func() error {
+		return a.soloReleaseRollback(ctx, opts)
+	})
+}
+
+func (a *App) soloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackOptions) error {
 	stream := a.Printer.Stream("devopsellence release rollback")
 	if err := stream.Event("started", map[string]any{}); err != nil {
 		return err
@@ -2936,6 +2974,12 @@ func publicURLsForHosts(scheme string, hosts []string) []string {
 }
 
 func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloSecretsSet(opts)
+	})
+}
+
+func (a *App) soloSecretsSet(opts SoloSecretsSetOptions) error {
 	store, err := soloSecretStore(opts)
 	if err != nil {
 		return err
@@ -3383,6 +3427,12 @@ func (a *App) SoloNodeList(_ context.Context, opts SoloNodeListOptions) error {
 }
 
 func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) error {
+	return a.withSoloStateLockProgress("devopsellence node attach", func() error {
+		return a.soloNodeAttach(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) error {
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -3422,6 +3472,12 @@ func (a *App) runSoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions)
 }
 
 func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) error {
+	return a.withSoloStateLockProgress("devopsellence node detach", func() error {
+		return a.soloNodeDetach(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) error {
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -3455,10 +3511,12 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 		return err
 	}
 	warnings := []string{}
+	remoteCleanup := "published"
 	if _, err := a.republishNodes(ctx, next, []string{opts.Node}); err != nil {
 		if next.NodeHasAttachments(opts.Node) || !soloRepublishMissingAgentError(err) {
 			return err
 		}
+		remoteCleanup = "skipped_missing_agent"
 		warnings = append(warnings, "remote desired state was not cleared because the agent is already uninstalled on the node")
 	}
 	if err := a.writeSoloState(next); err != nil {
@@ -3470,6 +3528,7 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 		"node":           opts.Node,
 		"environment":    environmentName,
 		"changed":        true,
+		"remote_cleanup": remoteCleanup,
 	}
 	if len(warnings) > 0 {
 		payload["warnings"] = warnings
@@ -3491,6 +3550,12 @@ func soloRepublishMissingAgentError(err error) bool {
 }
 
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloSecretsDelete(opts)
+	})
+}
+
+func (a *App) soloSecretsDelete(opts SoloSecretsDeleteOptions) error {
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -4538,6 +4603,7 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 		check.NextAction = "install ss or netstat on the node, then rerun devopsellence node diagnose"
 		return check
 	}
+	expectedDetails := expectedPublicListeningPortDetails(portLines)
 	ports := unexpectedPublicListeningPorts(portLines, node.Port)
 	if len(ports) > 0 {
 		check.OK = false
@@ -4546,6 +4612,9 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 		return check
 	}
 	check.Observed = "only expected public ports detected"
+	if len(expectedDetails) > 0 {
+		check.Observed += "; " + strings.Join(expectedDetails, "; ")
+	}
 	return check
 }
 
@@ -4614,7 +4683,7 @@ func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
 	seen := map[string]bool{}
 	for _, line := range lines {
 		for _, port := range publicPortsFromListeningLine(line) {
-			if expected[port] || seen[port] {
+			if expected[port] || expectedDevopsellenceACMEListener(line, port) || seen[port] {
 				continue
 			}
 			seen[port] = true
@@ -4626,6 +4695,25 @@ func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
 	}
 	sort.Strings(ports)
 	return ports
+}
+
+func expectedPublicListeningPortDetails(lines []string) []string {
+	seenACME := false
+	for _, line := range lines {
+		for _, port := range publicPortsFromListeningLine(line) {
+			if expectedDevopsellenceACMEListener(line, port) {
+				seenACME = true
+			}
+		}
+	}
+	if !seenACME {
+		return nil
+	}
+	return []string{"15980 is the devopsellence agent ACME HTTP-01 listener used for auto TLS challenges"}
+}
+
+func expectedDevopsellenceACMEListener(line, port string) bool {
+	return port == "15980" && strings.Contains(strings.ToLower(line), "devopsellence")
 }
 
 func publicPortsFromListeningLine(line string) []string {
@@ -4872,6 +4960,12 @@ func collectRemoteJSONLines(ctx context.Context, node config.Node, command strin
 }
 
 func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloNodeLabelSet(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -4922,6 +5016,12 @@ func (a *App) SoloNodeLabelList(_ context.Context, opts SoloNodeLabelListOptions
 }
 
 func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloNodeLabelRemove(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveOptions) error {
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -5347,6 +5447,12 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 }
 
 func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloNodeCreate(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -5654,6 +5760,12 @@ func sshInteractiveError(prefix string, err error, stdout string, stderr string)
 }
 
 func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloNodeRemove(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {
 	if !opts.Yes {
 		return ExitError{Code: 2, Err: errors.New("node remove requires --yes; rerun with --yes to confirm local/provider cleanup")}
 	}
@@ -8294,7 +8406,7 @@ func withRemoteLineLimit(command string, limit int) string {
 }
 
 func remoteListeningPortsCommand() string {
-	return withRemoteLineLimit("if command -v ss >/dev/null 2>&1; then ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi", soloDiagnosePortsLineLimit)
+	return withRemoteLineLimit("if command -v ss >/dev/null 2>&1; then sudo -n ss -ltnp || ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then sudo -n netstat -ltnp || netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi", soloDiagnosePortsLineLimit)
 }
 
 func remoteAgentVersionCommand() string {

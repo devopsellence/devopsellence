@@ -3971,7 +3971,7 @@ func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecu
 	}
 	offenders := []string{}
 	for _, line := range lines {
-		if strings.Contains(line, "/var/run/docker.sock") {
+		if managedDockerSocketMountLine(line) {
 			offenders = append(offenders, strings.TrimSpace(line))
 		}
 	}
@@ -3983,6 +3983,10 @@ func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecu
 	}
 	check.Observed = "no managed workload mounts /var/run/docker.sock"
 	return check
+}
+
+func managedDockerSocketMountLine(line string) bool {
+	return strings.Contains(line, "/var/run/docker.sock") || strings.Contains(line, "/run/docker.sock")
 }
 
 func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSecurityCheck {

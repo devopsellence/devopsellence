@@ -3887,6 +3887,17 @@ func TestSoloDockerSecurityChecksFailWhenManagedContainerOutputTruncated(t *test
 	}
 }
 
+func TestSoloDockerSocketMountsRejectsRunSocketPath(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_RUN_SOCKET_MOUNT", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "/run/docker.sock") {
+		t.Fatalf("docker socket check = %#v, want /run/docker.sock finding", mounts)
+	}
+}
+
 func TestRemoteManagedContainerSecurityCommandsUseBoundedOutputMarker(t *testing.T) {
 	for _, command := range []string{remoteManagedContainerMountsCommand(), remoteManagedContainerPrivilegesCommand()} {
 		if !strings.Contains(command, soloDiagnoseTruncatedMarker) {
@@ -8553,6 +8564,8 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect -
     printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
   elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
     printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_RUN_SOCKET_MOUNT:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /run/docker.sock:/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
   elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT:-}" ]]; then
     printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /var/run/docker.sock:/var/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
   else

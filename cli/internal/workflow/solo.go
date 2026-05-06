@@ -2059,9 +2059,6 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		warnings, _ := payload["warnings"].([]string)
 		payload["warnings"] = append(warnings, message)
 	}
-	if hasCurrent {
-		payload["current_release"] = soloStatusReleasePayload(currentRelease)
-	}
 	if len(verifiedPublicURLs) > 0 {
 		if allSettled {
 			payload["public_urls"] = verifiedPublicURLs
@@ -2096,6 +2093,13 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				"status_message": recovered.StatusMessage,
 			}
 		}
+	}
+	if hasCurrent {
+		releasePayload := currentRelease
+		if _, release, ok, err := current.CurrentRelease(workspaceRoot, environmentName); err == nil && ok {
+			releasePayload = release
+		}
+		payload["current_release"] = soloStatusReleasePayload(releasePayload)
 	}
 	if hasCurrent && payload["current_deployment"] == nil {
 		if deployment, ok := soloLatestDeploymentForEnvironment(current, environmentID); ok {

@@ -632,8 +632,8 @@ func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
 		service := cfg.Services[serviceName]
 		kind := config.InferredServiceKind(serviceName, service)
 		item := map[string]any{
-			"service": serviceName,
-			"kind":    kind,
+			"service_name": serviceName,
+			"service_kind": kind,
 		}
 		if kind == config.ServiceKindWeb {
 			item["strategy"] = "health_gated_cutover"
@@ -642,6 +642,7 @@ func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
 		} else {
 			item["strategy"] = "stop_old_before_start_new"
 			item["health_gated"] = false
+			item["stop_old_before_start_new"] = true
 			item["operator_note"] = "non-web service hash changes stop and remove old containers before starting the replacement; this path is not health-gated"
 		}
 		contracts = append(contracts, item)
@@ -1939,6 +1940,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	var current solo.State
 	var environmentID string
 	var currentRelease corerelease.Release
+	var statusRelease corerelease.Release
 	var hasCurrent bool
 	var recoveryCandidate corerelease.Deployment
 	hasRecoveryCandidate := false
@@ -1956,12 +1958,18 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			}
 			if hasCurrent {
 				localReleaseKnown = true
-				expectedRevisions = soloExpectedStatusRevisions(current, currentRelease)
-				cohostedRevisions = soloCohostedStatusRevisions(current, currentRelease)
-				staleRevisions = soloStaleStatusRevisions(current, currentRelease, expectedRevisions)
-				expectedWorkloadRevision = strings.TrimSpace(currentRelease.Revision)
+				statusRelease = currentRelease
+				if runningDeployment, ok := soloLatestRunningDeploymentForEnvironment(current, environmentID); ok {
+					if release, releaseOK := current.Releases[runningDeployment.ReleaseID]; releaseOK {
+						statusRelease = release
+					}
+				}
+				expectedRevisions = soloExpectedStatusRevisions(current, statusRelease)
+				cohostedRevisions = soloCohostedStatusRevisions(current, statusRelease)
+				staleRevisions = soloStaleStatusRevisions(current, statusRelease, expectedRevisions)
+				expectedWorkloadRevision = strings.TrimSpace(statusRelease.Revision)
 				expectedRuntimeEnvironment, _ = soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, "")
-				recoveryCandidate, hasRecoveryCandidate = soloLatestRunningDeployment(current, environmentID, currentRelease.ID)
+				recoveryCandidate, hasRecoveryCandidate = soloLatestRunningDeployment(current, environmentID, statusRelease.ID)
 				if hasRecoveryCandidate {
 					recoveryTargets = soloDeploymentTargetSet(recoveryCandidate, nodes)
 				}
@@ -2090,7 +2098,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		if err != nil {
 			return err
 		}
-		recovered, recoveredState, ok, err := soloRecoverSettledRunningDeployment(recoveryState, environmentID, currentRelease.ID, recoveryChecked, recoveryRevisions)
+		recovered, recoveredState, ok, err := soloRecoverSettledRunningDeployment(recoveryState, environmentID, statusRelease.ID, recoveryChecked, recoveryRevisions)
 		if err != nil {
 			return err
 		}
@@ -2171,6 +2179,12 @@ func soloLatestDeploymentForEnvironment(current solo.State, environmentID string
 	})
 }
 
+func soloLatestRunningDeploymentForEnvironment(current solo.State, environmentID string) (corerelease.Deployment, bool) {
+	return soloLatestDeploymentMatching(current, func(deployment corerelease.Deployment) bool {
+		return deployment.EnvironmentID == environmentID && deployment.Status == corerelease.DeploymentStatusRunning
+	})
+}
+
 func soloLatestDeploymentMatching(current solo.State, match func(corerelease.Deployment) bool) (corerelease.Deployment, bool) {
 	var selected corerelease.Deployment
 	found := false
@@ -2208,6 +2222,12 @@ func soloRecoverSettledRunningDeployment(current solo.State, environmentID, rele
 	}
 	if err := current.SaveDeployment(selected); err != nil {
 		return corerelease.Deployment{}, current, false, err
+	}
+	if selected.Kind == corerelease.DeploymentKindRollback {
+		current.Current[environmentID] = selected.ReleaseID
+		if release, ok := current.Releases[selected.ReleaseID]; ok {
+			current.Snapshots[environmentID] = release.Snapshot
+		}
 	}
 	return selected, current, true, nil
 }

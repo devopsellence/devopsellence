@@ -5360,9 +5360,9 @@ func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	byService := map[string]map[string]any{}
 	for _, item := range contracts {
 		contract := jsonMapFromAny(t, item)
-		byService[stringValueAny(contract["service"])] = contract
+		byService[stringValueAny(contract["service_name"])] = contract
 	}
-	if byService["web"]["strategy"] != "health_gated_cutover" || byService["worker"]["strategy"] != "stop_old_before_start_new" {
+	if byService["web"]["strategy"] != "health_gated_cutover" || byService["worker"]["strategy"] != "stop_old_before_start_new" || byService["worker"]["stop_old_before_start_new"] != true {
 		t.Fatalf("rollout_contract = %#v, want web health-gated and worker stop-old/start-new", contracts)
 	}
 }
@@ -5765,7 +5765,7 @@ func TestSoloStatusReportsInFlightRollbackDeployment(t *testing.T) {
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
 	}
-	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"bbb2222","phase":"settled"}` + "\n"}})
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"aaa1111","phase":"settled"}` + "\n"}})
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}

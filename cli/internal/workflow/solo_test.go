@@ -3863,10 +3863,26 @@ func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
 	}
 }
 
+func TestSplitListenAddressSupportsIPv6AnyNotation(t *testing.T) {
+	host, port, ok := splitListenAddress(":::80")
+	if !ok || host != "::" || port != "80" {
+		t.Fatalf("splitListenAddress(\":::80\") = host=%q port=%q ok=%v, want host=\"::\" port=\"80\" ok=true", host, port, ok)
+	}
+
+	host, port, ok = splitListenAddress(":::*")
+	if ok || host != "" || port != "" {
+		t.Fatalf("splitListenAddress(\":::*\") = host=%q port=%q ok=%v, want empty host/port and ok=false", host, port, ok)
+	}
+}
+
 func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
 	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true)
 	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {
 		t.Fatalf("truncated check = %#v, want failed truncated finding", truncated)
+	}
+	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false)
+	if marker.OK || !strings.Contains(marker.Observed, "truncated") {
+		t.Fatalf("marker check = %#v, want failed truncated finding", marker)
 	}
 
 	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false)
@@ -3884,12 +3900,39 @@ func TestSoloSSHPasswordAuthCheckFailsWhenSettingUnknown(t *testing.T) {
 	}
 }
 
+func TestSoloSSHPasswordAuthCheckFailsOnUnrecognizedValue(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "maybe")
+	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unrecognized") {
+		t.Fatalf("ssh password auth check = %#v, want failed unrecognized finding", check)
+	}
+}
+
 func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "755 root root /var/lib/devopsellence")
 	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
 	if check.OK || !strings.Contains(check.NextAction, "other read/write") {
 		t.Fatalf("agent state check = %#v, want other-read finding", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsFailWhenModeUnparseable(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "bad root root /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
+		t.Fatalf("agent state check = %#v, want failed unknown mode finding", check)
+	}
+}
+
+func TestSoloTLSKeyPermissionsFailWhenModeUnparseable(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT", "bad root root /var/lib/devopsellence/ingress-key.pem")
+	check := soloTLSKeyPermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
+		t.Fatalf("tls key check = %#v, want failed unknown mode finding", check)
 	}
 }
 
@@ -8468,7 +8511,8 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"sshd -T"*
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
-  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nmissing\n__DEVOPSELLENCE_STDERR__\n'
+  tls_stat="${DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT:-missing}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$tls_stat"
   exit 0
 fi
 

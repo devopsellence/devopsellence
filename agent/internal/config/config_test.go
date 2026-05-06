@@ -88,6 +88,34 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadDerivesStateRootOutsidePrivateAuthDir(t *testing.T) {
+	cfg, err := Load([]string{
+		"--control-plane-base-url=https://cp.example.com",
+		"--auth-state-path=/var/lib/devopsellence/private/auth.json",
+	})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.AuthStatePath != "/var/lib/devopsellence/private/auth.json" {
+		t.Fatalf("unexpected auth path: %s", cfg.AuthStatePath)
+	}
+	if cfg.StatusPath != "/var/lib/devopsellence/status.json" {
+		t.Fatalf("unexpected status path: %s", cfg.StatusPath)
+	}
+	if cfg.LifecycleStatePath != "/var/lib/devopsellence/lifecycle-state.json" {
+		t.Fatalf("unexpected lifecycle path: %s", cfg.LifecycleStatePath)
+	}
+	if cfg.DesiredStateCachePath != "/var/lib/devopsellence/desired-state-cache.json" {
+		t.Fatalf("unexpected desired state cache path: %s", cfg.DesiredStateCachePath)
+	}
+	if cfg.DiskCareStatePath != "/var/lib/devopsellence/disk-care-state.json" {
+		t.Fatalf("unexpected disk care path: %s", cfg.DiskCareStatePath)
+	}
+	if cfg.EnvoyTLSCertPath != "/var/lib/devopsellence/ingress-cert.pem" || cfg.EnvoyTLSKeyPath != "/var/lib/devopsellence/ingress-key.pem" {
+		t.Fatalf("unexpected ingress tls paths: cert=%s key=%s", cfg.EnvoyTLSCertPath, cfg.EnvoyTLSKeyPath)
+	}
+}
+
 func TestLoadRejectsOutOfRangeEnvoyPublicPorts(t *testing.T) {
 	_, err := Load([]string{
 		"--control-plane-base-url=https://cp.example.com",

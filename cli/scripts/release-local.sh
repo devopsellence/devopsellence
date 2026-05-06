@@ -6,6 +6,7 @@ CLI_DIR="$ROOT_DIR/cli"
 TARGET_NAME="devopsellence"
 INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
 INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"
+AGENT_SKILLS_DIR="${DEVOPSELLENCE_AGENT_SKILLS_DIR:-}"
 
 OS_RAW="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH_RAW="$(uname -m)"
@@ -113,26 +114,22 @@ case ":$PATH:" in
     ;;
 esac
 
+install_agent_skill() {
+  local skill_args=()
+
+  if [[ -n "$AGENT_SKILLS_DIR" ]]; then
+    skill_args+=(--dir "$AGENT_SKILLS_DIR")
+  fi
+
+  echo "installing devopsellence agent skill..."
+  "$INSTALL_DIR/$TARGET_NAME" skill install "${skill_args[@]}"
+}
+
 case "$INSTALL_AGENT_SKILL" in
   1|true|TRUE|yes|YES)
-    if command -v npx >/dev/null 2>&1; then
-      echo "installing devopsellence agent skill..."
-      npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes
-      printf '{"schema_version":1,"event":"result","operation":"devopsellence release-local","cli_installed":true,"cli_path":'
-      json_string "$INSTALL_DIR/$TARGET_NAME"
-      printf ',"commit":'
-      json_string "$COMMIT"
-      printf ',"agent_skill_requested":true,"agent_skill_installed":true,"agent_skill":"devopsellence"}\n'
-    else
-      echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
-      echo "Install the skill later with:" >&2
-      echo "  npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes" >&2
-      exit 1
-    fi
+    install_agent_skill
     ;;
   *)
-    echo "agent skill available:"
-    echo "  npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes"
-    echo "or rerun installer with DEVOPSELLENCE_INSTALL_AGENT_SKILL=1"
+    echo "agent skill available; rerun installer with DEVOPSELLENCE_INSTALL_AGENT_SKILL=1"
     ;;
 esac

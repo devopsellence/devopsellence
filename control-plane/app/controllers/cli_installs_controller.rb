@@ -30,6 +30,7 @@ class CliInstallsController < ActionController::Base
       CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
       INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"
+      AGENT_SKILLS_DIR="${DEVOPSELLENCE_AGENT_SKILLS_DIR:-}"
       TARGET_NAME="devopsellence"
 
       while [[ $# -gt 0 ]]; do
@@ -165,6 +166,17 @@ class CliInstallsController < ActionController::Base
         printf '"%s"' "$value"
       }
 
+      install_agent_skill() {
+        local skill_args=()
+
+        if [[ -n "$AGENT_SKILLS_DIR" ]]; then
+          skill_args+=(--dir "$AGENT_SKILLS_DIR")
+        fi
+
+        echo "installing devopsellence agent skill..."
+        "$INSTALL_DIR/$TARGET_NAME" skill install "${skill_args[@]}"
+      }
+
       echo "downloading devopsellence CLI..."
       curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BIN"
       curl -fsSL "$CHECKSUM_URL" -o "$TMP_SUMS"
@@ -220,23 +232,10 @@ class CliInstallsController < ActionController::Base
 
       case "$INSTALL_AGENT_SKILL" in
         1|true|TRUE|yes|YES)
-          if command -v npx >/dev/null 2>&1; then
-            echo "installing devopsellence agent skill..."
-            npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes
-            printf '{"schema_version":1,"event":"result","operation":"devopsellence install","cli_installed":true,"cli_path":'
-            json_string "$INSTALL_DIR/$TARGET_NAME"
-            printf ',"agent_skill_requested":true,"agent_skill_installed":true,"agent_skill":"devopsellence"}\\n'
-          else
-            echo "devopsellence CLI installed. Agent skill install requested, but npx was not found." >&2
-            echo "Install the skill later with:" >&2
-            echo "  npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes" >&2
-            exit 1
-          fi
+          install_agent_skill
           ;;
         *)
-          echo "agent skill available:"
-          echo "  npx --yes skills add devopsellence/devopsellence --skill devopsellence -g --yes"
-          echo "or install CLI + skill together with:"
+          echo "agent skill available; install CLI + skill together with:"
           echo "  curl -fsSL \"$INSTALL_SCRIPT_URL?version=$CLI_VERSION\" | bash -s -- --install-agent-skill"
           ;;
       esac

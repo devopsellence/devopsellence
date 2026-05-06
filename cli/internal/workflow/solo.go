@@ -2055,7 +2055,14 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
 	}
 	if allSettled && hasCurrent && len(opts.Nodes) == 0 {
-		recovered, recoveredState, ok := soloRecoverSettledRunningDeployment(current, environmentID, currentRelease.ID, recoveryChecked, recoveryRevisions)
+		recoveryState, err := a.readSoloState()
+		if err != nil {
+			return err
+		}
+		recovered, recoveredState, ok, err := soloRecoverSettledRunningDeployment(recoveryState, environmentID, currentRelease.ID, recoveryChecked, recoveryRevisions)
+		if err != nil {
+			return err
+		}
 		if ok {
 			if err := a.writeSoloState(recoveredState); err != nil {
 				return err
@@ -2104,10 +2111,10 @@ func soloLatestRunningDeployment(current solo.State, environmentID, releaseID st
 	return selected, found
 }
 
-func soloRecoverSettledRunningDeployment(current solo.State, environmentID, releaseID string, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, solo.State, bool) {
+func soloRecoverSettledRunningDeployment(current solo.State, environmentID, releaseID string, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, solo.State, bool, error) {
 	selected, found := soloLatestRunningDeployment(current, environmentID, releaseID)
 	if !found {
-		return corerelease.Deployment{}, current, false
+		return corerelease.Deployment{}, current, false, nil
 	}
 	for _, nodeName := range selected.TargetNodeIDs {
 		nodeName = strings.TrimSpace(nodeName)
@@ -2115,7 +2122,7 @@ func soloRecoverSettledRunningDeployment(current solo.State, environmentID, rele
 			continue
 		}
 		if !checkedTargets[nodeName] {
-			return corerelease.Deployment{}, current, false
+			return corerelease.Deployment{}, current, false, nil
 		}
 	}
 	selected.Status = corerelease.DeploymentStatusSettled
@@ -2125,9 +2132,9 @@ func soloRecoverSettledRunningDeployment(current solo.State, environmentID, rele
 		selected.PublicationResult = soloDeploymentPublicationResult(revisions, nil)
 	}
 	if err := current.SaveDeployment(selected); err != nil {
-		return corerelease.Deployment{}, current, false
+		return corerelease.Deployment{}, current, false, err
 	}
-	return selected, current, true
+	return selected, current, true, nil
 }
 
 func soloDeploymentTargetSet(deployment corerelease.Deployment, nodes map[string]config.Node) map[string]bool {

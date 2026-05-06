@@ -4122,6 +4122,39 @@ func TestSoloAgentUpgradeFailsWhenVersionVerificationFails(t *testing.T) {
 	}
 }
 
+func TestSoloAgentUpgradeFailsWhenVersionVerificationReturnsMissing(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "missing")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentUpgrade(context.Background(), SoloAgentUpgradeOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentUpgrade() error = nil, want missing-version verification failure")
+	}
+	if !strings.Contains(err.Error(), "agent upgrade verification failed") || !strings.Contains(err.Error(), "remote agent version is unknown") {
+		t.Fatalf("error = %v, want missing version failure", err)
+	}
+	if _, readErr := os.ReadFile(scriptPath); readErr != nil {
+		t.Fatalf("install script was not uploaded before verification: %v", readErr)
+	}
+}
+
 func TestSoloAgentUninstallRunsCleanupScript(t *testing.T) {
 	binDir := t.TempDir()
 	scriptPath := filepath.Join(t.TempDir(), "uninstall.sh")
@@ -7644,6 +7677,8 @@ func TestSoloAgentVersionStatusComparesExactObservedVersion(t *testing.T) {
 		{observed: "devopsellence v1.2.3 (commit abc, built now)", target: "v1.2.3", want: "current"},
 		{observed: "devopsellence v1.2.30 (commit abc, built now)", target: "v1.2.3", want: "mismatch"},
 		{observed: "devopsellence v2.0.0-rc.1 (commit abc, built now)", target: "v2.0.0", want: "mismatch"},
+		{observed: "totally different version output", target: "v2.0.0", want: "unknown"},
+		{observed: "missing", target: "v2.0.0", want: "unknown"},
 		{observed: "devopsellence-agent/v1.2.3 (linux; amd64)", target: "v1.2.3", want: "current"},
 	}
 	for _, tc := range cases {

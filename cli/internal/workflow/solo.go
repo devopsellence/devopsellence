@@ -3861,7 +3861,11 @@ func soloAgentVersionStatus(observed, target string) string {
 	if target == "" {
 		return "target_unknown"
 	}
-	if soloAgentObservedVersion(observed) == target {
+	observedVersion := soloAgentObservedVersion(observed)
+	if observedVersion == "" {
+		return "unknown"
+	}
+	if observedVersion == target {
 		return "current"
 	}
 	return "mismatch"
@@ -4526,17 +4530,24 @@ func (a *App) SoloAgentUpgrade(ctx context.Context, opts SoloAgentUpgradeOptions
 	}
 	afterResult := collectRemoteText(ctx, node, remoteAgentVersionCommand())
 	after := stringFromMap(afterResult, "value")
+	target := soloAgentTargetVersion()
+	versionStatus := soloAgentVersionStatus(after, target)
 	if afterResult["ok"] != true || strings.TrimSpace(after) == "" {
 		return fmt.Errorf("agent upgrade verification failed: %s", collectRemoteTextFailure(afterResult))
 	}
-	target := soloAgentTargetVersion()
+	if versionStatus == "unknown" {
+		return fmt.Errorf("agent upgrade verification failed: remote agent version is unknown: %s", after)
+	}
+	if versionStatus == "mismatch" {
+		return fmt.Errorf("agent upgrade verification failed: remote agent version %q does not match target %q", after, target)
+	}
 	payload := map[string]any{
 		"node":             opts.Node,
 		"action":           "upgraded",
 		"previous_version": before,
 		"agent_version":    after,
 		"target_version":   target,
-		"version_status":   soloAgentVersionStatus(after, target),
+		"version_status":   versionStatus,
 	}
 	if beforeResult["ok"] != true {
 		payload["previous_version_probe"] = beforeResult

@@ -4854,7 +4854,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 	target := soloAgentTargetVersion()
 	versionStatus := soloAgentVersionStatus(agentVersion, target)
 	if versionStatus == "unknown" {
-		return fmt.Errorf("agent install verification failed: %s", agentVersion)
+		return fmt.Errorf("agent install verification failed: remote agent version is unknown or unparseable: %q", strings.TrimSpace(agentVersion))
 	}
 	if strings.TrimSpace(opts.AgentBinary) != "" {
 		target = "custom"
@@ -4905,7 +4905,7 @@ func (a *App) SoloAgentUpgrade(ctx context.Context, opts SoloAgentUpgradeOptions
 		return fmt.Errorf("agent upgrade verification failed: %s", collectRemoteTextFailure(afterResult))
 	}
 	if versionStatus == "unknown" {
-		return fmt.Errorf("agent upgrade verification failed: remote agent version is unknown: %s", after)
+		return fmt.Errorf("agent upgrade verification failed: remote agent version is unknown or unparseable: %q", strings.TrimSpace(after))
 	}
 	if versionStatus == "mismatch" {
 		return fmt.Errorf("agent upgrade verification failed: remote agent version %q does not match target %q", after, target)

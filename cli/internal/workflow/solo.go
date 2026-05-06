@@ -3952,6 +3952,12 @@ func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecu
 		return check
 	}
 	lines := splitNonFinalEmptyLines(diag.Stdout)
+	if listenOutputHasTruncationMarker(lines) {
+		check.OK = false
+		check.Observed = "unknown: managed container mount output was truncated"
+		check.NextAction = "rerun devopsellence node diagnose after managed containers can be inspected completely"
+		return check
+	}
 	offenders := []string{}
 	for _, line := range lines {
 		if strings.Contains(line, "/var/run/docker.sock") {
@@ -3977,8 +3983,15 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 		check.NextAction = "rerun devopsellence node diagnose after Docker can be inspected"
 		return check
 	}
+	lines := splitNonFinalEmptyLines(diag.Stdout)
+	if listenOutputHasTruncationMarker(lines) {
+		check.OK = false
+		check.Observed = "unknown: managed container privilege output was truncated"
+		check.NextAction = "rerun devopsellence node diagnose after managed containers can be inspected completely"
+		return check
+	}
 	offenders := []string{}
-	for _, line := range splitNonFinalEmptyLines(diag.Stdout) {
+	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && fields[1] == "true" {
 			offenders = append(offenders, fields[0])
@@ -4018,7 +4031,7 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 		check.NextAction = "install ss or netstat on the node, then rerun devopsellence node diagnose"
 		return check
 	}
-	ports := unexpectedPublicListeningPorts(portLines)
+	ports := unexpectedPublicListeningPorts(portLines, node.Port)
 	if len(ports) > 0 {
 		check.OK = false
 		check.Observed = "unexpected public listening ports: " + strings.Join(ports, ", ")
@@ -4059,8 +4072,11 @@ func hasListenAddress(line string) bool {
 	return false
 }
 
-func unexpectedPublicListeningPorts(lines []string) []string {
-	expected := map[string]bool{"22": true, "80": true, "443": true}
+func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
+	if sshPort == 0 {
+		sshPort = 22
+	}
+	expected := map[string]bool{strconv.Itoa(sshPort): true, "80": true, "443": true}
 	seen := map[string]bool{}
 	for _, line := range lines {
 		for _, port := range publicPortsFromListeningLine(line) {
@@ -7586,17 +7602,47 @@ func remoteStatPathCommand(target string) string {
 }
 
 func remoteManagedContainerMountsCommand() string {
-	return `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true | head -n 100)
+	script := `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>&1)
+ps_status=$?
+if [ "$ps_status" -ne 0 ]; then
+  echo "Failed to list managed containers" >&2
+  printf '%s\n' "$ids" >&2
+  exit "$ps_status"
+fi
+ids=$(printf '%s\n' "$ids" | sed '/^$/d' | head -n 100)
 if [ -z "$ids" ]; then exit 0; fi
-$docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids | sed 's#^/##' | grep '/var/run/docker.sock' | head -n 100 || true`
+inspect_out=$($docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids 2>&1)
+inspect_status=$?
+if [ "$inspect_status" -ne 0 ]; then
+  echo "Failed to inspect managed container mounts" >&2
+  printf '%s\n' "$inspect_out" >&2
+  exit "$inspect_status"
+fi
+printf '%s\n' "$inspect_out" | sed 's#^/##' | head -n 100`
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container mount diagnostics' >&2; exit 1"
 }
 
 func remoteManagedContainerPrivilegesCommand() string {
-	return `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true | head -n 100)
+	script := `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>&1)
+ps_status=$?
+if [ "$ps_status" -ne 0 ]; then
+  echo "Failed to list managed containers" >&2
+  printf '%s\n' "$ids" >&2
+  exit "$ps_status"
+fi
+ids=$(printf '%s\n' "$ids" | sed '/^$/d' | head -n 100)
 if [ -z "$ids" ]; then exit 0; fi
-$docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids | sed 's#^/##' | awk '$2 == "true" { print }' | head -n 100`
+inspect_out=$($docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids 2>&1)
+inspect_status=$?
+if [ "$inspect_status" -ne 0 ]; then
+  echo "Failed to inspect managed container privileges" >&2
+  printf '%s\n' "$inspect_out" >&2
+  exit "$inspect_status"
+fi
+printf '%s\n' "$inspect_out" | sed 's#^/##' | head -n 100`
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container privilege diagnostics' >&2; exit 1"
 }
 
 func desiredStateOverridePath(node config.Node) string {

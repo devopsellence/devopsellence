@@ -3748,9 +3748,22 @@ func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
 		"LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:*",
 		"tcp6       0      0 :::9090                 :::*                    LISTEN      1234/demo",
 	}
-	ports := unexpectedPublicListeningPorts(lines)
+	ports := unexpectedPublicListeningPorts(lines, 22)
 	if !reflect.DeepEqual(ports, []string{"8080", "9090"}) {
 		t.Fatalf("unexpected ports = %#v, want wildcard public ports only", ports)
+	}
+}
+
+func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 2222)
+	if !reflect.DeepEqual(ports, []string{"22"}) {
+		t.Fatalf("unexpected ports = %#v, want default SSH port flagged when node uses 2222", ports)
 	}
 }
 
@@ -3763,6 +3776,38 @@ func TestSplitListenAddressSupportsIPv6AnyNotation(t *testing.T) {
 	host, port, ok = splitListenAddress(":::*")
 	if ok || host != "" || port != "" {
 		t.Fatalf("splitListenAddress(\":::*\") = host=%q port=%q ok=%v, want empty host/port and ok=false", host, port, ok)
+	}
+}
+
+func TestSoloDockerSecurityChecksFailWhenManagedContainerOutputTruncated(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "truncated") {
+		t.Fatalf("docker socket check = %#v, want failed truncated finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), node)
+	if privileged.OK || !strings.Contains(privileged.Observed, "truncated") {
+		t.Fatalf("privileged check = %#v, want failed truncated finding", privileged)
+	}
+}
+
+func TestSoloDockerSecurityChecksFailWhenInspectErrors(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "inspect failed") {
+		t.Fatalf("docker socket check = %#v, want failed inspect finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), node)
+	if privileged.OK || !strings.Contains(privileged.Observed, "inspect failed") {
+		t.Fatalf("privileged check = %#v, want failed inspect finding", privileged)
 	}
 }
 
@@ -3836,6 +3881,21 @@ func TestSoloTLSKeyPermissionsFailWhenModeUnparseable(t *testing.T) {
 	check := soloTLSKeyPermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
 	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
 		t.Fatalf("tls key check = %#v, want failed unknown mode finding", check)
+	}
+}
+
+func TestSoloManagedContainerSecurityChecksFailClosedOnInspectErrors(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR", "1")
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if mounts.OK || !strings.Contains(mounts.Observed, "unknown") || !strings.Contains(mounts.Observed, "inspect failed") || !strings.Contains(mounts.NextAction, "Docker can be inspected") {
+		t.Fatalf("docker socket mounts check = %#v, want failed unknown inspect finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if privileged.OK || !strings.Contains(privileged.Observed, "unknown") || !strings.Contains(privileged.Observed, "inspect failed") || !strings.Contains(privileged.NextAction, "Docker can be inspected") {
+		t.Fatalf("privileged containers check = %#v, want failed unknown inspect finding", privileged)
 	}
 }
 
@@ -8338,7 +8398,11 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"*
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *"Mounts"* ]]; then
-  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT:-}" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT:-}" ]]; then
     printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /var/run/docker.sock:/var/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
   else
     printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web app_storage:/app/storage\n__DEVOPSELLENCE_STDERR__\n'
@@ -8347,7 +8411,13 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect -
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *".HostConfig.Privileged"* ]]; then
-  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web false\n__DEVOPSELLENCE_STDERR__\n'
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  else
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web false\n__DEVOPSELLENCE_STDERR__\n'
+  fi
   exit 0
 fi
 

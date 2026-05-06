@@ -2000,7 +2000,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		}
 		expectedRevision := soloExpectedStatusRevision(expectedRevisions, name)
 		runtime := soloRuntimeEnvironmentStatus(result.Status, expectedRuntimeEnvironment, expectedWorkloadRevision)
-		statusMatches := soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name])
+		statusMatches := soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, runtime, cohostedRevisions[name], staleRevisions[name])
 		if hasRecoveryCandidate && recoveryTargets[name] && statusMatches && strings.TrimSpace(result.Status.Phase) == "settled" && soloRecoveryRuntimeSettled(runtime) {
 			recoveryChecked[name] = true
 			if revision := strings.TrimSpace(result.Status.Revision); revision != "" && len(cohostedRevisions[name]) == 0 {
@@ -2323,8 +2323,7 @@ func soloCohostedStatusRevisions(current solo.State, release corerelease.Release
 	return cohosted
 }
 
-func soloNodeStatusMatchesExpectedRelease(status soloNodeStatus, expectedDesiredStateRevision, expectedRuntimeEnvironment, expectedWorkloadRevision string, cohostedDesiredStateRevisions, staleDesiredStateRevisions map[string]bool) bool {
-	runtime := soloRuntimeEnvironmentStatus(status, expectedRuntimeEnvironment, expectedWorkloadRevision)
+func soloNodeStatusMatchesExpectedRelease(status soloNodeStatus, expectedDesiredStateRevision string, runtime soloRuntimeStatusResult, cohostedDesiredStateRevisions, staleDesiredStateRevisions map[string]bool) bool {
 	if runtime.State != "" {
 		if runtime.State != "settled" {
 			return false

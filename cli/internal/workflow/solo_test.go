@@ -4146,17 +4146,8 @@ func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "755 root root /var/lib/devopsellence")
 	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
-	if check.OK || !strings.Contains(check.NextAction, "chmod 700") {
+	if check.OK || !strings.Contains(check.NextAction, "other read/write") {
 		t.Fatalf("agent state check = %#v, want other-read finding", check)
-	}
-}
-
-func TestSoloAgentStatePermissionsRejectsOtherExecute(t *testing.T) {
-	installFakeSoloCommands(t, nil)
-	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "751 root root /var/lib/devopsellence")
-	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
-	if check.OK || !strings.Contains(check.NextAction, "chmod 700") {
-		t.Fatalf("agent state check = %#v, want other-execute finding", check)
 	}
 }
 
@@ -9215,7 +9206,7 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 		"BASE_URL='https://example.test'",
 		"$BASE_URL/agent/download",
 		"$BASE_URL/agent/checksums",
-		`run_root chmod 700 "$STATE_DIR"`,
+		`run_root chmod 751 "$STATE_DIR"`,
 		"HARDEN_SSH='false'",
 	} {
 		if !strings.Contains(script, want) {
@@ -10281,7 +10272,7 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"*
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
-  state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-700 root root /var/lib/devopsellence}"
+  state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-751 root root /var/lib/devopsellence}"
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$state_stat"
   exit 0
 fi

@@ -1025,6 +1025,11 @@ func (a *App) waitForSoloRolloutForRuntime(ctx context.Context, nodes map[string
 					details = append(details, name+"="+runtime.Detail)
 					continue
 				case "error":
+					if soloRolloutErrorRetryable(runtime.Message) {
+						reconcilingCount++
+						details = append(details, fmt.Sprintf("%s=retryable_error:%s", name, runtime.Message))
+						continue
+					}
 					return ExitError{Code: 1, Err: &soloRolloutError{Node: name, Message: runtime.Message, HealthcheckFailure: runtime.HealthcheckFailure}}
 				case "settled":
 					settledCount++
@@ -1035,6 +1040,11 @@ func (a *App) waitForSoloRolloutForRuntime(ctx context.Context, nodes map[string
 					settledCount++
 				case "error":
 					message := firstNonEmpty(strings.TrimSpace(result.Status.Error), "node reported phase=error")
+					if soloRolloutErrorRetryable(message) {
+						reconcilingCount++
+						details = append(details, fmt.Sprintf("%s=retryable_error:%s", name, message))
+						continue
+					}
 					return ExitError{Code: 1, Err: &soloRolloutError{Node: name, Message: message, HealthcheckFailure: soloRolloutMessageLooksLikeHealthcheck(message)}}
 				default:
 					reconcilingCount++
@@ -1063,6 +1073,15 @@ func (a *App) waitForSoloRolloutForRuntime(ctx context.Context, nodes map[string
 		case <-timer.C:
 		}
 	}
+}
+
+func soloRolloutErrorRetryable(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "network sandbox for container") ||
+		strings.Contains(normalized, "envoy unhealthy")
 }
 
 type soloRuntimeStatusResult struct {
@@ -3478,6 +3497,10 @@ func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 }
 
 func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) error {
+	nodeName := strings.TrimSpace(opts.Node)
+	if nodeName == "" {
+		return ExitError{Code: 2, Err: errors.New("missing required option: --node")}
+	}
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -3495,14 +3518,17 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 		return fmt.Errorf("environment %s has no attached nodes", environmentName)
 	}
 	next := cloneSoloState(current)
-	if _, changed, err := next.DetachNode(workspaceRoot, environmentName, opts.Node); err != nil {
+	if _, changed, err := next.DetachNode(workspaceRoot, environmentName, nodeName); err != nil {
 		return err
 	} else if !changed {
-		return fmt.Errorf("node %q is not attached to %s", opts.Node, environmentName)
+		return fmt.Errorf("node %q is not attached to %s", nodeName, environmentName)
+	}
+	if conflicts := soloNodeRemoteCleanupConflicts(next, nodeName); len(conflicts) > 0 {
+		return ExitError{Code: 1, Err: fmt.Errorf("remote cleanup for node %q refused: %s. These node records point at the same provider target or SSH endpoint; keep the duplicate records attached until they can be consolidated so cleanup cannot remove unrelated workloads", nodeName, strings.Join(conflicts, "; "))}
 	}
 	remainingNodeNames := make([]string, 0, len(nodeNamesBefore))
 	for _, name := range nodeNamesBefore {
-		if name != opts.Node {
+		if name != nodeName {
 			remainingNodeNames = append(remainingNodeNames, name)
 		}
 	}
@@ -3512,8 +3538,8 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	}
 	warnings := []string{}
 	remoteCleanup := "published"
-	if _, err := a.republishNodes(ctx, next, []string{opts.Node}); err != nil {
-		if next.NodeHasAttachments(opts.Node) || !soloRepublishMissingAgentError(err) {
+	if _, err := a.republishNodes(ctx, next, []string{nodeName}); err != nil {
+		if next.NodeHasAttachments(nodeName) || !soloRepublishMissingAgentError(err) {
 			return err
 		}
 		remoteCleanup = "skipped_missing_agent"
@@ -3525,7 +3551,7 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 
 	payload := map[string]any{
 		"schema_version": outputSchemaVersion,
-		"node":           opts.Node,
+		"node":           nodeName,
 		"environment":    environmentName,
 		"changed":        true,
 		"remote_cleanup": remoteCleanup,
@@ -3535,6 +3561,44 @@ func (a *App) soloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) er
 	}
 	return a.Printer.PrintJSON(payload)
 
+}
+
+func soloNodeRemoteCleanupConflicts(current solo.State, nodeName string) []string {
+	nodeName = strings.TrimSpace(nodeName)
+	node, ok := current.Nodes[nodeName]
+	if !ok {
+		return nil
+	}
+	conflicts := []string{}
+	for otherName, otherNode := range current.Nodes {
+		if otherName == nodeName || !soloNodesShareRemoteCleanupTarget(node, otherNode) || !current.NodeHasAttachments(otherName) {
+			continue
+		}
+		attachments := current.AttachmentsForNode(otherName)
+		descriptions := make([]string, 0, len(attachments))
+		for _, attachment := range attachments {
+			descriptions = append(descriptions, fmt.Sprintf("%s:%s", attachment.WorkspaceKey, attachment.Environment))
+		}
+		sort.Strings(descriptions)
+		conflicts = append(conflicts, fmt.Sprintf("%s has attached environments [%s]", otherName, strings.Join(descriptions, ", ")))
+	}
+	sort.Strings(conflicts)
+	return conflicts
+}
+
+func soloNodesShareRemoteCleanupTarget(a, b config.Node) bool {
+	aProvider := strings.TrimSpace(strings.ToLower(a.Provider))
+	bProvider := strings.TrimSpace(strings.ToLower(b.Provider))
+	aProviderID := strings.TrimSpace(a.ProviderServerID)
+	bProviderID := strings.TrimSpace(b.ProviderServerID)
+	if aProvider != "" && aProviderID != "" && aProvider == bProvider && aProviderID == bProviderID {
+		return true
+	}
+	aHost := strings.TrimSpace(strings.ToLower(a.Host))
+	bHost := strings.TrimSpace(strings.ToLower(b.Host))
+	aPort := solo.NormalizeNode(a).Port
+	bPort := solo.NormalizeNode(b).Port
+	return aHost != "" && aHost == bHost && aPort == bPort
 }
 
 func soloRepublishMissingAgentError(err error) bool {
@@ -7594,6 +7658,7 @@ func installSoloAgent(ctx context.Context, node config.Node, opts SoloAgentInsta
 		return runSoloAgentInstallScript(ctx, node, soloAgentInstallScript(soloAgentInstallScriptOptions{
 			StateDir:        firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 			LocalBinaryPath: remotePath,
+			HardenSSH:       soloAgentInstallShouldHardenSSH(node),
 		}), reporter)
 	}
 
@@ -7603,7 +7668,12 @@ func installSoloAgent(ctx context.Context, node config.Node, opts SoloAgentInsta
 		StateDir:     firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"),
 		BaseURL:      baseURL,
 		AgentVersion: releasedAgentVersionForInstall(),
+		HardenSSH:    soloAgentInstallShouldHardenSSH(node),
 	}), reporter)
+}
+
+func soloAgentInstallShouldHardenSSH(node config.Node) bool {
+	return strings.TrimSpace(node.Provider) != "" && strings.TrimSpace(node.ProviderServerID) != ""
 }
 
 func runSoloAgentInstallScript(ctx context.Context, node config.Node, script string, reporter soloInstallReporter) error {
@@ -7619,6 +7689,7 @@ type soloAgentInstallScriptOptions struct {
 	BaseURL         string
 	AgentVersion    string
 	LocalBinaryPath string
+	HardenSSH       bool
 }
 
 // Accept stable tags, semver-style prereleases, and workflow-generated
@@ -7631,12 +7702,16 @@ func soloAgentInstallScript(opts soloAgentInstallScriptOptions) string {
 	if stateDir == "" {
 		stateDir = "/var/lib/devopsellence"
 	}
-	authStatePath := stateDir + "/auth.json"
+	authStatePath := stateDir + "/private/auth.json"
 	overridePath := stateDir + "/desired-state-override.json"
 	envoyBootstrapPath := stateDir + "/envoy/envoy.yaml"
 	agentVersion := strings.TrimSpace(opts.AgentVersion)
 	localBinary := strings.TrimSpace(opts.LocalBinaryPath)
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
+	hardenSSH := "false"
+	if opts.HardenSSH {
+		hardenSSH = "true"
+	}
 	return fmt.Sprintf(`set -euo pipefail
 
 STATE_DIR=%s
@@ -7645,6 +7720,7 @@ SERVICE_FILE=/etc/systemd/system/devopsellence-agent.service
 BASE_URL=%s
 AGENT_VERSION=%s
 LOCAL_BINARY=%s
+HARDEN_SSH=%s
 
 if [ "$(id -u)" -ne 0 ]; then
   SUDO=sudo
@@ -7657,6 +7733,40 @@ run_root() {
     "$SUDO" "$@"
   else
     "$@"
+  fi
+}
+
+harden_sshd_password_auth() {
+  [ "$HARDEN_SSH" = "true" ] || return 0
+  SSHD_BIN="$(run_root sh -c 'command -v sshd || { [ -x /usr/sbin/sshd ] && printf %%s /usr/sbin/sshd; } || { [ -x /usr/bin/sshd ] && printf %%s /usr/bin/sshd; } || true')"
+  [ -n "$SSHD_BIN" ] || return 0
+  [ -d /etc/ssh ] || return 0
+  echo "progress: hardening SSH password authentication"
+  run_root mkdir -p /etc/ssh/sshd_config.d
+  run_root tee /etc/ssh/sshd_config.d/60-devopsellence-hardening.conf >/dev/null <<'EOF_SSHD'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF_SSHD
+  if [ -f /etc/ssh/sshd_config ] && ! run_root grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
+    tmp_sshd_config="$(run_root mktemp /etc/ssh/sshd_config.devopsellence.XXXXXX)"
+    run_root cp -p /etc/ssh/sshd_config "$tmp_sshd_config"
+    run_root sh -c '{
+      echo "Include /etc/ssh/sshd_config.d/*.conf"
+      cat /etc/ssh/sshd_config
+    } >"$1"' sh "$tmp_sshd_config"
+    run_root mv "$tmp_sshd_config" /etc/ssh/sshd_config
+  fi
+  run_root "$SSHD_BIN" -t
+  if ! run_root "$SSHD_BIN" -T | awk '
+    tolower($1) == "passwordauthentication" { password = tolower($2) }
+    tolower($1) == "kbdinteractiveauthentication" { keyboard = tolower($2) }
+    END { exit(password == "no" && keyboard == "no" ? 0 : 1) }
+  '; then
+    echo "SSH password hardening was written but is not effective according to sshd -T" >&2
+    return 1
+  fi
+  if ! run_root systemctl reload ssh && ! run_root systemctl reload sshd; then
+    echo "warning: SSH password hardening was written but sshd reload failed; reload sshd or reboot to apply it" >&2
   fi
 }
 
@@ -7704,8 +7814,13 @@ if ! docker_ready; then
   echo "Docker Engine is unavailable after install/start" >&2
   exit 1
 fi
+harden_sshd_password_auth
 
-run_root mkdir -p "$STATE_DIR" "$STATE_DIR/envoy"
+run_root mkdir -p "$STATE_DIR" "$STATE_DIR/envoy" "$STATE_DIR/private"
+# The parent must remain executable so Envoy can open the bind-mounted
+# bootstrap/socket directory; sensitive state files are written 0600/0640.
+run_root chmod 711 "$STATE_DIR"
+run_root chmod 700 "$STATE_DIR/private"
 TMP_BIN="$(mktemp)"
 TMP_SUMS="$(mktemp)"
 cleanup() {
@@ -7768,7 +7883,7 @@ run_root systemctl stop devopsellence-agent || true
 run_root systemctl enable --now devopsellence-agent
 echo "progress: checking devopsellence-agent service"
 run_root systemctl is-active --quiet devopsellence-agent
-`, shellQuote(stateDir), shellQuote(baseURL), shellQuote(agentVersion), shellQuote(localBinary), systemdQuoteArg(authStatePath), systemdQuoteArg(overridePath), systemdQuoteArg(envoyBootstrapPath))
+`, shellQuote(stateDir), shellQuote(baseURL), shellQuote(agentVersion), shellQuote(localBinary), shellQuote(hardenSSH), systemdQuoteArg(authStatePath), systemdQuoteArg(overridePath), systemdQuoteArg(envoyBootstrapPath))
 }
 
 type soloAgentUninstallScriptOptions struct {

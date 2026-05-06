@@ -4372,6 +4372,101 @@ func TestSoloAgentUpgradeReinstallsAgent(t *testing.T) {
 	if !strings.Contains(string(scriptBytes), "AGENT_VERSION='v2.0.0'") {
 		t.Fatalf("install script missing pinned version:\n%s", string(scriptBytes))
 	}
+	if strings.Contains(string(scriptBytes), "HARDEN_SSH='true'") {
+		t.Fatalf("manual node install script unexpectedly enables SSH hardening:\n%s", string(scriptBytes))
+	}
+}
+
+func TestSoloAgentUpgradeHardensProviderNodeSSH(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v2.0.0 (commit new, built now)")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Provider: "hetzner", ProviderServerID: "123"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentUpgrade(context.Background(), SoloAgentUpgradeOptions{Node: "node-a", BaseURL: "https://example.test"}); err != nil {
+		t.Fatalf("SoloAgentUpgrade() error = %v", err)
+	}
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read install script: %v", err)
+	}
+	script := string(scriptBytes)
+	for _, want := range []string{
+		"HARDEN_SSH='true'",
+		"harden_sshd_password_auth",
+		"PasswordAuthentication no",
+		"KbdInteractiveAuthentication no",
+		"/etc/ssh/sshd_config.d/60-devopsellence-hardening.conf",
+		"Include /etc/ssh/sshd_config.d/*.conf",
+		"SSHD_BIN=",
+		"/usr/sbin/sshd",
+		`run_root "$SSHD_BIN" -t`,
+		`run_root "$SSHD_BIN" -T`,
+		`password = tolower($2)`,
+		`keyboard = tolower($2)`,
+		"mktemp /etc/ssh/sshd_config.devopsellence.",
+		"run_root cp -p /etc/ssh/sshd_config \"$tmp_sshd_config\"",
+		"run_root mv \"$tmp_sshd_config\" /etc/ssh/sshd_config",
+		"not effective according to sshd -T",
+		"systemctl reload ssh",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "systemctl restart ssh") || strings.Contains(script, "systemctl restart sshd") {
+		t.Fatalf("install script should not restart sshd over the active SSH session:\n%s", script)
+	}
+	if strings.Contains(script, "grep -qi '^passwordauthentication no$'") {
+		t.Fatalf("install script should not use grep -q with sshd -T under pipefail:\n%s", script)
+	}
+}
+
+func TestSoloAgentInstallShouldHardenSSHRequiresCompleteProviderMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		node config.Node
+		want bool
+	}{
+		{
+			name: "manual node",
+			node: config.Node{Host: "203.0.113.10", User: "root"},
+		},
+		{
+			name: "provider without server id",
+			node: config.Node{Host: "203.0.113.10", User: "root", Provider: "hetzner"},
+		},
+		{
+			name: "complete provider metadata",
+			node: config.Node{Host: "203.0.113.10", User: "root", Provider: "hetzner", ProviderServerID: "123"},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := soloAgentInstallShouldHardenSSH(tt.node); got != tt.want {
+				t.Fatalf("soloAgentInstallShouldHardenSSH() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestSoloAgentInstallReportsVerification(t *testing.T) {
@@ -4886,6 +4981,15 @@ exit 1
 	}
 }
 
+func TestSoloNodeDetachRejectsBlankNodeName(t *testing.T) {
+	app := &App{Printer: output.New(io.Discard, io.Discard)}
+	err := app.soloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: " \t "})
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(exitErr.Error(), "--node") {
+		t.Fatalf("error = %#v, want missing --node ExitError", err)
+	}
+}
+
 func TestSoloNodeDetachPreservesLocalAttachmentWhenRemoteCleanupFails(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -5090,6 +5194,157 @@ func TestSoloNodeDetachRepublishesEmptyDesiredStateForLastAttachment(t *testing.
 	}
 	if strings.Contains(string(data), "aaa1111") {
 		t.Fatalf("published desired state still contains detached revision: %s", data)
+	}
+}
+
+func TestSoloNodeDetachTrimsNodeNameBeforeRepublish(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if _, err := config.Write(workspaceRoot, config.DefaultProjectConfig("solo", "app-a", "production")); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, nil)
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: " node-a "}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := decodeJSONOutput(t, &stdout)
+	if got := stringValueAny(payload["node"]); got != "node-a" {
+		t.Fatalf("node = %q, want trimmed node-a", got)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.NodeHasAttachments("node-a") {
+		t.Fatalf("node-a attachment remains after detach: %#v", loaded.Attachments)
+	}
+}
+
+func TestSoloNodeDetachRefusesRemoteCleanupWhenDuplicateHostHasAttachments(t *testing.T) {
+	workspaceDocs := t.TempDir()
+	workspaceDogfood := t.TempDir()
+	if _, err := config.Write(workspaceDocs, config.DefaultProjectConfig("solo", "docs", "production")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Write(workspaceDogfood, config.DefaultProjectConfig("solo", "dogfood", "production")); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"docs-1":           {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+			"docs-df-existing": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceDocs, "production", "docs-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceDogfood, "production", "docs-df-existing"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	revisionPath := installFakeSoloCommands(t, nil)
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceDogfood,
+	}
+	err := app.SoloNodeDetach(context.Background(), SoloNodeDetachOptions{Node: "docs-df-existing"})
+	if err == nil {
+		t.Fatal("expected duplicate-host detach refusal")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	for _, want := range []string{"remote cleanup", "docs-1", "same provider target or SSH endpoint", "unrelated workloads"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want substring %q", err.Error(), want)
+		}
+	}
+	if _, err := os.Stat(revisionPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("desired state file stat err = %v, want not exist", err)
+	}
+	loaded, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.NodeHasAttachments("docs-df-existing") {
+		t.Fatalf("docs-df-existing attachment was removed after refused detach: %#v", loaded.Attachments)
+	}
+	if !loaded.NodeHasAttachments("docs-1") {
+		t.Fatalf("docs-1 attachment was removed after refused detach: %#v", loaded.Attachments)
+	}
+}
+
+func TestSoloNodesShareRemoteCleanupTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a    config.Node
+		b    config.Node
+		want bool
+	}{
+		{
+			name: "same provider target",
+			a:    config.Node{Provider: "hetzner", ProviderServerID: "srv-1", Host: "203.0.113.10", Port: 22},
+			b:    config.Node{Provider: " HETZNER ", ProviderServerID: "srv-1", Host: "203.0.113.11", Port: 2222},
+			want: true,
+		},
+		{
+			name: "same ssh endpoint",
+			a:    config.Node{Host: "203.0.113.10", Port: 22},
+			b:    config.Node{Host: " 203.0.113.10 ", Port: 0},
+			want: true,
+		},
+		{
+			name: "same host different ssh port",
+			a:    config.Node{Host: "203.0.113.10", Port: 22},
+			b:    config.Node{Host: "203.0.113.10", Port: 2222},
+			want: false,
+		},
+		{
+			name: "different provider target same stale host",
+			a:    config.Node{Provider: "hetzner", ProviderServerID: "srv-1", Host: "203.0.113.10", Port: 22},
+			b:    config.Node{Provider: "hetzner", ProviderServerID: "srv-2", Host: "203.0.113.10", Port: 2222},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := soloNodesShareRemoteCleanupTarget(tt.a, tt.b); got != tt.want {
+				t.Fatalf("soloNodesShareRemoteCleanupTarget() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -8792,6 +9047,31 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	}
 }
 
+func TestWaitForSoloRolloutRetriesTransientExpectedRevisionErrorPhase(t *testing.T) {
+	statusCountPath := installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: `{"revision":"expected-revision","phase":"error","error":"ensure envoy: connect envoy to workload network app-net: Error response from daemon: network sandbox for container abc not found"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"settled","environments":[{"name":"production","revision":"workload-revision","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}` + "\n"},
+	})
+
+	app := &App{
+		Printer:            output.New(io.Discard, io.Discard),
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      time.Second,
+	}
+
+	err := app.waitForSoloRolloutForRuntime(context.Background(), map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
+	}, map[string]string{
+		"node-a": "expected-revision",
+	}, "production", "workload-revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFakeSSHStatusCount(t, statusCountPath); got != 2 {
+		t.Fatalf("status poll count = %d, want retry then settled", got)
+	}
+}
+
 func TestWaitForSoloRolloutFailsOnUnhealthyRuntimeEnvironmentDespiteTopLevelSettled(t *testing.T) {
 	installFakeSoloCommands(t, []fakeSSHResponse{
 		{stdout: `{"revision":"expected-revision","phase":"settled","environments":[{"name":"production","revision":"workload-revision","phase":"settled","services":[{"name":"web","phase":"settled","state":"unhealthy"}]}]}` + "\n"},
@@ -8928,13 +9208,36 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{
 		"--mode=solo",
-		`--auth-state-path="/var/lib/devopsellence/auth.json"`,
+		`--auth-state-path="/var/lib/devopsellence/private/auth.json"`,
 		`--desired-state-override-path="/var/lib/devopsellence/desired-state-override.json"`,
 		"AGENT_BIN=/usr/local/bin/devopsellence-agent",
 		`ARTIFACT_NAME="agent-$OS-$ARCH"`,
 		"BASE_URL='https://example.test'",
 		"$BASE_URL/agent/download",
 		"$BASE_URL/agent/checksums",
+		`run_root chmod 711 "$STATE_DIR"`,
+		`run_root chmod 700 "$STATE_DIR/private"`,
+		"HARDEN_SSH='false'",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestSoloAgentInstallScriptCanHardenSSHPasswordAuthentication(t *testing.T) {
+	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test", HardenSSH: true})
+	for _, want := range []string{
+		"HARDEN_SSH='true'",
+		"progress: hardening SSH password authentication",
+		"/etc/ssh/sshd_config.d/60-devopsellence-hardening.conf",
+		"PasswordAuthentication no",
+		"KbdInteractiveAuthentication no",
+		`run_root "$SSHD_BIN" -t`,
+		`run_root "$SSHD_BIN" -T`,
+		`password = tolower($2)`,
+		`keyboard = tolower($2)`,
+		"systemctl reload ssh",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q", want)
@@ -8950,7 +9253,7 @@ func TestSoloAgentInstallScriptUsesConfiguredStateDir(t *testing.T) {
 
 	for _, want := range []string{
 		"STATE_DIR='/tmp/devopsellence-test-state'",
-		`--auth-state-path="/tmp/devopsellence-test-state/auth.json"`,
+		`--auth-state-path="/tmp/devopsellence-test-state/private/auth.json"`,
 		`--desired-state-override-path="/tmp/devopsellence-test-state/desired-state-override.json"`,
 		`--envoy-bootstrap-path="/tmp/devopsellence-test-state/envoy/envoy.yaml"`,
 	} {
@@ -8967,7 +9270,7 @@ func TestSoloAgentInstallScriptQuotesSystemdExecStartPaths(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		`--auth-state-path="/tmp/devopsellence state/\"quoted\"%%value/auth.json"`,
+		`--auth-state-path="/tmp/devopsellence state/\"quoted\"%%value/private/auth.json"`,
 		`--desired-state-override-path="/tmp/devopsellence state/\"quoted\"%%value/desired-state-override.json"`,
 		`--envoy-bootstrap-path="/tmp/devopsellence state/\"quoted\"%%value/envoy/envoy.yaml"`,
 	} {
@@ -9979,7 +10282,7 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"*
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
-  state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-751 root root /var/lib/devopsellence}"
+  state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-711 root root /var/lib/devopsellence}"
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$state_stat"
   exit 0
 fi

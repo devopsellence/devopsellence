@@ -249,8 +249,11 @@ func Load(args []string) (*Config, error) {
 		return nil, errors.New("--auth-state-path is required")
 	}
 
-	// Derive paths from AuthStatePath directory.
-	stateDir := filepath.Dir(cfg.AuthStatePath)
+	// Derive sibling state paths from the agent state root. Solo installs
+	// keep auth under a private child directory while status/TLS artifacts
+	// remain in the root so the CLI and Envoy can read them.
+	stateDir := derivedStateDir(cfg.AuthStatePath)
+	privateStateDir := filepath.Dir(cfg.AuthStatePath)
 	cfg.StatusPath = filepath.Join(stateDir, "status.json")
 	cfg.LifecycleStatePath = filepath.Join(stateDir, "lifecycle-state.json")
 	if cfg.DesiredStateCachePath == "" {
@@ -260,7 +263,7 @@ func Load(args []string) (*Config, error) {
 		cfg.DesiredStateOverridePath = filepath.Join(stateDir, "desired-state-override.json")
 	}
 	if cfg.DiskCareStatePath == "" {
-		cfg.DiskCareStatePath = filepath.Join(stateDir, "disk-care-state.json")
+		cfg.DiskCareStatePath = filepath.Join(privateStateDir, "disk-care-state.json")
 	}
 	if cfg.EnvoyTLSCertPath == "" {
 		cfg.EnvoyTLSCertPath = filepath.Join(stateDir, "ingress-cert.pem")
@@ -307,6 +310,14 @@ func Load(args []string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func derivedStateDir(authStatePath string) string {
+	stateDir := filepath.Dir(authStatePath)
+	if filepath.Base(stateDir) == "private" {
+		return filepath.Dir(stateDir)
+	}
+	return stateDir
 }
 
 func parseLevel(level string) (slog.Level, error) {

@@ -71,7 +71,28 @@ func TestReportTightensExistingDirectoryPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
 	}
-	if info.Mode().Perm() != 0o751 {
+	if info.Mode().Perm() != 0o711 {
+		t.Fatalf("unexpected dir permissions: %v", info.Mode().Perm())
+	}
+}
+
+func TestReportPreservesPrivateDirectoryPermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{}))
+	reporter := New(filepath.Join(dir, "status.json"), logger)
+	if err := reporter.Report(context.Background(), report.Status{Time: time.Now().UTC()}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
 		t.Fatalf("unexpected dir permissions: %v", info.Mode().Perm())
 	}
 }

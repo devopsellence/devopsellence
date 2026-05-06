@@ -7800,6 +7800,7 @@ fi
 harden_sshd_password_auth
 
 run_root mkdir -p "$STATE_DIR" "$STATE_DIR/envoy"
+run_root chmod 700 "$STATE_DIR"
 TMP_BIN="$(mktemp)"
 TMP_SUMS="$(mktemp)"
 cleanup() {

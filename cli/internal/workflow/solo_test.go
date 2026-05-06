@@ -9181,6 +9181,7 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 		"BASE_URL='https://example.test'",
 		"$BASE_URL/agent/download",
 		"$BASE_URL/agent/checksums",
+		`run_root chmod 700 "$STATE_DIR"`,
 		"HARDEN_SSH='false'",
 	} {
 		if !strings.Contains(script, want) {

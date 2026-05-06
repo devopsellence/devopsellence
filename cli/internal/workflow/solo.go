@@ -583,7 +583,8 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		return err
 	}
 
-	runtimeVerified := soloDeployRuntimeVerified(false, false)
+	verifiedURLs, endpointProbeVerified, tlsVerified := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes)
+	runtimeVerified := soloDeployRuntimeVerified(endpointProbeVerified, tlsVerified, ingressRequiresTLSReadiness(cfg))
 	payload := map[string]any{
 		"release_id":              release.ID,
 		"deployment_id":           deployment.ID,
@@ -596,16 +597,19 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 		"rollout_contract":        soloDeployRolloutContract(cfg),
 		"runtime_verified":        runtimeVerified,
 	}
-	if urls, endpointProbeVerified, tlsVerified := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes); len(urls) > 0 {
-		payload["public_urls"] = urls
-		runtimeVerified["endpoint_probe"] = endpointProbeVerified
-		runtimeVerified["tls"] = tlsVerified
-		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + urls[0]}, soloNodeLogNextSteps(environmentName, nodes)...)
+	if len(verifiedURLs) > 0 {
+		payload["public_urls"] = verifiedURLs
+		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName), "curl " + verifiedURLs[0]}, soloNodeLogNextSteps(environmentName, nodes)...)
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
 		payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
-		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName)}, soloNodeLogNextSteps(environmentName, nodes)...)
+		nextSteps := []string{"devopsellence status" + soloEnvFlag(environmentName)}
+		if ingressRequiresTLSReadiness(cfg) {
+			nextSteps = append(nextSteps, "devopsellence ingress check"+soloEnvFlag(environmentName)+" --wait 5m")
+		}
+		nextSteps = append(nextSteps, soloNodeLogNextSteps(environmentName, nodes)...)
+		payload["next_steps"] = nextSteps
 	} else {
 		payload["next_steps"] = append([]string{"devopsellence status" + soloEnvFlag(environmentName)}, soloNodeLogNextSteps(environmentName, nodes)...)
 	}
@@ -613,14 +617,73 @@ func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 
 }
 
-func soloDeployRuntimeVerified(endpointProbe, tls bool) map[string]any {
-	return map[string]any{
-		"desired_state_revision": true,
-		"container_replaced":     false,
-		"healthcheck":            true,
-		"endpoint_probe":         endpointProbe,
-		"tls":                    tls,
+type soloRuntimeVerification struct {
+	DesiredStateRevision bool
+	Healthcheck          bool
+	ContainerReplaced    bool
+	EndpointProbe        bool
+	TLS                  bool
+	PublicEndpointNeeded bool
+}
+
+func soloDeployRuntimeVerified(endpointProbe, tls, publicEndpointNeeded bool) map[string]any {
+	return soloRuntimeVerifiedPayload(soloRuntimeVerification{
+		DesiredStateRevision: true,
+		Healthcheck:          true,
+		ContainerReplaced:    false,
+		EndpointProbe:        endpointProbe,
+		TLS:                  tls,
+		PublicEndpointNeeded: publicEndpointNeeded,
+	})
+}
+
+func soloRuntimeVerifiedPayload(verification soloRuntimeVerification) map[string]any {
+	ready := verification.DesiredStateRevision && verification.Healthcheck
+	if verification.PublicEndpointNeeded {
+		ready = ready && verification.EndpointProbe && verification.TLS
 	}
+	payload := map[string]any{
+		"desired_state_revision": verification.DesiredStateRevision,
+		"container_replaced":     verification.ContainerReplaced,
+		"healthcheck":            verification.Healthcheck,
+		"endpoint_probe":         verification.EndpointProbe,
+		"tls":                    verification.TLS,
+		"ready":                  ready,
+		"confidence": map[string]string{
+			"desired_state_revision": soloRuntimeVerificationConfidence(verification.DesiredStateRevision, true),
+			"container_replaced":     soloRuntimeVerificationConfidence(verification.ContainerReplaced, true),
+			"healthcheck":            soloRuntimeVerificationConfidence(verification.Healthcheck, true),
+			"endpoint_probe":         soloRuntimeVerificationConfidence(verification.EndpointProbe, verification.PublicEndpointNeeded),
+			"tls":                    soloRuntimeVerificationConfidence(verification.TLS, verification.PublicEndpointNeeded),
+		},
+	}
+	pending := []string{}
+	if !verification.DesiredStateRevision {
+		pending = append(pending, "desired_state_revision")
+	}
+	if !verification.Healthcheck {
+		pending = append(pending, "healthcheck")
+	}
+	if verification.PublicEndpointNeeded && !verification.EndpointProbe {
+		pending = append(pending, "endpoint_probe")
+	}
+	if verification.PublicEndpointNeeded && !verification.TLS {
+		pending = append(pending, "tls")
+	}
+	if len(pending) > 0 {
+		payload["pending"] = pending
+	}
+	return payload
+}
+
+func soloRuntimeVerificationConfidence(verified, required bool) string {
+	if verified {
+		return "verified"
+	}
+	if !required {
+		return "not_required"
+	}
+	return "not_verified"
 }
 
 func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
@@ -1795,7 +1858,26 @@ func (a *App) soloProgress(operation string, fields map[string]any) func(string)
 		for key, value := range fields {
 			payload[key] = value
 		}
+		if _, ok := payload["step"]; !ok {
+			if step := soloProgressStep(message); step != "" {
+				payload["step"] = step
+			}
+		}
 		_ = a.Printer.PrintEvent("progress", payload)
+	}
+}
+
+func soloProgressStep(message string) string {
+	message = strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case strings.Contains(message, "docker image"):
+		return "image_build"
+	case strings.Contains(message, "ready"):
+		return "node_ready"
+	case strings.Contains(message, "create"):
+		return "node_create"
+	default:
+		return ""
 	}
 }
 
@@ -1937,7 +2019,8 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes attached to the current environment")
 	}
-	verifiedPublicURLs, _, _ := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes)
+	verifiedPublicURLs, endpointProbeVerified, tlsVerified := a.soloVerifiedPublicURLs(workspaceRoot, environmentName, cfg, nodes)
+	configuredPublicURLs := soloStatusPublicURLs(cfg, nodes)
 	releaseRequired := workspaceRoot != "" && environmentName != "" && (len(opts.Nodes) == 0 || strings.TrimSpace(opts.Environment) != "")
 	localReleaseKnown := len(opts.Nodes) > 0 && !releaseRequired
 	expectedRevisions := map[string]string{}
@@ -2096,11 +2179,20 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			payload["configured_public_urls"] = verifiedPublicURLs
 			appendPayloadWarning("public URLs are configured, but one or more nodes are not settled; check `devopsellence status" + soloEnvFlag(environmentName) + "` before testing reachability")
 		}
-	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
-		payload["configured_public_urls"] = urls
+	} else if len(configuredPublicURLs) > 0 {
+		payload["configured_public_urls"] = configuredPublicURLs
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
 		appendPayloadWarning(soloPublicURLWarning(cfg, environmentName))
 	}
+	statusRuntimeVerified := allSettled && hasCurrent && readErrors == 0 && statusErrors == 0 && statusMismatches == 0 && missingStatuses == 0
+	payload["runtime_verified"] = soloRuntimeVerifiedPayload(soloRuntimeVerification{
+		DesiredStateRevision: statusRuntimeVerified,
+		Healthcheck:          statusRuntimeVerified,
+		ContainerReplaced:    false,
+		EndpointProbe:        endpointProbeVerified,
+		TLS:                  tlsVerified,
+		PublicEndpointNeeded: ingressRequiresTLSReadiness(cfg),
+	})
 	if allSettled && hasCurrent && hasRecoveryCandidate && len(opts.Nodes) == 0 && soloRecoveryTargetsChecked(recoveryTargets, recoveryChecked) {
 		var recovered corerelease.Deployment
 		var recoveredState solo.State

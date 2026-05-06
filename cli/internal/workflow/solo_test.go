@@ -1261,6 +1261,14 @@ func TestSoloStatusUsesResolvedEnvironmentOverlay(t *testing.T) {
 	if len(urls) != 1 || urls[0] != "http://staging.example.com/" {
 		t.Fatalf("public_urls = %#v, want staging host only", urls)
 	}
+	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
+	if runtimeVerified["ready"] != true || runtimeVerified["desired_state_revision"] != true || runtimeVerified["healthcheck"] != true {
+		t.Fatalf("runtime_verified = %#v, want status to confirm current settled release", runtimeVerified)
+	}
+	confidence := jsonMapFromAny(t, runtimeVerified["confidence"])
+	if confidence["endpoint_probe"] != "not_required" || confidence["tls"] != "not_required" {
+		t.Fatalf("confidence = %#v, want public endpoint checks marked not required for HTTP", confidence)
+	}
 }
 
 func TestSoloStatusUsesExplicitEnvironment(t *testing.T) {
@@ -1494,6 +1502,14 @@ func TestSoloStatusDoesNotTreatDNSOnlyTLSCheckAsVerifiedPublicURL(t *testing.T) 
 	if payload["public_url_status"] != "configured_tls_pending" {
 		t.Fatalf("public_url_status = %#v, want configured_tls_pending", payload["public_url_status"])
 	}
+	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
+	if runtimeVerified["ready"] != false || runtimeVerified["endpoint_probe"] != false || runtimeVerified["tls"] != false {
+		t.Fatalf("runtime_verified = %#v, want TLS endpoint still pending", runtimeVerified)
+	}
+	pending := jsonArrayFromMap(t, runtimeVerified, "pending")
+	if !jsonArrayContains(pending, "endpoint_probe") || !jsonArrayContains(pending, "tls") {
+		t.Fatalf("pending = %#v, want endpoint_probe and tls", pending)
+	}
 }
 
 func TestSoloStatusTreatsTLSVerifiedCheckAsReadyPublicURL(t *testing.T) {
@@ -1547,6 +1563,10 @@ func TestSoloStatusTreatsTLSVerifiedCheckAsReadyPublicURL(t *testing.T) {
 	}
 	if _, ok := payload["public_url_status"]; ok {
 		t.Fatalf("payload = %#v, did not want pending public_url_status after TLS verification", payload)
+	}
+	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
+	if runtimeVerified["ready"] != true || runtimeVerified["endpoint_probe"] != true || runtimeVerified["tls"] != true {
+		t.Fatalf("runtime_verified = %#v, want TLS endpoint verified", runtimeVerified)
 	}
 }
 
@@ -7468,6 +7488,22 @@ func TestSoloDeployWaitsForSettledStatusBeforeSuccess(t *testing.T) {
 	if runtimeVerified["tls"] != false {
 		t.Fatalf("runtime_verified = %#v, plain HTTP deploy must not report TLS verified", runtimeVerified)
 	}
+	if runtimeVerified["ready"] != true {
+		t.Fatalf("runtime_verified = %#v, want deploy runtime ready after settled rollout", runtimeVerified)
+	}
+	confidence := jsonMapFromAny(t, runtimeVerified["confidence"])
+	if confidence["desired_state_revision"] != "verified" || confidence["endpoint_probe"] != "not_required" || confidence["tls"] != "not_required" {
+		t.Fatalf("confidence = %#v, want verified runtime and non-required public endpoint checks", confidence)
+	}
+	var sawBuildStep bool
+	for _, event := range events {
+		if event["event"] == "progress" && event["step"] == "image_build" {
+			sawBuildStep = true
+		}
+	}
+	if !sawBuildStep {
+		t.Fatalf("events = %#v, want machine-readable image_build progress step", events)
+	}
 	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
 	if len(nextSteps) != 4 || nextSteps[0] != "devopsellence status --env 'production'" || nextSteps[1] != "curl http://203.0.113.10/" || nextSteps[2] != "devopsellence logs --env 'production' --node 'node-a' --lines 100" || nextSteps[3] != "devopsellence node logs 'node-a' --lines 100" {
 		t.Fatalf("next_steps = %#v, want status, curl, and logs commands", nextSteps)
@@ -7571,6 +7607,14 @@ func TestSoloDeployDoesNotTreatDNSOnlyTLSCheckAsVerifiedPublicURL(t *testing.T) 
 	warnings := jsonArrayFromMap(t, payload, "warnings")
 	if len(warnings) != 1 || !strings.Contains(stringValueAny(warnings[0]), "devopsellence status --env 'production'") {
 		t.Fatalf("warnings = %#v, want env-qualified status guidance", warnings)
+	}
+	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
+	if runtimeVerified["ready"] != false || runtimeVerified["endpoint_probe"] != false || runtimeVerified["tls"] != false {
+		t.Fatalf("runtime_verified = %#v, want pending public endpoint verification", runtimeVerified)
+	}
+	nextSteps := jsonArrayFromMap(t, payload, "next_steps")
+	if len(nextSteps) < 2 || nextSteps[1] != "devopsellence ingress check --env 'production' --wait 5m" {
+		t.Fatalf("next_steps = %#v, want env-scoped ingress check before logs", nextSteps)
 	}
 }
 

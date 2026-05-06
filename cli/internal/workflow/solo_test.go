@@ -3977,7 +3977,7 @@ func TestRemoteStatPathCommandRetriesWithSudoAfterDirectStat(t *testing.T) {
 	if direct < 0 || sudo < 0 || sudo < direct {
 		t.Fatalf("command = %q, want direct stat followed by sudo retry", command)
 	}
-	if !strings.Contains(command, "%a\\t%U\\t%G\\t%n") {
+	if !strings.Contains(command, "%a\t%U\t%G\t%n") {
 		t.Fatalf("command = %q, want tab-delimited stat format", command)
 	}
 }

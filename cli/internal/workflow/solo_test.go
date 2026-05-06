@@ -897,6 +897,10 @@ func TestSoloNodeCreateAttachRollsBackExistingSSHStateWhenRepublishFails(t *test
 set -euo pipefail
 command="${!#}"
 if [[ "$command" == "true" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" ]]; then
+    printf 'ssh connect failed\n' >&2
+    exit 255
+  fi
   exit 0
 fi
 if [[ "$command" == *"docker image inspect"* ]]; then
@@ -2300,6 +2304,115 @@ func TestSoloDoctorScopesRuntimeChecksToCurrentEnvironment(t *testing.T) {
 	}
 }
 
+func TestSoloDoctorReportsSecurityFindings(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want security finding failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %#v, want false", payload["ok"])
+	}
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "security_ssh_password_auth" {
+			if check["ok"] != false || check["severity"] != "high" || !strings.Contains(stringValueAny(check["detail"]), "yes") {
+				t.Fatalf("security_ssh_password_auth = %#v, want high severity finding", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want security_ssh_password_auth", checks)
+}
+
+func TestSoloDoctorSkipsSecurityDiagnosticsWhenSSHFails(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	commandLog := filepath.Join(t.TempDir(), "ssh-commands.log")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG", commandLog)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL", "1")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want ssh failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "security_ssh_password_auth" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["detail"]), "skipped") || strings.Contains(stringValueAny(check["detail"]), "yes") {
+				commands, _ := os.ReadFile(commandLog)
+				t.Fatalf("security_ssh_password_auth = %#v, want skipped security check; commands:\n%s", check, commands)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want skipped security_ssh_password_auth", checks)
+}
+
 func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -3619,6 +3732,315 @@ func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
 	status := jsonMapFromAny(t, payload["status"])
 	if status["phase"] != "settled" {
 		t.Fatalf("status = %#v, want settled phase", status)
+	}
+	security := jsonMapFromAny(t, payload["security"])
+	if security["ok"] != true {
+		t.Fatalf("security = %#v, want ok", security)
+	}
+	securityChecks := jsonArrayFromMap(t, security, "checks")
+	securityNames := map[string]bool{}
+	for _, item := range securityChecks {
+		check := jsonMapFromAny(t, item)
+		securityNames[stringValueAny(check["name"])] = true
+	}
+	for _, want := range []string{"ssh_password_auth", "agent_state_permissions", "tls_key_permissions", "docker_socket_mounts", "privileged_containers", "public_listening_ports"} {
+		if !securityNames[want] {
+			t.Fatalf("security checks = %#v, missing %s", securityChecks, want)
+		}
+	}
+}
+
+func TestSoloNodeDiagnoseReportsSecurityFindings(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloNodeDiagnose() error = nil, want security finding failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %#v, want false", payload["ok"])
+	}
+	security := jsonMapFromAny(t, payload["security"])
+	if security["ok"] != false {
+		t.Fatalf("security = %#v, want not ok", security)
+	}
+	checks := jsonArrayFromMap(t, security, "checks")
+	findings := map[string]map[string]any{}
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		findings[stringValueAny(check["name"])] = check
+	}
+	if findings["ssh_password_auth"]["ok"] != false || !strings.Contains(stringValueAny(findings["ssh_password_auth"]["observed"]), "yes") {
+		t.Fatalf("ssh_password_auth = %#v, want disabled finding", findings["ssh_password_auth"])
+	}
+	if findings["docker_socket_mounts"]["ok"] != false || !strings.Contains(stringValueAny(findings["docker_socket_mounts"]["observed"]), "/var/run/docker.sock") {
+		t.Fatalf("docker_socket_mounts = %#v, want socket finding", findings["docker_socket_mounts"])
+	}
+}
+
+func TestSoloNodeDiagnoseSecurityReportsPortDiagnosticError(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PORTS_FAIL", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloNodeDiagnose() error = nil, want port diagnostic failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	security := jsonMapFromAny(t, payload["security"])
+	checks := jsonArrayFromMap(t, security, "checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["name"] == "public_listening_ports" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["observed"]), "ports failed") {
+				t.Fatalf("public_listening_ports = %#v, want concrete port diagnostic error", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("security checks = %#v, want public_listening_ports", checks)
+}
+
+func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 10.0.0.5:5432 0.0.0.0:*",
+		"LISTEN 0 4096 192.168.1.10:6379 0.0.0.0:*",
+		"LISTEN 0 4096 127.0.0.1:9000 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:*",
+		"tcp6       0      0 :::9090                 :::*                    LISTEN      1234/demo",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 22)
+	if !reflect.DeepEqual(ports, []string{"8080", "9090"}) {
+		t.Fatalf("unexpected ports = %#v, want wildcard public ports only", ports)
+	}
+}
+
+func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 2222)
+	if !reflect.DeepEqual(ports, []string{"22"}) {
+		t.Fatalf("unexpected ports = %#v, want default SSH port flagged when node uses 2222", ports)
+	}
+}
+
+func TestSplitListenAddressSupportsIPv6AnyNotation(t *testing.T) {
+	host, port, ok := splitListenAddress(":::80")
+	if !ok || host != "::" || port != "80" {
+		t.Fatalf("splitListenAddress(\":::80\") = host=%q port=%q ok=%v, want host=\"::\" port=\"80\" ok=true", host, port, ok)
+	}
+
+	host, port, ok = splitListenAddress(":::*")
+	if ok || host != "" || port != "" {
+		t.Fatalf("splitListenAddress(\":::*\") = host=%q port=%q ok=%v, want empty host/port and ok=false", host, port, ok)
+	}
+}
+
+func TestSoloDockerSecurityChecksFailWhenManagedContainerOutputTruncated(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "truncated") {
+		t.Fatalf("docker socket check = %#v, want failed truncated finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), node)
+	if privileged.OK || !strings.Contains(privileged.Observed, "truncated") {
+		t.Fatalf("privileged check = %#v, want failed truncated finding", privileged)
+	}
+}
+
+func TestSoloDockerSocketMountsRejectsRunSocketPath(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_RUN_SOCKET_MOUNT", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "/run/docker.sock") {
+		t.Fatalf("docker socket check = %#v, want /run/docker.sock finding", mounts)
+	}
+}
+
+func TestRemoteManagedContainerSecurityCommandsUseBoundedOutputMarker(t *testing.T) {
+	for _, command := range []string{remoteManagedContainerMountsCommand(), remoteManagedContainerPrivilegesCommand()} {
+		if !strings.Contains(command, soloDiagnoseTruncatedMarker) {
+			t.Fatalf("command = %q, want truncation marker", command)
+		}
+		if strings.Contains(command, "head -n 100") {
+			t.Fatalf("command = %q, want no silent head truncation", command)
+		}
+		if strings.Contains(command, "ps -aq --filter label=devopsellence.managed=true 2>&1") || strings.Contains(command, "$ids 2>&1") {
+			t.Fatalf("command = %q, want stderr captured separately from IDs/inspect output", command)
+		}
+	}
+}
+
+func TestSoloDockerSecurityChecksFailWhenInspectErrors(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "inspect failed") {
+		t.Fatalf("docker socket check = %#v, want failed inspect finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), node)
+	if privileged.OK || !strings.Contains(privileged.Observed, "inspect failed") {
+		t.Fatalf("privileged check = %#v, want failed inspect finding", privileged)
+	}
+}
+
+func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
+	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true, nil)
+	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {
+		t.Fatalf("truncated check = %#v, want failed truncated finding", truncated)
+	}
+	if !strings.Contains(truncated.NextAction, "ss -ltnp") || strings.Contains(truncated.NextAction, "rerun listening-port diagnostics") {
+		t.Fatalf("truncated next action = %q, want direct node inspection guidance", truncated.NextAction)
+	}
+	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false, nil)
+	if marker.OK || !strings.Contains(marker.Observed, "truncated") {
+		t.Fatalf("marker check = %#v, want failed truncated finding", marker)
+	}
+
+	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false, nil)
+	if unavailable.OK || !strings.Contains(unavailable.Observed, "not inspected") {
+		t.Fatalf("unavailable check = %#v, want failed unknown finding", unavailable)
+	}
+}
+
+func TestSoloSSHPasswordAuthCheckFailsWhenSettingUnknown(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "")
+	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "SSH daemon configuration") {
+		t.Fatalf("ssh password auth check = %#v, want failed unknown finding", check)
+	}
+}
+
+func TestSoloSSHPasswordAuthCheckFailsOnUnrecognizedValue(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "maybe")
+	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unrecognized") {
+		t.Fatalf("ssh password auth check = %#v, want failed unrecognized finding", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "755 root root /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.NextAction, "other read/write") {
+		t.Fatalf("agent state check = %#v, want other-read finding", check)
+	}
+}
+
+func TestSoloStatFieldsPreservesWhitespacePath(t *testing.T) {
+	fields := soloStatFields("750\troot\troot\t/var/lib/dev ops")
+	if len(fields) != 4 || fields[0] != "750" || fields[1] != "root" || fields[2] != "root" || fields[3] != "/var/lib/dev ops" {
+		t.Fatalf("fields = %#v, want tab-delimited stat fields with intact path", fields)
+	}
+}
+
+func TestRemoteStatPathCommandRetriesWithSudoAfterDirectStat(t *testing.T) {
+	command := remoteStatPathCommand("/var/lib/dev ops")
+	direct := strings.Index(command, "stat -c \"$format\" '/var/lib/dev ops' 2>/dev/null")
+	sudo := strings.Index(command, "sudo -n stat -c \"$format\" '/var/lib/dev ops'")
+	if direct < 0 || sudo < 0 || sudo < direct {
+		t.Fatalf("command = %q, want direct stat followed by sudo retry", command)
+	}
+	if !strings.Contains(command, "%a\t%U\t%G\t%n") {
+		t.Fatalf("command = %q, want tab-delimited stat format", command)
+	}
+}
+
+func TestSoloAgentStatePermissionsQuotesRemediationPath(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_STAT", "755 root root /var/lib/dev ops")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root", AgentStateDir: "/var/lib/dev ops"})
+	if check.OK || !strings.Contains(check.NextAction, "'/var/lib/dev ops'") {
+		t.Fatalf("agent state check = %#v, want shell-quoted remediation path", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsRejectsNonRootGroup(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "750 root docker /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.NextAction, "root group ownership") {
+		t.Fatalf("agent state check = %#v, want non-root-group finding", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsFailWhenModeUnparseable(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "bad root root /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
+		t.Fatalf("agent state check = %#v, want failed unknown mode finding", check)
+	}
+}
+
+func TestSoloTLSKeyPermissionsFailWhenModeUnparseable(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT", "bad root root /var/lib/devopsellence/ingress-key.pem")
+	check := soloTLSKeyPermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
+		t.Fatalf("tls key check = %#v, want failed unknown mode finding", check)
+	}
+}
+
+func TestSoloManagedContainerSecurityChecksFailClosedOnInspectErrors(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR", "1")
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if mounts.OK || !strings.Contains(mounts.Observed, "unknown") || !strings.Contains(mounts.Observed, "inspect failed") || !strings.Contains(mounts.NextAction, "Docker can be inspected") {
+		t.Fatalf("docker socket mounts check = %#v, want failed unknown inspect finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if privileged.OK || !strings.Contains(privileged.Observed, "unknown") || !strings.Contains(privileged.Observed, "inspect failed") || !strings.Contains(privileged.NextAction, "Docker can be inspected") {
+		t.Fatalf("privileged containers check = %#v, want failed unknown inspect finding", privileged)
 	}
 }
 
@@ -8000,8 +8422,15 @@ func installFakeSoloCommands(t *testing.T, statusResponses []fakeSSHResponse) st
 	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
 set -euo pipefail
 command="${!#}"
+if [[ -n "${DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG:-}" ]]; then
+  printf '%s\n' "$command" >>"$DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG"
+fi
 
 if [[ "$command" == "true" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" ]]; then
+    printf 'ssh connect failed\n' >&2
+    exit 255
+  fi
   exit 0
 fi
 
@@ -8051,6 +8480,11 @@ if [[ "$command" =~ (__DEVOPSELLENCE_EXEC_EXIT_CODE__[0-9a-f]+__) ]]; then
   exec_marker="${BASH_REMATCH[1]}"
 fi
 
+if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" && "$command" == *"true"* ]]; then
+  printf 'ssh connect failed\n' >&2
+  exit 255
+fi
+
 if [[ -n "$exec_marker" && "$command" == *"svc-production-web-abc"* ]]; then
   printf 'service stdout\n'
   printf 'service stderr\n%s0\n' "$exec_marker" >&2
@@ -8087,7 +8521,7 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"journalct
   exit 0
 fi
 
-if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ps -a"* ]]; then
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ps -a --format"* ]]; then
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi
@@ -8102,7 +8536,56 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ne
   exit 0
 fi
 
-if [[ "$command" == *"docker ps -a"* ]]; then
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"sshd -T"* ]]; then
+  password_auth="${DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH-no}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$password_auth"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
+  tls_stat="${DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT:-missing}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$tls_stat"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && -n "${DEVOPSELLENCE_FAKE_SSH_STAT:-}" ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$DEVOPSELLENCE_FAKE_SSH_STAT"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
+  state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-751 root root /var/lib/devopsellence}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$state_stat"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *"Mounts"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_RUN_SOCKET_MOUNT:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /run/docker.sock:/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /var/run/docker.sock:/var/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
+  else
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web app_storage:/app/storage\n__DEVOPSELLENCE_STDERR__\n'
+  fi
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *".HostConfig.Privileged"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  else
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web false\n__DEVOPSELLENCE_STDERR__\n'
+  fi
+  exit 0
+fi
+
+if [[ "$command" == *"docker ps -a --format"* ]]; then
   printf '{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n'
   exit 0
 fi
@@ -8132,6 +8615,10 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"systemctl
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && ( "$command" == *"ss -ltn"* || "$command" == *"netstat -ltn"* ) ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_PORTS_FAIL:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\nports failed\n'
+    exit 0
+  fi
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nLISTEN 0 4096 0.0.0.0:80 0.0.0.0:*\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi

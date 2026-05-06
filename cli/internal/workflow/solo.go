@@ -3661,7 +3661,15 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	payload["docker"] = dockerSnapshot
 	ports := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
 	payload["ports"] = ports
+	portLines, _ := ports["lines"].([]string)
+	portsTruncated, _ := ports["truncated"].(bool)
+	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated, ports)
+	payload["security"] = security
 	if !diagnosticSectionsOK(agent, dockerSnapshot, ports) {
+		diagnoseOK = false
+		payload["ok"] = false
+	}
+	if security["ok"] == false {
 		diagnoseOK = false
 		payload["ok"] = false
 	}
@@ -3785,6 +3793,409 @@ func soloChecksOK(checks []map[string]any) bool {
 		}
 	}
 	return true
+}
+
+type soloSecurityCheck struct {
+	Name       string
+	OK         bool
+	Severity   string
+	Observed   string
+	NextAction string
+}
+
+func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) map[string]any {
+	checks := soloNodeSecurityChecks(ctx, node, portLines, portsTruncated, portDiagnostic)
+	items, ok := soloNodeSecurityCheckItems(checks)
+	return map[string]any{"ok": ok, "checks": items}
+}
+
+func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) []soloSecurityCheck {
+	return []soloSecurityCheck{
+		soloSSHPasswordAuthCheck(ctx, node),
+		soloAgentStatePermissionsCheck(ctx, node),
+		soloTLSKeyPermissionsCheck(ctx, node),
+		soloDockerSocketMountsCheck(ctx, node),
+		soloPrivilegedContainersCheck(ctx, node),
+		soloPublicListeningPortsCheck(ctx, node, portLines, portsTruncated, portDiagnostic),
+	}
+}
+
+func soloNodeSecurityCheckItems(checks []soloSecurityCheck) ([]map[string]any, bool) {
+	items := make([]map[string]any, 0, len(checks))
+	ok := true
+	for _, check := range checks {
+		item := map[string]any{
+			"name":     check.Name,
+			"ok":       check.OK,
+			"severity": check.Severity,
+			"observed": check.Observed,
+		}
+		if check.NextAction != "" {
+			item["next_action"] = check.NextAction
+		}
+		items = append(items, item)
+		if !check.OK {
+			ok = false
+		}
+	}
+	return items, ok
+}
+
+func soloSSHPasswordAuthCheck(ctx context.Context, node config.Node) soloSecurityCheck {
+	diag := runRemoteDiagnostic(ctx, node, remoteSSHPasswordAuthCommand())
+	check := soloSecurityCheck{Name: "ssh_password_auth", OK: true, Severity: "high"}
+	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
+		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after SSH daemon configuration can be inspected"
+		return check
+	}
+	value := strings.ToLower(strings.TrimSpace(diag.Stdout))
+	switch value {
+	case "yes", "true":
+		check.OK = false
+		check.Observed = "PasswordAuthentication " + value
+		check.NextAction = "disable SSH password auth or use a provider image with key-only SSH"
+	case "no", "false":
+		check.Observed = "PasswordAuthentication " + value
+	case "":
+		check.OK = false
+		check.Observed = "unknown: sshd password authentication setting not found"
+		check.NextAction = "rerun devopsellence node diagnose after SSH daemon configuration can be inspected"
+	default:
+		check.OK = false
+		check.Observed = "unknown: unrecognized SSH PasswordAuthentication value " + value
+		check.NextAction = "inspect SSH daemon configuration on the node and rerun devopsellence node diagnose"
+	}
+	return check
+}
+
+func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloSecurityCheck {
+	stateDir := firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence")
+	diag := runRemoteDiagnostic(ctx, node, remoteStatPathCommand(stateDir))
+	check := soloSecurityCheck{Name: "agent_state_permissions", OK: true, Severity: "high"}
+	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
+		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after the agent state directory can be inspected"
+		return check
+	}
+	fields := soloStatFields(diag.Stdout)
+	if len(fields) == 0 || fields[0] == "missing" {
+		check.OK = false
+		check.Observed = stateDir + " missing"
+		check.NextAction = "reinstall or restart the devopsellence agent so the state directory exists"
+		return check
+	}
+	check.Observed = strings.TrimSpace(diag.Stdout)
+	mode, err := strconv.ParseInt(fields[0], 8, 64)
+	if err != nil {
+		check.OK = false
+		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
+		check.NextAction = "rerun devopsellence node diagnose after the agent state directory mode can be parsed"
+		return check
+	}
+	if len(fields) >= 2 && fields[1] != "root" {
+		check.OK = false
+		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + shellQuote(stateDir)
+		return check
+	}
+	if len(fields) >= 3 && fields[2] != "root" {
+		check.OK = false
+		check.NextAction = "restore root group ownership on the agent state directory, for example chown root:root " + shellQuote(stateDir)
+		return check
+	}
+	if mode&0o026 != 0 {
+		check.OK = false
+		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + shellQuote(stateDir)
+	}
+	return check
+}
+
+func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecurityCheck {
+	keyPath := path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "ingress-key.pem")
+	diag := runRemoteDiagnostic(ctx, node, remoteStatPathCommand(keyPath))
+	check := soloSecurityCheck{Name: "tls_key_permissions", OK: true, Severity: "high"}
+	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
+		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after the TLS key path can be inspected"
+		return check
+	}
+	fields := soloStatFields(diag.Stdout)
+	if len(fields) == 0 || fields[0] == "missing" {
+		check.Observed = keyPath + " not present"
+		return check
+	}
+	check.Observed = strings.TrimSpace(diag.Stdout)
+	mode, err := strconv.ParseInt(fields[0], 8, 64)
+	if err != nil {
+		check.OK = false
+		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
+		check.NextAction = "rerun devopsellence node diagnose after the TLS key mode can be parsed"
+		return check
+	}
+	if mode&0o037 != 0 {
+		check.OK = false
+		check.NextAction = "restrict the TLS private key file to the agent or Envoy group, for example chmod 640 " + shellQuote(keyPath)
+	}
+	return check
+}
+
+func soloStatFields(output string) []string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil
+	}
+	if strings.Contains(output, "\t") {
+		return strings.SplitN(output, "\t", 4)
+	}
+	return strings.Fields(output)
+}
+
+func soloDockerSocketMountsCheck(ctx context.Context, node config.Node) soloSecurityCheck {
+	diag := runRemoteDiagnostic(ctx, node, remoteManagedContainerMountsCommand())
+	check := soloSecurityCheck{Name: "docker_socket_mounts", OK: true, Severity: "critical"}
+	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
+		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after Docker can be inspected"
+		return check
+	}
+	lines := splitNonFinalEmptyLines(diag.Stdout)
+	if listenOutputHasTruncationMarker(lines) {
+		check.OK = false
+		check.Observed = "unknown: managed container mount output was truncated"
+		check.NextAction = "rerun devopsellence node diagnose after managed containers can be inspected completely"
+		return check
+	}
+	offenders := []string{}
+	for _, line := range lines {
+		if managedDockerSocketMountLine(line) {
+			offenders = append(offenders, strings.TrimSpace(line))
+		}
+	}
+	if len(offenders) > 0 {
+		check.OK = false
+		check.Observed = strings.Join(offenders, "; ")
+		check.NextAction = "remove Docker socket mounts from managed workload services before redeploying"
+		return check
+	}
+	check.Observed = "no managed workload mounts /var/run/docker.sock"
+	return check
+}
+
+func managedDockerSocketMountLine(line string) bool {
+	return strings.Contains(line, "/var/run/docker.sock") || strings.Contains(line, "/run/docker.sock")
+}
+
+func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSecurityCheck {
+	diag := runRemoteDiagnostic(ctx, node, remoteManagedContainerPrivilegesCommand())
+	check := soloSecurityCheck{Name: "privileged_containers", OK: true, Severity: "critical"}
+	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
+		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after Docker can be inspected"
+		return check
+	}
+	lines := splitNonFinalEmptyLines(diag.Stdout)
+	if listenOutputHasTruncationMarker(lines) {
+		check.OK = false
+		check.Observed = "unknown: managed container privilege output was truncated"
+		check.NextAction = "rerun devopsellence node diagnose after managed containers can be inspected completely"
+		return check
+	}
+	offenders := []string{}
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == "true" {
+			offenders = append(offenders, fields[0])
+		}
+	}
+	if len(offenders) > 0 {
+		check.OK = false
+		check.Observed = "privileged managed containers: " + strings.Join(offenders, ", ")
+		check.NextAction = "remove privileged mode from managed workload services before redeploying"
+		return check
+	}
+	check.Observed = "no privileged managed workload containers"
+	return check
+}
+
+func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) soloSecurityCheck {
+	check := soloSecurityCheck{Name: "public_listening_ports", OK: true, Severity: "medium"}
+	if portDiagnostic != nil && portDiagnostic["ok"] != true {
+		check.OK = false
+		check.Observed = "unknown: " + remoteDiagnosticResultMessage(portDiagnostic)
+		check.NextAction = "rerun devopsellence node diagnose after listening ports can be inspected"
+		return check
+	}
+	if portLines == nil {
+		diag := runRemoteDiagnostic(ctx, node, remoteListeningPortsCommand())
+		if diag.Err != nil || diag.ExitCode != 0 {
+			check.OK = false
+			check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+			check.NextAction = "rerun devopsellence node diagnose after listening ports can be inspected"
+			return check
+		}
+		portLines = splitNonFinalEmptyLines(diag.Stdout)
+	}
+	if portsTruncated || listenOutputHasTruncationMarker(portLines) {
+		check.OK = false
+		check.Observed = "unknown: listening port output was truncated"
+		check.NextAction = "inspect listening ports directly on the node with ss -ltnp or netstat -ltnp before trusting public port hardening"
+		return check
+	}
+	if !listeningPortsInspectable(portLines) {
+		check.OK = false
+		check.Observed = "unknown: listening ports were not inspected"
+		check.NextAction = "install ss or netstat on the node, then rerun devopsellence node diagnose"
+		return check
+	}
+	ports := unexpectedPublicListeningPorts(portLines, node.Port)
+	if len(ports) > 0 {
+		check.OK = false
+		check.Observed = "unexpected public listening ports: " + strings.Join(ports, ", ")
+		check.NextAction = "close unexpected public ports or bind those services to localhost/internal networks"
+		return check
+	}
+	check.Observed = "only expected public ports detected"
+	return check
+}
+
+func remoteDiagnosticResultMessage(result map[string]any) string {
+	if message := diagnosticStringValue(result["error"]); strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	if message := diagnosticStringValue(result["stderr"]); strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	if code, ok := result["exit_code"]; ok {
+		return fmt.Sprintf("command exited with code %v", code)
+	}
+	return "diagnostic failed"
+}
+
+func diagnosticStringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprint(typed)
+	}
+}
+
+func listenOutputHasTruncationMarker(lines []string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) == soloDiagnoseTruncatedMarker {
+			return true
+		}
+	}
+	return false
+}
+
+func listeningPortsInspectable(lines []string) bool {
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "no ss or netstat available") {
+			return false
+		}
+		if len(publicPortsFromListeningLine(line)) > 0 || hasListenAddress(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasListenAddress(line string) bool {
+	for _, field := range strings.Fields(line) {
+		if _, _, ok := splitListenAddress(field); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
+	if sshPort == 0 {
+		sshPort = 22
+	}
+	expected := map[string]bool{strconv.Itoa(sshPort): true, "80": true, "443": true}
+	seen := map[string]bool{}
+	for _, line := range lines {
+		for _, port := range publicPortsFromListeningLine(line) {
+			if expected[port] || seen[port] {
+				continue
+			}
+			seen[port] = true
+		}
+	}
+	ports := make([]string, 0, len(seen))
+	for port := range seen {
+		ports = append(ports, port)
+	}
+	sort.Strings(ports)
+	return ports
+}
+
+func publicPortsFromListeningLine(line string) []string {
+	fields := strings.Fields(line)
+	ports := []string{}
+	for _, field := range fields {
+		host, port, ok := splitListenAddress(field)
+		if !ok || !isPublicListenHost(host) {
+			continue
+		}
+		ports = append(ports, port)
+	}
+	return ports
+}
+
+func splitListenAddress(value string) (string, string, bool) {
+	value = strings.Trim(value, "[]")
+	if strings.HasPrefix(value, ":::") {
+		port := strings.Trim(strings.TrimPrefix(value, ":::"), "*")
+		if port == "" {
+			return "", "", false
+		}
+		for _, r := range port {
+			if r < '0' || r > '9' {
+				return "", "", false
+			}
+		}
+		return "::", port, true
+	}
+	idx := strings.LastIndex(value, ":")
+	if idx < 0 || idx == len(value)-1 {
+		return "", "", false
+	}
+	host := strings.Trim(value[:idx], "[]")
+	port := strings.Trim(value[idx+1:], "*")
+	if port == "" {
+		return "", "", false
+	}
+	for _, r := range port {
+		if r < '0' || r > '9' {
+			return "", "", false
+		}
+	}
+	return host, port, true
+}
+
+func isPublicListenHost(host string) bool {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "" || host == "*" || host == "0.0.0.0" || host == "::" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsGlobalUnicast() && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast()
 }
 
 func soloCheckFailed(checks []map[string]any, name string) bool {
@@ -4146,9 +4557,13 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			{name: "docker", cmd: remoteDockerCheckCommand()},
 			{name: "agent", cmd: "systemctl is-active --quiet devopsellence-agent"},
 		}
+		sshOK := true
 		for _, check := range checks {
 			out, err := solo.RunSSH(ctx, node, check.cmd, nil)
 			ok := err == nil
+			if check.name == "ssh" {
+				sshOK = ok
+			}
 			result := map[string]any{"node": name, "check": check.name, "ok": ok}
 			if ok {
 				if detail := strings.TrimSpace(out); detail != "" {
@@ -4160,8 +4575,46 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			}
 			results = append(results, result)
 		}
+		if !sshOK {
+			for _, check := range soloSkippedSecurityChecksAfterSSHFailure() {
+				results = append(results, soloRuntimeSecurityCheckResult(name, check))
+			}
+			continue
+		}
+		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false, nil) {
+			result := soloRuntimeSecurityCheckResult(name, check)
+			if !check.OK {
+				failed = true
+			}
+			results = append(results, result)
+		}
 	}
 	return results, failed, nil
+}
+
+func soloSkippedSecurityChecksAfterSSHFailure() []soloSecurityCheck {
+	return []soloSecurityCheck{
+		{Name: "ssh_password_auth", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "agent_state_permissions", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "tls_key_permissions", OK: false, Severity: "high", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "docker_socket_mounts", OK: false, Severity: "critical", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "privileged_containers", OK: false, Severity: "critical", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+		{Name: "public_listening_ports", OK: false, Severity: "medium", Observed: "skipped: ssh check failed", NextAction: "fix SSH connectivity, then rerun devopsellence doctor"},
+	}
+}
+
+func soloRuntimeSecurityCheckResult(nodeName string, check soloSecurityCheck) map[string]any {
+	result := map[string]any{
+		"node":     nodeName,
+		"check":    "security_" + check.Name,
+		"ok":       check.OK,
+		"severity": check.Severity,
+		"detail":   check.Observed,
+	}
+	if check.NextAction != "" {
+		result["next_action"] = check.NextAction
+	}
+	return result
 }
 
 func (a *App) runSoloRuntimeDoctor(ctx context.Context, opts SoloDoctorOptions) error {
@@ -7211,6 +7664,71 @@ func withRemoteLineLimit(command string, limit int) string {
 
 func remoteListeningPortsCommand() string {
 	return withRemoteLineLimit("if command -v ss >/dev/null 2>&1; then ss -ltnp || ss -ltn; elif command -v netstat >/dev/null 2>&1; then netstat -ltnp || netstat -ltn; else echo 'no ss or netstat available'; fi", soloDiagnosePortsLineLimit)
+}
+
+func remoteSSHPasswordAuthCommand() string {
+	return "out=\"\"; if command -v sshd >/dev/null 2>&1; then out=\"$(sshd -T 2>/dev/null | awk 'tolower($1)==\"passwordauthentication\" {print tolower($2); exit}')\"; if [ -z \"$out\" ] && command -v sudo >/dev/null 2>&1; then out=\"$(sudo -n sshd -T 2>/dev/null | awk 'tolower($1)==\"passwordauthentication\" {print tolower($2); exit}')\"; fi; fi; if [ -z \"$out\" ] && [ -r /etc/ssh/sshd_config ]; then out=\"$(awk 'tolower($1)==\"passwordauthentication\" {print tolower($2)}' /etc/ssh/sshd_config | tail -n1)\"; fi; if [ -z \"$out\" ] && command -v sudo >/dev/null 2>&1 && sudo -n test -r /etc/ssh/sshd_config >/dev/null 2>&1; then out=\"$(sudo -n awk 'tolower($1)==\"passwordauthentication\" {print tolower($2)}' /etc/ssh/sshd_config | tail -n1)\"; fi; if [ -n \"$out\" ]; then printf '%s\\n' \"$out\"; fi"
+}
+
+func remoteStatPathCommand(target string) string {
+	quoted := shellQuote(target)
+	return fmt.Sprintf("format='%%a	%%U	%%G	%%n'; if stat -c \"$format\" %[1]s 2>/dev/null; then exit 0; fi; if command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then exec sudo -n stat -c \"$format\" %[1]s; fi; if [ -e %[1]s ]; then exec stat -c \"$format\" %[1]s; fi; echo missing", quoted)
+}
+
+func remoteManagedContainerMountsCommand() string {
+	script := fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+ps_stderr=$(mktemp)
+inspect_stderr=$(mktemp)
+trap 'rm -f "$ps_stderr" "$inspect_stderr"' EXIT
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>"$ps_stderr")
+ps_status=$?
+if [ "$ps_status" -ne 0 ]; then
+  echo "Failed to list managed containers" >&2
+  cat "$ps_stderr" >&2
+  exit "$ps_status"
+fi
+id_count=$(printf '%%s\n' "$ids" | awk 'NF { c++ } END { print c+0 }')
+ids=$(printf '%%s\n' "$ids" | awk 'NF { print; if (++c >= %d) exit }')
+if [ -z "$ids" ]; then exit 0; fi
+if [ "$id_count" -gt %d ]; then printf '%%s\n' %s; fi
+inspect_out=$($docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids 2>"$inspect_stderr")
+inspect_status=$?
+if [ "$inspect_status" -ne 0 ]; then
+  echo "Failed to inspect managed container mounts" >&2
+  printf '%%s\n' "$inspect_out" >&2
+  cat "$inspect_stderr" >&2
+  exit "$inspect_status"
+fi
+printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'`, soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit, shellQuote(soloDiagnoseTruncatedMarker), shellQuote(soloDiagnoseTruncatedMarker), soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit+1)
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container mount diagnostics' >&2; exit 1"
+}
+
+func remoteManagedContainerPrivilegesCommand() string {
+	script := fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+ps_stderr=$(mktemp)
+inspect_stderr=$(mktemp)
+trap 'rm -f "$ps_stderr" "$inspect_stderr"' EXIT
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>"$ps_stderr")
+ps_status=$?
+if [ "$ps_status" -ne 0 ]; then
+  echo "Failed to list managed containers" >&2
+  cat "$ps_stderr" >&2
+  exit "$ps_status"
+fi
+id_count=$(printf '%%s\n' "$ids" | awk 'NF { c++ } END { print c+0 }')
+ids=$(printf '%%s\n' "$ids" | awk 'NF { print; if (++c >= %d) exit }')
+if [ -z "$ids" ]; then exit 0; fi
+if [ "$id_count" -gt %d ]; then printf '%%s\n' %s; fi
+inspect_out=$($docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids 2>"$inspect_stderr")
+inspect_status=$?
+if [ "$inspect_status" -ne 0 ]; then
+  echo "Failed to inspect managed container privileges" >&2
+  printf '%%s\n' "$inspect_out" >&2
+  cat "$inspect_stderr" >&2
+  exit "$inspect_status"
+fi
+printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'`, soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit, shellQuote(soloDiagnoseTruncatedMarker), shellQuote(soloDiagnoseTruncatedMarker), soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit+1)
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container privilege diagnostics' >&2; exit 1"
 }
 
 func desiredStateOverridePath(node config.Node) string {

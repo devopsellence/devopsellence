@@ -1996,10 +1996,10 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		recoveryMatch := false
 		if hasRecoveryCandidate && recoveryTargets[name] && strings.TrimSpace(result.Status.Phase) == "settled" && runtime.State == "settled" {
 			recoveryChecked[name] = true
-			if revision := strings.TrimSpace(result.Status.Revision); revision != "" {
+			if revision := strings.TrimSpace(result.Status.Revision); revision != "" && len(cohostedRevisions[name]) == 0 {
 				recoveryRevisions[name] = revision
 			}
-			recoveryMatch = recoveryCandidate.PublicationResult == nil && strings.TrimSpace(result.Status.Revision) != ""
+			recoveryMatch = recoveryCandidate.PublicationResult == nil && strings.TrimSpace(result.Status.Revision) != "" && len(cohostedRevisions[name]) == 0
 		}
 		if expectedRevision != "" && !soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name]) && !recoveryMatch {
 			allSettled = false

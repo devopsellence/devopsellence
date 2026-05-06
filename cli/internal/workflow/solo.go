@@ -4861,6 +4861,8 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		versionStatus = "custom"
 	} else if versionStatus == "unknown" {
 		return fmt.Errorf("agent install verification failed: remote agent version is unknown or unparseable: %q", strings.TrimSpace(agentVersion))
+	} else if versionStatus == "mismatch" {
+		return fmt.Errorf("agent install verification failed: remote agent version %q does not match target %q", agentVersion, target)
 	}
 	activeProbe := collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent")
 	agentActive := activeProbe["ok"] == true && stringFromMap(activeProbe, "value") == "active"

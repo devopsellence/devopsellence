@@ -4489,6 +4489,34 @@ func TestSoloAgentInstallFailsWhenVersionIsUnknown(t *testing.T) {
 	}
 }
 
+func TestSoloAgentInstallFailsWhenVersionMismatchesTarget(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v1.9.0 (commit old, built then)")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentInstall() error = nil, want mismatch failure")
+	}
+	if !strings.Contains(err.Error(), "agent install verification failed") || !strings.Contains(err.Error(), "does not match target") {
+		t.Fatalf("error = %v, want version mismatch failure", err)
+	}
+}
+
 func TestSoloAgentUpgradeFailsWhenVersionVerificationFails(t *testing.T) {
 	originalVersion := cliversion.Version
 	t.Cleanup(func() { cliversion.Version = originalVersion })

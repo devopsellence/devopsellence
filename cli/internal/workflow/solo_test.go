@@ -6826,6 +6826,39 @@ func TestSoloReleaseRollbackReportsMigrationContract(t *testing.T) {
 	}
 }
 
+func TestSoloReleaseRollbackWarnsWhenOnlyCurrentReleaseHasTask(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	active := current.Releases["rel-2"]
+	active.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:bbb2222", Command: []string{"bin/migrate"}}
+	active.Snapshot.ReleaseService = "web"
+	active.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-2"] = active
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	contract := jsonMapFromAny(t, payload["rollback_contract"])
+	if contract["current_release_task"] != true || contract["selected_release_task"] != false || contract["selected_release_task_reruns"] != false {
+		t.Fatalf("rollback_contract = %#v, want current-task-only warning", contract)
+	}
+	if !strings.Contains(stringValueAny(contract["operator_responsibility"]), "backup") {
+		t.Fatalf("rollback_contract = %#v, want backup responsibility", contract)
+	}
+}
+
 func TestSoloReleaseRollbackDryRunValidatesReleaseTaskPlacement(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -6847,6 +6880,36 @@ func TestSoloReleaseRollbackDryRunValidatesReleaseTaskPlacement(t *testing.T) {
 	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true})
 	if err == nil {
 		t.Fatal("SoloReleaseRollback() error = nil, want release task placement failure")
+	}
+	if !strings.Contains(err.Error(), "requires at least one attached node labeled") || !strings.Contains(err.Error(), "worker") {
+		t.Fatalf("error = %v, want release task placement guidance", err)
+	}
+}
+
+func TestSoloReleaseRollbackValidatesReleaseTaskPlacementAgainstTargets(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	worker := current.Nodes["node-b"]
+	worker.Labels = []string{config.DefaultWorkerRole}
+	current.Nodes["node-b"] = worker
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "worker"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWorker
+	current.Releases["rel-1"] = previous
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{Printer: output.New(io.Discard, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true})
+	if err == nil {
+		t.Fatal("SoloReleaseRollback() error = nil, want release task target placement failure")
 	}
 	if !strings.Contains(err.Error(), "requires at least one attached node labeled") || !strings.Contains(err.Error(), "worker") {
 		t.Fatalf("error = %v, want release task placement guidance", err)

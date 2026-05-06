@@ -1865,12 +1865,16 @@ func soloAttachmentHasReleaseState(current solo.State, attachment solo.Attachmen
 }
 
 func releaseNodeForSnapshot(snapshot desiredstate.DeploySnapshot, attachment solo.AttachmentRecord, nodes map[string]config.Node) (string, error) {
+	return releaseNodeForSnapshotTargets(snapshot, attachment.NodeNames, nodes)
+}
+
+func releaseNodeForSnapshotTargets(snapshot desiredstate.DeploySnapshot, nodeNames []string, nodes map[string]config.Node) (string, error) {
 	if snapshot.ReleaseTask == nil {
 		return "", nil
 	}
-	nodeNames := append([]string(nil), attachment.NodeNames...)
-	sort.Strings(nodeNames)
-	for _, nodeName := range nodeNames {
+	sortedNames := append([]string(nil), nodeNames...)
+	sort.Strings(sortedNames)
+	for _, nodeName := range sortedNames {
 		node, ok := nodes[nodeName]
 		if ok && soloNodeCanRunKind(node, snapshot.ReleaseServiceKind) {
 			return nodeName, nil
@@ -2300,12 +2304,16 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err != nil {
 		return err
 	}
+	if _, err := releaseNodeForSnapshotTargets(selected.Snapshot, rollbackTargetNodeNames, current.Nodes); err != nil {
+		return err
+	}
 	nodes, err := a.resolveNodes(current, rollbackTargetNodeNames)
 	if err != nil {
 		return err
 	}
+	rollbackContract := soloRollbackContract(currentRelease, selected)
 	if opts.DryRun {
-		return stream.Result(map[string]any{
+		result := map[string]any{
 			"action":            "rollback",
 			"dry_run":           true,
 			"release_id":        selected.ID,
@@ -2322,7 +2330,11 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 				"state_write": false,
 			},
 			"next_steps": []string{"devopsellence release rollback" + soloEnvFlag(environmentName) + " " + selected.ID},
-		})
+		}
+		if rollbackContract != nil {
+			result["rollback_contract"] = rollbackContract
+		}
+		return stream.Result(result)
 	}
 	now := time.Now().UTC()
 	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
@@ -2353,6 +2365,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if _, err := publishState.SaveRelease(selected); err != nil {
 		return err
 	}
+	publishState = soloStateScopedToRollbackTargets(publishState, environmentID, rollbackTargetNodeNames)
 	statusBaselines := a.soloNodeStatusTimes(ctx, nodes)
 	desiredStateRevisions, err := a.republishNodes(ctx, publishState, rollbackTargetNodeNames)
 	if err != nil {
@@ -2397,7 +2410,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if err := a.writeSoloState(current); err != nil {
 		return err
 	}
-	return stream.Result(map[string]any{
+	result := map[string]any{
 		"release_id":              selected.ID,
 		"deployment_id":           deployment.ID,
 		"rolled_back_from":        currentRelease.ID,
@@ -2406,7 +2419,39 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 		"environment":             environmentName,
 		"nodes":                   sortedNodeNames(nodes),
 		"phase":                   "settled",
-	})
+	}
+	if rollbackContract != nil {
+		result["rollback_contract"] = rollbackContract
+	}
+	return stream.Result(result)
+}
+
+func soloRollbackContract(currentRelease, selectedRelease corerelease.Release) map[string]any {
+	selectedTask := selectedRelease.Snapshot.ReleaseTask != nil
+	currentTask := currentRelease.Snapshot.ReleaseTask != nil
+	if !selectedTask && !currentTask {
+		return nil
+	}
+	return map[string]any{
+		"data_rollback_automatic":       false,
+		"selected_release_task":         selectedTask,
+		"current_release_task":          currentTask,
+		"selected_release_task_reruns":  selectedTask,
+		"message":                       "rollback republishes selected desired state; devopsellence does not reverse database or data migrations",
+		"operator_responsibility":       "verify data compatibility before rollback; restore from backup if the current migration is not backward-compatible",
+		"recommended_dry_run_first":     true,
+		"recommended_backup_before_run": true,
+	}
+}
+
+func soloStateScopedToRollbackTargets(current solo.State, environmentID string, nodeNames []string) solo.State {
+	attachment, ok := current.Attachments[environmentID]
+	if !ok {
+		return current
+	}
+	attachment.NodeNames = normalizeSoloNames(nodeNames)
+	current.Attachments[environmentID] = attachment
+	return current
 }
 
 func soloReadyPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {

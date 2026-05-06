@@ -7605,47 +7605,51 @@ func remoteStatPathCommand(target string) string {
 }
 
 func remoteManagedContainerMountsCommand() string {
-	script := `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+	script := fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
 ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>&1)
 ps_status=$?
 if [ "$ps_status" -ne 0 ]; then
   echo "Failed to list managed containers" >&2
-  printf '%s\n' "$ids" >&2
+  printf '%%s\n' "$ids" >&2
   exit "$ps_status"
 fi
-ids=$(printf '%s\n' "$ids" | sed '/^$/d')
+id_count=$(printf '%%s\n' "$ids" | awk 'NF { c++ } END { print c+0 }')
+ids=$(printf '%%s\n' "$ids" | awk 'NF { print; if (++c >= %d) exit }')
 if [ -z "$ids" ]; then exit 0; fi
+if [ "$id_count" -gt %d ]; then printf '%%s\n' %s; fi
 inspect_out=$($docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids 2>&1)
 inspect_status=$?
 if [ "$inspect_status" -ne 0 ]; then
   echo "Failed to inspect managed container mounts" >&2
-  printf '%s\n' "$inspect_out" >&2
+  printf '%%s\n' "$inspect_out" >&2
   exit "$inspect_status"
 fi
-printf '%s\n' "$inspect_out" | sed 's#^/##'`
-	return withRemoteLineLimit(script, soloDiagnoseDockerItemLimit)
+printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'`, soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit, shellQuote(soloDiagnoseTruncatedMarker), shellQuote(soloDiagnoseTruncatedMarker), soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit+1)
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container mount diagnostics' >&2; exit 1"
 }
 
 func remoteManagedContainerPrivilegesCommand() string {
-	script := `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
+	script := fmt.Sprintf(`if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
 ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true 2>&1)
 ps_status=$?
 if [ "$ps_status" -ne 0 ]; then
   echo "Failed to list managed containers" >&2
-  printf '%s\n' "$ids" >&2
+  printf '%%s\n' "$ids" >&2
   exit "$ps_status"
 fi
-ids=$(printf '%s\n' "$ids" | sed '/^$/d')
+id_count=$(printf '%%s\n' "$ids" | awk 'NF { c++ } END { print c+0 }')
+ids=$(printf '%%s\n' "$ids" | awk 'NF { print; if (++c >= %d) exit }')
 if [ -z "$ids" ]; then exit 0; fi
+if [ "$id_count" -gt %d ]; then printf '%%s\n' %s; fi
 inspect_out=$($docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids 2>&1)
 inspect_status=$?
 if [ "$inspect_status" -ne 0 ]; then
   echo "Failed to inspect managed container privileges" >&2
-  printf '%s\n' "$inspect_out" >&2
+  printf '%%s\n' "$inspect_out" >&2
   exit "$inspect_status"
 fi
-printf '%s\n' "$inspect_out" | sed 's#^/##'`
-	return withRemoteLineLimit(script, soloDiagnoseDockerItemLimit)
+printf '%%s\n' "$inspect_out" | sed 's#^/##' | awk -v marker=%s 'NR <= %d { print } NR == %d { print marker; exit }'`, soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit, shellQuote(soloDiagnoseTruncatedMarker), shellQuote(soloDiagnoseTruncatedMarker), soloDiagnoseDockerItemLimit, soloDiagnoseDockerItemLimit+1)
+	return "if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c " + shellQuote(script) + "; fi; echo 'bash is required for managed container privilege diagnostics' >&2; exit 1"
 }
 
 func desiredStateOverridePath(node config.Node) string {

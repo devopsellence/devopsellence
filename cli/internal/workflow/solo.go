@@ -3859,7 +3859,9 @@ func soloSSHPasswordAuthCheck(ctx context.Context, node config.Node) soloSecurit
 	case "no":
 		check.Observed = "PasswordAuthentication no"
 	case "":
+		check.OK = false
 		check.Observed = "unknown: sshd password authentication setting not found"
+		check.NextAction = "rerun devopsellence node diagnose after SSH daemon configuration can be inspected"
 	default:
 		check.Observed = "PasswordAuthentication " + value
 	}

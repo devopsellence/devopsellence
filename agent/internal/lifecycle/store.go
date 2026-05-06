@@ -71,7 +71,7 @@ func (s *Store) save(state *fileState) error {
 	if s == nil || s.path == "" {
 		return nil
 	}
-	if err := fileaccess.EnsureDirMode(filepath.Dir(s.path), 0o711); err != nil {
+	if err := fileaccess.EnsureDirMaxMode(filepath.Dir(s.path), 0o711); err != nil {
 		return err
 	}
 	data, err := json.Marshal(state)

@@ -12,6 +12,22 @@ func EnsureDirMode(path string, mode os.FileMode) error {
 	return ensureMode(path, mode)
 }
 
+func EnsureDirMaxMode(path string, mode os.FileMode) error {
+	if err := os.MkdirAll(path, mode); err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	current := info.Mode().Perm()
+	next := current & mode
+	if next == current {
+		return nil
+	}
+	return os.Chmod(path, next)
+}
+
 func EnsureDirOwnershipAndMode(path string, mode os.FileMode, uid int, gid int) error {
 	if err := os.MkdirAll(path, mode); err != nil {
 		return err

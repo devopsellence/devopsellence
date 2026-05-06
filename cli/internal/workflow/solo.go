@@ -4054,7 +4054,11 @@ func soloAgentVersionStatus(observed, target string) string {
 	if target == "" {
 		return "target_unknown"
 	}
-	if soloAgentObservedVersion(observed) == target {
+	observedVersion := soloAgentObservedVersion(observed)
+	if observedVersion == "" {
+		return "unknown"
+	}
+	if observedVersion == target {
 		return "current"
 	}
 	return "mismatch"
@@ -4130,18 +4134,20 @@ func soloSSHPasswordAuthCheck(ctx context.Context, node config.Node) soloSecurit
 	}
 	value := strings.ToLower(strings.TrimSpace(diag.Stdout))
 	switch value {
-	case "yes":
+	case "yes", "true":
 		check.OK = false
-		check.Observed = "PasswordAuthentication yes"
+		check.Observed = "PasswordAuthentication " + value
 		check.NextAction = "disable SSH password auth or use a provider image with key-only SSH"
-	case "no":
-		check.Observed = "PasswordAuthentication no"
+	case "no", "false":
+		check.Observed = "PasswordAuthentication " + value
 	case "":
 		check.OK = false
 		check.Observed = "unknown: sshd password authentication setting not found"
 		check.NextAction = "rerun devopsellence node diagnose after SSH daemon configuration can be inspected"
 	default:
-		check.Observed = "PasswordAuthentication " + value
+		check.OK = false
+		check.Observed = "unknown: unrecognized SSH PasswordAuthentication value " + value
+		check.NextAction = "inspect SSH daemon configuration on the node and rerun devopsellence node diagnose"
 	}
 	return check
 }
@@ -4166,7 +4172,9 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 	check.Observed = strings.TrimSpace(diag.Stdout)
 	mode, err := strconv.ParseInt(fields[0], 8, 64)
 	if err != nil {
+		check.OK = false
 		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
+		check.NextAction = "rerun devopsellence node diagnose after the agent state directory mode can be parsed"
 		return check
 	}
 	if len(fields) >= 2 && fields[1] != "root" {
@@ -4199,7 +4207,9 @@ func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecur
 	check.Observed = strings.TrimSpace(diag.Stdout)
 	mode, err := strconv.ParseInt(fields[0], 8, 64)
 	if err != nil {
+		check.OK = false
 		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
+		check.NextAction = "rerun devopsellence node diagnose after the TLS key mode can be parsed"
 		return check
 	}
 	if mode&0o037 != 0 {
@@ -4273,7 +4283,7 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 		}
 		portLines = splitNonFinalEmptyLines(diag.Stdout)
 	}
-	if portsTruncated {
+	if portsTruncated || listenOutputHasTruncationMarker(portLines) {
 		check.OK = false
 		check.Observed = "unknown: listening port output was truncated"
 		check.NextAction = "rerun listening-port diagnostics with complete output before trusting public port hardening"
@@ -4294,6 +4304,15 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 	}
 	check.Observed = "only expected public ports detected"
 	return check
+}
+
+func listenOutputHasTruncationMarker(lines []string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "__DEVOPSELLENCE_TRUNCATED__" {
+			return true
+		}
+	}
+	return false
 }
 
 func listeningPortsInspectable(lines []string) bool {
@@ -4721,17 +4740,24 @@ func (a *App) SoloAgentUpgrade(ctx context.Context, opts SoloAgentUpgradeOptions
 	}
 	afterResult := collectRemoteText(ctx, node, remoteAgentVersionCommand())
 	after := stringFromMap(afterResult, "value")
+	target := soloAgentTargetVersion()
+	versionStatus := soloAgentVersionStatus(after, target)
 	if afterResult["ok"] != true || strings.TrimSpace(after) == "" {
 		return fmt.Errorf("agent upgrade verification failed: %s", collectRemoteTextFailure(afterResult))
 	}
-	target := soloAgentTargetVersion()
+	if versionStatus == "unknown" {
+		return fmt.Errorf("agent upgrade verification failed: remote agent version is unknown: %s", after)
+	}
+	if versionStatus == "mismatch" {
+		return fmt.Errorf("agent upgrade verification failed: remote agent version %q does not match target %q", after, target)
+	}
 	payload := map[string]any{
 		"node":             opts.Node,
 		"action":           "upgraded",
 		"previous_version": before,
 		"agent_version":    after,
 		"target_version":   target,
-		"version_status":   soloAgentVersionStatus(after, target),
+		"version_status":   versionStatus,
 	}
 	if beforeResult["ok"] != true {
 		payload["previous_version_probe"] = beforeResult
@@ -7931,16 +7957,16 @@ func remoteStatPathCommand(target string) string {
 
 func remoteManagedContainerMountsCommand() string {
 	return `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true)
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true | head -n 100)
 if [ -z "$ids" ]; then exit 0; fi
-$docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids | sed 's#^/##'`
+$docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids | sed 's#^/##' | grep '/var/run/docker.sock' | head -n 100 || true`
 }
 
 func remoteManagedContainerPrivilegesCommand() string {
 	return `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true)
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true | head -n 100)
 if [ -z "$ids" ]; then exit 0; fi
-$docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids | sed 's#^/##'`
+$docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids | sed 's#^/##' | awk '$2 == "true" { print }' | head -n 100`
 }
 
 func desiredStateOverridePath(node config.Node) string {

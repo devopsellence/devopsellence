@@ -108,7 +108,7 @@ func TestLoadDerivesStateRootOutsidePrivateAuthDir(t *testing.T) {
 	if cfg.DesiredStateCachePath != "/var/lib/devopsellence/desired-state-cache.json" {
 		t.Fatalf("unexpected desired state cache path: %s", cfg.DesiredStateCachePath)
 	}
-	if cfg.DiskCareStatePath != "/var/lib/devopsellence/disk-care-state.json" {
+	if cfg.DiskCareStatePath != "/var/lib/devopsellence/private/disk-care-state.json" {
 		t.Fatalf("unexpected disk care path: %s", cfg.DiskCareStatePath)
 	}
 	if cfg.EnvoyTLSCertPath != "/var/lib/devopsellence/ingress-cert.pem" || cfg.EnvoyTLSKeyPath != "/var/lib/devopsellence/ingress-key.pem" {

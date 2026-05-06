@@ -29,6 +29,9 @@ cd my-app
 codex "deploy with devopsellence solo"
 ```
 
+`--install-agent-skill` installs the matching devopsellence agent skill from
+the CLI itself; it does not require npm or `npx`.
+
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 
 ## Modes

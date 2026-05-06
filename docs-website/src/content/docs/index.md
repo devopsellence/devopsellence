@@ -25,6 +25,9 @@ cd my-app
 codex e "Deploy this app with devopsellence solo."
 ```
 
+`--install-agent-skill` installs the matching skill from the CLI itself; it does
+not require npm or `npx`.
+
 - [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
   one VM.
 - [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app

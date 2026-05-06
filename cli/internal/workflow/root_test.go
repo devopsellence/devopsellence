@@ -71,6 +71,30 @@ func TestRootVersionCommandIncludesReleaseProvenanceFields(t *testing.T) {
 	}
 }
 
+func TestRootSkillInstallWritesBundledSkill(t *testing.T) {
+	skillsDir := t.TempDir()
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install", "--dir", skillsDir})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["schema_version"] != float64(outputSchemaVersion) || payload["action"] != "installed" || payload["skill"] != "devopsellence" || payload["source"] != "embedded" {
+		t.Fatalf("payload = %#v, want embedded skill install result", payload)
+	}
+	path := filepath.Join(skillsDir, "devopsellence", "SKILL.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected bundled skill at %s: %v", path, err)
+	}
+	if payload["path"] != filepath.Join(skillsDir, "devopsellence") {
+		t.Fatalf("path = %#v, want %q", payload["path"], filepath.Join(skillsDir, "devopsellence"))
+	}
+}
+
 func TestRootModeFlagIsNotGlobal(t *testing.T) {
 	t.Parallel()
 

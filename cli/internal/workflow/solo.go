@@ -1025,6 +1025,11 @@ func (a *App) waitForSoloRolloutForRuntime(ctx context.Context, nodes map[string
 					details = append(details, name+"="+runtime.Detail)
 					continue
 				case "error":
+					if soloRolloutErrorRetryable(runtime.Message) {
+						reconcilingCount++
+						details = append(details, fmt.Sprintf("%s=retryable_error:%s", name, runtime.Message))
+						continue
+					}
 					return ExitError{Code: 1, Err: &soloRolloutError{Node: name, Message: runtime.Message, HealthcheckFailure: runtime.HealthcheckFailure}}
 				case "settled":
 					settledCount++
@@ -1035,6 +1040,11 @@ func (a *App) waitForSoloRolloutForRuntime(ctx context.Context, nodes map[string
 					settledCount++
 				case "error":
 					message := firstNonEmpty(strings.TrimSpace(result.Status.Error), "node reported phase=error")
+					if soloRolloutErrorRetryable(message) {
+						reconcilingCount++
+						details = append(details, fmt.Sprintf("%s=retryable_error:%s", name, message))
+						continue
+					}
 					return ExitError{Code: 1, Err: &soloRolloutError{Node: name, Message: message, HealthcheckFailure: soloRolloutMessageLooksLikeHealthcheck(message)}}
 				default:
 					reconcilingCount++
@@ -1063,6 +1073,15 @@ func (a *App) waitForSoloRolloutForRuntime(ctx context.Context, nodes map[string
 		case <-timer.C:
 		}
 	}
+}
+
+func soloRolloutErrorRetryable(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "network sandbox for container") ||
+		strings.Contains(normalized, "envoy unhealthy")
 }
 
 type soloRuntimeStatusResult struct {

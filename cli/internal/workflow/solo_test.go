@@ -9038,6 +9038,31 @@ func TestWaitForSoloRolloutFailsOnExpectedRevisionErrorPhase(t *testing.T) {
 	}
 }
 
+func TestWaitForSoloRolloutRetriesTransientExpectedRevisionErrorPhase(t *testing.T) {
+	statusCountPath := installFakeSoloCommands(t, []fakeSSHResponse{
+		{stdout: `{"revision":"expected-revision","phase":"error","error":"ensure envoy: connect envoy to workload network app-net: Error response from daemon: network sandbox for container abc not found"}` + "\n"},
+		{stdout: `{"revision":"expected-revision","phase":"settled","environments":[{"name":"production","revision":"workload-revision","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}` + "\n"},
+	})
+
+	app := &App{
+		Printer:            output.New(io.Discard, io.Discard),
+		DeployPollInterval: 5 * time.Millisecond,
+		DeployTimeout:      time.Second,
+	}
+
+	err := app.waitForSoloRolloutForRuntime(context.Background(), map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence"},
+	}, map[string]string{
+		"node-a": "expected-revision",
+	}, "production", "workload-revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFakeSSHStatusCount(t, statusCountPath); got != 2 {
+		t.Fatalf("status poll count = %d, want retry then settled", got)
+	}
+}
+
 func TestWaitForSoloRolloutFailsOnUnhealthyRuntimeEnvironmentDespiteTopLevelSettled(t *testing.T) {
 	installFakeSoloCommands(t, []fakeSSHResponse{
 		{stdout: `{"revision":"expected-revision","phase":"settled","environments":[{"name":"production","revision":"workload-revision","phase":"settled","services":[{"name":"web","phase":"settled","state":"unhealthy"}]}]}` + "\n"},

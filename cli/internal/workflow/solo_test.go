@@ -3875,6 +3875,15 @@ func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
 	}
 }
 
+func TestSoloSSHPasswordAuthCheckFailsWhenSettingUnknown(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "")
+	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "SSH daemon configuration") {
+		t.Fatalf("ssh password auth check = %#v, want failed unknown finding", check)
+	}
+}
+
 func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "755 root root /var/lib/devopsellence")
@@ -8646,7 +8655,7 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ne
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"sshd -T"* ]]; then
-  password_auth="${DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH:-no}"
+  password_auth="${DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH-no}"
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$password_auth"
   exit 0
 fi

@@ -4188,6 +4188,34 @@ func TestSoloAgentInstallFailsWhenVersionVerificationFails(t *testing.T) {
 	}
 }
 
+func TestSoloAgentInstallFailsWhenVersionIsMissing(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "missing")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentInstall() error = nil, want missing version failure")
+	}
+	if !strings.Contains(err.Error(), "agent install verification failed") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("error = %v, want missing version failure", err)
+	}
+}
+
 func TestSoloAgentUpgradeFailsWhenVersionVerificationFails(t *testing.T) {
 	originalVersion := cliversion.Version
 	t.Cleanup(func() { cliversion.Version = originalVersion })
@@ -5712,7 +5740,7 @@ func TestSoloStatusReportsInFlightRollbackDeployment(t *testing.T) {
 		t.Fatalf("current_release = %#v, want existing current release", releasePayload)
 	}
 	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
-	if currentDeployment["id"] != "dep_rollback" || currentDeployment["release_id"] != rollbackRelease.ID || currentDeployment["kind"] != corerelease.DeploymentKindRollback {
+	if currentDeployment["id"] != "dep_rollback" || currentDeployment["release_id"] != rollbackRelease.ID || currentDeployment["release_revision"] != rollbackRelease.Revision || currentDeployment["image"] != rollbackRelease.Image.Reference || currentDeployment["kind"] != corerelease.DeploymentKindRollback {
 		t.Fatalf("current_deployment = %#v, want in-flight rollback deployment", currentDeployment)
 	}
 }

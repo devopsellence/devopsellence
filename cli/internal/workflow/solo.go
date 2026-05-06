@@ -2077,7 +2077,6 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				"status":         recovered.Status,
 				"status_message": recovered.StatusMessage,
 			}
-			payload["current_deployment"] = soloStatusDeploymentPayload(current, recovered)
 		}
 	}
 	if hasCurrent && payload["current_deployment"] == nil {

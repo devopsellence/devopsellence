@@ -3775,12 +3775,12 @@ func TestSoloSSHPasswordAuthCheckFailsWhenSettingUnknown(t *testing.T) {
 	}
 }
 
-func TestSoloSSHPasswordAuthCheckFailsWhenSettingNotBoolean(t *testing.T) {
+func TestSoloSSHPasswordAuthCheckRejectsUnexpectedValue(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "true")
 	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
-	if check.OK || !strings.Contains(check.Observed, "PasswordAuthentication") {
-		t.Fatalf("ssh password auth check = %#v, want failed unknown value finding", check)
+	if check.OK || !strings.Contains(check.Observed, "PasswordAuthentication true") || !strings.Contains(check.NextAction, "SSH daemon configuration") {
+		t.Fatalf("ssh password auth check = %#v, want failed unexpected value finding", check)
 	}
 }
 
@@ -3793,21 +3793,21 @@ func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	}
 }
 
-func TestSoloAgentStatePermissionsFailsOnBadModeFormat(t *testing.T) {
+func TestSoloAgentStatePermissionsCheckFailsWhenModeUnparseable(t *testing.T) {
 	installFakeSoloCommands(t, nil)
-	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "not-a-mode root root /var/lib/devopsellence")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "junk")
 	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
-	if check.OK || check.NextAction == "" {
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "agent state directory") {
 		t.Fatalf("agent state check = %#v, want parse-failure finding", check)
 	}
 }
 
-func TestSoloTLSKeyPermissionsFailsOnBadModeFormat(t *testing.T) {
+func TestSoloTLSKeyPermissionsCheckFailsWhenModeUnparseable(t *testing.T) {
 	installFakeSoloCommands(t, nil)
-	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT", "not-a-mode root root /var/lib/devopsellence/ingress-key.pem")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT", "junk")
 	check := soloTLSKeyPermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
-	if check.OK || check.NextAction == "" {
-		t.Fatalf("tls key permissions check = %#v, want parse-failure finding", check)
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "TLS key path") {
+		t.Fatalf("tls key check = %#v, want parse-failure finding", check)
 	}
 }
 
@@ -8297,11 +8297,11 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"sshd -T"*
   exit 0
 fi
 
-	if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
-		key_stat="${DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT:-missing}"
-		printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$key_stat"
-		exit 0
-	fi
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
+  key_stat="${DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT:-missing}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$key_stat"
+  exit 0
+fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
   state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-751 root root /var/lib/devopsellence}"

@@ -3865,7 +3865,7 @@ func soloSSHPasswordAuthCheck(ctx context.Context, node config.Node) soloSecurit
 	default:
 		check.OK = false
 		check.Observed = "PasswordAuthentication " + value
-		check.NextAction = "set PasswordAuthentication to no"
+		check.NextAction = "rerun devopsellence node diagnose after SSH daemon configuration can be inspected"
 	}
 	return check
 }
@@ -3887,14 +3887,14 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 		check.NextAction = "reinstall or restart the devopsellence agent so the state directory exists"
 		return check
 	}
+	check.Observed = strings.TrimSpace(diag.Stdout)
 	mode, err := strconv.ParseInt(fields[0], 8, 64)
 	if err != nil {
 		check.OK = false
 		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
-		check.NextAction = "reinstall or restart the devopsellence agent so the state directory permissions can be inspected"
+		check.NextAction = "rerun devopsellence node diagnose after the agent state directory can be inspected"
 		return check
 	}
-	check.Observed = strings.TrimSpace(diag.Stdout)
 	if len(fields) >= 2 && fields[1] != "root" {
 		check.OK = false
 		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + stateDir
@@ -3903,36 +3903,6 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 	if mode&0o026 != 0 {
 		check.OK = false
 		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + stateDir
-	}
-	return check
-}
-
-func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecurityCheck {
-	keyPath := path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "ingress-key.pem")
-	diag := runRemoteDiagnostic(ctx, node, remoteStatPathCommand(keyPath))
-	check := soloSecurityCheck{Name: "tls_key_permissions", OK: true, Severity: "high"}
-	if diag.Err != nil || diag.ExitCode != 0 {
-		check.OK = false
-		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
-		check.NextAction = "rerun devopsellence node diagnose after the TLS key path can be inspected"
-		return check
-	}
-	fields := strings.Fields(strings.TrimSpace(diag.Stdout))
-	if len(fields) == 0 || fields[0] == "missing" {
-		check.Observed = keyPath + " not present"
-		return check
-	}
-	check.Observed = strings.TrimSpace(diag.Stdout)
-	mode, err := strconv.ParseInt(fields[0], 8, 64)
-	if err != nil {
-		check.OK = false
-		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
-		check.NextAction = "reinstall or restart the devopsellence agent so the TLS key permissions can be inspected"
-		return check
-	}
-	if mode&0o037 != 0 {
-		check.OK = false
-		check.NextAction = "restrict the TLS private key file to the agent or Envoy group, for example chmod 640 " + keyPath
 	}
 	return check
 }
@@ -3989,19 +3959,56 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 	return check
 }
 
+func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecurityCheck {
+	keyPath := path.Join(firstNonEmpty(node.AgentStateDir, "/var/lib/devopsellence"), "ingress-key.pem")
+	diag := runRemoteDiagnostic(ctx, node, remoteStatPathCommand(keyPath))
+	check := soloSecurityCheck{Name: "tls_key_permissions", OK: true, Severity: "high"}
+	if diag.Err != nil || diag.ExitCode != 0 {
+		check.OK = false
+		check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+		check.NextAction = "rerun devopsellence node diagnose after the TLS key path can be inspected"
+		return check
+	}
+	fields := strings.Fields(strings.TrimSpace(diag.Stdout))
+	if len(fields) == 0 || fields[0] == "missing" {
+		check.Observed = keyPath + " not present"
+		return check
+	}
+	check.Observed = strings.TrimSpace(diag.Stdout)
+	mode, err := strconv.ParseInt(fields[0], 8, 64)
+	if err != nil {
+		check.OK = false
+		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
+		check.NextAction = "rerun devopsellence node diagnose after the TLS key path can be inspected"
+		return check
+	}
+	if mode&0o037 != 0 {
+		check.OK = false
+		check.NextAction = "restrict the TLS private key file to the agent or Envoy group, for example chmod 640 " + keyPath
+	}
+	return check
+}
+
 func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) soloSecurityCheck {
 	check := soloSecurityCheck{Name: "public_listening_ports", OK: true, Severity: "medium"}
 	if portLines == nil {
-		linesResult := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
-		if errorMessage, ok := linesResult["error"].(string); ok {
+		collection := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
+		if !collection["ok"].(bool) {
 			check.OK = false
-			check.Observed = "unknown: " + errorMessage
+			if err, ok := collection["error"].(string); ok && err != "" {
+				check.Observed = "unknown: " + err
+			} else {
+				check.Observed = "unknown: cannot collect listening ports"
+			}
 			check.NextAction = "rerun devopsellence node diagnose after listening ports can be inspected"
 			return check
 		}
-		parsedLines, _ := linesResult["lines"].([]string)
-		portLines = parsedLines
-		portsTruncated = linesResult["truncated"].(bool)
+		if lines, ok := collection["lines"].([]string); ok {
+			portLines = lines
+		}
+		if truncated, ok := collection["truncated"].(bool); ok && truncated {
+			portsTruncated = true
+		}
 	}
 	if portsTruncated {
 		check.OK = false
@@ -4495,10 +4502,7 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			}
 			results = append(results, result)
 		}
-		portsResult := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
-		parsedPortLines, _ := portsResult["lines"].([]string)
-		portsTruncated, _ := portsResult["truncated"].(bool)
-		for _, check := range soloNodeSecurityChecks(ctx, node, parsedPortLines, portsTruncated) {
+		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false) {
 			result := map[string]any{
 				"node":     name,
 				"check":    "security_" + check.Name,
@@ -7578,16 +7582,16 @@ func remoteStatPathCommand(target string) string {
 
 func remoteManagedContainerMountsCommand() string {
 	return `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true)
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true | head -n 64)
 if [ -z "$ids" ]; then exit 0; fi
-$docker_cmd inspect --format '{{.Name}} {{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' $ids | sed 's#^/##'`
+$docker_cmd inspect --format '{{range .Mounts}}{{if eq .Source "/var/run/docker.sock"}}{{$.Name}} {{.Source}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' $ids | sed 's#^/##'`
 }
 
 func remoteManagedContainerPrivilegesCommand() string {
 	return `if docker info >/dev/null 2>&1; then docker_cmd=docker; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then docker_cmd="sudo -n docker"; else echo 'Docker is not reachable' >&2; exit 1; fi
-ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true)
+ids=$($docker_cmd ps -aq --filter label=devopsellence.managed=true | head -n 64)
 if [ -z "$ids" ]; then exit 0; fi
-$docker_cmd inspect --format '{{.Name}} {{.HostConfig.Privileged}}' $ids | sed 's#^/##'`
+$docker_cmd inspect --format '{{if .HostConfig.Privileged}}{{$.Name}} true{{end}}' $ids | sed 's#^/##'`
 }
 
 func desiredStateOverridePath(node config.Node) string {

@@ -4408,6 +4408,12 @@ func soloAgentStatusReportCheck(ctx context.Context, node config.Node) soloRunti
 		return check
 	}
 	age := time.Since(statusTime)
+	if age < -2*time.Minute {
+		check.OK = false
+		check.Observed = fmt.Sprintf("status report at %s is from the future: time=%s", statusPath, result.Status.Time)
+		check.NextAction = "check node clock skew, then rerun devopsellence doctor"
+		return check
+	}
 	if age > 5*time.Minute {
 		check.OK = false
 		check.Observed = fmt.Sprintf("status report at %s is stale: time=%s", statusPath, result.Status.Time)

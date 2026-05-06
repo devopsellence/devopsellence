@@ -2398,6 +2398,54 @@ func TestSoloDoctorFailsWhenAgentStatusReportMissingAtExpectedPath(t *testing.T)
 	t.Fatalf("runtime_checks = %#v, want agent_status_report", checks)
 }
 
+func TestSoloDoctorFailsWhenAgentStatusReportTimeIsInFuture(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"time":"2099-01-01T00:00:00Z","revision":"abc","phase":"settled"}` + "\n"}})
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want future status report failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "agent_status_report" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["detail"]), "future") || !strings.Contains(stringValueAny(check["next_action"]), "clock skew") {
+				t.Fatalf("agent_status_report = %#v, want future timestamp failure", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want agent_status_report", checks)
+}
+
 func TestSoloDoctorReportsSecurityFindings(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
@@ -10471,7 +10519,7 @@ if [[ "$command" == *"status.json"* ]]; then
       cat "$base.stdout"
     fi
   elif [[ ! -f "$base.stderr" && ! -f "$base.code" ]]; then
-    printf '{"time":"2099-01-01T00:00:00Z","revision":"fake-revision","phase":"settled","environments":[{"name":"production","revision":"fake-revision","phase":"settled","services":[{"name":"web","state":"running"}]}]}\n'
+    printf '{"time":"%s","revision":"fake-revision","phase":"settled","environments":[{"name":"production","revision":"fake-revision","phase":"settled","services":[{"name":"web","state":"running"}]}]}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   fi
   if [[ -f "$base.stderr" ]]; then
     cat "$base.stderr" >&2

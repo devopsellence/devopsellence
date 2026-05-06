@@ -3863,10 +3863,26 @@ func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
 	}
 }
 
+func TestSplitListenAddressSupportsIPv6AnyNotation(t *testing.T) {
+	host, port, ok := splitListenAddress(":::80")
+	if !ok || host != "::" || port != "80" {
+		t.Fatalf("splitListenAddress(\":::80\") = host=%q port=%q ok=%v, want host=\"::\" port=\"80\" ok=true", host, port, ok)
+	}
+
+	host, port, ok = splitListenAddress(":::*")
+	if ok || host != "" || port != "" {
+		t.Fatalf("splitListenAddress(\":::*\") = host=%q port=%q ok=%v, want empty host/port and ok=false", host, port, ok)
+	}
+}
+
 func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
 	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true)
 	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {
 		t.Fatalf("truncated check = %#v, want failed truncated finding", truncated)
+	}
+	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false)
+	if marker.OK || !strings.Contains(marker.Observed, "truncated") {
+		t.Fatalf("marker check = %#v, want failed truncated finding", marker)
 	}
 
 	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false)
@@ -3884,12 +3900,39 @@ func TestSoloSSHPasswordAuthCheckFailsWhenSettingUnknown(t *testing.T) {
 	}
 }
 
+func TestSoloSSHPasswordAuthCheckFailsOnUnrecognizedValue(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "maybe")
+	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unrecognized") {
+		t.Fatalf("ssh password auth check = %#v, want failed unrecognized finding", check)
+	}
+}
+
 func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "755 root root /var/lib/devopsellence")
 	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
 	if check.OK || !strings.Contains(check.NextAction, "other read/write") {
 		t.Fatalf("agent state check = %#v, want other-read finding", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsFailWhenModeUnparseable(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "bad root root /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
+		t.Fatalf("agent state check = %#v, want failed unknown mode finding", check)
+	}
+}
+
+func TestSoloTLSKeyPermissionsFailWhenModeUnparseable(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT", "bad root root /var/lib/devopsellence/ingress-key.pem")
+	check := soloTLSKeyPermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
+		t.Fatalf("tls key check = %#v, want failed unknown mode finding", check)
 	}
 }
 
@@ -4073,6 +4116,39 @@ func TestSoloAgentUpgradeFailsWhenVersionVerificationFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "agent upgrade verification failed") || !strings.Contains(err.Error(), "version probe failed") {
 		t.Fatalf("error = %v, want version probe failure", err)
+	}
+	if _, readErr := os.ReadFile(scriptPath); readErr != nil {
+		t.Fatalf("install script was not uploaded before verification: %v", readErr)
+	}
+}
+
+func TestSoloAgentUpgradeFailsWhenVersionVerificationReturnsMissing(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "missing")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentUpgrade(context.Background(), SoloAgentUpgradeOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentUpgrade() error = nil, want missing-version verification failure")
+	}
+	if !strings.Contains(err.Error(), "agent upgrade verification failed") || !strings.Contains(err.Error(), "remote agent version is unknown") {
+		t.Fatalf("error = %v, want missing version failure", err)
 	}
 	if _, readErr := os.ReadFile(scriptPath); readErr != nil {
 		t.Fatalf("install script was not uploaded before verification: %v", readErr)
@@ -7956,6 +8032,8 @@ func TestSoloAgentVersionStatusComparesExactObservedVersion(t *testing.T) {
 		{observed: "devopsellence v1.2.3 (commit abc, built now)", target: "v1.2.3", want: "current"},
 		{observed: "devopsellence v1.2.30 (commit abc, built now)", target: "v1.2.3", want: "mismatch"},
 		{observed: "devopsellence v2.0.0-rc.1 (commit abc, built now)", target: "v2.0.0", want: "mismatch"},
+		{observed: "totally different version output", target: "v2.0.0", want: "unknown"},
+		{observed: "missing", target: "v2.0.0", want: "unknown"},
 		{observed: "devopsellence-agent/v1.2.3 (linux; amd64)", target: "v1.2.3", want: "current"},
 	}
 	for _, tc := range cases {
@@ -8823,7 +8901,8 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"sshd -T"*
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
-  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nmissing\n__DEVOPSELLENCE_STDERR__\n'
+  tls_stat="${DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT:-missing}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$tls_stat"
   exit 0
 fi
 

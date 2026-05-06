@@ -2077,7 +2077,6 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 				"status":         recovered.Status,
 				"status_message": recovered.StatusMessage,
 			}
-			payload["current_deployment"] = soloStatusDeploymentPayload(current, recovered)
 		}
 	}
 	if hasCurrent && payload["current_deployment"] == nil {
@@ -2518,6 +2517,7 @@ func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackO
 	if _, err := publishState.SaveRelease(selected); err != nil {
 		return err
 	}
+	publishState = soloStateScopedToRollbackTargets(publishState, environmentID, rollbackTargetNodeNames)
 	statusBaselines := a.soloNodeStatusTimes(ctx, nodes)
 	desiredStateRevisions, err := a.republishNodes(ctx, publishState, rollbackTargetNodeNames)
 	if err != nil {
@@ -2594,6 +2594,16 @@ func soloRollbackContract(currentRelease, selectedRelease corerelease.Release) m
 		"recommended_dry_run_first":     true,
 		"recommended_backup_before_run": true,
 	}
+}
+
+func soloStateScopedToRollbackTargets(current solo.State, environmentID string, nodeNames []string) solo.State {
+	attachment, ok := current.Attachments[environmentID]
+	if !ok {
+		return current
+	}
+	attachment.NodeNames = normalizeSoloNames(nodeNames)
+	current.Attachments[environmentID] = attachment
+	return current
 }
 
 func soloReadyPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {

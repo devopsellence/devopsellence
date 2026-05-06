@@ -3754,6 +3754,18 @@ func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
 	}
 }
 
+func TestSplitListenAddressSupportsIPv6AnyNotation(t *testing.T) {
+	host, port, ok := splitListenAddress(":::80")
+	if !ok || host != "::" || port != "80" {
+		t.Fatalf("splitListenAddress(\":::80\") = host=%q port=%q ok=%v, want host=\"::\" port=\"80\" ok=true", host, port, ok)
+	}
+
+	host, port, ok = splitListenAddress(":::*")
+	if ok || host != "" || port != "" {
+		t.Fatalf("splitListenAddress(\":::*\") = host=%q port=%q ok=%v, want empty host/port and ok=false", host, port, ok)
+	}
+}
+
 func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
 	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true)
 	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {

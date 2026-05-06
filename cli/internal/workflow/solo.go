@@ -3282,6 +3282,7 @@ func (a *App) SoloNodeList(_ context.Context, opts SoloNodeListOptions) error {
 		"nodes":          nodes,
 		"node_items":     items,
 	}
+	a.addLocalStateMetadata(payload)
 	if warnings := soloNodeListDuplicateHostWarnings(current, nodeNames); len(warnings) > 0 {
 		payload["warnings"] = warnings
 	}
@@ -5932,7 +5933,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"devopsellence doctor",
 		"devopsellence deploy",
 	}
-	return a.Printer.PrintJSON(map[string]any{
+	payload := map[string]any{
 		"schema_version":   outputSchemaVersion,
 		"mode":             string(ModeSolo),
 		"workspace_root":   discovered.WorkspaceRoot,
@@ -5948,7 +5949,9 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		"ready":       ready,
 		"missing":     missing,
 		"next_steps":  nextSteps,
-	})
+	}
+	a.addLocalStateMetadata(payload)
+	return a.Printer.PrintJSON(payload)
 }
 
 type runtimeContractProvenance struct {

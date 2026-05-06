@@ -40,3 +40,28 @@ func TestStoreWriteReadDelete(t *testing.T) {
 		t.Fatal("Delete() = false, want true")
 	}
 }
+
+func TestDefaultPathPrefersDevopsellenceStateHome(t *testing.T) {
+	preferred := filepath.Join(t.TempDir(), "devopsellence-state")
+	fallback := filepath.Join(t.TempDir(), "xdg-state")
+	t.Setenv(HomeEnv, preferred)
+	t.Setenv(FallbackHomeEnv, fallback)
+
+	got := DefaultPath(filepath.Join("devopsellence", "solo", "state.json"))
+	want := filepath.Join(preferred, "devopsellence", "solo", "state.json")
+	if got != want {
+		t.Fatalf("DefaultPath() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultPathUsesXDGStateHomeAsFallback(t *testing.T) {
+	fallback := filepath.Join(t.TempDir(), "xdg-state")
+	t.Setenv(HomeEnv, "")
+	t.Setenv(FallbackHomeEnv, fallback)
+
+	got := DefaultPath(filepath.Join("devopsellence", "workspace.json"))
+	want := filepath.Join(fallback, "devopsellence", "workspace.json")
+	if got != want {
+		t.Fatalf("DefaultPath() = %q, want %q", got, want)
+	}
+}

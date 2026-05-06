@@ -9,6 +9,7 @@ import (
 
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/solo"
+	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
@@ -163,6 +164,31 @@ func (a *App) workspaceHasSoloState(workspaceRoot string) bool {
 	return false
 }
 
+func storePath(store *state.Store) string {
+	if store == nil {
+		return ""
+	}
+	return strings.TrimSpace(store.Path)
+}
+
+func soloStorePath(store *solo.StateStore) string {
+	if store == nil {
+		return ""
+	}
+	return strings.TrimSpace(store.Path)
+}
+
+func (a *App) addLocalStateMetadata(payload map[string]any) {
+	payload["state_home_env"] = state.HomeEnv
+	payload["state_home_fallback_env"] = state.FallbackHomeEnv
+	if path := storePath(a.WorkspaceState); path != "" {
+		payload["workspace_state_path"] = path
+	}
+	if path := soloStorePath(a.SoloState); path != "" {
+		payload["solo_state_path"] = path
+	}
+}
+
 func (a *App) ResolveMode() (Mode, error) {
 	if saved, ok, err := a.savedMode(); err != nil {
 		return "", ExitError{Code: 1, Err: err}
@@ -197,6 +223,7 @@ func (a *App) ModeShow() error {
 		"workspace_key":  a.modeWorkspaceKey(),
 		"set":            ok,
 	}
+	a.addLocalStateMetadata(payload)
 	if ok {
 		payload["mode"] = string(mode)
 	}
@@ -220,6 +247,7 @@ func (a *App) ContextShow() error {
 		"workspace_root": discovered.WorkspaceRoot,
 		"mode_set":       ok,
 	}
+	a.addLocalStateMetadata(result)
 	if ok {
 		result["mode"] = string(mode)
 	}

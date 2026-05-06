@@ -632,8 +632,8 @@ func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
 		service := cfg.Services[serviceName]
 		kind := config.InferredServiceKind(serviceName, service)
 		item := map[string]any{
-			"service": serviceName,
-			"kind":    kind,
+			"service_name": serviceName,
+			"service_kind": kind,
 		}
 		if kind == config.ServiceKindWeb {
 			item["strategy"] = "health_gated_cutover"
@@ -642,6 +642,7 @@ func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
 		} else {
 			item["strategy"] = "stop_old_before_start_new"
 			item["health_gated"] = false
+			item["stop_old_before_start_new"] = true
 			item["operator_note"] = "non-web service hash changes stop and remove old containers before starting the replacement; this path is not health-gated"
 		}
 		contracts = append(contracts, item)

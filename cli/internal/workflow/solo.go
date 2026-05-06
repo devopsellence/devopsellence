@@ -2048,29 +2048,32 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		"environment":    environmentName,
 		"nodes":          jsonResults,
 	}
+	appendPayloadWarning := func(message string) {
+		warnings, _ := payload["warnings"].([]string)
+		payload["warnings"] = append(warnings, message)
+	}
 	if len(verifiedPublicURLs) > 0 {
 		if allSettled {
 			payload["public_urls"] = verifiedPublicURLs
 		} else {
 			payload["configured_public_urls"] = verifiedPublicURLs
-			payload["warnings"] = []string{"public URLs are configured, but one or more nodes are not settled; check `devopsellence status" + soloEnvFlag(environmentName) + "` before testing reachability"}
+			appendPayloadWarning("public URLs are configured, but one or more nodes are not settled; check `devopsellence status" + soloEnvFlag(environmentName) + "` before testing reachability")
 		}
 	} else if urls := soloStatusPublicURLs(cfg, nodes); len(urls) > 0 {
 		payload["configured_public_urls"] = urls
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
-		payload["warnings"] = []string{soloPublicURLWarning(cfg, environmentName)}
+		appendPayloadWarning(soloPublicURLWarning(cfg, environmentName))
 	}
-	if allSettled && hasCurrent && len(opts.Nodes) == 0 {
+	if allSettled && hasCurrent && hasRecoveryCandidate && len(opts.Nodes) == 0 {
 		var recovered corerelease.Deployment
 		recoveredOK := false
 		if err := a.updateSoloState(func(recoveryState *solo.State) error {
 			var err error
-			recovered, recoveredOK, err = soloRecoverSettledRunningDeployment(recoveryState, environmentID, currentRelease.ID, recoveryChecked, recoveryRevisions)
+			recovered, recoveredOK, err = soloRecoverSettledRunningDeployment(recoveryState, environmentID, currentRelease.ID, nodes, recoveryChecked, recoveryRevisions)
 			return err
 		}); err != nil {
-			return err
-		}
-		if recoveredOK {
+			appendPayloadWarning("remote status is settled, but local deployment recovery could not be persisted: " + err.Error())
+		} else if recoveredOK {
 			payload["recovered_deployment"] = map[string]any{
 				"id":             recovered.ID,
 				"release_id":     recovered.ReleaseID,
@@ -2115,16 +2118,16 @@ func soloLatestRunningDeployment(current solo.State, environmentID, releaseID st
 	return selected, found
 }
 
-func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, releaseID string, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, bool, error) {
+func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, releaseID string, nodes map[string]config.Node, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, bool, error) {
 	selected, found := soloLatestRunningDeployment(*current, environmentID, releaseID)
 	if !found {
 		return corerelease.Deployment{}, false, nil
 	}
-	for _, nodeName := range selected.TargetNodeIDs {
-		nodeName = strings.TrimSpace(nodeName)
-		if nodeName == "" {
-			continue
-		}
+	targets := soloDeploymentTargetSet(selected, nodes)
+	if len(targets) == 0 {
+		return corerelease.Deployment{}, false, nil
+	}
+	for nodeName := range targets {
 		if !checkedTargets[nodeName] {
 			return corerelease.Deployment{}, false, nil
 		}

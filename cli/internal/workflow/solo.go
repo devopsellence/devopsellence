@@ -3593,14 +3593,9 @@ func soloNodesShareRemoteCleanupTarget(a, b config.Node) bool {
 	}
 	aHost := strings.TrimSpace(strings.ToLower(a.Host))
 	bHost := strings.TrimSpace(strings.ToLower(b.Host))
-	return aHost != "" && aHost == bHost && normalizedSoloNodePort(a.Port) == normalizedSoloNodePort(b.Port)
-}
-
-func normalizedSoloNodePort(port int) int {
-	if port == 0 {
-		return 22
-	}
-	return port
+	aPort := solo.NormalizeNode(a).Port
+	bPort := solo.NormalizeNode(b).Port
+	return aHost != "" && aHost == bHost && aPort == bPort
 }
 
 func soloRepublishMissingAgentError(err error) bool {
@@ -7819,6 +7814,8 @@ fi
 harden_sshd_password_auth
 
 run_root mkdir -p "$STATE_DIR" "$STATE_DIR/envoy"
+# The parent must remain traversable so Envoy can open the bind-mounted
+# bootstrap/socket directory; sensitive state files are written 0600/0640.
 run_root chmod 751 "$STATE_DIR"
 TMP_BIN="$(mktemp)"
 TMP_SUMS="$(mktemp)"

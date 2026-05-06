@@ -3918,6 +3918,15 @@ func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	}
 }
 
+func TestSoloAgentStatePermissionsRejectsNonRootGroup(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "750 root docker /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.NextAction, "root group ownership") {
+		t.Fatalf("agent state check = %#v, want non-root-group finding", check)
+	}
+}
+
 func TestSoloAgentStatePermissionsFailWhenModeUnparseable(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "bad root root /var/lib/devopsellence")

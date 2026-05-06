@@ -4522,9 +4522,9 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 		check.NextAction = "restore root group ownership on the agent state directory, for example chown root:root " + shellQuote(stateDir)
 		return check
 	}
-	if mode&0o026 != 0 {
+	if mode&0o077 != 0 {
 		check.OK = false
-		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + shellQuote(stateDir)
+		check.NextAction = "remove group and other access from the agent state directory, for example chmod 700 " + shellQuote(stateDir)
 	}
 	return check
 }

@@ -35,7 +35,7 @@ func (r *Reporter) Report(ctx context.Context, status report.Status) error {
 	}
 
 	dir := filepath.Dir(r.path)
-	if err := fileaccess.EnsureDirMode(dir, 0o751); err != nil {
+	if err := fileaccess.EnsureDirMode(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir status dir: %w", err)
 	}
 

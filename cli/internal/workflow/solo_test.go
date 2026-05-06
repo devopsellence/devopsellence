@@ -6223,6 +6223,41 @@ func TestSoloRecoverSettledRunningDeploymentIgnoresDetachedTargets(t *testing.T)
 	}
 }
 
+func TestSoloRecoverSettledRunningDeploymentSkipsEmptyAttachedTargetIntersection(t *testing.T) {
+	current := solo.State{}
+	deployment := corerelease.Deployment{
+		ID:            "dep_interrupted",
+		EnvironmentID: "env",
+		ReleaseID:     "rel",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-old"},
+		Status:        corerelease.DeploymentStatusRunning,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, ok, err := soloRecoverSettledRunningDeployment(
+		&current,
+		"env",
+		"rel",
+		map[string]config.Node{"node-a": {Host: "203.0.113.10"}},
+		map[string]bool{"node-a": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("recovered = %#v, want no recovery when explicit targets are detached", recovered)
+	}
+	if current.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
+		t.Fatalf("deployment = %#v, want running status preserved", current.Deployments["dep_interrupted"])
+	}
+}
+
 func TestSoloRecoverSettledRunningDeploymentRequiresFallbackTargets(t *testing.T) {
 	current := solo.State{}
 	deployment := corerelease.Deployment{
@@ -6257,6 +6292,42 @@ func TestSoloRecoverSettledRunningDeploymentRequiresFallbackTargets(t *testing.T
 	}
 	if current.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
 		t.Fatalf("deployment = %#v, want running status preserved", current.Deployments["dep_interrupted"])
+	}
+}
+
+func TestSoloLatestRunningDeploymentComparesCreatedAtAsTime(t *testing.T) {
+	current := solo.State{}
+	for _, deployment := range []corerelease.Deployment{
+		{
+			ID:            "dep_late_offset",
+			EnvironmentID: "env",
+			ReleaseID:     "rel",
+			Kind:          corerelease.DeploymentKindDeploy,
+			Sequence:      7,
+			Status:        corerelease.DeploymentStatusRunning,
+			CreatedAt:     "2026-05-06T00:30:00-01:00",
+		},
+		{
+			ID:            "dep_early_utc",
+			EnvironmentID: "env",
+			ReleaseID:     "rel",
+			Kind:          corerelease.DeploymentKindDeploy,
+			Sequence:      7,
+			Status:        corerelease.DeploymentStatusRunning,
+			CreatedAt:     "2026-05-06T01:00:00Z",
+		},
+	} {
+		if err := current.SaveDeployment(deployment); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	selected, ok := soloLatestRunningDeployment(current, "env", "rel")
+	if !ok {
+		t.Fatal("soloLatestRunningDeployment() ok = false, want true")
+	}
+	if selected.ID != "dep_late_offset" {
+		t.Fatalf("selected.ID = %q, want dep_late_offset", selected.ID)
 	}
 }
 

@@ -2110,12 +2110,35 @@ func soloLatestRunningDeployment(current solo.State, environmentID, releaseID st
 		if deployment.EnvironmentID != environmentID || deployment.ReleaseID != releaseID || deployment.Status != corerelease.DeploymentStatusRunning {
 			continue
 		}
-		if !found || deployment.Sequence > selected.Sequence || (deployment.Sequence == selected.Sequence && deployment.CreatedAt > selected.CreatedAt) {
+		if !found || soloDeploymentSortsAfter(deployment, selected) {
 			selected = deployment
 			found = true
 		}
 	}
 	return selected, found
+}
+
+func soloDeploymentSortsAfter(candidate, selected corerelease.Deployment) bool {
+	if candidate.Sequence != selected.Sequence {
+		return candidate.Sequence > selected.Sequence
+	}
+	candidateCreatedAt, candidateOK := parseSoloDeploymentCreatedAt(candidate.CreatedAt)
+	selectedCreatedAt, selectedOK := parseSoloDeploymentCreatedAt(selected.CreatedAt)
+	if candidateOK && selectedOK && !candidateCreatedAt.Equal(selectedCreatedAt) {
+		return candidateCreatedAt.After(selectedCreatedAt)
+	}
+	if candidateOK != selectedOK {
+		return candidateOK
+	}
+	return candidate.ID > selected.ID
+}
+
+func parseSoloDeploymentCreatedAt(value string) (time.Time, bool) {
+	createdAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return createdAt, true
 }
 
 func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, releaseID string, nodes map[string]config.Node, checkedTargets map[string]bool, revisions map[string]string) (corerelease.Deployment, bool, error) {
@@ -2150,13 +2173,18 @@ func soloRecoveryRuntimeSettled(runtime soloRuntimeStatusResult) bool {
 
 func soloDeploymentTargetSet(deployment corerelease.Deployment, nodes map[string]config.Node) map[string]bool {
 	targets := map[string]bool{}
+	hasExplicitTargets := false
 	for _, nodeName := range deployment.TargetNodeIDs {
 		nodeName = strings.TrimSpace(nodeName)
+		if nodeName == "" {
+			continue
+		}
+		hasExplicitTargets = true
 		if _, ok := nodes[nodeName]; nodeName != "" && ok {
 			targets[nodeName] = true
 		}
 	}
-	if len(targets) > 0 {
+	if hasExplicitTargets {
 		return targets
 	}
 	for nodeName := range nodes {

@@ -3857,10 +3857,32 @@ func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
 		"LISTEN 0 4096 192.168.1.10:6379 0.0.0.0:*",
 		"LISTEN 0 4096 127.0.0.1:9000 0.0.0.0:*",
 		"LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:*",
+		"tcp6       0      0 :::9090                 :::*                    LISTEN      1234/demo",
 	}
 	ports := unexpectedPublicListeningPorts(lines)
-	if !reflect.DeepEqual(ports, []string{"8080"}) {
-		t.Fatalf("unexpected ports = %#v, want only wildcard public port", ports)
+	if !reflect.DeepEqual(ports, []string{"8080", "9090"}) {
+		t.Fatalf("unexpected ports = %#v, want wildcard public ports only", ports)
+	}
+}
+
+func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
+	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true)
+	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {
+		t.Fatalf("truncated check = %#v, want failed truncated finding", truncated)
+	}
+
+	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false)
+	if unavailable.OK || !strings.Contains(unavailable.Observed, "not inspected") {
+		t.Fatalf("unavailable check = %#v, want failed unknown finding", unavailable)
+	}
+}
+
+func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "755 root root /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.NextAction, "other read/write") {
+		t.Fatalf("agent state check = %#v, want other-read finding", check)
 	}
 }
 
@@ -8647,7 +8669,8 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"*
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
-  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n755 root root /var/lib/devopsellence\n__DEVOPSELLENCE_STDERR__\n'
+  state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-751 root root /var/lib/devopsellence}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$state_stat"
   exit 0
 fi
 

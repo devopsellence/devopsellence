@@ -1918,6 +1918,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	var current solo.State
 	var environmentID string
 	var currentRelease corerelease.Release
+	var statusRelease corerelease.Release
 	var hasCurrent bool
 	var recoveryCandidate corerelease.Deployment
 	hasRecoveryCandidate := false
@@ -1935,12 +1936,18 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			}
 			if hasCurrent {
 				localReleaseKnown = true
-				expectedRevisions = soloExpectedStatusRevisions(current, currentRelease)
-				cohostedRevisions = soloCohostedStatusRevisions(current, currentRelease)
-				staleRevisions = soloStaleStatusRevisions(current, currentRelease, expectedRevisions)
-				expectedWorkloadRevision = strings.TrimSpace(currentRelease.Revision)
+				statusRelease = currentRelease
+				if runningDeployment, ok := soloLatestRunningDeploymentForEnvironment(current, environmentID); ok {
+					if release, releaseOK := current.Releases[runningDeployment.ReleaseID]; releaseOK {
+						statusRelease = release
+					}
+				}
+				expectedRevisions = soloExpectedStatusRevisions(current, statusRelease)
+				cohostedRevisions = soloCohostedStatusRevisions(current, statusRelease)
+				staleRevisions = soloStaleStatusRevisions(current, statusRelease, expectedRevisions)
+				expectedWorkloadRevision = strings.TrimSpace(statusRelease.Revision)
 				expectedRuntimeEnvironment, _ = soloRuntimeEnvironmentNameForNode(current, workspaceRoot, environmentName, "")
-				recoveryCandidate, hasRecoveryCandidate = soloLatestRunningDeployment(current, environmentID, currentRelease.ID)
+				recoveryCandidate, hasRecoveryCandidate = soloLatestRunningDeployment(current, environmentID, statusRelease.ID)
 				if hasRecoveryCandidate {
 					recoveryTargets = soloDeploymentTargetSet(recoveryCandidate, nodes)
 				}
@@ -2066,20 +2073,37 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	}
 	if allSettled && hasCurrent && hasRecoveryCandidate && len(opts.Nodes) == 0 && soloRecoveryTargetsChecked(recoveryTargets, recoveryChecked) {
 		var recovered corerelease.Deployment
+		var recoveredState solo.State
 		recoveredOK := false
 		if err := a.updateSoloState(func(recoveryState *solo.State) error {
 			var err error
-			recovered, recoveredOK, err = soloRecoverSettledRunningDeployment(recoveryState, environmentID, currentRelease.ID, nodes, recoveryChecked, recoveryRevisions)
+			recovered, recoveredOK, err = soloRecoverSettledRunningDeployment(recoveryState, environmentID, statusRelease.ID, nodes, recoveryChecked, recoveryRevisions)
+			if err == nil && recoveredOK {
+				recoveredState = *recoveryState
+			}
 			return err
 		}); err != nil {
 			appendPayloadWarning("remote status is settled, but local deployment recovery could not be persisted: " + err.Error())
 		} else if recoveredOK {
+			current = recoveredState
 			payload["recovered_deployment"] = map[string]any{
 				"id":             recovered.ID,
 				"release_id":     recovered.ReleaseID,
 				"status":         recovered.Status,
 				"status_message": recovered.StatusMessage,
 			}
+		}
+	}
+	if hasCurrent {
+		releasePayload := currentRelease
+		if _, release, ok, err := current.CurrentRelease(workspaceRoot, environmentName); err == nil && ok {
+			releasePayload = release
+		}
+		payload["current_release"] = soloStatusReleasePayload(releasePayload)
+	}
+	if hasCurrent && payload["current_deployment"] == nil {
+		if deployment, ok := soloLatestDeploymentForEnvironment(current, environmentID); ok {
+			payload["current_deployment"] = soloStatusDeploymentPayload(current, deployment)
 		}
 	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
@@ -2100,14 +2124,58 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	return nil
 }
 
-func soloLatestRunningDeployment(current solo.State, environmentID, releaseID string) (corerelease.Deployment, bool) {
-	if strings.TrimSpace(environmentID) == "" || strings.TrimSpace(releaseID) == "" {
-		return corerelease.Deployment{}, false
+func soloStatusReleasePayload(release corerelease.Release) map[string]any {
+	return map[string]any{
+		"id":           release.ID,
+		"revision":     release.Revision,
+		"image":        release.Image.Reference,
+		"created_at":   release.CreatedAt,
+		"target_nodes": release.TargetNodeIDs,
 	}
+}
+
+func soloLatestRunningDeployment(current solo.State, environmentID, releaseID string) (corerelease.Deployment, bool) {
+	return soloLatestDeploymentMatching(current, func(deployment corerelease.Deployment) bool {
+		return deployment.EnvironmentID == environmentID && deployment.ReleaseID == releaseID && deployment.Status == corerelease.DeploymentStatusRunning
+	})
+}
+
+func soloStatusDeploymentPayload(current solo.State, deployment corerelease.Deployment) map[string]any {
+	payload := map[string]any{
+		"id":             deployment.ID,
+		"release_id":     deployment.ReleaseID,
+		"kind":           deployment.Kind,
+		"status":         deployment.Status,
+		"status_message": deployment.StatusMessage,
+		"sequence":       deployment.Sequence,
+		"created_at":     deployment.CreatedAt,
+		"finished_at":    deployment.FinishedAt,
+		"target_nodes":   deployment.TargetNodeIDs,
+	}
+	if release, ok := current.Releases[deployment.ReleaseID]; ok {
+		payload["release_revision"] = release.Revision
+		payload["image"] = release.Image.Reference
+	}
+	return payload
+}
+
+func soloLatestDeploymentForEnvironment(current solo.State, environmentID string) (corerelease.Deployment, bool) {
+	return soloLatestDeploymentMatching(current, func(deployment corerelease.Deployment) bool {
+		return deployment.EnvironmentID == environmentID
+	})
+}
+
+func soloLatestRunningDeploymentForEnvironment(current solo.State, environmentID string) (corerelease.Deployment, bool) {
+	return soloLatestDeploymentMatching(current, func(deployment corerelease.Deployment) bool {
+		return deployment.EnvironmentID == environmentID && deployment.Status == corerelease.DeploymentStatusRunning
+	})
+}
+
+func soloLatestDeploymentMatching(current solo.State, match func(corerelease.Deployment) bool) (corerelease.Deployment, bool) {
 	var selected corerelease.Deployment
 	found := false
 	for _, deployment := range current.Deployments {
-		if deployment.EnvironmentID != environmentID || deployment.ReleaseID != releaseID || deployment.Status != corerelease.DeploymentStatusRunning {
+		if !match(deployment) {
 			continue
 		}
 		if !found || soloDeploymentSortsAfter(deployment, selected) {
@@ -2163,6 +2231,12 @@ func soloRecoverSettledRunningDeployment(current *solo.State, environmentID, rel
 	}
 	if err := current.SaveDeployment(selected); err != nil {
 		return corerelease.Deployment{}, false, err
+	}
+	if selected.Kind == corerelease.DeploymentKindRollback {
+		current.Current[environmentID] = selected.ReleaseID
+		if release, ok := current.Releases[selected.ReleaseID]; ok {
+			current.Snapshots[environmentID] = release.Snapshot
+		}
 	}
 	return selected, true, nil
 }

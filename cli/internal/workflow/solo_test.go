@@ -5762,6 +5762,130 @@ func TestSoloStatusComparesRemoteStatusToPublishedDesiredStateRevision(t *testin
 	if status["revision"] != "desired-state-hash" {
 		t.Fatalf("node = %#v, want published desired-state revision accepted", node)
 	}
+	currentRelease := jsonMapFromAny(t, payload["current_release"])
+	if currentRelease["id"] != release.ID || currentRelease["revision"] != "shortsha" || currentRelease["image"] != "demo:shortsha" {
+		t.Fatalf("current_release = %#v, want local release metadata", currentRelease)
+	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_test" || currentDeployment["status"] != corerelease.DeploymentStatusFailed || intValueAny(currentDeployment["sequence"]) != 1 {
+		t.Fatalf("current_deployment = %#v, want latest deployment metadata", currentDeployment)
+	}
+}
+
+func TestSoloStatusReportsInFlightRollbackDeployment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	environmentID, currentRelease, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	rollbackRelease := current.Releases["rel-1"]
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_rollback",
+		EnvironmentID: environmentID,
+		ReleaseID:     rollbackRelease.ID,
+		Kind:          corerelease.DeploymentKindRollback,
+		Sequence:      8,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"aaa1111","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	releasePayload := jsonMapFromAny(t, payload["current_release"])
+	if releasePayload["id"] != currentRelease.ID {
+		t.Fatalf("current_release = %#v, want existing current release", releasePayload)
+	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_rollback" || currentDeployment["release_id"] != rollbackRelease.ID || currentDeployment["release_revision"] != rollbackRelease.Revision || currentDeployment["image"] != rollbackRelease.Image.Reference || currentDeployment["kind"] != corerelease.DeploymentKindRollback {
+		t.Fatalf("current_deployment = %#v, want in-flight rollback deployment", currentDeployment)
+	}
+}
+
+func TestSoloStatusRecoveredRollbackReportsUpdatedCurrentRelease(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := current.Attachments[key]
+	attachment.NodeNames = []string{"node-a"}
+	current.Attachments[key] = attachment
+	environmentID, _, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	rollbackRelease := current.Releases["rel-1"]
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_rollback",
+		EnvironmentID: environmentID,
+		ReleaseID:     rollbackRelease.ID,
+		Kind:          corerelease.DeploymentKindRollback,
+		Sequence:      8,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"aaa1111","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	releasePayload := jsonMapFromAny(t, payload["current_release"])
+	if releasePayload["id"] != rollbackRelease.ID || releasePayload["revision"] != rollbackRelease.Revision {
+		t.Fatalf("current_release = %#v, want recovered rollback release", releasePayload)
+	}
+	updated, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Current[environmentID] != rollbackRelease.ID {
+		t.Fatalf("current release id = %q, want %q", updated.Current[environmentID], rollbackRelease.ID)
+	}
 }
 
 func TestSoloStatusAcceptsExpectedRevisionWhenStatusTimePredatesLocalDeploymentClock(t *testing.T) {
@@ -6055,6 +6179,10 @@ func TestSoloStatusRecoversInterruptedRunningDeployment(t *testing.T) {
 	recovered := jsonMapFromAny(t, payload["recovered_deployment"])
 	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
 		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
+	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_interrupted" || currentDeployment["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("current_deployment = %#v, want recovered settled deployment", currentDeployment)
 	}
 	updated, err := soloState.Read()
 	if err != nil {

@@ -20,6 +20,7 @@ Critical defaults:
 - Desired-state/status payloads backed by protobuf use protobuf JSON casing; Rails-owned JSON/API payloads use snake_case.
 - Product intent: one shared stable release version. Use `DEVOPSELLENCE_STABLE_VERSION`; do not add per-component stable version env vars or defaults.
 - Keep ordinary-tool escape hatches: SSH, Docker, files, logs, JSON, cloud CLIs.
+- CLI operator environments are Linux, macOS, and WSL on Windows. Do not treat native Windows as a supported CLI surface unless product direction explicitly changes.
 
 ## Layout
 

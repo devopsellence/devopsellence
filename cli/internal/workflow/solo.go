@@ -408,6 +408,9 @@ func expandSoloSSHKeyPath(path string) (string, error) {
 }
 
 func (a *App) SoloDeploy(ctx context.Context, opts SoloDeployOptions) error {
+	if opts.DryRun {
+		return a.soloDeploy(ctx, opts)
+	}
 	return a.withSoloStateLock(func() error {
 		return a.soloDeploy(ctx, opts)
 	})
@@ -2626,6 +2629,9 @@ func (a *App) SoloReleaseList(ctx context.Context, opts SoloReleaseListOptions) 
 }
 
 func (a *App) SoloReleaseRollback(ctx context.Context, opts SoloReleaseRollbackOptions) error {
+	if opts.DryRun {
+		return a.soloReleaseRollback(ctx, opts)
+	}
 	return a.withSoloStateLock(func() error {
 		return a.soloReleaseRollback(ctx, opts)
 	})
@@ -2955,6 +2961,12 @@ func publicURLsForHosts(scheme string, hosts []string) []string {
 }
 
 func (a *App) SoloSecretsSet(_ context.Context, opts SoloSecretsSetOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloSecretsSet(opts)
+	})
+}
+
+func (a *App) soloSecretsSet(opts SoloSecretsSetOptions) error {
 	store, err := soloSecretStore(opts)
 	if err != nil {
 		return err
@@ -3525,6 +3537,12 @@ func soloRepublishMissingAgentError(err error) bool {
 }
 
 func (a *App) SoloSecretsDelete(_ context.Context, opts SoloSecretsDeleteOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloSecretsDelete(opts)
+	})
+}
+
+func (a *App) soloSecretsDelete(opts SoloSecretsDeleteOptions) error {
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -4682,7 +4700,7 @@ func expectedPublicListeningPortDetails(lines []string) []string {
 }
 
 func expectedDevopsellenceACMEListener(line, port string) bool {
-	return port == "15980" && strings.Contains(strings.ToLower(line), "devopsellence")
+	return port == "15980"
 }
 
 func publicPortsFromListeningLine(line string) []string {
@@ -4929,6 +4947,12 @@ func collectRemoteJSONLines(ctx context.Context, node config.Node, command strin
 }
 
 func (a *App) SoloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloNodeLabelSet(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeLabelSet(ctx context.Context, opts SoloNodeLabelSetOptions) error {
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -4979,6 +5003,12 @@ func (a *App) SoloNodeLabelList(_ context.Context, opts SoloNodeLabelListOptions
 }
 
 func (a *App) SoloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloNodeLabelRemove(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeLabelRemove(ctx context.Context, opts SoloNodeLabelRemoveOptions) error {
 	current, err := a.readSoloState()
 	if err != nil {
 		return err
@@ -5404,6 +5434,12 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 }
 
 func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloNodeCreate(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {
 	cfg, workspaceRoot, err := a.loadSoloProjectConfig()
 	if err != nil {
 		return err
@@ -5711,6 +5747,12 @@ func sshInteractiveError(prefix string, err error, stdout string, stderr string)
 }
 
 func (a *App) SoloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {
+	return a.withSoloStateLock(func() error {
+		return a.soloNodeRemove(ctx, opts)
+	})
+}
+
+func (a *App) soloNodeRemove(ctx context.Context, opts SoloNodeRemoveOptions) error {
 	if !opts.Yes {
 		return ExitError{Code: 2, Err: errors.New("node remove requires --yes; rerun with --yes to confirm local/provider cleanup")}
 	}

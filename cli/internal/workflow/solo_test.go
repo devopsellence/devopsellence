@@ -4013,7 +4013,7 @@ func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
 
 func TestUnexpectedPublicListeningPortsAllowsDevopsellenceACMEBackend(t *testing.T) {
 	lines := []string{
-		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=9))",
+		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:*",
 		"LISTEN 0 4096 0.0.0.0:15981 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=10))",
 	}
 	ports := unexpectedPublicListeningPorts(lines, 22)

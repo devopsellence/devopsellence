@@ -7721,7 +7721,8 @@ run_root() {
 
 harden_sshd_password_auth() {
   [ "$HARDEN_SSH" = "true" ] || return 0
-  run_root sh -c 'command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || [ -x /usr/bin/sshd ]' || return 0
+  SSHD_BIN="$(run_root sh -c 'command -v sshd || { [ -x /usr/sbin/sshd ] && printf %%s /usr/sbin/sshd; } || { [ -x /usr/bin/sshd ] && printf %%s /usr/bin/sshd; }')"
+  [ -n "$SSHD_BIN" ] || return 0
   [ -d /etc/ssh ] || return 0
   echo "progress: hardening SSH password authentication"
   run_root mkdir -p /etc/ssh/sshd_config.d
@@ -7730,16 +7731,10 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 EOF_SSHD
   if [ -f /etc/ssh/sshd_config ] && ! run_root grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
-    tmp_sshd_config="$(mktemp)"
-    {
-      printf 'Include /etc/ssh/sshd_config.d/*.conf\n'
-      run_root cat /etc/ssh/sshd_config
-    } >"$tmp_sshd_config"
-    run_root cp "$tmp_sshd_config" /etc/ssh/sshd_config
-    rm -f "$tmp_sshd_config"
+    printf '\nInclude /etc/ssh/sshd_config.d/*.conf\n' | run_root tee -a /etc/ssh/sshd_config >/dev/null
   fi
-  run_root sshd -t
-  if ! run_root sshd -T | grep -qi '^passwordauthentication no$'; then
+  run_root "$SSHD_BIN" -t
+  if ! run_root "$SSHD_BIN" -T | grep -qi '^passwordauthentication no$'; then
     echo "SSH password hardening was written but is not effective according to sshd -T" >&2
     return 1
   fi

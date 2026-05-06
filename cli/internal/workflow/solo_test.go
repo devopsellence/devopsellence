@@ -5603,7 +5603,7 @@ func TestSoloStatusReportsInFlightRollbackDeployment(t *testing.T) {
 		t.Fatalf("current_release = %#v, want existing current release", releasePayload)
 	}
 	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
-	if currentDeployment["id"] != "dep_rollback" || currentDeployment["release_id"] != rollbackRelease.ID || currentDeployment["kind"] != corerelease.DeploymentKindRollback {
+	if currentDeployment["id"] != "dep_rollback" || currentDeployment["release_id"] != rollbackRelease.ID || currentDeployment["release_revision"] != rollbackRelease.Revision || currentDeployment["image"] != rollbackRelease.Image.Reference || currentDeployment["kind"] != corerelease.DeploymentKindRollback {
 		t.Fatalf("current_deployment = %#v, want in-flight rollback deployment", currentDeployment)
 	}
 }

@@ -4377,7 +4377,7 @@ func TestSoloAgentInstallReportsActiveVerificationFailure(t *testing.T) {
 
 func TestSoloAgentInstallReportsCustomBinaryTarget(t *testing.T) {
 	installFakeSoloCommands(t, nil)
-	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v9.9.9-custom (commit local, built now)")
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "custom build\nsecond line")
 	binaryPath := filepath.Join(t.TempDir(), "agent")
 	if err := os.WriteFile(binaryPath, []byte("agent binary"), 0o755); err != nil {
 		t.Fatal(err)

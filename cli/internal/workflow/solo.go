@@ -4414,13 +4414,7 @@ func soloAgentStatusReportCheck(ctx context.Context, node config.Node) soloRunti
 		check.NextAction = "check node clock skew, then rerun devopsellence doctor"
 		return check
 	}
-	if age > 5*time.Minute {
-		check.OK = false
-		check.Observed = fmt.Sprintf("status report at %s is stale: time=%s", statusPath, result.Status.Time)
-		check.NextAction = "restart devopsellence-agent and rerun devopsellence doctor"
-		return check
-	}
-	check.Observed = fmt.Sprintf("fresh status report at %s: phase=%s time=%s", statusPath, firstNonEmpty(result.Status.Phase, "unknown"), result.Status.Time)
+	check.Observed = fmt.Sprintf("status report at %s: phase=%s time=%s age=%s", statusPath, firstNonEmpty(result.Status.Phase, "unknown"), result.Status.Time, age.Round(time.Second))
 	return check
 }
 

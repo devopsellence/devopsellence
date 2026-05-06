@@ -2446,6 +2446,53 @@ func TestSoloDoctorFailsWhenAgentStatusReportTimeIsInFuture(t *testing.T) {
 	t.Fatalf("runtime_checks = %#v, want agent_status_report", checks)
 }
 
+func TestSoloDoctorAllowsOldSettledStatusReport(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"time":"2000-01-01T00:00:00Z","revision":"abc","phase":"settled"}` + "\n"}})
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	if err := app.SoloDoctor(context.Background()); err != nil {
+		t.Fatalf("SoloDoctor() error = %v, want old settled status accepted", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "agent_status_report" {
+			if check["ok"] != true || !strings.Contains(stringValueAny(check["detail"]), "age=") {
+				t.Fatalf("agent_status_report = %#v, want non-fatal age detail", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want agent_status_report", checks)
+}
+
 func TestSoloDoctorReportsSecurityFindings(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")

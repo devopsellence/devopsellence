@@ -32,6 +32,9 @@ not require npm or `npx`.
   one VM.
 - [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app
   example that maps a Kamal-style deployment to devopsellence solo.
+- [AI operator model](/concepts/agent-primary/) for the product thesis: a CLI
+  that gives AI operators structured feedback, safe boundaries, and facts they
+  can compose with the user's tools.
 - [Runtime model](/concepts/runtime-model/) for desired state, releases,
   services, nodes, and status.
 - [CLI reference](/reference/cli/) for the AI-operator-safe command surface.

@@ -3771,6 +3771,9 @@ func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
 	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {
 		t.Fatalf("truncated check = %#v, want failed truncated finding", truncated)
 	}
+	if !strings.Contains(truncated.NextAction, "ss -ltnp") || strings.Contains(truncated.NextAction, "rerun listening-port diagnostics") {
+		t.Fatalf("truncated next action = %q, want direct node inspection guidance", truncated.NextAction)
+	}
 	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false)
 	if marker.OK || !strings.Contains(marker.Observed, "truncated") {
 		t.Fatalf("marker check = %#v, want failed truncated finding", marker)

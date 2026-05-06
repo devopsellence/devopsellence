@@ -4009,7 +4009,7 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 	if portsTruncated || listenOutputHasTruncationMarker(portLines) {
 		check.OK = false
 		check.Observed = "unknown: listening port output was truncated"
-		check.NextAction = "rerun listening-port diagnostics with complete output before trusting public port hardening"
+		check.NextAction = "inspect listening ports directly on the node with ss -ltnp or netstat -ltnp before trusting public port hardening"
 		return check
 	}
 	if !listeningPortsInspectable(portLines) {

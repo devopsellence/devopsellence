@@ -4069,8 +4069,77 @@ func TestSoloAgentInstallReportsVerification(t *testing.T) {
 		t.Fatalf("SoloAgentInstall() error = %v", err)
 	}
 	payload := lastNDJSONEvent(t, &stdout)
-	if payload["action"] != "installed" || payload["target_version"] != "v2.0.0" || payload["version_status"] != "current" || payload["agent_active"] != true {
+	if payload["action"] != "installed" || payload["agent_version"] != "devopsellence v2.0.0 (commit new, built now)" || payload["target_version"] != "v2.0.0" || payload["version_status"] != "current" || payload["agent_active"] != true || payload["agent_active_check_ok"] != true {
 		t.Fatalf("payload = %#v, want verified installed agent", payload)
+	}
+	versionProbe := jsonMapFromAny(t, payload["agent_version_probe"])
+	if versionProbe["ok"] != true || versionProbe["value"] != "devopsellence v2.0.0 (commit new, built now)" {
+		t.Fatalf("agent_version_probe = %#v, want version probe details", versionProbe)
+	}
+	activeProbe := jsonMapFromAny(t, payload["agent_active_check"])
+	if activeProbe["ok"] != true || activeProbe["value"] != "active" {
+		t.Fatalf("agent_active_check = %#v, want active probe details", activeProbe)
+	}
+}
+
+func TestSoloAgentInstallReportsActiveVerificationFailure(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v2.0.0 (commit new, built now)")
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_ACTIVE_FAIL", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"}); err != nil {
+		t.Fatalf("SoloAgentInstall() error = %v", err)
+	}
+	payload := lastNDJSONEvent(t, &stdout)
+	if payload["agent_active"] != false || payload["agent_active_check_ok"] != false {
+		t.Fatalf("payload = %#v, want inactive verification failure details", payload)
+	}
+	activeProbe := jsonMapFromAny(t, payload["agent_active_check"])
+	if activeProbe["ok"] != false || !strings.Contains(stringValueAny(activeProbe["error"]), "agent inactive") {
+		t.Fatalf("agent_active_check = %#v, want active probe error", activeProbe)
+	}
+}
+
+func TestSoloAgentInstallFailsWhenVersionVerificationFails(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION_FAIL", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentInstall() error = nil, want verification failure")
+	}
+	if !strings.Contains(err.Error(), "agent install verification failed") || !strings.Contains(err.Error(), "version probe failed") {
+		t.Fatalf("error = %v, want version probe failure", err)
 	}
 }
 
@@ -8895,6 +8964,10 @@ if [[ "$command" == *"docker info"* ]]; then
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"systemctl is-active devopsellence-agent"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_AGENT_ACTIVE_FAIL:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__3\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\nagent inactive\n'
+    exit 0
+  fi
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nactive\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi

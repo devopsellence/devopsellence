@@ -3913,6 +3913,18 @@ func TestSoloStatFieldsPreservesWhitespacePath(t *testing.T) {
 	}
 }
 
+func TestRemoteStatPathCommandRetriesWithSudoAfterDirectStat(t *testing.T) {
+	command := remoteStatPathCommand("/var/lib/dev ops")
+	direct := strings.Index(command, "stat -c \"$format\" '/var/lib/dev ops' 2>/dev/null")
+	sudo := strings.Index(command, "sudo -n stat -c \"$format\" '/var/lib/dev ops'")
+	if direct < 0 || sudo < 0 || sudo < direct {
+		t.Fatalf("command = %q, want direct stat followed by sudo retry", command)
+	}
+	if !strings.Contains(command, "%a\\t%U\\t%G\\t%n") {
+		t.Fatalf("command = %q, want tab-delimited stat format", command)
+	}
+}
+
 func TestSoloAgentStatePermissionsQuotesRemediationPath(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_STAT", "755 root root /var/lib/dev ops")

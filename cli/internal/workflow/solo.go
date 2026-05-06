@@ -7612,7 +7612,7 @@ func remoteSSHPasswordAuthCommand() string {
 
 func remoteStatPathCommand(target string) string {
 	quoted := shellQuote(target)
-	return fmt.Sprintf("if [ -e %[1]s ]; then stat -c '%%a\\t%%U\\t%%G\\t%%n' %[1]s; elif command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then sudo -n stat -c '%%a\\t%%U\\t%%G\\t%%n' %[1]s; else echo missing; fi", quoted)
+	return fmt.Sprintf("format='%%a\\t%%U\\t%%G\\t%%n'; if stat -c \"$format\" %[1]s 2>/dev/null; then exit 0; fi; if command -v sudo >/dev/null 2>&1 && sudo -n test -e %[1]s >/dev/null 2>&1; then exec sudo -n stat -c \"$format\" %[1]s; fi; if [ -e %[1]s ]; then exec stat -c \"$format\" %[1]s; fi; echo missing", quoted)
 }
 
 func remoteManagedContainerMountsCommand() string {

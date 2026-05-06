@@ -3788,7 +3788,8 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	ports := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
 	payload["ports"] = ports
 	portLines, _ := ports["lines"].([]string)
-	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines)
+	portsTruncated, _ := ports["truncated"].(bool)
+	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated)
 	payload["security"] = security
 	if !diagnosticSectionsOK(agent, dockerSnapshot, ports) {
 		diagnoseOK = false
@@ -4003,20 +4004,20 @@ func soloAgentObservedVersion(observed string) string {
 	return ""
 }
 
-func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string) map[string]any {
-	checks := soloNodeSecurityChecks(ctx, node, portLines)
+func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) map[string]any {
+	checks := soloNodeSecurityChecks(ctx, node, portLines, portsTruncated)
 	items, ok := soloNodeSecurityCheckItems(checks)
 	return map[string]any{"ok": ok, "checks": items}
 }
 
-func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string) []soloSecurityCheck {
+func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) []soloSecurityCheck {
 	return []soloSecurityCheck{
 		soloSSHPasswordAuthCheck(ctx, node),
 		soloAgentStatePermissionsCheck(ctx, node),
 		soloTLSKeyPermissionsCheck(ctx, node),
 		soloDockerSocketMountsCheck(ctx, node),
 		soloPrivilegedContainersCheck(ctx, node),
-		soloPublicListeningPortsCheck(ctx, node, portLines),
+		soloPublicListeningPortsCheck(ctx, node, portLines, portsTruncated),
 	}
 }
 
@@ -4094,9 +4095,9 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + stateDir
 		return check
 	}
-	if mode&0o022 != 0 {
+	if mode&0o026 != 0 {
 		check.OK = false
-		check.NextAction = "remove group/other write access from the agent state directory, for example chmod go-w " + stateDir
+		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + stateDir
 	}
 	return check
 }
@@ -4181,7 +4182,7 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 	return check
 }
 
-func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string) soloSecurityCheck {
+func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) soloSecurityCheck {
 	check := soloSecurityCheck{Name: "public_listening_ports", OK: true, Severity: "medium"}
 	if portLines == nil {
 		diag := runRemoteDiagnostic(ctx, node, remoteListeningPortsCommand())
@@ -4193,6 +4194,18 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 		}
 		portLines = splitNonFinalEmptyLines(diag.Stdout)
 	}
+	if portsTruncated {
+		check.OK = false
+		check.Observed = "unknown: listening port output was truncated"
+		check.NextAction = "rerun listening-port diagnostics with complete output before trusting public port hardening"
+		return check
+	}
+	if !listeningPortsInspectable(portLines) {
+		check.OK = false
+		check.Observed = "unknown: listening ports were not inspected"
+		check.NextAction = "install ss or netstat on the node, then rerun devopsellence node diagnose"
+		return check
+	}
 	ports := unexpectedPublicListeningPorts(portLines)
 	if len(ports) > 0 {
 		check.OK = false
@@ -4202,6 +4215,27 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 	}
 	check.Observed = "only expected public ports detected"
 	return check
+}
+
+func listeningPortsInspectable(lines []string) bool {
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "no ss or netstat available") {
+			return false
+		}
+		if len(publicPortsFromListeningLine(line)) > 0 || hasListenAddress(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasListenAddress(line string) bool {
+	for _, field := range strings.Fields(line) {
+		if _, _, ok := splitListenAddress(field); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func unexpectedPublicListeningPorts(lines []string) []string {
@@ -4238,6 +4272,18 @@ func publicPortsFromListeningLine(line string) []string {
 
 func splitListenAddress(value string) (string, string, bool) {
 	value = strings.Trim(value, "[]")
+	if strings.HasPrefix(value, ":::") {
+		port := strings.Trim(strings.TrimPrefix(value, ":::"), "*")
+		if port == "" {
+			return "", "", false
+		}
+		for _, r := range port {
+			if r < '0' || r > '9' {
+				return "", "", false
+			}
+		}
+		return "::", port, true
+	}
 	idx := strings.LastIndex(value, ":")
 	if idx < 0 || idx == len(value)-1 {
 		return "", "", false
@@ -4705,7 +4751,7 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			failed = true
 		}
 		results = append(results, versionResult)
-		for _, check := range soloNodeSecurityChecks(ctx, node, nil) {
+		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false) {
 			result := map[string]any{
 				"node":     name,
 				"check":    "security_" + check.Name,

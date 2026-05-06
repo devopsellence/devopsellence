@@ -9208,7 +9208,7 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 	script := soloAgentInstallScript(soloAgentInstallScriptOptions{BaseURL: "https://example.test"})
 	for _, want := range []string{
 		"--mode=solo",
-		`--auth-state-path="/var/lib/devopsellence/auth.json"`,
+		`--auth-state-path="/var/lib/devopsellence/private/auth.json"`,
 		`--desired-state-override-path="/var/lib/devopsellence/desired-state-override.json"`,
 		"AGENT_BIN=/usr/local/bin/devopsellence-agent",
 		`ARTIFACT_NAME="agent-$OS-$ARCH"`,
@@ -9216,6 +9216,7 @@ func TestSoloAgentInstallScriptConfiguresSoloMode(t *testing.T) {
 		"$BASE_URL/agent/download",
 		"$BASE_URL/agent/checksums",
 		`run_root chmod 711 "$STATE_DIR"`,
+		`run_root chmod 700 "$STATE_DIR/private"`,
 		"HARDEN_SSH='false'",
 	} {
 		if !strings.Contains(script, want) {
@@ -9252,7 +9253,7 @@ func TestSoloAgentInstallScriptUsesConfiguredStateDir(t *testing.T) {
 
 	for _, want := range []string{
 		"STATE_DIR='/tmp/devopsellence-test-state'",
-		`--auth-state-path="/tmp/devopsellence-test-state/auth.json"`,
+		`--auth-state-path="/tmp/devopsellence-test-state/private/auth.json"`,
 		`--desired-state-override-path="/tmp/devopsellence-test-state/desired-state-override.json"`,
 		`--envoy-bootstrap-path="/tmp/devopsellence-test-state/envoy/envoy.yaml"`,
 	} {
@@ -9269,7 +9270,7 @@ func TestSoloAgentInstallScriptQuotesSystemdExecStartPaths(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		`--auth-state-path="/tmp/devopsellence state/\"quoted\"%%value/auth.json"`,
+		`--auth-state-path="/tmp/devopsellence state/\"quoted\"%%value/private/auth.json"`,
 		`--desired-state-override-path="/tmp/devopsellence state/\"quoted\"%%value/desired-state-override.json"`,
 		`--envoy-bootstrap-path="/tmp/devopsellence state/\"quoted\"%%value/envoy/envoy.yaml"`,
 	} {

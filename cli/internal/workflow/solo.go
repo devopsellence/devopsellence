@@ -7702,7 +7702,7 @@ func soloAgentInstallScript(opts soloAgentInstallScriptOptions) string {
 	if stateDir == "" {
 		stateDir = "/var/lib/devopsellence"
 	}
-	authStatePath := stateDir + "/auth.json"
+	authStatePath := stateDir + "/private/auth.json"
 	overridePath := stateDir + "/desired-state-override.json"
 	envoyBootstrapPath := stateDir + "/envoy/envoy.yaml"
 	agentVersion := strings.TrimSpace(opts.AgentVersion)
@@ -7816,10 +7816,11 @@ if ! docker_ready; then
 fi
 harden_sshd_password_auth
 
-run_root mkdir -p "$STATE_DIR" "$STATE_DIR/envoy"
+run_root mkdir -p "$STATE_DIR" "$STATE_DIR/envoy" "$STATE_DIR/private"
 # The parent must remain executable so Envoy can open the bind-mounted
 # bootstrap/socket directory; sensitive state files are written 0600/0640.
 run_root chmod 711 "$STATE_DIR"
+run_root chmod 700 "$STATE_DIR/private"
 TMP_BIN="$(mktemp)"
 TMP_SUMS="$(mktemp)"
 cleanup() {

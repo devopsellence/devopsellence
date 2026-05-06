@@ -3863,7 +3863,9 @@ func soloSSHPasswordAuthCheck(ctx context.Context, node config.Node) soloSecurit
 		check.Observed = "unknown: sshd password authentication setting not found"
 		check.NextAction = "rerun devopsellence node diagnose after SSH daemon configuration can be inspected"
 	default:
+		check.OK = false
 		check.Observed = "PasswordAuthentication " + value
+		check.NextAction = "set PasswordAuthentication to no"
 	}
 	return check
 }
@@ -3885,12 +3887,14 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 		check.NextAction = "reinstall or restart the devopsellence agent so the state directory exists"
 		return check
 	}
-	check.Observed = strings.TrimSpace(diag.Stdout)
 	mode, err := strconv.ParseInt(fields[0], 8, 64)
 	if err != nil {
+		check.OK = false
 		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
+		check.NextAction = "reinstall or restart the devopsellence agent so the state directory permissions can be inspected"
 		return check
 	}
+	check.Observed = strings.TrimSpace(diag.Stdout)
 	if len(fields) >= 2 && fields[1] != "root" {
 		check.OK = false
 		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + stateDir
@@ -3921,7 +3925,9 @@ func soloTLSKeyPermissionsCheck(ctx context.Context, node config.Node) soloSecur
 	check.Observed = strings.TrimSpace(diag.Stdout)
 	mode, err := strconv.ParseInt(fields[0], 8, 64)
 	if err != nil {
+		check.OK = false
 		check.Observed = "unknown: " + strings.TrimSpace(diag.Stdout)
+		check.NextAction = "reinstall or restart the devopsellence agent so the TLS key permissions can be inspected"
 		return check
 	}
 	if mode&0o037 != 0 {
@@ -3986,14 +3992,16 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool) soloSecurityCheck {
 	check := soloSecurityCheck{Name: "public_listening_ports", OK: true, Severity: "medium"}
 	if portLines == nil {
-		diag := runRemoteDiagnostic(ctx, node, remoteListeningPortsCommand())
-		if diag.Err != nil || diag.ExitCode != 0 {
+		linesResult := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
+		if errorMessage, ok := linesResult["error"].(string); ok {
 			check.OK = false
-			check.Observed = "unknown: " + diagnosticErrorMessage(diag)
+			check.Observed = "unknown: " + errorMessage
 			check.NextAction = "rerun devopsellence node diagnose after listening ports can be inspected"
 			return check
 		}
-		portLines = splitNonFinalEmptyLines(diag.Stdout)
+		parsedLines, _ := linesResult["lines"].([]string)
+		portLines = parsedLines
+		portsTruncated = linesResult["truncated"].(bool)
 	}
 	if portsTruncated {
 		check.OK = false
@@ -4487,7 +4495,10 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			}
 			results = append(results, result)
 		}
-		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false) {
+		portsResult := collectRemoteLimitedLines(ctx, node, remoteListeningPortsCommand(), soloDiagnosePortsLineLimit)
+		parsedPortLines, _ := portsResult["lines"].([]string)
+		portsTruncated, _ := portsResult["truncated"].(bool)
+		for _, check := range soloNodeSecurityChecks(ctx, node, parsedPortLines, portsTruncated) {
 			result := map[string]any{
 				"node":     name,
 				"check":    "security_" + check.Name,

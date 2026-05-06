@@ -3775,12 +3775,39 @@ func TestSoloSSHPasswordAuthCheckFailsWhenSettingUnknown(t *testing.T) {
 	}
 }
 
+func TestSoloSSHPasswordAuthCheckFailsWhenSettingNotBoolean(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "true")
+	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "PasswordAuthentication") {
+		t.Fatalf("ssh password auth check = %#v, want failed unknown value finding", check)
+	}
+}
+
 func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "755 root root /var/lib/devopsellence")
 	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
 	if check.OK || !strings.Contains(check.NextAction, "other read/write") {
 		t.Fatalf("agent state check = %#v, want other-read finding", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsFailsOnBadModeFormat(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "not-a-mode root root /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || check.NextAction == "" {
+		t.Fatalf("agent state check = %#v, want parse-failure finding", check)
+	}
+}
+
+func TestSoloTLSKeyPermissionsFailsOnBadModeFormat(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT", "not-a-mode root root /var/lib/devopsellence/ingress-key.pem")
+	check := soloTLSKeyPermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || check.NextAction == "" {
+		t.Fatalf("tls key permissions check = %#v, want parse-failure finding", check)
 	}
 }
 
@@ -8270,10 +8297,11 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"sshd -T"*
   exit 0
 fi
 
-if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
-  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nmissing\n__DEVOPSELLENCE_STDERR__\n'
-  exit 0
-fi
+	if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
+		key_stat="${DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT:-missing}"
+		printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$key_stat"
+		exit 0
+	fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
   state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-751 root root /var/lib/devopsellence}"

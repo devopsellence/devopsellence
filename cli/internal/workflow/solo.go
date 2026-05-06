@@ -5955,6 +5955,7 @@ type runtimeContractProvenance struct {
 	Created                 bool
 	PortExplicit            bool
 	HealthcheckPathExplicit bool
+	ConfigFieldPrefix       string
 }
 
 func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.ProjectConfig, environmentName string, created bool) runtimeContractProvenance {
@@ -5963,6 +5964,7 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 	if !ok || created {
 		return provenance
 	}
+	provenance.ConfigFieldPrefix = fmt.Sprintf("services.%s", serviceName)
 	if baseService, ok := base.Services[serviceName]; ok {
 		provenance.PortExplicit = hasNonDefaultHTTPPortConfig(baseService.Ports)
 		provenance.HealthcheckPathExplicit = hasNonDefaultHealthcheckPathConfig(baseService.Healthcheck)
@@ -5973,8 +5975,13 @@ func initRuntimeContractProvenance(base config.ProjectConfig, resolved config.Pr
 	}
 	if overlay, ok := base.Environments[envName]; ok {
 		if serviceOverlay, ok := overlay.Services[serviceName]; ok {
-			provenance.PortExplicit = provenance.PortExplicit || hasHTTPPortConfig(serviceOverlay.Ports)
-			provenance.HealthcheckPathExplicit = provenance.HealthcheckPathExplicit || hasHealthcheckPathOverlayConfig(serviceOverlay.Healthcheck)
+			portExplicit := hasHTTPPortConfig(serviceOverlay.Ports)
+			healthcheckPathExplicit := hasHealthcheckPathOverlayConfig(serviceOverlay.Healthcheck)
+			if portExplicit || healthcheckPathExplicit {
+				provenance.ConfigFieldPrefix = fmt.Sprintf("environments.%s.services.%s", envName, serviceName)
+			}
+			provenance.PortExplicit = provenance.PortExplicit || portExplicit
+			provenance.HealthcheckPathExplicit = provenance.HealthcheckPathExplicit || healthcheckPathExplicit
 		}
 	}
 	return provenance
@@ -6002,8 +6009,12 @@ func hasNonDefaultHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) boo
 	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != "" && strings.TrimSpace(healthcheck.Path) != config.DefaultHealthcheckPath
 }
 
+func hasHealthcheckPathConfig(healthcheck *config.HTTPHealthcheck) bool {
+	return healthcheck != nil && strings.TrimSpace(healthcheck.Path) != ""
+}
+
 func hasHealthcheckPathOverlayConfig(healthcheck *config.HTTPHealthcheckOverlay) bool {
-	return healthcheck != nil && healthcheck.Path != nil && strings.TrimSpace(*healthcheck.Path) != ""
+	return healthcheck != nil && healthcheck.Path != nil
 }
 
 func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, provenance runtimeContractProvenance) map[string]any {
@@ -6052,12 +6063,15 @@ func initRuntimeContract(cfg config.ProjectConfig, discovered discovery.Result, 
 		contract["healthcheck_path_source"] = healthcheckPathSource
 		contract["healthcheck_confidence"] = healthcheckConfidence
 	}
-	contract["agent_hints"] = initRuntimeAgentHints(serviceName, contract)
+	contract["agent_hints"] = initRuntimeAgentHints(serviceName, provenance.ConfigFieldPrefix, contract)
 	return contract
 }
 
-func initRuntimeAgentHints(serviceName string, contract map[string]any) []map[string]any {
+func initRuntimeAgentHints(serviceName string, configFieldPrefix string, contract map[string]any) []map[string]any {
 	hints := []map[string]any{}
+	if configFieldPrefix == "" {
+		configFieldPrefix = fmt.Sprintf("services.%s", serviceName)
+	}
 	if contract["port_source"] == "default" {
 		hints = append(hints, map[string]any{
 			"action": "inspect_app_port",
@@ -6068,8 +6082,8 @@ func initRuntimeAgentHints(serviceName string, contract map[string]any) []map[st
 				"Alternatively add EXPOSE <port> to the Dockerfile so future init/deploy runs can infer it deterministically.",
 			},
 			"config_fields": []string{
-				fmt.Sprintf("services.%s.ports[http].port", serviceName),
-				fmt.Sprintf("services.%s.healthcheck.port", serviceName),
+				fmt.Sprintf("%s.ports[http].port", configFieldPrefix),
+				fmt.Sprintf("%s.healthcheck.port", configFieldPrefix),
 			},
 		})
 	}
@@ -6083,7 +6097,7 @@ func initRuntimeAgentHints(serviceName string, contract map[string]any) []map[st
 				"If the app has no health endpoint, add one or configure a path that returns HTTP 2xx when the service is ready.",
 			},
 			"config_fields": []string{
-				fmt.Sprintf("services.%s.healthcheck.path", serviceName),
+				fmt.Sprintf("%s.healthcheck.path", configFieldPrefix),
 			},
 		})
 	}

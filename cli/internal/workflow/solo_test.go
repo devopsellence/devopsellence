@@ -9375,6 +9375,65 @@ func TestSoloInitKeepsGeneratedDefaultsLowConfidenceWithUnrelatedOverlay(t *test
 	}
 }
 
+func TestSoloInitKeepsEditedBaseDefaultRuntimeContractLowConfidence(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	web := cfg.Services["web"]
+	web.Env = map[string]string{"RAILS_ENV": "production"}
+	cfg.Services["web"] = web
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+
+	if err := app.SoloInit(context.Background(), SoloInitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	runtimeContract := jsonMapFromAny(t, payload["runtime_contract"])
+	if runtimeContract["port_source"] != "default" || runtimeContract["port_confidence"] != "low" || runtimeContract["healthcheck_path_source"] != "default" || runtimeContract["healthcheck_confidence"] != "low" {
+		t.Fatalf("runtime_contract = %#v, want unrelated base service edits to keep default runtime contract values low confidence", runtimeContract)
+	}
+	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 2 {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want port and healthcheck hints for generated/default runtime fields", hints)
+	}
+}
+
+func TestSoloInitRuntimeContractTreatsBlankOverlayHealthcheckAsExplicitDefault(t *testing.T) {
+	base := config.DefaultProjectConfig("solo", "demo", "production")
+	web := base.Services["web"]
+	web.Healthcheck = &config.HTTPHealthcheck{Path: "/health", Port: config.DefaultWebPort}
+	base.Services["web"] = web
+	blankPath := "   "
+	base.Environments = map[string]config.EnvironmentOverlay{
+		"staging": {
+			Services: map[string]config.ServiceConfigOverlay{
+				"web": {
+					Healthcheck: &config.HTTPHealthcheckOverlay{Path: &blankPath},
+				},
+			},
+		},
+	}
+	resolved, err := config.ResolveEnvironmentConfig(base, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contract := initRuntimeContract(resolved, discovery.Result{}, initRuntimeContractProvenance(base, resolved, "staging", false))
+	if contract["healthcheck_path"] != config.DefaultHealthcheckPath || contract["healthcheck_path_source"] != "config" || contract["healthcheck_confidence"] != "high" {
+		t.Fatalf("runtime_contract = %#v, want blank overlay path treated as explicit default config", contract)
+	}
+	if hints, ok := contract["agent_hints"].([]map[string]any); !ok || len(hints) != 1 || hints[0]["action"] != "inspect_app_port" {
+		t.Fatalf("runtime_contract.agent_hints = %#v, want only port hint for explicit blank overlay healthcheck reset", contract["agent_hints"])
+	}
+}
+
 func TestSoloInitReportsConfigPortContract(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "Dockerfile"), []byte("FROM nginx:1.27-alpine\nEXPOSE 8080\n"), 0o644); err != nil {

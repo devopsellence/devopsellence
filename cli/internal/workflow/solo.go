@@ -4846,7 +4846,37 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		return err
 	}
 
-	return a.Printer.PrintResultEvent("devopsellence agent install", map[string]any{"node": opts.Node, "action": "installed"})
+	agentVersionProbe := collectRemoteText(ctx, node, remoteAgentVersionCommand())
+	agentVersion := stringFromMap(agentVersionProbe, "value")
+	if agentVersionProbe["ok"] != true || strings.TrimSpace(agentVersion) == "" {
+		return fmt.Errorf("agent install verification failed: %s", collectRemoteTextFailure(agentVersionProbe))
+	}
+	target := soloAgentTargetVersion()
+	versionStatus := soloAgentVersionStatus(agentVersion, target)
+	if strings.TrimSpace(agentVersion) == "missing" {
+		return fmt.Errorf("agent install verification failed: remote agent version is missing after install")
+	}
+	if strings.TrimSpace(opts.AgentBinary) != "" {
+		target = "custom"
+		versionStatus = "custom"
+	} else if versionStatus == "unknown" {
+		return fmt.Errorf("agent install verification failed: remote agent version is unknown or unparseable: %q", strings.TrimSpace(agentVersion))
+	} else if versionStatus == "mismatch" {
+		return fmt.Errorf("agent install verification failed: remote agent version %q does not match target %q", agentVersion, target)
+	}
+	activeProbe := collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent")
+	agentActive := activeProbe["ok"] == true && stringFromMap(activeProbe, "value") == "active"
+	return a.Printer.PrintResultEvent("devopsellence agent install", map[string]any{
+		"node":                  opts.Node,
+		"action":                "installed",
+		"agent_version":         agentVersion,
+		"agent_version_probe":   agentVersionProbe,
+		"target_version":        target,
+		"version_status":        versionStatus,
+		"agent_active":          agentActive,
+		"agent_active_check":    activeProbe,
+		"agent_active_check_ok": activeProbe["ok"] == true,
+	})
 
 }
 
@@ -4879,7 +4909,7 @@ func (a *App) SoloAgentUpgrade(ctx context.Context, opts SoloAgentUpgradeOptions
 		return fmt.Errorf("agent upgrade verification failed: %s", collectRemoteTextFailure(afterResult))
 	}
 	if versionStatus == "unknown" {
-		return fmt.Errorf("agent upgrade verification failed: remote agent version is unknown: %s", after)
+		return fmt.Errorf("agent upgrade verification failed: remote agent version is unknown or unparseable: %q", strings.TrimSpace(after))
 	}
 	if versionStatus == "mismatch" {
 		return fmt.Errorf("agent upgrade verification failed: remote agent version %q does not match target %q", after, target)

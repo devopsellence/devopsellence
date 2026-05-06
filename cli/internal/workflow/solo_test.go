@@ -5753,7 +5753,7 @@ func TestSoloStatusReportsInFlightRollbackDeployment(t *testing.T) {
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
 	}
-	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"bbb2222","phase":"settled"}` + "\n"}})
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"aaa1111","phase":"settled"}` + "\n"}})
 
 	var stdout bytes.Buffer
 	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}

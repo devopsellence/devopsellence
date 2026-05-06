@@ -16,6 +16,10 @@ type soloInstallReporter struct {
 }
 
 func newSoloInstallReporter(_ context.Context, printer output.Printer, node string) soloInstallReporter {
+	return newSoloAgentReporter(printer, node, "devopsellence agent install")
+}
+
+func newSoloAgentReporter(printer output.Printer, node, operation string) soloInstallReporter {
 	return soloInstallReporter{
 		progress: func(message string) {
 			message = strings.TrimSpace(message)
@@ -23,7 +27,7 @@ func newSoloInstallReporter(_ context.Context, printer output.Printer, node stri
 				return
 			}
 			_ = printer.PrintEvent("progress", map[string]any{
-				"operation": "devopsellence agent install",
+				"operation": operation,
 				"node":      node,
 				"message":   message,
 			})

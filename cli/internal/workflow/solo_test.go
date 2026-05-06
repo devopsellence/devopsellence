@@ -897,6 +897,10 @@ func TestSoloNodeCreateAttachRollsBackExistingSSHStateWhenRepublishFails(t *test
 set -euo pipefail
 command="${!#}"
 if [[ "$command" == "true" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" ]]; then
+    printf 'ssh connect failed\n' >&2
+    exit 255
+  fi
   exit 0
 fi
 if [[ "$command" == *"docker image inspect"* ]]; then
@@ -1156,6 +1160,7 @@ func TestSoloAffectedNodesForNodeWithReleaseStateSkipsStatelessAttachments(t *te
 func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["worker"] = config.ServiceConfig{Command: []string{"bin/worker"}}
 	cfg.Ingress = &config.IngressConfig{
 		Hosts: []string{"*"},
 		Rules: []config.IngressRuleConfig{{
@@ -1213,6 +1218,7 @@ func TestSoloStatusUsesResolvedEnvironmentOverlay(t *testing.T) {
 	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["worker"] = config.ServiceConfig{Command: []string{"bin/worker"}}
 	cfg.Ingress = &config.IngressConfig{
 		Hosts: []string{"prod.example.com"},
 		Rules: []config.IngressRuleConfig{{
@@ -2298,6 +2304,219 @@ func TestSoloDoctorScopesRuntimeChecksToCurrentEnvironment(t *testing.T) {
 			t.Fatalf("runtime check node = %v, want only node-a", check["node"])
 		}
 	}
+}
+
+func TestSoloDoctorReportsSecurityFindings(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want security finding failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %#v, want false", payload["ok"])
+	}
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "security_ssh_password_auth" {
+			if check["ok"] != false || check["severity"] != "high" || !strings.Contains(stringValueAny(check["detail"]), "yes") {
+				t.Fatalf("security_ssh_password_auth = %#v, want high severity finding", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want security_ssh_password_auth", checks)
+}
+
+func TestSoloDoctorReportsAgentVersionSkew(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v1.9.0 (commit old, built earlier)")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want version skew failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "agent_version" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["next_action"]), "agent upgrade") {
+				t.Fatalf("agent_version = %#v, want upgrade guidance", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want agent_version", checks)
+}
+
+func TestSoloDoctorSkipsSecurityDiagnosticsWhenSSHFails(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	commandLog := filepath.Join(t.TempDir(), "ssh-commands.log")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG", commandLog)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL", "1")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want ssh failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "security_ssh_password_auth" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["detail"]), "skipped") || strings.Contains(stringValueAny(check["detail"]), "yes") {
+				commands, _ := os.ReadFile(commandLog)
+				t.Fatalf("security_ssh_password_auth = %#v, want skipped security check; commands:\n%s", check, commands)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want skipped security_ssh_password_auth", checks)
+}
+
+func TestSoloDoctorFailsWhenAgentVersionUnknown(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "missing")
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
+	err := app.SoloDoctor(context.Background())
+	if err == nil {
+		t.Fatal("SoloDoctor() error = nil, want unknown version failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "agent_version" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["next_action"]), "node diagnose") {
+				t.Fatalf("agent_version = %#v, want diagnose guidance", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want agent_version", checks)
 }
 
 func TestSoloStatusReturnsFailureWhenNodeStatusReadFails(t *testing.T) {
@@ -3616,9 +3835,323 @@ func TestSoloNodeDiagnoseCollectsRuntimeSnapshot(t *testing.T) {
 	if len(items) != 1 || jsonMapFromAny(t, items[0])["Names"] != "svc-production-web" {
 		t.Fatalf("containers = %#v, want web container", containers)
 	}
+	agent := jsonMapFromAny(t, payload["agent"])
+	agentVersion := jsonMapFromAny(t, agent["version"])
+	if !strings.Contains(stringValueAny(agentVersion["value"]), "devopsellence dev") || agent["version_status"] != "target_unknown" {
+		t.Fatalf("agent = %#v, want remote version with unknown dev target", agent)
+	}
 	status := jsonMapFromAny(t, payload["status"])
 	if status["phase"] != "settled" {
 		t.Fatalf("status = %#v, want settled phase", status)
+	}
+	security := jsonMapFromAny(t, payload["security"])
+	if security["ok"] != true {
+		t.Fatalf("security = %#v, want ok", security)
+	}
+	securityChecks := jsonArrayFromMap(t, security, "checks")
+	securityNames := map[string]bool{}
+	for _, item := range securityChecks {
+		check := jsonMapFromAny(t, item)
+		securityNames[stringValueAny(check["name"])] = true
+	}
+	for _, want := range []string{"ssh_password_auth", "agent_state_permissions", "tls_key_permissions", "docker_socket_mounts", "privileged_containers", "public_listening_ports"} {
+		if !securityNames[want] {
+			t.Fatalf("security checks = %#v, missing %s", securityChecks, want)
+		}
+	}
+}
+
+func TestSoloNodeDiagnoseReportsSecurityFindings(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "yes")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloNodeDiagnose() error = nil, want security finding failure")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("error = %#v, want ExitError code 1", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != false {
+		t.Fatalf("payload ok = %#v, want false", payload["ok"])
+	}
+	security := jsonMapFromAny(t, payload["security"])
+	if security["ok"] != false {
+		t.Fatalf("security = %#v, want not ok", security)
+	}
+	checks := jsonArrayFromMap(t, security, "checks")
+	findings := map[string]map[string]any{}
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		findings[stringValueAny(check["name"])] = check
+	}
+	if findings["ssh_password_auth"]["ok"] != false || !strings.Contains(stringValueAny(findings["ssh_password_auth"]["observed"]), "yes") {
+		t.Fatalf("ssh_password_auth = %#v, want disabled finding", findings["ssh_password_auth"])
+	}
+	if findings["docker_socket_mounts"]["ok"] != false || !strings.Contains(stringValueAny(findings["docker_socket_mounts"]["observed"]), "/var/run/docker.sock") {
+		t.Fatalf("docker_socket_mounts = %#v, want socket finding", findings["docker_socket_mounts"])
+	}
+}
+
+func TestSoloNodeDiagnoseSecurityReportsPortDiagnosticError(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"abc","phase":"settled"}` + "\n"}})
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PORTS_FAIL", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloNodeDiagnose(context.Background(), SoloNodeDiagnoseOptions{Node: "node-a"})
+	if err == nil {
+		t.Fatal("SoloNodeDiagnose() error = nil, want port diagnostic failure")
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	security := jsonMapFromAny(t, payload["security"])
+	checks := jsonArrayFromMap(t, security, "checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["name"] == "public_listening_ports" {
+			if check["ok"] != false || !strings.Contains(stringValueAny(check["observed"]), "ports failed") {
+				t.Fatalf("public_listening_ports = %#v, want concrete port diagnostic error", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("security checks = %#v, want public_listening_ports", checks)
+}
+
+func TestUnexpectedPublicListeningPortsIgnoresPrivateInterfaces(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 10.0.0.5:5432 0.0.0.0:*",
+		"LISTEN 0 4096 192.168.1.10:6379 0.0.0.0:*",
+		"LISTEN 0 4096 127.0.0.1:9000 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:*",
+		"tcp6       0      0 :::9090                 :::*                    LISTEN      1234/demo",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 22)
+	if !reflect.DeepEqual(ports, []string{"8080", "9090"}) {
+		t.Fatalf("unexpected ports = %#v, want wildcard public ports only", ports)
+	}
+}
+
+func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*",
+		"LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 2222)
+	if !reflect.DeepEqual(ports, []string{"22"}) {
+		t.Fatalf("unexpected ports = %#v, want default SSH port flagged when node uses 2222", ports)
+	}
+}
+
+func TestSplitListenAddressSupportsIPv6AnyNotation(t *testing.T) {
+	host, port, ok := splitListenAddress(":::80")
+	if !ok || host != "::" || port != "80" {
+		t.Fatalf("splitListenAddress(\":::80\") = host=%q port=%q ok=%v, want host=\"::\" port=\"80\" ok=true", host, port, ok)
+	}
+
+	host, port, ok = splitListenAddress(":::*")
+	if ok || host != "" || port != "" {
+		t.Fatalf("splitListenAddress(\":::*\") = host=%q port=%q ok=%v, want empty host/port and ok=false", host, port, ok)
+	}
+}
+
+func TestSoloDockerSecurityChecksFailWhenManagedContainerOutputTruncated(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "truncated") {
+		t.Fatalf("docker socket check = %#v, want failed truncated finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), node)
+	if privileged.OK || !strings.Contains(privileged.Observed, "truncated") {
+		t.Fatalf("privileged check = %#v, want failed truncated finding", privileged)
+	}
+}
+
+func TestSoloDockerSocketMountsRejectsRunSocketPath(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_RUN_SOCKET_MOUNT", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "/run/docker.sock") {
+		t.Fatalf("docker socket check = %#v, want /run/docker.sock finding", mounts)
+	}
+}
+
+func TestRemoteManagedContainerSecurityCommandsUseBoundedOutputMarker(t *testing.T) {
+	for _, command := range []string{remoteManagedContainerMountsCommand(), remoteManagedContainerPrivilegesCommand()} {
+		if !strings.Contains(command, soloDiagnoseTruncatedMarker) {
+			t.Fatalf("command = %q, want truncation marker", command)
+		}
+		if strings.Contains(command, "head -n 100") {
+			t.Fatalf("command = %q, want no silent head truncation", command)
+		}
+		if strings.Contains(command, "ps -aq --filter label=devopsellence.managed=true 2>&1") || strings.Contains(command, "$ids 2>&1") {
+			t.Fatalf("command = %q, want stderr captured separately from IDs/inspect output", command)
+		}
+	}
+}
+
+func TestSoloDockerSecurityChecksFailWhenInspectErrors(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR", "1")
+	node := config.Node{Host: "203.0.113.10", User: "root", Port: 22}
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), node)
+	if mounts.OK || !strings.Contains(mounts.Observed, "inspect failed") {
+		t.Fatalf("docker socket check = %#v, want failed inspect finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), node)
+	if privileged.OK || !strings.Contains(privileged.Observed, "inspect failed") {
+		t.Fatalf("privileged check = %#v, want failed inspect finding", privileged)
+	}
+}
+
+func TestSoloPublicListeningPortsCheckFailsWhenOutputIncomplete(t *testing.T) {
+	truncated := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*"}, true, nil)
+	if truncated.OK || !strings.Contains(truncated.Observed, "truncated") {
+		t.Fatalf("truncated check = %#v, want failed truncated finding", truncated)
+	}
+	if !strings.Contains(truncated.NextAction, "ss -ltnp") || strings.Contains(truncated.NextAction, "rerun listening-port diagnostics") {
+		t.Fatalf("truncated next action = %q, want direct node inspection guidance", truncated.NextAction)
+	}
+	marker := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*", "__DEVOPSELLENCE_TRUNCATED__"}, false, nil)
+	if marker.OK || !strings.Contains(marker.Observed, "truncated") {
+		t.Fatalf("marker check = %#v, want failed truncated finding", marker)
+	}
+
+	unavailable := soloPublicListeningPortsCheck(context.Background(), config.Node{}, []string{"no ss or netstat available"}, false, nil)
+	if unavailable.OK || !strings.Contains(unavailable.Observed, "not inspected") {
+		t.Fatalf("unavailable check = %#v, want failed unknown finding", unavailable)
+	}
+}
+
+func TestSoloSSHPasswordAuthCheckFailsWhenSettingUnknown(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "")
+	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "SSH daemon configuration") {
+		t.Fatalf("ssh password auth check = %#v, want failed unknown finding", check)
+	}
+}
+
+func TestSoloSSHPasswordAuthCheckFailsOnUnrecognizedValue(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH", "maybe")
+	check := soloSSHPasswordAuthCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unrecognized") {
+		t.Fatalf("ssh password auth check = %#v, want failed unrecognized finding", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "755 root root /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.NextAction, "other read/write") {
+		t.Fatalf("agent state check = %#v, want other-read finding", check)
+	}
+}
+
+func TestSoloStatFieldsPreservesWhitespacePath(t *testing.T) {
+	fields := soloStatFields("750\troot\troot\t/var/lib/dev ops")
+	if len(fields) != 4 || fields[0] != "750" || fields[1] != "root" || fields[2] != "root" || fields[3] != "/var/lib/dev ops" {
+		t.Fatalf("fields = %#v, want tab-delimited stat fields with intact path", fields)
+	}
+}
+
+func TestRemoteStatPathCommandRetriesWithSudoAfterDirectStat(t *testing.T) {
+	command := remoteStatPathCommand("/var/lib/dev ops")
+	direct := strings.Index(command, "stat -c \"$format\" '/var/lib/dev ops' 2>/dev/null")
+	sudo := strings.Index(command, "sudo -n stat -c \"$format\" '/var/lib/dev ops'")
+	if direct < 0 || sudo < 0 || sudo < direct {
+		t.Fatalf("command = %q, want direct stat followed by sudo retry", command)
+	}
+	if !strings.Contains(command, "%a\t%U\t%G\t%n") {
+		t.Fatalf("command = %q, want tab-delimited stat format", command)
+	}
+}
+
+func TestSoloAgentStatePermissionsQuotesRemediationPath(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_STAT", "755 root root /var/lib/dev ops")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root", AgentStateDir: "/var/lib/dev ops"})
+	if check.OK || !strings.Contains(check.NextAction, "'/var/lib/dev ops'") {
+		t.Fatalf("agent state check = %#v, want shell-quoted remediation path", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsRejectsNonRootGroup(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "750 root docker /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.NextAction, "root group ownership") {
+		t.Fatalf("agent state check = %#v, want non-root-group finding", check)
+	}
+}
+
+func TestSoloAgentStatePermissionsFailWhenModeUnparseable(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "bad root root /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
+		t.Fatalf("agent state check = %#v, want failed unknown mode finding", check)
+	}
+}
+
+func TestSoloTLSKeyPermissionsFailWhenModeUnparseable(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT", "bad root root /var/lib/devopsellence/ingress-key.pem")
+	check := soloTLSKeyPermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.Observed, "unknown") || !strings.Contains(check.NextAction, "mode can be parsed") {
+		t.Fatalf("tls key check = %#v, want failed unknown mode finding", check)
+	}
+}
+
+func TestSoloManagedContainerSecurityChecksFailClosedOnInspectErrors(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR", "1")
+
+	mounts := soloDockerSocketMountsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if mounts.OK || !strings.Contains(mounts.Observed, "unknown") || !strings.Contains(mounts.Observed, "inspect failed") || !strings.Contains(mounts.NextAction, "Docker can be inspected") {
+		t.Fatalf("docker socket mounts check = %#v, want failed unknown inspect finding", mounts)
+	}
+
+	privileged := soloPrivilegedContainersCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if privileged.OK || !strings.Contains(privileged.Observed, "unknown") || !strings.Contains(privileged.Observed, "inspect failed") || !strings.Contains(privileged.NextAction, "Docker can be inspected") {
+		t.Fatalf("privileged containers check = %#v, want failed unknown inspect finding", privileged)
 	}
 }
 
@@ -3735,6 +4268,320 @@ func TestSoloAgentUninstallRejectsUnsafeStateDir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsafe devopsellence agent state dir") {
 		t.Fatalf("error = %q, want unsafe state dir", err.Error())
+	}
+}
+
+func TestSoloAgentUpgradeReinstallsAgent(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v2.0.0 (commit new, built now)")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentUpgrade(context.Background(), SoloAgentUpgradeOptions{Node: "node-a", BaseURL: "https://example.test"}); err != nil {
+		t.Fatalf("SoloAgentUpgrade() error = %v", err)
+	}
+	payload := lastNDJSONEvent(t, &stdout)
+	if payload["action"] != "upgraded" || payload["target_version"] != "v2.0.0" || payload["version_status"] != "current" {
+		t.Fatalf("payload = %#v, want upgraded current agent", payload)
+	}
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read install script: %v", err)
+	}
+	if !strings.Contains(string(scriptBytes), "AGENT_VERSION='v2.0.0'") {
+		t.Fatalf("install script missing pinned version:\n%s", string(scriptBytes))
+	}
+}
+
+func TestSoloAgentInstallReportsVerification(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v2.0.0 (commit new, built now)")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"}); err != nil {
+		t.Fatalf("SoloAgentInstall() error = %v", err)
+	}
+	payload := lastNDJSONEvent(t, &stdout)
+	if payload["action"] != "installed" || payload["agent_version"] != "devopsellence v2.0.0 (commit new, built now)" || payload["target_version"] != "v2.0.0" || payload["version_status"] != "current" || payload["agent_active"] != true || payload["agent_active_check_ok"] != true {
+		t.Fatalf("payload = %#v, want verified installed agent", payload)
+	}
+	versionProbe := jsonMapFromAny(t, payload["agent_version_probe"])
+	if versionProbe["ok"] != true || versionProbe["value"] != "devopsellence v2.0.0 (commit new, built now)" {
+		t.Fatalf("agent_version_probe = %#v, want version probe details", versionProbe)
+	}
+	activeProbe := jsonMapFromAny(t, payload["agent_active_check"])
+	if activeProbe["ok"] != true || activeProbe["value"] != "active" {
+		t.Fatalf("agent_active_check = %#v, want active probe details", activeProbe)
+	}
+}
+
+func TestSoloAgentInstallReportsActiveVerificationFailure(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v2.0.0 (commit new, built now)")
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_ACTIVE_FAIL", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"}); err != nil {
+		t.Fatalf("SoloAgentInstall() error = %v", err)
+	}
+	payload := lastNDJSONEvent(t, &stdout)
+	if payload["agent_active"] != false || payload["agent_active_check_ok"] != false {
+		t.Fatalf("payload = %#v, want inactive verification failure details", payload)
+	}
+	activeProbe := jsonMapFromAny(t, payload["agent_active_check"])
+	if activeProbe["ok"] != false || !strings.Contains(stringValueAny(activeProbe["error"]), "agent inactive") {
+		t.Fatalf("agent_active_check = %#v, want active probe error", activeProbe)
+	}
+}
+
+func TestSoloAgentInstallReportsCustomBinaryTarget(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "custom build\nsecond line")
+	binaryPath := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(binaryPath, []byte("agent binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", AgentBinary: binaryPath}); err != nil {
+		t.Fatalf("SoloAgentInstall() error = %v", err)
+	}
+	payload := lastNDJSONEvent(t, &stdout)
+	if payload["target_version"] != "custom" || payload["version_status"] != "custom" {
+		t.Fatalf("payload = %#v, want custom target status", payload)
+	}
+}
+
+func TestSoloAgentInstallCustomBinaryFailsWhenVersionIsMissing(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "missing")
+	binaryPath := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(binaryPath, []byte("agent binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", AgentBinary: binaryPath})
+	if err == nil {
+		t.Fatal("SoloAgentInstall() error = nil, want missing version failure")
+	}
+	if !strings.Contains(err.Error(), "agent install verification failed") || !strings.Contains(err.Error(), "missing after install") {
+		t.Fatalf("error = %v, want missing custom install failure", err)
+	}
+}
+
+func TestSoloAgentInstallFailsWhenVersionVerificationFails(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION_FAIL", "1")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentInstall() error = nil, want verification failure")
+	}
+	if !strings.Contains(err.Error(), "agent install verification failed") || !strings.Contains(err.Error(), "version probe failed") {
+		t.Fatalf("error = %v, want version probe failure", err)
+	}
+}
+
+func TestSoloAgentInstallFailsWhenVersionIsUnknown(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "totally different\nsecond line")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentInstall() error = nil, want unknown version failure")
+	}
+	if !strings.Contains(err.Error(), "agent install verification failed") || !strings.Contains(err.Error(), "unknown or unparseable") || !strings.Contains(err.Error(), `\n`) {
+		t.Fatalf("error = %v, want quoted unknown version failure", err)
+	}
+}
+
+func TestSoloAgentInstallFailsWhenVersionMismatchesTarget(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v1.9.0 (commit old, built then)")
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentInstall() error = nil, want mismatch failure")
+	}
+	if !strings.Contains(err.Error(), "agent install verification failed") || !strings.Contains(err.Error(), "does not match target") {
+		t.Fatalf("error = %v, want version mismatch failure", err)
+	}
+}
+
+func TestSoloAgentUpgradeFailsWhenVersionVerificationFails(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION_FAIL", "1")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentUpgrade(context.Background(), SoloAgentUpgradeOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentUpgrade() error = nil, want verification failure")
+	}
+	if !strings.Contains(err.Error(), "agent upgrade verification failed") || !strings.Contains(err.Error(), "version probe failed") {
+		t.Fatalf("error = %v, want version probe failure", err)
+	}
+	if _, readErr := os.ReadFile(scriptPath); readErr != nil {
+		t.Fatalf("install script was not uploaded before verification: %v", readErr)
+	}
+}
+
+func TestSoloAgentUpgradeFailsWhenVersionVerificationReturnsMissing(t *testing.T) {
+	originalVersion := cliversion.Version
+	t.Cleanup(func() { cliversion.Version = originalVersion })
+	cliversion.Version = "v2.0.0"
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "missing")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_SCRIPT", scriptPath)
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentUpgrade(context.Background(), SoloAgentUpgradeOptions{Node: "node-a", BaseURL: "https://example.test"})
+	if err == nil {
+		t.Fatal("SoloAgentUpgrade() error = nil, want missing-version verification failure")
+	}
+	if !strings.Contains(err.Error(), "agent upgrade verification failed") || !strings.Contains(err.Error(), "remote agent version is unknown") {
+		t.Fatalf("error = %v, want missing version failure", err)
+	}
+	if _, readErr := os.ReadFile(scriptPath); readErr != nil {
+		t.Fatalf("install script was not uploaded before verification: %v", readErr)
 	}
 }
 
@@ -4720,6 +5567,7 @@ func secretRefsContain(refs []config.SecretRef, name string) bool {
 func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Services["worker"] = config.ServiceConfig{Command: []string{"bin/worker"}}
 	cfg.Ingress = &config.IngressConfig{
 		Hosts: []string{"*"},
 		Rules: []config.IngressRuleConfig{{
@@ -4736,7 +5584,7 @@ func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
 		Nodes: map[string]config.Node{
-			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole}},
+			"node-a": {Host: "203.0.113.10", User: "root", Port: 22, Labels: []string{config.DefaultWebRole, config.DefaultWorkerRole}},
 		},
 		Attachments: map[string]solo.AttachmentRecord{},
 		Snapshots:   map[string]desiredstate.DeploySnapshot{},
@@ -4772,6 +5620,15 @@ func TestSoloDeployDryRunPlansWithoutSideEffects(t *testing.T) {
 	}
 	if payload["release_id"] != nil || payload["deployment_id"] != nil || payload["desired_state_revisions"] != nil {
 		t.Fatalf("payload = %#v, dry-run must not create release/deployment/publication revisions", payload)
+	}
+	contracts := jsonArrayFromMap(t, payload, "rollout_contract")
+	byService := map[string]map[string]any{}
+	for _, item := range contracts {
+		contract := jsonMapFromAny(t, item)
+		byService[stringValueAny(contract["service_name"])] = contract
+	}
+	if byService["web"]["strategy"] != "health_gated_cutover" || byService["web"]["stop_old_before_start_new"] != false || byService["worker"]["strategy"] != "stop_old_before_start_new" || byService["worker"]["stop_old_before_start_new"] != true {
+		t.Fatalf("rollout_contract = %#v, want web health-gated and worker stop-old/start-new", contracts)
 	}
 }
 
@@ -5128,6 +5985,130 @@ func TestSoloStatusComparesRemoteStatusToPublishedDesiredStateRevision(t *testin
 	if status["revision"] != "desired-state-hash" {
 		t.Fatalf("node = %#v, want published desired-state revision accepted", node)
 	}
+	currentRelease := jsonMapFromAny(t, payload["current_release"])
+	if currentRelease["id"] != release.ID || currentRelease["revision"] != "shortsha" || currentRelease["image"] != "demo:shortsha" {
+		t.Fatalf("current_release = %#v, want local release metadata", currentRelease)
+	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_test" || currentDeployment["status"] != corerelease.DeploymentStatusFailed || intValueAny(currentDeployment["sequence"]) != 1 {
+		t.Fatalf("current_deployment = %#v, want latest deployment metadata", currentDeployment)
+	}
+}
+
+func TestSoloStatusReportsInFlightRollbackDeployment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	environmentID, currentRelease, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	rollbackRelease := current.Releases["rel-1"]
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_rollback",
+		EnvironmentID: environmentID,
+		ReleaseID:     rollbackRelease.ID,
+		Kind:          corerelease.DeploymentKindRollback,
+		Sequence:      8,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"aaa1111","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	releasePayload := jsonMapFromAny(t, payload["current_release"])
+	if releasePayload["id"] != currentRelease.ID {
+		t.Fatalf("current_release = %#v, want existing current release", releasePayload)
+	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_rollback" || currentDeployment["release_id"] != rollbackRelease.ID || currentDeployment["release_revision"] != rollbackRelease.Revision || currentDeployment["image"] != rollbackRelease.Image.Reference || currentDeployment["kind"] != corerelease.DeploymentKindRollback {
+		t.Fatalf("current_deployment = %#v, want in-flight rollback deployment", currentDeployment)
+	}
+}
+
+func TestSoloStatusRecoveredRollbackReportsUpdatedCurrentRelease(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := current.Attachments[key]
+	attachment.NodeNames = []string{"node-a"}
+	current.Attachments[key] = attachment
+	environmentID, _, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	rollbackRelease := current.Releases["rel-1"]
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_rollback",
+		EnvironmentID: environmentID,
+		ReleaseID:     rollbackRelease.ID,
+		Kind:          corerelease.DeploymentKindRollback,
+		Sequence:      8,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"aaa1111","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	releasePayload := jsonMapFromAny(t, payload["current_release"])
+	if releasePayload["id"] != rollbackRelease.ID || releasePayload["revision"] != rollbackRelease.Revision {
+		t.Fatalf("current_release = %#v, want recovered rollback release", releasePayload)
+	}
+	updated, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Current[environmentID] != rollbackRelease.ID {
+		t.Fatalf("current release id = %q, want %q", updated.Current[environmentID], rollbackRelease.ID)
+	}
 }
 
 func TestSoloStatusAcceptsExpectedRevisionWhenStatusTimePredatesLocalDeploymentClock(t *testing.T) {
@@ -5313,6 +6294,466 @@ func TestSoloStatusFailsWhenCurrentDeploymentStatusIsMissing(t *testing.T) {
 	}
 	if strings.Contains(message, "run `devopsellence deploy`") {
 		t.Fatalf("message = %q, want wait/status guidance before redeploy", message)
+	}
+}
+
+func TestSoloStatusDoesNotWriteStateWithoutRecoveryCandidate(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := t.TempDir()
+	soloState := solo.NewStateStore(filepath.Join(stateDir, "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(stateDir, 0o700)
+		_ = os.Chmod(soloState.Path, 0o600)
+	})
+	if err := os.Chmod(soloState.Path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"shortsha","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if warnings, ok := payload["warnings"]; ok {
+		t.Fatalf("warnings = %#v, want no state-write recovery warning", warnings)
+	}
+}
+
+func TestSoloStatusRecoversInterruptedRunningDeployment(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_interrupted",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	deployment.StatusMessage = "publishing desired state"
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"shortsha","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	recovered := jsonMapFromAny(t, payload["recovered_deployment"])
+	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
+	}
+	currentDeployment := jsonMapFromAny(t, payload["current_deployment"])
+	if currentDeployment["id"] != "dep_interrupted" || currentDeployment["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("current_deployment = %#v, want recovered settled deployment", currentDeployment)
+	}
+	updated, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredDeployment := updated.Deployments["dep_interrupted"]
+	if recoveredDeployment.Status != corerelease.DeploymentStatusSettled || recoveredDeployment.FinishedAt == "" {
+		t.Fatalf("deployment = %#v, want persisted recovery", recoveredDeployment)
+	}
+	if recoveredDeployment.PublicationResult == nil || len(recoveredDeployment.PublicationResult.NodeResults) != 1 || recoveredDeployment.PublicationResult.NodeResults[0].Revision != "shortsha" {
+		t.Fatalf("publication_result = %#v, want recovered desired-state revision", recoveredDeployment.PublicationResult)
+	}
+}
+
+func TestSoloStatusRecoversInterruptedRunningDeploymentWithMinimalStatus(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_interrupted",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"shortsha","phase":"settled"}` + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	recovered := jsonMapFromAny(t, payload["recovered_deployment"])
+	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
+	}
+}
+
+func TestSoloStatusRecoversInterruptedDeploymentWhenStaleTargetDetached(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_interrupted",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a", "node-b"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"shortsha","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	recovered := jsonMapFromAny(t, payload["recovered_deployment"])
+	if recovered["id"] != "dep_interrupted" || recovered["status"] != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered_deployment = %#v, want settled interrupted deployment", recovered)
+	}
+	updated, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusSettled {
+		t.Fatalf("deployment = %#v, want settled deployment", updated.Deployments["dep_interrupted"])
+	}
+}
+
+func TestSoloRecoverSettledRunningDeploymentIgnoresDetachedTargets(t *testing.T) {
+	current := solo.State{}
+	deployment := corerelease.Deployment{
+		ID:            "dep_interrupted",
+		EnvironmentID: "env",
+		ReleaseID:     "rel",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a", "node-old"},
+		Status:        corerelease.DeploymentStatusRunning,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, ok, err := soloRecoverSettledRunningDeployment(
+		&current,
+		"env",
+		"rel",
+		map[string]config.Node{"node-a": {Host: "203.0.113.10"}},
+		map[string]bool{"node-a": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || recovered.Status != corerelease.DeploymentStatusSettled {
+		t.Fatalf("recovered = %#v ok=%v, want settled recovery from attached target", recovered, ok)
+	}
+}
+
+func TestSoloRecoverSettledRunningDeploymentSkipsEmptyAttachedTargetIntersection(t *testing.T) {
+	current := solo.State{}
+	deployment := corerelease.Deployment{
+		ID:            "dep_interrupted",
+		EnvironmentID: "env",
+		ReleaseID:     "rel",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-old"},
+		Status:        corerelease.DeploymentStatusRunning,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, ok, err := soloRecoverSettledRunningDeployment(
+		&current,
+		"env",
+		"rel",
+		map[string]config.Node{"node-a": {Host: "203.0.113.10"}},
+		map[string]bool{"node-a": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("recovered = %#v, want no recovery when explicit targets are detached", recovered)
+	}
+	if current.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
+		t.Fatalf("deployment = %#v, want running status preserved", current.Deployments["dep_interrupted"])
+	}
+}
+
+func TestSoloRecoveryTargetsCheckedRequiresEveryTarget(t *testing.T) {
+	if soloRecoveryTargetsChecked(map[string]bool{}, map[string]bool{"node-a": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = true for empty targets, want false")
+	}
+	if soloRecoveryTargetsChecked(map[string]bool{"node-a": true, "node-b": true}, map[string]bool{"node-a": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = true for unchecked target, want false")
+	}
+	if !soloRecoveryTargetsChecked(map[string]bool{"node-a": true, "node-b": true}, map[string]bool{"node-a": true, "node-b": true}) {
+		t.Fatal("soloRecoveryTargetsChecked() = false for checked targets, want true")
+	}
+}
+
+func TestSoloRecoverSettledRunningDeploymentRequiresFallbackTargets(t *testing.T) {
+	current := solo.State{}
+	deployment := corerelease.Deployment{
+		ID:            "dep_interrupted",
+		EnvironmentID: "env",
+		ReleaseID:     "rel",
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		Status:        corerelease.DeploymentStatusRunning,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, ok, err := soloRecoverSettledRunningDeployment(
+		&current,
+		"env",
+		"rel",
+		map[string]config.Node{
+			"node-a": {Host: "203.0.113.10"},
+			"node-b": {Host: "203.0.113.11"},
+		},
+		map[string]bool{"node-a": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("recovered = %#v, want no recovery until every fallback target is checked", recovered)
+	}
+	if current.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
+		t.Fatalf("deployment = %#v, want running status preserved", current.Deployments["dep_interrupted"])
+	}
+}
+
+func TestSoloLatestRunningDeploymentComparesCreatedAtAsTime(t *testing.T) {
+	current := solo.State{}
+	for _, deployment := range []corerelease.Deployment{
+		{
+			ID:            "dep_late_offset",
+			EnvironmentID: "env",
+			ReleaseID:     "rel",
+			Kind:          corerelease.DeploymentKindDeploy,
+			Sequence:      7,
+			Status:        corerelease.DeploymentStatusRunning,
+			CreatedAt:     "2026-05-06T00:30:00-01:00",
+		},
+		{
+			ID:            "dep_early_utc",
+			EnvironmentID: "env",
+			ReleaseID:     "rel",
+			Kind:          corerelease.DeploymentKindDeploy,
+			Sequence:      7,
+			Status:        corerelease.DeploymentStatusRunning,
+			CreatedAt:     "2026-05-06T01:00:00Z",
+		},
+	} {
+		if err := current.SaveDeployment(deployment); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	selected, ok := soloLatestRunningDeployment(current, "env", "rel")
+	if !ok {
+		t.Fatal("soloLatestRunningDeployment() ok = false, want true")
+	}
+	if selected.ID != "dep_late_offset" {
+		t.Fatalf("selected.ID = %q, want dep_late_offset", selected.ID)
+	}
+}
+
+func TestSoloStatusDoesNotRecoverConfigOnlyStaleDesiredState(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes:       map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Port: 22, AgentStateDir: "/var/lib/devopsellence", Labels: []string{config.DefaultWebRole}}},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "shortsha")
+	environmentID, release, ok, err := current.CurrentRelease(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current release missing")
+	}
+	deployment, err := corerelease.NewDeployment(corerelease.DeploymentCreateInput{
+		ID:            "dep_interrupted",
+		EnvironmentID: environmentID,
+		ReleaseID:     release.ID,
+		Kind:          corerelease.DeploymentKindDeploy,
+		Sequence:      7,
+		TargetNodeIDs: []string{"node-a"},
+		CreatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Status = corerelease.DeploymentStatusRunning
+	if err := current.SaveDeployment(deployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEnvironment, err := soloRuntimeEnvironmentNameForNode(current, workspaceRoot, "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON := fmt.Sprintf(`{"revision":"old-desired-state","phase":"settled","environments":[{"name":%q,"revision":"shortsha","phase":"settled","services":[{"name":"web","phase":"settled","state":"running"}]}]}`, runtimeEnvironment)
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: statusJSON + "\n"}})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err = app.SoloStatus(context.Background(), SoloStatusOptions{})
+	if err == nil {
+		t.Fatal("SoloStatus() error = nil, want stale desired-state mismatch")
+	}
+	updated, err := soloState.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Deployments["dep_interrupted"].Status != corerelease.DeploymentStatusRunning {
+		t.Fatalf("deployment = %#v, want running deployment preserved", updated.Deployments["dep_interrupted"])
 	}
 }
 
@@ -6164,6 +7605,11 @@ func TestSoloReleaseListReturnsCurrentReleaseHistory(t *testing.T) {
 	}
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := soloReleaseWorkflowState(workspaceRoot)
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "web"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-1"] = previous
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
 	}
@@ -6336,6 +7782,11 @@ func TestSoloReleaseRollbackDryRunPlansWithoutSideEffects(t *testing.T) {
 	}
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := soloReleaseWorkflowState(workspaceRoot)
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "web"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-1"] = previous
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
 	}
@@ -6369,6 +7820,134 @@ func TestSoloReleaseRollbackDryRunPlansWithoutSideEffects(t *testing.T) {
 	}
 }
 
+func TestSoloReleaseRollbackReportsMigrationContract(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "web"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-1"] = previous
+	active := current.Releases["rel-2"]
+	active.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:bbb2222", Command: []string{"bin/migrate"}}
+	active.Snapshot.ReleaseService = "web"
+	active.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-2"] = active
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	contract := jsonMapFromAny(t, payload["rollback_contract"])
+	if contract["data_rollback_automatic"] != false || contract["selected_release_task_reruns"] != true {
+		t.Fatalf("rollback_contract = %#v, want release task/data contract", contract)
+	}
+	if !strings.Contains(stringValueAny(contract["operator_responsibility"]), "backup") || !strings.Contains(stringValueAny(contract["message"]), "does not reverse") {
+		t.Fatalf("rollback_contract = %#v, want migration warning", contract)
+	}
+}
+
+func TestSoloReleaseRollbackWarnsWhenOnlyCurrentReleaseHasTask(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	active := current.Releases["rel-2"]
+	active.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:bbb2222", Command: []string{"bin/migrate"}}
+	active.Snapshot.ReleaseService = "web"
+	active.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-2"] = active
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	events := decodeNDJSONOutput(t, &stdout)
+	payload := events[len(events)-1]
+	contract := jsonMapFromAny(t, payload["rollback_contract"])
+	if contract["current_release_task"] != true || contract["selected_release_task"] != false || contract["selected_release_task_reruns"] != false {
+		t.Fatalf("rollback_contract = %#v, want current-task-only warning", contract)
+	}
+	if !strings.Contains(stringValueAny(contract["operator_responsibility"]), "backup") {
+		t.Fatalf("rollback_contract = %#v, want backup responsibility", contract)
+	}
+}
+
+func TestSoloReleaseRollbackDryRunValidatesReleaseTaskPlacement(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "worker"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWorker
+	current.Releases["rel-1"] = previous
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{Printer: output.New(io.Discard, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true})
+	if err == nil {
+		t.Fatal("SoloReleaseRollback() error = nil, want release task placement failure")
+	}
+	if !strings.Contains(err.Error(), "requires at least one attached node labeled") || !strings.Contains(err.Error(), "worker") {
+		t.Fatalf("error = %v, want release task placement guidance", err)
+	}
+}
+
+func TestSoloReleaseRollbackValidatesReleaseTaskPlacementAgainstTargets(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := soloReleaseWorkflowState(workspaceRoot)
+	worker := current.Nodes["node-b"]
+	worker.Labels = []string{config.DefaultWorkerRole}
+	current.Nodes["node-b"] = worker
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "worker"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWorker
+	current.Releases["rel-1"] = previous
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{Printer: output.New(io.Discard, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	err := app.SoloReleaseRollback(context.Background(), SoloReleaseRollbackOptions{Selector: "aaa1111", DryRun: true})
+	if err == nil {
+		t.Fatal("SoloReleaseRollback() error = nil, want release task target placement failure")
+	}
+	if !strings.Contains(err.Error(), "requires at least one attached node labeled") || !strings.Contains(err.Error(), "worker") {
+		t.Fatalf("error = %v, want release task placement guidance", err)
+	}
+}
+
 func TestSoloReleaseRollbackUnknownSelectorSuggestsReleaseList(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
@@ -6377,6 +7956,11 @@ func TestSoloReleaseRollbackUnknownSelectorSuggestsReleaseList(t *testing.T) {
 	}
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := soloReleaseWorkflowState(workspaceRoot)
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "web"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-1"] = previous
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
 	}
@@ -6502,6 +8086,11 @@ func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 	}
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := soloReleaseWorkflowState(workspaceRoot)
+	previous := current.Releases["rel-1"]
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "web"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-1"] = previous
 	if err := soloState.Write(current); err != nil {
 		t.Fatal(err)
 	}
@@ -6528,6 +8117,10 @@ func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 	if payload["release_id"] != "rel-1" || payload["rolled_back_from"] != "rel-2" || payload["phase"] != "settled" {
 		t.Fatalf("payload = %#v, want settled rollback to rel-1", payload)
 	}
+	contract := jsonMapFromAny(t, payload["rollback_contract"])
+	if contract["selected_release_task_reruns"] != true || contract["data_rollback_automatic"] != false {
+		t.Fatalf("rollback_contract = %#v, want settled rollback contract", contract)
+	}
 	nodes := jsonArrayFromMap(t, payload, "nodes")
 	if !reflect.DeepEqual(nodes, []any{"node-a"}) {
 		t.Fatalf("nodes = %#v, want only selected release target", nodes)
@@ -6550,6 +8143,28 @@ func TestSoloReleaseRollbackUsesSelectedReleaseTargets(t *testing.T) {
 	}
 	if deployment.Status != corerelease.DeploymentStatusSettled || !reflect.DeepEqual(deployment.TargetNodeIDs, []string{"node-a"}) {
 		t.Fatalf("deployment = %#v, want settled target node-a", deployment)
+	}
+}
+
+func TestSoloRollbackScopedStateKeepsReleaseTaskOnTargetNode(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	current := soloReleaseWorkflowState(workspaceRoot)
+	key := workspaceRoot + "\nproduction"
+	previous := current.Releases["rel-1"]
+	previous.TargetNodeIDs = []string{"node-b"}
+	previous.Snapshot.ReleaseTask = &desiredstate.TaskJSON{Name: "release", Image: "demo:aaa1111", Command: []string{"bin/migrate"}}
+	previous.Snapshot.ReleaseService = "web"
+	previous.Snapshot.ReleaseServiceKind = config.ServiceKindWeb
+	current.Releases["rel-1"] = previous
+	current.Current[key] = "rel-1"
+
+	scoped := soloStateScopedToRollbackTargets(current, key, []string{"node-b"})
+	_, releaseNodes, _, _, err := soloNodeDesiredStateInputs(scoped, "node-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if releaseNodes[key] != "node-b" {
+		t.Fatalf("releaseNodes = %#v, want release task on rollback target node-b", releaseNodes)
 	}
 }
 
@@ -7248,6 +8863,26 @@ func TestReleasedAgentVersionForInstall(t *testing.T) {
 	cliversion.Version = "bad version?"
 	if got := releasedAgentVersionForInstall(); got != "" {
 		t.Fatalf("releasedAgentVersionForInstall() = %q, want empty for unsafe version", got)
+	}
+}
+
+func TestSoloAgentVersionStatusComparesExactObservedVersion(t *testing.T) {
+	cases := []struct {
+		observed string
+		target   string
+		want     string
+	}{
+		{observed: "devopsellence v1.2.3 (commit abc, built now)", target: "v1.2.3", want: "current"},
+		{observed: "devopsellence v1.2.30 (commit abc, built now)", target: "v1.2.3", want: "mismatch"},
+		{observed: "devopsellence v2.0.0-rc.1 (commit abc, built now)", target: "v2.0.0", want: "mismatch"},
+		{observed: "totally different version output", target: "v2.0.0", want: "unknown"},
+		{observed: "missing", target: "v2.0.0", want: "unknown"},
+		{observed: "devopsellence-agent/v1.2.3 (linux; amd64)", target: "v1.2.3", want: "current"},
+	}
+	for _, tc := range cases {
+		if got := soloAgentVersionStatus(tc.observed, tc.target); got != tc.want {
+			t.Fatalf("soloAgentVersionStatus(%q, %q) = %q, want %q", tc.observed, tc.target, got, tc.want)
+		}
 	}
 }
 
@@ -8059,8 +9694,15 @@ func installFakeSoloCommands(t *testing.T, statusResponses []fakeSSHResponse) st
 	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/usr/bin/env bash
 set -euo pipefail
 command="${!#}"
+if [[ -n "${DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG:-}" ]]; then
+  printf '%s\n' "$command" >>"$DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG"
+fi
 
 if [[ "$command" == "true" ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" ]]; then
+    printf 'ssh connect failed\n' >&2
+    exit 255
+  fi
   exit 0
 fi
 
@@ -8110,6 +9752,11 @@ if [[ "$command" =~ (__DEVOPSELLENCE_EXEC_EXIT_CODE__[0-9a-f]+__) ]]; then
   exec_marker="${BASH_REMATCH[1]}"
 fi
 
+if [[ -n "${DEVOPSELLENCE_FAKE_SSH_TRUE_FAIL:-}" && "$command" == *"true"* ]]; then
+  printf 'ssh connect failed\n' >&2
+  exit 255
+fi
+
 if [[ -n "$exec_marker" && "$command" == *"svc-production-web-abc"* ]]; then
   printf 'service stdout\n'
   printf 'service stderr\n%s0\n' "$exec_marker" >&2
@@ -8146,7 +9793,7 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"journalct
   exit 0
 fi
 
-if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ps -a"* ]]; then
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ps -a --format"* ]]; then
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi
@@ -8161,7 +9808,56 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"docker ne
   exit 0
 fi
 
-if [[ "$command" == *"docker ps -a"* ]]; then
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"sshd -T"* ]]; then
+  password_auth="${DEVOPSELLENCE_FAKE_SSH_PASSWORD_AUTH-no}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$password_auth"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence/ingress-key.pem"* ]]; then
+  tls_stat="${DEVOPSELLENCE_FAKE_SSH_TLS_KEY_STAT:-missing}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$tls_stat"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && -n "${DEVOPSELLENCE_FAKE_SSH_STAT:-}" ]]; then
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$DEVOPSELLENCE_FAKE_SSH_STAT"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"stat -c"* && "$command" == *"/var/lib/devopsellence"* ]]; then
+  state_stat="${DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT:-751 root root /var/lib/devopsellence}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$state_stat"
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *"Mounts"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_RUN_SOCKET_MOUNT:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /run/docker.sock:/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_SOCKET_MOUNT:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web /var/run/docker.sock:/var/run/docker.sock\n__DEVOPSELLENCE_STDERR__\n'
+  else
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web app_storage:/app/storage\n__DEVOPSELLENCE_STDERR__\n'
+  fi
+  exit 0
+fi
+
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"inspect --format"* && "$command" == *".HostConfig.Privileged"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_ERROR:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\ninspect failed\n'
+  elif [[ -n "${DEVOPSELLENCE_FAKE_SSH_DOCKER_INSPECT_TRUNCATED:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n__DEVOPSELLENCE_TRUNCATED__\n__DEVOPSELLENCE_STDERR__\n'
+  else
+    printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nsvc-production-web false\n__DEVOPSELLENCE_STDERR__\n'
+  fi
+  exit 0
+fi
+
+if [[ "$command" == *"docker ps -a --format"* ]]; then
   printf '{"Names":"svc-production-web","Image":"demo:abc","Status":"Up 1 minute","Ports":"3000/tcp"}\n'
   exit 0
 fi
@@ -8181,6 +9877,10 @@ if [[ "$command" == *"docker info"* ]]; then
 fi
 
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"systemctl is-active devopsellence-agent"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_AGENT_ACTIVE_FAIL:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__3\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\nagent inactive\n'
+    exit 0
+  fi
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nactive\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi
@@ -8190,7 +9890,21 @@ if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"systemctl
   exit 0
 fi
 
+if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && "$command" == *"devopsellence-agent --version"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_AGENT_VERSION_FAIL:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__42\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\nversion probe failed\n'
+    exit 0
+  fi
+  agent_version="${DEVOPSELLENCE_FAKE_AGENT_VERSION:-devopsellence dev (commit unknown, built unknown)}"
+  printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\n%s\n__DEVOPSELLENCE_STDERR__\n' "$agent_version"
+  exit 0
+fi
+
 if [[ "$command" == *"__DEVOPSELLENCE_EXIT_CODE__"* && ( "$command" == *"ss -ltn"* || "$command" == *"netstat -ltn"* ) ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_SSH_PORTS_FAIL:-}" ]]; then
+    printf '__DEVOPSELLENCE_EXIT_CODE__1\n__DEVOPSELLENCE_STDOUT__\n\n__DEVOPSELLENCE_STDERR__\nports failed\n'
+    exit 0
+  fi
   printf '__DEVOPSELLENCE_EXIT_CODE__0\n__DEVOPSELLENCE_STDOUT__\nLISTEN 0 4096 0.0.0.0:80 0.0.0.0:*\n__DEVOPSELLENCE_STDERR__\n'
   exit 0
 fi
@@ -8206,6 +9920,15 @@ fi
 
 if [[ "$command" == *"systemctl status"* ]]; then
   printf 'devopsellence-agent active\n'
+  exit 0
+fi
+
+if [[ "$command" == *"devopsellence-agent --version"* ]]; then
+  if [[ -n "${DEVOPSELLENCE_FAKE_AGENT_VERSION_FAIL:-}" ]]; then
+    printf 'version probe failed\n' >&2
+    exit 42
+  fi
+  printf '%s\n' "${DEVOPSELLENCE_FAKE_AGENT_VERSION:-devopsellence dev (commit unknown, built unknown)}"
   exit 0
 fi
 

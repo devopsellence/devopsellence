@@ -819,6 +819,26 @@ func TestNodeDiagnoseAcceptsSoloNodeName(t *testing.T) {
 	}
 }
 
+func TestAgentUpgradeHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"agent", "upgrade", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Upgrade the agent", "--agent-binary", "--base-url"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output = %q, want %q", output, want)
+		}
+	}
+}
+
 func TestNodeLogsHelpDocumentsBoundedJSONSnapshot(t *testing.T) {
 	t.Parallel()
 

@@ -91,6 +91,7 @@ ingress:
 
 - [docs website component](docs-website/)
 - [AI operator direction](docs/agent-primary.md)
+- [solo production operations](docs/solo-production.md)
 - [vision](docs/vision.md)
 - [north star](docs/north-star.md)
 

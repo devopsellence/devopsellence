@@ -30,6 +30,10 @@ devopsellence support bundle --output ./devopsellence-support.json
 config, solo state shape, attached nodes, CLI version, and recommended follow-up
 commands.
 
+For app data, use an ordinary backup service with restic and the existing
+`secret`, `deploy`, `logs`, and `exec` commands. See
+[Backup and restore](/guides/backup-restore/).
+
 To create a Hetzner-backed solo node:
 
 ```bash

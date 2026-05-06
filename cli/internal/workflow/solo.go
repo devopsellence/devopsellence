@@ -2024,10 +2024,10 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		recoveryMatch := false
 		if hasRecoveryCandidate && recoveryTargets[name] && strings.TrimSpace(result.Status.Phase) == "settled" && runtime.State == "settled" {
 			recoveryChecked[name] = true
-			if revision := strings.TrimSpace(result.Status.Revision); revision != "" {
+			if revision := strings.TrimSpace(result.Status.Revision); revision != "" && len(cohostedRevisions[name]) == 0 {
 				recoveryRevisions[name] = revision
 			}
-			recoveryMatch = recoveryCandidate.PublicationResult == nil && strings.TrimSpace(result.Status.Revision) != ""
+			recoveryMatch = recoveryCandidate.PublicationResult == nil && strings.TrimSpace(result.Status.Revision) != "" && len(cohostedRevisions[name]) == 0
 		}
 		if expectedRevision != "" && !soloNodeStatusMatchesExpectedRelease(result.Status, expectedRevision, expectedRuntimeEnvironment, expectedWorkloadRevision, cohostedRevisions[name], staleRevisions[name]) && !recoveryMatch {
 			allSettled = false
@@ -4204,6 +4204,11 @@ func soloAgentStatePermissionsCheck(ctx context.Context, node config.Node) soloS
 		check.NextAction = "restore root ownership on the agent state directory, for example chown root:root " + stateDir
 		return check
 	}
+	if len(fields) >= 3 && fields[2] != "root" {
+		check.OK = false
+		check.NextAction = "restore root group ownership on the agent state directory, for example chown root:root " + stateDir
+		return check
+	}
 	if mode&0o026 != 0 {
 		check.OK = false
 		check.NextAction = "remove group write and other read/write access from the agent state directory, for example chmod g-w,o-rw " + stateDir
@@ -4330,7 +4335,7 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 
 func listenOutputHasTruncationMarker(lines []string) bool {
 	for _, line := range lines {
-		if strings.TrimSpace(line) == "__DEVOPSELLENCE_TRUNCATED__" {
+		if strings.TrimSpace(line) == soloDiagnoseTruncatedMarker {
 			return true
 		}
 	}
@@ -4728,7 +4733,12 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 	if versionStatus == "unknown" {
 		return fmt.Errorf("agent install verification failed: %s", agentVersion)
 	}
+	if strings.TrimSpace(opts.AgentBinary) != "" {
+		target = "custom"
+		versionStatus = "custom"
+	}
 	activeProbe := collectRemoteText(ctx, node, "systemctl is-active devopsellence-agent")
+	agentActive := activeProbe["ok"] == true && stringFromMap(activeProbe, "value") == "active"
 	return a.Printer.PrintResultEvent("devopsellence agent install", map[string]any{
 		"node":                  opts.Node,
 		"action":                "installed",
@@ -4736,7 +4746,7 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 		"agent_version_probe":   agentVersionProbe,
 		"target_version":        target,
 		"version_status":        versionStatus,
-		"agent_active":          stringFromMap(activeProbe, "value") == "active",
+		"agent_active":          agentActive,
 		"agent_active_check":    activeProbe,
 		"agent_active_check_ok": activeProbe["ok"] == true,
 	})
@@ -7973,7 +7983,7 @@ func remoteAgentVersionCommand() string {
 }
 
 func remoteSSHPasswordAuthCommand() string {
-	return "if command -v sshd >/dev/null 2>&1; then out=\"$(sshd -T 2>/dev/null | awk 'tolower($1)==\"passwordauthentication\" {print tolower($2); exit}')\"; if [ -z \"$out\" ] && command -v sudo >/dev/null 2>&1; then out=\"$(sudo -n sshd -T 2>/dev/null | awk 'tolower($1)==\"passwordauthentication\" {print tolower($2); exit}')\"; fi; if [ -n \"$out\" ]; then printf '%s\\n' \"$out\"; fi; elif [ -r /etc/ssh/sshd_config ]; then awk 'tolower($1)==\"passwordauthentication\" {print tolower($2)}' /etc/ssh/sshd_config | tail -n1; elif command -v sudo >/dev/null 2>&1 && sudo -n test -r /etc/ssh/sshd_config >/dev/null 2>&1; then sudo -n awk 'tolower($1)==\"passwordauthentication\" {print tolower($2)}' /etc/ssh/sshd_config | tail -n1; fi"
+	return "out=\"\"; if command -v sshd >/dev/null 2>&1; then out=\"$(sshd -T 2>/dev/null | awk 'tolower($1)==\"passwordauthentication\" {print tolower($2); exit}')\"; if [ -z \"$out\" ] && command -v sudo >/dev/null 2>&1; then out=\"$(sudo -n sshd -T 2>/dev/null | awk 'tolower($1)==\"passwordauthentication\" {print tolower($2); exit}')\"; fi; fi; if [ -z \"$out\" ] && [ -r /etc/ssh/sshd_config ]; then out=\"$(awk 'tolower($1)==\"passwordauthentication\" {print tolower($2)}' /etc/ssh/sshd_config | tail -n1)\"; fi; if [ -z \"$out\" ] && command -v sudo >/dev/null 2>&1 && sudo -n test -r /etc/ssh/sshd_config >/dev/null 2>&1; then out=\"$(sudo -n awk 'tolower($1)==\"passwordauthentication\" {print tolower($2)}' /etc/ssh/sshd_config | tail -n1)\"; fi; if [ -n \"$out\" ]; then printf '%s\\n' \"$out\"; fi"
 }
 
 func remoteStatPathCommand(target string) string {

@@ -3920,6 +3920,15 @@ func TestSoloAgentStatePermissionsRejectsOtherRead(t *testing.T) {
 	}
 }
 
+func TestSoloAgentStatePermissionsRejectsNonRootGroup(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "750 root docker /var/lib/devopsellence")
+	check := soloAgentStatePermissionsCheck(context.Background(), config.Node{Host: "203.0.113.10", User: "root"})
+	if check.OK || !strings.Contains(check.NextAction, "root group ownership") {
+		t.Fatalf("agent state check = %#v, want non-root-group finding", check)
+	}
+}
+
 func TestSoloAgentStatePermissionsFailWhenModeUnparseable(t *testing.T) {
 	installFakeSoloCommands(t, nil)
 	t.Setenv("DEVOPSELLENCE_FAKE_SSH_AGENT_STATE_STAT", "bad root root /var/lib/devopsellence")
@@ -4157,6 +4166,35 @@ func TestSoloAgentInstallReportsActiveVerificationFailure(t *testing.T) {
 	activeProbe := jsonMapFromAny(t, payload["agent_active_check"])
 	if activeProbe["ok"] != false || !strings.Contains(stringValueAny(activeProbe["error"]), "agent inactive") {
 		t.Fatalf("agent_active_check = %#v, want active probe error", activeProbe)
+	}
+}
+
+func TestSoloAgentInstallReportsCustomBinaryTarget(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "devopsellence v9.9.9-custom (commit local, built now)")
+	binaryPath := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(binaryPath, []byte("agent binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	if err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", AgentBinary: binaryPath}); err != nil {
+		t.Fatalf("SoloAgentInstall() error = %v", err)
+	}
+	payload := lastNDJSONEvent(t, &stdout)
+	if payload["target_version"] != "custom" || payload["version_status"] != "custom" {
+		t.Fatalf("payload = %#v, want custom target status", payload)
 	}
 }
 

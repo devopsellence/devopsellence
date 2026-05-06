@@ -7740,7 +7740,7 @@ EOF_SSHD
     rm -f "$tmp_sshd_config"
   fi
   run_root "$SSHD_BIN" -t
-  if ! run_root "$SSHD_BIN" -T | grep -qi '^passwordauthentication no$'; then
+  if ! run_root "$SSHD_BIN" -T | awk 'tolower($1) == "passwordauthentication" && tolower($2) == "no" { found = 1 } END { exit(found ? 0 : 1) }'; then
     echo "SSH password hardening was written but is not effective according to sshd -T" >&2
     return 1
   fi

@@ -4417,6 +4417,7 @@ func TestSoloAgentUpgradeHardensProviderNodeSSH(t *testing.T) {
 		"/usr/sbin/sshd",
 		`run_root "$SSHD_BIN" -t`,
 		`run_root "$SSHD_BIN" -T`,
+		`awk 'tolower($1) == "passwordauthentication"`,
 		"run_root cp \"$tmp_sshd_config\" /etc/ssh/sshd_config",
 		"not effective according to sshd -T",
 		"systemctl reload ssh",
@@ -4427,6 +4428,9 @@ func TestSoloAgentUpgradeHardensProviderNodeSSH(t *testing.T) {
 	}
 	if strings.Contains(script, "systemctl restart ssh") || strings.Contains(script, "systemctl restart sshd") {
 		t.Fatalf("install script should not restart sshd over the active SSH session:\n%s", script)
+	}
+	if strings.Contains(script, "grep -qi '^passwordauthentication no$'") {
+		t.Fatalf("install script should not use grep -q with sshd -T under pipefail:\n%s", script)
 	}
 }
 
@@ -9192,6 +9196,7 @@ func TestSoloAgentInstallScriptCanHardenSSHPasswordAuthentication(t *testing.T) 
 		"KbdInteractiveAuthentication no",
 		`run_root "$SSHD_BIN" -t`,
 		`run_root "$SSHD_BIN" -T`,
+		`awk 'tolower($1) == "passwordauthentication"`,
 		"systemctl reload ssh",
 	} {
 		if !strings.Contains(script, want) {

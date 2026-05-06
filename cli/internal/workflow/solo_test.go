@@ -4404,6 +4404,35 @@ func TestSoloAgentInstallReportsCustomBinaryTarget(t *testing.T) {
 	}
 }
 
+func TestSoloAgentInstallCustomBinaryFailsWhenVersionIsMissing(t *testing.T) {
+	installFakeSoloCommands(t, nil)
+	t.Setenv("DEVOPSELLENCE_FAKE_AGENT_VERSION", "missing")
+	binaryPath := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(binaryPath, []byte("agent binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState}
+	err := app.SoloAgentInstall(context.Background(), SoloAgentInstallOptions{Node: "node-a", AgentBinary: binaryPath})
+	if err == nil {
+		t.Fatal("SoloAgentInstall() error = nil, want missing version failure")
+	}
+	if !strings.Contains(err.Error(), "agent install verification failed") || !strings.Contains(err.Error(), "missing after install") {
+		t.Fatalf("error = %v, want missing custom install failure", err)
+	}
+}
+
 func TestSoloAgentInstallFailsWhenVersionVerificationFails(t *testing.T) {
 	originalVersion := cliversion.Version
 	t.Cleanup(func() { cliversion.Version = originalVersion })

@@ -4853,6 +4853,9 @@ func (a *App) SoloAgentInstall(ctx context.Context, opts SoloAgentInstallOptions
 	}
 	target := soloAgentTargetVersion()
 	versionStatus := soloAgentVersionStatus(agentVersion, target)
+	if strings.TrimSpace(agentVersion) == "missing" {
+		return fmt.Errorf("agent install verification failed: remote agent version is missing after install")
+	}
 	if strings.TrimSpace(opts.AgentBinary) != "" {
 		target = "custom"
 		versionStatus = "custom"

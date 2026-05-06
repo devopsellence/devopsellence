@@ -80,7 +80,7 @@ devopsellence release rollback --dry-run <release-id-or-revision-prefix>
 devopsellence release rollback <release-id-or-revision-prefix>
 ```
 
-Read `rollback_contract` before applying:
+For release-task rollbacks, read `rollback_contract` before applying:
 
 - data rollback is not automatic;
 - the selected release task may rerun;

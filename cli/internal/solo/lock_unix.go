@@ -12,6 +12,10 @@ import (
 )
 
 func (s *StateStore) WithLock(fn func() error) error {
+	return s.WithLockNotify(fn, nil)
+}
+
+func (s *StateStore) WithLockNotify(fn func() error, waiting func() error) error {
 	if s == nil || strings.TrimSpace(s.Path) == "" {
 		return errors.New("solo state store path is required")
 	}
@@ -24,9 +28,20 @@ func (s *StateStore) WithLock(fn func() error) error {
 		return fmt.Errorf("open solo state lock: %w", err)
 	}
 	defer lockFile.Close()
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("lock solo state: %w", err)
+	fd := int(lockFile.Fd())
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			return fmt.Errorf("lock solo state: %w", err)
+		}
+		if waiting != nil {
+			if waitErr := waiting(); waitErr != nil {
+				return waitErr
+			}
+		}
+		if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
+			return fmt.Errorf("lock solo state: %w", err)
+		}
 	}
-	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	defer syscall.Flock(fd, syscall.LOCK_UN)
 	return fn()
 }

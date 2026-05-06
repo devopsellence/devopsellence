@@ -53,16 +53,18 @@ func TestStateStoreWithLockSerializesCallers(t *testing.T) {
 	<-entered
 
 	var ran atomic.Bool
-	attempting := make(chan struct{})
+	waiting := make(chan struct{})
 	blocked := make(chan error, 1)
 	go func() {
-		close(attempting)
-		blocked <- store.WithLock(func() error {
+		blocked <- store.WithLockNotify(func() error {
 			ran.Store(true)
+			return nil
+		}, func() error {
+			close(waiting)
 			return nil
 		})
 	}()
-	<-attempting
+	<-waiting
 
 	select {
 	case err := <-blocked:

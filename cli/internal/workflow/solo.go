@@ -1161,14 +1161,16 @@ func (a *App) withSoloStateLock(fn func() error) error {
 }
 
 func (a *App) withSoloStateLockProgress(operation string, fn func() error) error {
-	if err := a.Printer.PrintEvent(output.EventProgress, map[string]any{
-		"operation": operation,
-		"step":      "state_lock_wait",
-		"message":   "Waiting for solo state lock...",
-	}); err != nil {
-		return err
+	if a.SoloState == nil {
+		return fmt.Errorf("solo state store is required")
 	}
-	return a.withSoloStateLock(fn)
+	return a.SoloState.WithLockNotify(fn, func() error {
+		return a.Printer.PrintEvent(output.EventProgress, map[string]any{
+			"operation": operation,
+			"step":      "state_lock_wait",
+			"message":   "Waiting for solo state lock...",
+		})
+	})
 }
 
 func (a *App) writeSoloState(current solo.State) error {
@@ -3425,7 +3427,7 @@ func (a *App) SoloNodeList(_ context.Context, opts SoloNodeListOptions) error {
 }
 
 func (a *App) SoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions) error {
-	return a.withSoloStateLock(func() error {
+	return a.withSoloStateLockProgress("devopsellence node attach", func() error {
 		return a.soloNodeAttach(ctx, opts)
 	})
 }
@@ -3470,7 +3472,7 @@ func (a *App) runSoloNodeAttach(ctx context.Context, opts SoloNodeAttachOptions)
 }
 
 func (a *App) SoloNodeDetach(ctx context.Context, opts SoloNodeDetachOptions) error {
-	return a.withSoloStateLock(func() error {
+	return a.withSoloStateLockProgress("devopsellence node detach", func() error {
 		return a.soloNodeDetach(ctx, opts)
 	})
 }

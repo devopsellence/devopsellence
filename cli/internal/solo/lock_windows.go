@@ -8,6 +8,10 @@ import (
 )
 
 func (s *StateStore) WithLock(fn func() error) error {
+	return s.WithLockNotify(fn, nil)
+}
+
+func (s *StateStore) WithLockNotify(fn func() error, waiting func() error) error {
 	if s == nil || strings.TrimSpace(s.Path) == "" {
 		return errors.New("solo state store path is required")
 	}

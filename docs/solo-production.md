@@ -18,13 +18,13 @@ devopsellence doctor
 devopsellence node diagnose <node>
 ```
 
-`doctor` is the release gate: config, local state, attached nodes, runtime
-status, agent version, and node security findings summarized as pass/fail
-checks.
+`doctor` is the preflight gate: config, local state, attached nodes, SSH,
+Docker, agent liveness, agent version, and node security findings summarized as
+pass/fail checks. Use `status` for runtime health after deploy.
 
 `node diagnose` is the node evidence command: SSH reachability, agent status,
-agent version, desired-state files, Docker containers, listening ports, recent
-logs, and node security findings.
+agent version, `status.json`, Docker containers, images, networks, listening
+ports, and node security findings.
 
 Security hardening belongs here as baseline drift detection, not as a separate
 VM security platform. devopsellence should flag production-relevant risks such
@@ -46,8 +46,12 @@ devopsellence status
 Read `rollout_contract` in the dry-run or final result:
 
 - web services use health-gated cutover;
-- non-web services stop the old container before starting the new one;
-- release tasks run as one-shot tasks and may change data before app rollout.
+- non-web services use reconcile replacement without a health-gated traffic
+  cutover.
+
+Release tasks run as one-shot tasks and may change data before app rollout. They
+are not represented in `rollout_contract`; treat them as migration/data-change
+boundaries and pair risky changes with a backup or restore point.
 
 After deploy, `status` is the source of truth for the current release,
 deployment, desired-state revision, observed runtime revision, health, public
@@ -102,6 +106,7 @@ devopsellence support bundle
 ```
 
 These commands should preserve the agent-primary contract: machine-readable
-evidence, stable failures, redacted secrets, and next safe actions. SSH, Docker,
-files, and logs remain valid escape hatches when the structured surface is not
-enough.
+evidence, stable failures, and next safe actions. `support bundle` is the
+redacted sharing path; workload and node logs are raw operational output and
+should be handled as sensitive. SSH, Docker, files, and logs remain valid escape
+hatches when the structured surface is not enough.

@@ -644,7 +644,7 @@ func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
 			item["strategy"] = "stop_old_before_start_new"
 			item["health_gated"] = false
 			item["stop_old_before_start_new"] = true
-			item["operator_note"] = "non-web service hash changes stop and remove old containers before starting the replacement; this path is not health-gated"
+			item["operator_note"] = "non-web image, config, or desired-state changes stop and remove old containers before starting the replacement; this path is not health-gated"
 		}
 		contracts = append(contracts, item)
 	}

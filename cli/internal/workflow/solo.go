@@ -638,6 +638,7 @@ func soloDeployRolloutContract(cfg *config.ProjectConfig) []map[string]any {
 		if kind == config.ServiceKindWeb {
 			item["strategy"] = "health_gated_cutover"
 			item["health_gated"] = true
+			item["stop_old_before_start_new"] = false
 			item["operator_note"] = "web traffic moves after the replacement passes its healthcheck"
 		} else {
 			item["strategy"] = "stop_old_before_start_new"

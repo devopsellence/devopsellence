@@ -216,6 +216,79 @@ func TestResolveStoredDeploySnapshotRejectsLegacySnapshotWhenSecretsExist(t *tes
 	}
 }
 
+func TestResolveStoredDeploySnapshotAllowsLegacySecretlessCohostedSnapshotForDeployRepublish(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	storedSnapshot := desiredstate.DeploySnapshot{
+		WorkspaceRoot: workspaceRoot,
+		WorkspaceKey:  workspaceRoot,
+		Environment:   "staging",
+		Revision:      "oldrev",
+		Image:         "demo:old",
+		Services: []desiredstate.ServiceJSON{{
+			Name: "web",
+			Kind: config.ServiceKindWeb,
+			Env:  map[string]string{"APP_MODE": "old"},
+		}},
+	}
+	current := solo.State{}
+	if _, err := current.SetSecret(workspaceRoot, "staging", "web", "API_KEY", solo.SecretMaterial{Store: solo.SecretStorePlaintext, Value: "secret-value"}); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+	key, err := solo.EnvironmentStateKey(workspaceRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{}
+	resolved, err := app.resolveStoredDeploySnapshotWithOptions(context.Background(), current, storedSnapshot, soloRepublishOptions{allowLegacySecretlessSnapshotKeys: map[string]bool{key: true}})
+	if err != nil {
+		t.Fatalf("resolve legacy cohosted snapshot: %v", err)
+	}
+	if _, ok := resolved.Services[0].Env["API_KEY"]; ok {
+		t.Fatalf("resolved env = %#v, did not expect secret injected into legacy snapshot", resolved.Services[0].Env)
+	}
+	if got := resolved.Services[0].Env["APP_MODE"]; got != "old" {
+		t.Fatalf("APP_MODE = %q, want historical value old", got)
+	}
+}
+
+func TestDeployLegacySecretlessSnapshotKeysIncludesSnapshotOnlyCohosts(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cohostRoot := t.TempDir()
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cohostRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	currentID, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cohostID, err := solo.EnvironmentStateKey(cohostRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[cohostID] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: cohostRoot,
+		WorkspaceKey:  cohostRoot,
+		Environment:   "staging",
+		Revision:      "oldrev",
+	}
+
+	keys := deployLegacySecretlessSnapshotKeys(current, []string{"node-a"}, currentID)
+	if !keys[cohostID] {
+		t.Fatalf("keys = %#v, want snapshot-only cohost key %q", keys, cohostID)
+	}
+	if keys[currentID] {
+		t.Fatalf("keys = %#v, did not expect current environment key %q", keys, currentID)
+	}
+}
+
 func TestResolveStoredDeploySnapshotDoesNotMutateStoredSnapshotSecrets(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	storedSnapshot := desiredstate.DeploySnapshot{
@@ -10879,7 +10952,7 @@ func TestRepublishRefreshesCohostedIngressIntentFromCurrentConfigs(t *testing.T)
 	}
 
 	app := &App{ConfigStore: config.NewStore()}
-	inputs, err := app.preparedNodeDesiredStateInputs(context.Background(), current, "node-a", current.Nodes["node-a"], map[string]desiredstate.DeploySnapshot{})
+	inputs, err := app.preparedNodeDesiredStateInputs(context.Background(), current, "node-a", current.Nodes["node-a"], map[string]desiredstate.DeploySnapshot{}, soloRepublishOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10904,6 +10977,92 @@ func TestRepublishRefreshesCohostedIngressIntentFromCurrentConfigs(t *testing.T)
 	}
 	if state.Ingress == nil || state.Ingress.TLS.Email != "ops@example.com" {
 		t.Fatalf("published ingress = %#v, want refreshed TLS email", state.Ingress)
+	}
+}
+
+func TestPrepareRepublishPlansReportsCohostedIngressSettingsBeforePublish(t *testing.T) {
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	writeConfig := func(root, project, host, tlsMode string, redirect bool) config.ProjectConfig {
+		cfg := config.DefaultProjectConfig("solo", project, config.DefaultEnvironment)
+		cfg.Ingress = &config.IngressConfig{
+			Hosts: []string{host},
+			Rules: []config.IngressRuleConfig{{
+				Match:  config.IngressMatchConfig{Host: host, PathPrefix: "/"},
+				Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+			}},
+			TLS:          config.IngressTLSConfig{Mode: tlsMode},
+			RedirectHTTP: configBoolPtr(redirect),
+		}
+		if _, err := config.Write(root, cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	cfgA := writeConfig(workspaceA, "app-a", "a.example.com", "off", false)
+	cfgB := writeConfig(workspaceB, "app-b", "b.example.com", "manual", true)
+	snapshotFor := func(root string, cfg config.ProjectConfig, image, revision string) desiredstate.DeploySnapshot {
+		snapshot, err := solo.BuildDeploySnapshot(&cfg, root, filepath.Join(root, config.FilePath), image, revision, map[string]string{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.SetNode("node-b", config.Node{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceA, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceB, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceA, "production", "node-b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceB, "production", "node-b"); err != nil {
+		t.Fatal(err)
+	}
+	saveRelease := func(id, root string, cfg config.ProjectConfig, image, revision string) {
+		key, err := solo.EnvironmentStateKey(root, "production")
+		if err != nil {
+			t.Fatal(err)
+		}
+		release, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
+			ID:            id,
+			EnvironmentID: key,
+			Revision:      revision,
+			Snapshot:      snapshotFor(root, cfg, image, revision),
+			Image:         corerelease.ImageRef{Reference: image},
+			TargetNodeIDs: []string{"node-a"},
+			CreatedAt:     time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := current.SaveRelease(release); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saveRelease("rel-a", workspaceA, cfgA, "app-a:aaa1111", "aaa1111")
+	saveRelease("rel-b", workspaceB, cfgB, "app-b:bbb2222", "bbb2222")
+
+	_, err := (&App{ConfigStore: config.NewStore()}).prepareRepublishPlans(context.Background(), current, []string{"node-a", "node-b"}, soloRepublishOptions{})
+	if err == nil {
+		t.Fatal("prepareRepublishPlans() error = nil, want cohosted ingress mismatch")
+	}
+	if !strings.Contains(err.Error(), "cannot merge ingress for co-hosted environments with different settings") || !strings.Contains(err.Error(), "TLS") || !strings.Contains(err.Error(), "redirect_http") {
+		t.Fatalf("prepareRepublishPlans() error = %v, want TLS/redirect_http mismatch", err)
+	}
+	for _, nodeName := range []string{"node-a", "node-b"} {
+		if !strings.Contains(err.Error(), "["+nodeName+"] build desired state:") {
+			t.Fatalf("prepareRepublishPlans() error = %v, want %s planning error", err, nodeName)
+		}
 	}
 }
 

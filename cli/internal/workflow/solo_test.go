@@ -216,79 +216,6 @@ func TestResolveStoredDeploySnapshotRejectsLegacySnapshotWhenSecretsExist(t *tes
 	}
 }
 
-func TestResolveStoredDeploySnapshotAllowsLegacySecretlessCohostedSnapshotForDeployRepublish(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	storedSnapshot := desiredstate.DeploySnapshot{
-		WorkspaceRoot: workspaceRoot,
-		WorkspaceKey:  workspaceRoot,
-		Environment:   "staging",
-		Revision:      "oldrev",
-		Image:         "demo:old",
-		Services: []desiredstate.ServiceJSON{{
-			Name: "web",
-			Kind: config.ServiceKindWeb,
-			Env:  map[string]string{"APP_MODE": "old"},
-		}},
-	}
-	current := solo.State{}
-	if _, err := current.SetSecret(workspaceRoot, "staging", "web", "API_KEY", solo.SecretMaterial{Store: solo.SecretStorePlaintext, Value: "secret-value"}); err != nil {
-		t.Fatalf("set secret: %v", err)
-	}
-	key, err := solo.EnvironmentStateKey(workspaceRoot, "staging")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	app := &App{}
-	resolved, err := app.resolveStoredDeploySnapshotWithOptions(context.Background(), current, storedSnapshot, soloRepublishOptions{allowLegacySecretlessSnapshotKeys: map[string]bool{key: true}})
-	if err != nil {
-		t.Fatalf("resolve legacy cohosted snapshot: %v", err)
-	}
-	if _, ok := resolved.Services[0].Env["API_KEY"]; ok {
-		t.Fatalf("resolved env = %#v, did not expect secret injected into legacy snapshot", resolved.Services[0].Env)
-	}
-	if got := resolved.Services[0].Env["APP_MODE"]; got != "old" {
-		t.Fatalf("APP_MODE = %q, want historical value old", got)
-	}
-}
-
-func TestDeployLegacySecretlessSnapshotKeysIncludesSnapshotOnlyCohosts(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	cohostRoot := t.TempDir()
-	current := solo.State{}
-	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := current.AttachNode(cohostRoot, "staging", "node-a"); err != nil {
-		t.Fatal(err)
-	}
-	currentID, err := solo.EnvironmentStateKey(workspaceRoot, "production")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cohostID, err := solo.EnvironmentStateKey(cohostRoot, "staging")
-	if err != nil {
-		t.Fatal(err)
-	}
-	current.Snapshots[cohostID] = desiredstate.DeploySnapshot{
-		WorkspaceRoot: cohostRoot,
-		WorkspaceKey:  cohostRoot,
-		Environment:   "staging",
-		Revision:      "oldrev",
-	}
-
-	keys := deployLegacySecretlessSnapshotKeys(current, []string{"node-a"}, currentID)
-	if !keys[cohostID] {
-		t.Fatalf("keys = %#v, want snapshot-only cohost key %q", keys, cohostID)
-	}
-	if keys[currentID] {
-		t.Fatalf("keys = %#v, did not expect current environment key %q", keys, currentID)
-	}
-}
-
 func TestResolveStoredDeploySnapshotDoesNotMutateStoredSnapshotSecrets(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	storedSnapshot := desiredstate.DeploySnapshot{
@@ -10952,7 +10879,7 @@ func TestRepublishRefreshesCohostedIngressIntentFromCurrentConfigs(t *testing.T)
 	}
 
 	app := &App{ConfigStore: config.NewStore()}
-	inputs, err := app.preparedNodeDesiredStateInputs(context.Background(), current, "node-a", current.Nodes["node-a"], map[string]desiredstate.DeploySnapshot{}, soloRepublishOptions{})
+	inputs, err := app.preparedNodeDesiredStateInputs(context.Background(), current, "node-a", current.Nodes["node-a"], map[string]desiredstate.DeploySnapshot{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -11052,7 +10979,7 @@ func TestPrepareRepublishPlansReportsCohostedIngressSettingsBeforePublish(t *tes
 	saveRelease("rel-a", workspaceA, cfgA, "app-a:aaa1111", "aaa1111")
 	saveRelease("rel-b", workspaceB, cfgB, "app-b:bbb2222", "bbb2222")
 
-	_, err := (&App{ConfigStore: config.NewStore()}).prepareRepublishPlans(context.Background(), current, []string{"node-a", "node-b"}, soloRepublishOptions{})
+	_, err := (&App{ConfigStore: config.NewStore()}).prepareRepublishPlans(context.Background(), current, []string{"node-a", "node-b"})
 	if err == nil {
 		t.Fatal("prepareRepublishPlans() error = nil, want cohosted ingress mismatch")
 	}

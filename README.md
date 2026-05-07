@@ -10,7 +10,7 @@ No PaaS. No Kubernetes-lite. No hidden scheduler pretending machines do not
 exist.
 
 Why care today: devopsellence gives an AI assistant a narrow deployment
-contract it can operate without guessing from prose logs or shell history:
+contract it can follow without guessing from prose logs or shell history:
 deploy a Dockerized app to a VM, verify status and HTTPS, inspect logs, manage
 secrets, and roll back.
 

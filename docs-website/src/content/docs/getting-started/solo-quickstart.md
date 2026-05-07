@@ -65,11 +65,13 @@ mutating production.
 
 ```bash
 devopsellence ingress set --service web --host app.example.com --tls-email ops@example.com
-devopsellence ingress check --wait 5m
 devopsellence deploy
+devopsellence ingress check --wait 5m
 devopsellence status
 curl https://app.example.com/
 ```
 
-Treat HTTPS as ready only after the DNS/TLS check, `status`, and a direct HTTPS
-request all agree. See [Ingress and TLS](/guides/ingress-tls/) for details.
+`ingress check` verifies DNS and TLS after deploy publishes the ingress desired
+state. Treat HTTPS as ready only after the DNS/TLS check, `status`, and a direct
+HTTPS request all agree. See [Ingress and TLS](/guides/ingress-tls/) for
+details.

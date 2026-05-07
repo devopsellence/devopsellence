@@ -10,16 +10,17 @@ For solo HTTPS, point DNS at each web node, then configure ingress:
 
 ```bash
 devopsellence ingress set --service web --host app.example.com --tls-email ops@example.com
-devopsellence ingress check --wait 5m
 devopsellence deploy
+devopsellence ingress check --wait 5m
 devopsellence status
 curl https://app.example.com/
 ```
 
 Pass `--service` when the target web service is not obvious.
 
-`ingress check --wait` checks DNS readiness. After deploy, use
-`devopsellence status` and `curl` to confirm TLS reachability.
+`ingress check --wait` verifies DNS and TLS after deploy publishes the ingress
+desired state and the agent has reconciled Envoy. Use `devopsellence status` and
+`curl` as direct runtime proof before treating HTTPS as ready.
 
 ## Auto TLS On Multiple Nodes
 

@@ -10943,7 +10943,7 @@ func TestRepublishRefreshesCohostedIngressIntentFromCurrentConfigs(t *testing.T)
 	}
 }
 
-func TestValidateRepublishPlanReportsCohostedIngressSettingsBeforePublish(t *testing.T) {
+func TestPrepareRepublishPlansReportsCohostedIngressSettingsBeforePublish(t *testing.T) {
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
 	writeConfig := func(root, project, host, tlsMode string, redirect bool) config.ProjectConfig {
@@ -11006,12 +11006,12 @@ func TestValidateRepublishPlanReportsCohostedIngressSettingsBeforePublish(t *tes
 	saveRelease("rel-a", workspaceA, cfgA, "app-a:aaa1111", "aaa1111")
 	saveRelease("rel-b", workspaceB, cfgB, "app-b:bbb2222", "bbb2222")
 
-	err := (&App{ConfigStore: config.NewStore()}).validateRepublishPlan(context.Background(), current, []string{"node-a"}, soloRepublishOptions{})
+	_, err := (&App{ConfigStore: config.NewStore()}).prepareRepublishPlans(context.Background(), current, []string{"node-a"}, soloRepublishOptions{})
 	if err == nil {
-		t.Fatal("validateRepublishPlan() error = nil, want cohosted ingress mismatch")
+		t.Fatal("prepareRepublishPlans() error = nil, want cohosted ingress mismatch")
 	}
 	if !strings.Contains(err.Error(), "cannot merge ingress for co-hosted environments with different settings") || !strings.Contains(err.Error(), "TLS") || !strings.Contains(err.Error(), "redirect_http") {
-		t.Fatalf("validateRepublishPlan() error = %v, want TLS/redirect_http mismatch", err)
+		t.Fatalf("prepareRepublishPlans() error = %v, want TLS/redirect_http mismatch", err)
 	}
 }
 

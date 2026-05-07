@@ -1847,7 +1847,7 @@ func (a *App) resolveOnePasswordSecret(ctx context.Context, reference string) (s
 func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.State, nodeName string, node config.Node, resolvedSnapshotCache map[string]desiredstate.DeploySnapshot, opts soloRepublishOptions) (preparedNodeState, error) {
 	storedSnapshots, releaseNodes, peers, _, err := soloNodeDesiredStateInputs(current, nodeName)
 	if err != nil {
-		return preparedNodeState{}, fmt.Errorf("build desired state inputs: %w", err)
+		return preparedNodeState{}, err
 	}
 	resolvedSnapshots := make([]desiredstate.DeploySnapshot, 0, len(storedSnapshots))
 	imageSet := map[string]bool{}

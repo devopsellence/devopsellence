@@ -9,6 +9,11 @@ logs, and a node agent that reconciles desired state.
 No PaaS. No Kubernetes-lite. No hidden scheduler pretending machines do not
 exist.
 
+Why care today: devopsellence gives an AI assistant a narrow deployment
+contract it can operate without guessing from prose logs or shell history:
+deploy a Dockerized app to a VM, verify status and HTTPS, inspect logs, manage
+secrets, and roll back.
+
 ## AI-operator-first
 
 The main operator is an AI coding or operations assistant acting for a human.

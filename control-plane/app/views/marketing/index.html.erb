@@ -3,7 +3,7 @@
 <main class="page">
   <section class="hero">
     <h1 class="hero-title">VMs are enough.</h1>
-    <p class="hero-sub">devopsellence is a toolkit for deploying and running containerized apps.<br>No PaaS. No platform. No extra abstraction layer.<br>Start with SSH. Add a control plane when you need one.</p>
+    <p class="hero-sub">Deploy containerized apps to familiar VMs with commands an AI operator can safely run.<br>Start in solo mode with dry-runs, deploys, status, logs, secrets, rollback, and HTTPS checks.<br>No PaaS. No Kubernetes-lite. No hidden scheduler.</p>
 
     <div class="install-pill">
       <code id="install-cmd"><%= @cli_install_command %></code>
@@ -17,7 +17,8 @@
   <section class="split-section">
     <div class="split-text">
       <h2>Keep the VM.<br>Lose the toil.</h2>
-      <p>devopsellence keeps the VM as the unit of execution. The agent reconciles your app on machines you control using ordinary primitives for images, state, and secrets.</p>
+      <p>devopsellence keeps the VM as the unit of execution. In solo mode, the CLI gives AI operators a narrow control surface for dry-runs, deploys, status, doctor, logs, exec, secrets, rollback, DNS checks, and HTTPS verification.</p>
+      <p>The node agent reconciles your app on familiar Linux VMs using ordinary primitives for images, state, and secrets.</p>
       <p>No dynos. No pods. No shared multi-tenant runtime. If the control plane goes down, your apps keep running.</p>
     </div>
     <div class="split-visual">
@@ -46,13 +47,13 @@
     <div class="mode-compare" style="margin-top:32px;">
       <div class="mode-card">
         <h3>Solo</h3>
-        <p class="mode-tagline">SSH-first. No control plane. Deploy from your terminal to any Linux server.</p>
+        <p class="mode-tagline">SSH-first. No control plane. Deploy from your terminal or AI assistant to familiar Linux VMs.</p>
         <dl>
           <div class="mode-row"><dt>Transport</dt><dd>SSH</dd></div>
           <div class="mode-row"><dt>Auth</dt><dd>SSH keys</dd></div>
-          <div class="mode-row"><dt>Secrets</dt><dd>Local <code>.env</code> file</dd></div>
+          <div class="mode-row"><dt>Secrets</dt><dd>Local state or external refs</dd></div>
           <div class="mode-row"><dt>Images</dt><dd>Streamed over SSH</dd></div>
-          <div class="mode-row"><dt>HTTPS</dt><dd>Coming soon</dd></div>
+          <div class="mode-row"><dt>HTTPS</dt><dd>Auto TLS with Envoy + Let's Encrypt</dd></div>
           <div class="mode-row"><dt>Best for</dt><dd>Side projects, single-dev apps, staging</dd></div>
         </dl>
       </div>
@@ -73,7 +74,7 @@
 
   <section class="section section-center">
     <h2>Works with your stack</h2>
-    <p class="section-sub">Standard Dockerfiles. GitHub Actions. Any Linux server &mdash; Hetzner, DigitalOcean, GCP, or your home lab. Bring PlanetScale, RDS, Redis Cloud, S3, Datadog, Grafana Cloud, self-hosted Postgres, or your own services. devopsellence deploys your app; it does not replace the rest of your architecture.</p>
+    <p class="section-sub">Standard Dockerfiles. GitHub Actions. Familiar Linux VMs &mdash; Hetzner, DigitalOcean, GCP, or your home lab. Bring PlanetScale, RDS, Redis Cloud, S3, Datadog, Grafana Cloud, self-hosted Postgres, or your own services. devopsellence deploys your app; it does not replace the rest of your architecture.</p>
     <%= link_to "Read the docs", "https://docs.devopsellence.com", class: "btn btn-dark" %>
   </section>
 

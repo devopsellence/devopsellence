@@ -7,6 +7,10 @@ devopsellence deploys containerized applications to familiar VMs. It does not
 try to hide machines, containers, files, registries, or secret stores. It makes
 the ordinary primitives easier to use together.
 
+The immediate solo-mode value is an operator-safe deployment loop: dry-run,
+deploy, status, doctor, logs, exec, secrets, rollback, DNS checks, and HTTPS
+verification with structured output an AI assistant can act on.
+
 The system has three product surfaces:
 
 - **Node agent**: runs on each node and reconciles containers, Envoy ingress,

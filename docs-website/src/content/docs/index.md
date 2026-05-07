@@ -13,7 +13,12 @@ hero:
 devopsellence helps AI coding and operations assistants deploy containerized
 apps without inventing production shell choreography.
 
-The contract is narrow: inspect, plan, apply desired state, observe
+Why care today: it gives Codex, Claude, or a human operator a narrow deployment
+contract for Dockerized apps on VMs. Plan a change, deploy it, verify status and
+HTTPS, inspect logs, manage secrets, and roll back with structured evidence
+instead of guesses.
+
+The contract stays narrow: inspect, plan, apply desired state, observe
 reconciliation, and recover with ordinary tools when needed. Humans stay in the
 approval loop; the node agent stays deterministic.
 
@@ -30,6 +35,8 @@ not require npm or `npx`.
 
 - [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
   one VM.
+- [Ingress and TLS](/guides/ingress-tls/) for hostnames, DNS checks, and HTTPS
+  verification.
 - [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app
   example that maps a Kamal-style deployment to devopsellence solo.
 - [Flue agents on Node.js](/examples/flue-node-solo/) for deploying an

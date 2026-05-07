@@ -58,3 +58,22 @@ devopsellence node logs prod-1 --lines 100
 `deploy --dry-run` prints a structured plan and does not build images, connect to
 nodes, publish desired state, or write solo state. Review that plan before
 mutating production.
+
+<ol class="command-sequence" start="5">
+  <li>Add a hostname and HTTPS when the app is ready for public traffic.</li>
+</ol>
+
+```bash
+devopsellence ingress set --service web --host app.example.com --tls-email ops@example.com
+# update DNS so app.example.com points at the attached web node IP before deploy
+devopsellence deploy
+devopsellence ingress check --wait 5m
+devopsellence status
+curl https://app.example.com/
+```
+
+With auto TLS, `deploy` runs a DNS preflight and expects the hostname to resolve
+to the attached web node IPs. `ingress check` verifies DNS and TLS after deploy
+publishes the ingress desired state. Treat HTTPS as ready only after the DNS/TLS
+check, `status`, and a direct HTTPS request all agree. See [Ingress and
+TLS](/guides/ingress-tls/) for details.

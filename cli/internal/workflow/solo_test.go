@@ -252,6 +252,43 @@ func TestResolveStoredDeploySnapshotAllowsLegacySecretlessCohostedSnapshotForDep
 	}
 }
 
+func TestDeployLegacySecretlessSnapshotKeysIncludesSnapshotOnlyCohosts(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cohostRoot := t.TempDir()
+	current := solo.State{}
+	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(cohostRoot, "staging", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	currentID, err := solo.EnvironmentStateKey(workspaceRoot, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cohostID, err := solo.EnvironmentStateKey(cohostRoot, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Snapshots[cohostID] = desiredstate.DeploySnapshot{
+		WorkspaceRoot: cohostRoot,
+		WorkspaceKey:  cohostRoot,
+		Environment:   "staging",
+		Revision:      "oldrev",
+	}
+
+	keys := deployLegacySecretlessSnapshotKeys(current, []string{"node-a"}, currentID)
+	if !keys[cohostID] {
+		t.Fatalf("keys = %#v, want snapshot-only cohost key %q", keys, cohostID)
+	}
+	if keys[currentID] {
+		t.Fatalf("keys = %#v, did not expect current environment key %q", keys, currentID)
+	}
+}
+
 func TestResolveStoredDeploySnapshotDoesNotMutateStoredSnapshotSecrets(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	storedSnapshot := desiredstate.DeploySnapshot{

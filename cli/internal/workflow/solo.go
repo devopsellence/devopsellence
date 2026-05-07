@@ -502,12 +502,7 @@ func (a *App) soloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
-	legacySecretlessSnapshotKeys := map[string]bool{}
-	for key := range current.Current {
-		if key != environmentID {
-			legacySecretlessSnapshotKeys[key] = true
-		}
-	}
+	legacySecretlessSnapshotKeys := deployLegacySecretlessSnapshotKeys(current, attachedNodeNames, environmentID)
 	now := time.Now().UTC()
 	releaseID := soloReleaseID(shortSHA, now)
 	release, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
@@ -1388,6 +1383,21 @@ func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames 
 
 type soloRepublishOptions struct {
 	allowLegacySecretlessSnapshotKeys map[string]bool
+}
+
+func deployLegacySecretlessSnapshotKeys(current solo.State, nodeNames []string, currentEnvironmentID string) map[string]bool {
+	keys := map[string]bool{}
+	currentEnvironmentID = strings.TrimSpace(currentEnvironmentID)
+	for _, nodeName := range normalizeSoloNames(nodeNames) {
+		for _, key := range current.AttachmentKeysForNode(nodeName) {
+			key = strings.TrimSpace(key)
+			if key == "" || key == currentEnvironmentID {
+				continue
+			}
+			keys[key] = true
+		}
+	}
+	return keys
 }
 
 func (a *App) republishNodesWithOptions(ctx context.Context, current solo.State, nodeNames []string, opts soloRepublishOptions) (map[string]string, error) {

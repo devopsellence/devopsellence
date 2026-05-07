@@ -1838,20 +1838,10 @@ func (a *App) resolveOnePasswordSecret(ctx context.Context, reference string) (s
 	return value, nil
 }
 
-func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.State, nodeName string, node config.Node, resolvedSnapshotCache map[string]desiredstate.DeploySnapshot, opts soloRepublishOptions) (struct {
-	snapshots    []desiredstate.DeploySnapshot
-	releaseNodes map[string]string
-	peers        []desiredstate.NodePeer
-	images       []string
-}, error) {
+func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.State, nodeName string, node config.Node, resolvedSnapshotCache map[string]desiredstate.DeploySnapshot, opts soloRepublishOptions) (preparedNodeState, error) {
 	storedSnapshots, releaseNodes, peers, _, err := soloNodeDesiredStateInputs(current, nodeName)
 	if err != nil {
-		return struct {
-			snapshots    []desiredstate.DeploySnapshot
-			releaseNodes map[string]string
-			peers        []desiredstate.NodePeer
-			images       []string
-		}{}, fmt.Errorf("build desired state inputs: %w", err)
+		return preparedNodeState{}, fmt.Errorf("build desired state inputs: %w", err)
 	}
 	resolvedSnapshots := make([]desiredstate.DeploySnapshot, 0, len(storedSnapshots))
 	imageSet := map[string]bool{}
@@ -1861,24 +1851,14 @@ func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.S
 		if !ok {
 			resolvedSnapshot, err = a.resolveStoredDeploySnapshotWithOptions(ctx, current, snapshot, opts)
 			if err != nil {
-				return struct {
-					snapshots    []desiredstate.DeploySnapshot
-					releaseNodes map[string]string
-					peers        []desiredstate.NodePeer
-					images       []string
-				}{}, fmt.Errorf("hydrate snapshot: %w", err)
+				return preparedNodeState{}, fmt.Errorf("hydrate snapshot: %w", err)
 			}
 			resolvedSnapshotCache[key] = resolvedSnapshot
 		}
 		if len(storedSnapshots) > 1 {
 			resolvedSnapshot, err = a.refreshSnapshotIngressIntent(resolvedSnapshot)
 			if err != nil {
-				return struct {
-					snapshots    []desiredstate.DeploySnapshot
-					releaseNodes map[string]string
-					peers        []desiredstate.NodePeer
-					images       []string
-				}{}, fmt.Errorf("refresh cohosted ingress intent: %w", err)
+				return preparedNodeState{}, fmt.Errorf("refresh cohosted ingress intent: %w", err)
 			}
 		}
 		resolvedSnapshots = append(resolvedSnapshots, resolvedSnapshot)
@@ -1893,12 +1873,7 @@ func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.S
 		images = append(images, image)
 	}
 	sort.Strings(images)
-	return struct {
-		snapshots    []desiredstate.DeploySnapshot
-		releaseNodes map[string]string
-		peers        []desiredstate.NodePeer
-		images       []string
-	}{
+	return preparedNodeState{
 		snapshots:    resolvedSnapshots,
 		releaseNodes: releaseNodes,
 		peers:        peers,

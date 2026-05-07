@@ -502,7 +502,6 @@ func (a *App) soloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if err != nil {
 		return err
 	}
-	legacySecretlessSnapshotKeys := deployLegacySecretlessSnapshotKeys(current, attachedNodeNames, environmentID)
 	now := time.Now().UTC()
 	releaseID := soloReleaseID(shortSHA, now)
 	release, err := corerelease.NewRelease(corerelease.ReleaseCreateInput{
@@ -536,7 +535,7 @@ func (a *App) soloDeploy(ctx context.Context, opts SoloDeployOptions) error {
 	if _, err := publishState.SaveRelease(release); err != nil {
 		return err
 	}
-	preparedRepublish, err := a.prepareRepublishPlans(ctx, publishState, attachedNodeNames, soloRepublishOptions{allowLegacySecretlessSnapshotKeys: legacySecretlessSnapshotKeys})
+	preparedRepublish, err := a.prepareRepublishPlans(ctx, publishState, attachedNodeNames)
 	if err != nil {
 		return err
 	}
@@ -1378,30 +1377,7 @@ func appendSoloRepublishError(mu *sync.Mutex, errs *[]soloRepublishErrorEntry, n
 }
 
 func (a *App) republishNodes(ctx context.Context, current solo.State, nodeNames []string) (map[string]string, error) {
-	return a.republishNodesWithOptions(ctx, current, nodeNames, soloRepublishOptions{})
-}
-
-type soloRepublishOptions struct {
-	allowLegacySecretlessSnapshotKeys map[string]bool
-}
-
-func deployLegacySecretlessSnapshotKeys(current solo.State, nodeNames []string, currentEnvironmentID string) map[string]bool {
-	keys := map[string]bool{}
-	currentEnvironmentID = strings.TrimSpace(currentEnvironmentID)
-	for _, nodeName := range normalizeSoloNames(nodeNames) {
-		for _, key := range current.AttachmentKeysForNode(nodeName) {
-			key = strings.TrimSpace(key)
-			if key == "" || key == currentEnvironmentID {
-				continue
-			}
-			keys[key] = true
-		}
-	}
-	return keys
-}
-
-func (a *App) republishNodesWithOptions(ctx context.Context, current solo.State, nodeNames []string, opts soloRepublishOptions) (map[string]string, error) {
-	prepared, err := a.prepareRepublishPlans(ctx, current, nodeNames, opts)
+	prepared, err := a.prepareRepublishPlans(ctx, current, nodeNames)
 	if err != nil {
 		return nil, err
 	}
@@ -1421,7 +1397,7 @@ type preparedNodeState struct {
 	images       []string
 }
 
-func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nodeNames []string, opts soloRepublishOptions) (map[string]preparedNodePublication, error) {
+func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nodeNames []string) (map[string]preparedNodePublication, error) {
 	if len(nodeNames) == 0 {
 		return map[string]preparedNodePublication{}, nil
 	}
@@ -1434,7 +1410,7 @@ func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nod
 	resolvedSnapshotCache := map[string]desiredstate.DeploySnapshot{}
 	var errs []soloRepublishErrorEntry
 	for _, nodeName := range sortedNames {
-		inputs, err := a.preparedNodeDesiredStateInputs(ctx, current, nodeName, nodes[nodeName], resolvedSnapshotCache, opts)
+		inputs, err := a.preparedNodeDesiredStateInputs(ctx, current, nodeName, nodes[nodeName], resolvedSnapshotCache)
 		if err != nil {
 			errs = append(errs, soloRepublishErrorEntry{node: nodeName, operation: "build desired state inputs", err: err})
 			continue
@@ -1540,10 +1516,6 @@ func (a *App) republishPreparedNodes(ctx context.Context, prepared map[string]pr
 }
 
 func (a *App) resolveStoredDeploySnapshot(ctx context.Context, current solo.State, snapshot desiredstate.DeploySnapshot) (desiredstate.DeploySnapshot, error) {
-	return a.resolveStoredDeploySnapshotWithOptions(ctx, current, snapshot, soloRepublishOptions{})
-}
-
-func (a *App) resolveStoredDeploySnapshotWithOptions(ctx context.Context, current solo.State, snapshot desiredstate.DeploySnapshot, opts soloRepublishOptions) (desiredstate.DeploySnapshot, error) {
 	snapshot = cloneDeploySnapshot(snapshot)
 	records, err := current.SecretRecords(snapshot.WorkspaceRoot, snapshot.Environment)
 	if err != nil {
@@ -1554,10 +1526,6 @@ func (a *App) resolveStoredDeploySnapshotWithOptions(ctx context.Context, curren
 		local[record.ServiceName+"\x00"+record.Name] = record
 	}
 	if len(local) > 0 && len(snapshot.SecretRefs) == 0 {
-		key, keyErr := solo.EnvironmentStateKey(snapshot.WorkspaceRoot, snapshot.Environment)
-		if keyErr == nil && opts.allowLegacySecretlessSnapshotKeys[key] {
-			return snapshot, nil
-		}
 		return desiredstate.DeploySnapshot{}, fmt.Errorf("stored release snapshot for %s (%s) was created before secret metadata was tracked; run `devopsellence deploy` to create a fresh release before rollback or republish", snapshot.WorkspaceRoot, snapshot.Environment)
 	}
 	cache := map[string]string{}
@@ -1844,7 +1812,7 @@ func (a *App) resolveOnePasswordSecret(ctx context.Context, reference string) (s
 	return value, nil
 }
 
-func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.State, nodeName string, node config.Node, resolvedSnapshotCache map[string]desiredstate.DeploySnapshot, opts soloRepublishOptions) (preparedNodeState, error) {
+func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.State, nodeName string, node config.Node, resolvedSnapshotCache map[string]desiredstate.DeploySnapshot) (preparedNodeState, error) {
 	storedSnapshots, releaseNodes, peers, _, err := soloNodeDesiredStateInputs(current, nodeName)
 	if err != nil {
 		return preparedNodeState{}, err
@@ -1855,7 +1823,7 @@ func (a *App) preparedNodeDesiredStateInputs(ctx context.Context, current solo.S
 		key := strings.TrimSpace(snapshot.WorkspaceKey) + "\n" + strings.TrimSpace(snapshot.Environment)
 		resolvedSnapshot, ok := resolvedSnapshotCache[key]
 		if !ok {
-			resolvedSnapshot, err = a.resolveStoredDeploySnapshotWithOptions(ctx, current, snapshot, opts)
+			resolvedSnapshot, err = a.resolveStoredDeploySnapshot(ctx, current, snapshot)
 			if err != nil {
 				return preparedNodeState{}, fmt.Errorf("hydrate snapshot: %w", err)
 			}

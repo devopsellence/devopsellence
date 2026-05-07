@@ -1432,10 +1432,12 @@ func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nod
 	sortedNames := sortedNodeNames(nodes)
 	prepared := make(map[string]preparedNodePublication, len(sortedNames))
 	resolvedSnapshotCache := map[string]desiredstate.DeploySnapshot{}
+	var errs []soloRepublishErrorEntry
 	for _, nodeName := range sortedNames {
 		inputs, err := a.preparedNodeDesiredStateInputs(ctx, current, nodeName, nodes[nodeName], resolvedSnapshotCache, opts)
 		if err != nil {
-			return nil, err
+			errs = append(errs, soloRepublishErrorEntry{node: nodeName, operation: "build desired state inputs", err: err})
+			continue
 		}
 		publication, err := corerelease.PlanPublication(corerelease.PublicationPlanInput{
 			NodeName:     nodeName,
@@ -1445,13 +1447,17 @@ func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nod
 			NodePeers:    inputs.peers,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("[%s] build desired state: %w", nodeName, err)
+			errs = append(errs, soloRepublishErrorEntry{node: nodeName, operation: "build desired state", err: err})
+			continue
 		}
 		prepared[nodeName] = preparedNodePublication{
 			node:        nodes[nodeName],
 			inputs:      inputs,
 			publication: publication,
 		}
+	}
+	if len(errs) > 0 {
+		return nil, &soloRepublishError{entries: errs}
 	}
 	return prepared, nil
 }

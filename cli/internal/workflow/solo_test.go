@@ -11013,10 +11013,19 @@ func TestPrepareRepublishPlansReportsCohostedIngressSettingsBeforePublish(t *tes
 	if err := current.SetNode("node-a", config.Node{Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := current.SetNode("node-b", config.Node{Host: "203.0.113.11", User: "root", Labels: []string{config.DefaultWebRole}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := current.AttachNode(workspaceA, "production", "node-a"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := current.AttachNode(workspaceB, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceA, "production", "node-b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := current.AttachNode(workspaceB, "production", "node-b"); err != nil {
 		t.Fatal(err)
 	}
 	saveRelease := func(id, root string, cfg config.ProjectConfig, image, revision string) {
@@ -11043,12 +11052,17 @@ func TestPrepareRepublishPlansReportsCohostedIngressSettingsBeforePublish(t *tes
 	saveRelease("rel-a", workspaceA, cfgA, "app-a:aaa1111", "aaa1111")
 	saveRelease("rel-b", workspaceB, cfgB, "app-b:bbb2222", "bbb2222")
 
-	_, err := (&App{ConfigStore: config.NewStore()}).prepareRepublishPlans(context.Background(), current, []string{"node-a"}, soloRepublishOptions{})
+	_, err := (&App{ConfigStore: config.NewStore()}).prepareRepublishPlans(context.Background(), current, []string{"node-a", "node-b"}, soloRepublishOptions{})
 	if err == nil {
 		t.Fatal("prepareRepublishPlans() error = nil, want cohosted ingress mismatch")
 	}
 	if !strings.Contains(err.Error(), "cannot merge ingress for co-hosted environments with different settings") || !strings.Contains(err.Error(), "TLS") || !strings.Contains(err.Error(), "redirect_http") {
 		t.Fatalf("prepareRepublishPlans() error = %v, want TLS/redirect_http mismatch", err)
+	}
+	for _, nodeName := range []string{"node-a", "node-b"} {
+		if !strings.Contains(err.Error(), "["+nodeName+"] build desired state:") {
+			t.Fatalf("prepareRepublishPlans() error = %v, want %s planning error", err, nodeName)
+		}
 	}
 }
 

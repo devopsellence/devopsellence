@@ -44,6 +44,7 @@ export default defineConfig({
             { label: "Deploy with shared", link: "/guides/shared-deploy/" },
             { label: "CloudStack VMs", link: "/guides/cloudstack-vms/" },
             { label: "GitHub Actions", link: "/guides/github-actions/" },
+            { label: "Environment overlays", link: "/guides/environment-overlays/" },
             { label: "Secrets", link: "/guides/secrets/" },
             { label: "Ingress and TLS", link: "/guides/ingress-tls/" },
             { label: "Rollback", link: "/guides/rollback/" },

@@ -68,3 +68,7 @@ environments:
 
 Services are explicit. Do not rely on fixed concepts such as one `web` and one
 `worker`; name the runtime units your app actually needs.
+
+For a full production/staging example, environment selection commands, merge
+behavior, and the intentional boundaries around build overlays and ingress
+rules, see [Environment overlays](/guides/environment-overlays/).

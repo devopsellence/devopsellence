@@ -778,6 +778,12 @@ func (a *App) Deploy(ctx context.Context, opts DeployOptions) error {
 			"public_url":       publicURL(publish),
 			"trial_expires_at": stringFromMap(publish, "trial_expires_at"),
 		}
+		if status := stringFromMap(publish, "public_url_status"); status != "" {
+			result["public_url_status"] = status
+		}
+		if urls := stringSlice(publish["configured_public_urls"]); len(urls) > 0 {
+			result["configured_public_urls"] = urls
+		}
 		accessToken = session.AccessToken()
 		return nil
 	}
@@ -2470,7 +2476,7 @@ func isTransientServerError(err error) bool {
 }
 
 func deploymentProgressMap(progress api.DeploymentProgress) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"id":             progress.ID,
 		"sequence":       progress.Sequence,
 		"status":         progress.Status,
@@ -2495,6 +2501,31 @@ func deploymentProgressMap(progress api.DeploymentProgress) map[string]any {
 		},
 		"nodes": progress.Nodes,
 	}
+	if progress.Ingress != nil {
+		ingress := map[string]any{
+			"hostname":    progress.Ingress.Hostname,
+			"hosts":       progress.Ingress.Hosts,
+			"public_urls": progress.Ingress.PublicURLs,
+			"status":      progress.Ingress.Status,
+		}
+		if progress.Ingress.PublicURL != "" {
+			ingress["public_url"] = progress.Ingress.PublicURL
+		}
+		if len(progress.Ingress.ConfiguredPublicURLs) > 0 {
+			ingress["configured_public_urls"] = progress.Ingress.ConfiguredPublicURLs
+		}
+		if progress.Ingress.PublicURLStatus != "" {
+			ingress["public_url_status"] = progress.Ingress.PublicURLStatus
+		}
+		if progress.Ingress.TLSStatus != "" {
+			ingress["tls_status"] = progress.Ingress.TLSStatus
+		}
+		if progress.Ingress.TLSError != "" {
+			ingress["tls_error"] = progress.Ingress.TLSError
+		}
+		result["ingress"] = ingress
+	}
+	return result
 }
 
 func rolloutOutcome(progress api.DeploymentProgress) error {

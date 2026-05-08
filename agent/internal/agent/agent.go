@@ -171,6 +171,7 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		Revision:     desired.Revision,
 		Message:      fmt.Sprintf("created=%d updated=%d removed=%d unchanged=%d", result.Created, result.Updated, result.Removed, result.Unchanged),
 		Summary:      summary,
+		Ingress:      a.reconciler.IngressStatus(desired),
 		DiskCare:     diskCareStatus,
 		Environments: environments,
 	}, fetched.Sequence)
@@ -318,6 +319,7 @@ type reportFingerprint struct {
 	err              string
 	taskHash         string
 	diskCareHash     string
+	ingressHash      string
 	environmentsHash string
 }
 
@@ -330,6 +332,7 @@ func newReportFingerprint(sequence int64, status report.Status) *reportFingerpri
 		err:              status.Error,
 		taskHash:         fingerprintTask(status.Task),
 		diskCareHash:     fingerprintDiskCare(status.DiskCare),
+		ingressHash:      fingerprintIngress(status.Ingress),
 		environmentsHash: fingerprintEnvironments(status.Environments),
 	}
 }
@@ -343,6 +346,7 @@ func (f *reportFingerprint) suppresses(other *reportFingerprint) bool {
 	}
 	if f.phase == report.PhaseSettled {
 		return f.diskCareHash == other.diskCareHash &&
+			f.ingressHash == other.ingressHash &&
 			f.environmentsHash == other.environmentsHash
 	}
 	return f.revision == other.revision &&
@@ -350,6 +354,7 @@ func (f *reportFingerprint) suppresses(other *reportFingerprint) bool {
 		f.err == other.err &&
 		f.taskHash == other.taskHash &&
 		f.diskCareHash == other.diskCareHash &&
+		f.ingressHash == other.ingressHash &&
 		f.environmentsHash == other.environmentsHash
 }
 
@@ -406,6 +411,22 @@ func fingerprintDiskCare(status *report.DiskCareStatus) string {
 		builder.WriteString(fmt.Sprintf("%d", artifact.Bytes))
 		builder.WriteByte(0)
 	}
+	return builder.String()
+}
+
+func fingerprintIngress(status *report.IngressStatus) string {
+	if status == nil {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.WriteString(status.TLSStatus)
+	builder.WriteByte(0)
+	if status.TLSNotAfter != nil && !status.TLSNotAfter.IsZero() {
+		builder.WriteString(status.TLSNotAfter.UTC().Format(time.RFC3339))
+	}
+	builder.WriteByte(0)
+	builder.WriteString(status.TLSError)
 	return builder.String()
 }
 

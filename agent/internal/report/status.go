@@ -18,6 +18,7 @@ type Status struct {
 	Error        string              `json:"error,omitempty"`
 	Summary      *Summary            `json:"summary,omitempty"`
 	Task         *TaskStatus         `json:"task,omitempty"`
+	Ingress      *IngressStatus      `json:"ingress,omitempty"`
 	DiskCare     *DiskCareStatus     `json:"disk_care,omitempty"`
 	Environments []EnvironmentStatus `json:"environments,omitempty"`
 }
@@ -51,6 +52,12 @@ type TaskStatus struct {
 	Message  string `json:"message,omitempty"`
 	Error    string `json:"error,omitempty"`
 	ExitCode int64  `json:"exit_code,omitempty"`
+}
+
+type IngressStatus struct {
+	TLSStatus   string     `json:"tls_status,omitempty"`
+	TLSNotAfter *time.Time `json:"tls_not_after,omitempty"`
+	TLSError    string     `json:"tls_error,omitempty"`
 }
 
 // DiskCareStatus reports node-local cleanup and retention state for

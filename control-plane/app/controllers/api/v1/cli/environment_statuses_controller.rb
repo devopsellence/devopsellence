@@ -30,7 +30,7 @@ module Api
               runtime_kind: environment.runtime_kind,
               ingress_strategy: environment.ingress_strategy
             },
-            ingress: serialize_ingress(environment.environment_ingress),
+            ingress: serialize_ingress(environment),
             current_release: serialize_release(current_release, organization),
             latest_deployment: serialize_deployment(latest_deployment),
             assigned_nodes: assigned_nodes,
@@ -80,17 +80,12 @@ module Api
           }
         end
 
-        def serialize_ingress(ingress)
-          return nil unless ingress
-
-          {
-            hostname: ingress.primary_hostname,
-            hosts: ingress.hosts,
-            public_url: ingress.public_url,
-            public_urls: ingress.public_urls,
-            status: ingress.status,
-            last_error: ingress.last_error
-          }
+        def serialize_ingress(environment)
+          ::Cli::IngressStatusSerializer.new(
+            environment: environment,
+            ingress: environment.environment_ingress,
+            release: environment.current_release
+          ).as_json
         end
 
         def assignment_warning_for(environment, assigned_nodes)

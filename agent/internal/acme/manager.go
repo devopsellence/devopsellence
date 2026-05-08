@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatepb"
+	"github.com/devopsellence/devopsellence/agent/internal/report"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
@@ -52,6 +53,8 @@ type Manager struct {
 	provider *HTTP01Provider
 	once     sync.Once
 	startErr error
+	statusMu sync.Mutex
+	lastErr  string
 }
 
 func New(cfg Config) *Manager {
@@ -76,6 +79,36 @@ func New(cfg Config) *Manager {
 }
 
 func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer) error {
+	err := m.ensure(ctx, ingress, nodePeers)
+	m.recordEnsureResult(err)
+	return err
+}
+
+func (m *Manager) Status(ingress *desiredstatepb.Ingress) *report.IngressStatus {
+	if !wantsTLS(ingress) {
+		m.recordEnsureResult(nil)
+		return nil
+	}
+
+	hosts := ingressHosts(ingress)
+	if len(hosts) == 0 {
+		return &report.IngressStatus{TLSStatus: "failed", TLSError: "ingress hosts required"}
+	}
+
+	cert, err := certificateForHosts(m.cfg.CertPath, hosts)
+	if err == nil && time.Now().Before(cert.NotAfter) {
+		notAfter := cert.NotAfter.UTC()
+		return &report.IngressStatus{TLSStatus: "ready", TLSNotAfter: &notAfter}
+	}
+
+	if lastErr := m.lastError(); lastErr != "" {
+		return &report.IngressStatus{TLSStatus: "failed", TLSError: lastErr}
+	}
+
+	return &report.IngressStatus{TLSStatus: "pending"}
+}
+
+func (m *Manager) ensure(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer) error {
 	if !needsAutoTLS(ingress) {
 		return nil
 	}
@@ -133,6 +166,22 @@ func (m *Manager) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, n
 	}
 	m.logger.Info("acme certificate ready", "hosts", strings.Join(hosts, ","))
 	return nil
+}
+
+func (m *Manager) recordEnsureResult(err error) {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	if err == nil {
+		m.lastErr = ""
+		return
+	}
+	m.lastErr = err.Error()
+}
+
+func (m *Manager) lastError() string {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	return m.lastErr
 }
 
 func (m *Manager) startHTTP01Server() error {
@@ -348,6 +397,25 @@ func needsAutoTLS(ingress *desiredstatepb.Ingress) bool {
 	return mode == "" || mode == "auto"
 }
 
+func wantsTLS(ingress *desiredstatepb.Ingress) bool {
+	if ingress == nil {
+		return false
+	}
+	mode := strings.TrimSpace(ingress.Mode)
+	if mode == "" {
+		mode = "public"
+	}
+	if mode != "public" {
+		return false
+	}
+	tls := ingress.GetTls()
+	if tls == nil {
+		return true
+	}
+	mode = strings.TrimSpace(tls.Mode)
+	return mode == "" || mode == "auto" || mode == "manual"
+}
+
 func ingressTLSEmail(ingress *desiredstatepb.Ingress) string {
 	if ingress == nil || ingress.GetTls() == nil {
 		return ""
@@ -413,20 +481,25 @@ func ingressHosts(ingress *desiredstatepb.Ingress) []string {
 }
 
 func certCurrent(path string, hosts []string, renewBefore time.Duration) bool {
-	data, err := os.ReadFile(path)
+	cert, err := certificateForHosts(path, hosts)
 	if err != nil {
 		return false
+	}
+	return time.Until(cert.NotAfter) > renewBefore
+}
+
+func certificateForHosts(path string, hosts []string) (*x509.Certificate, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
 	block, _ := pem.Decode(data)
 	if block == nil || block.Type != "CERTIFICATE" {
-		return false
+		return nil, fmt.Errorf("acme: certificate PEM missing")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return false
-	}
-	if time.Until(cert.NotAfter) <= renewBefore {
-		return false
+		return nil, err
 	}
 	names := map[string]bool{}
 	for _, name := range cert.DNSNames {
@@ -437,10 +510,10 @@ func certCurrent(path string, hosts []string, renewBefore time.Duration) bool {
 	}
 	for _, host := range hosts {
 		if !names[host] {
-			return false
+			return nil, fmt.Errorf("acme: certificate missing host %s", host)
 		}
 	}
-	return true
+	return cert, nil
 }
 
 func parseECPrivateKey(data []byte) (*ecdsa.PrivateKey, error) {

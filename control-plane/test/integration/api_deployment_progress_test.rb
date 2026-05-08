@@ -28,7 +28,7 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
       image_digest: "sha256:#{'b' * 64}",
       runtime_json: release_runtime_json
     )
-    node, access_token, _refresh = issue_test_node!(organization: organization, name: "node-a")
+    node, access_token, _refresh = issue_test_node!(organization: organization, name: "node-a", public_ip: "198.51.100.10")
     node.update!(environment: environment)
     hostname = random_ingress_hostname
     environment.create_environment_ingress!(
@@ -65,7 +65,7 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
           }
         ]
       },
-      headers: { "Authorization" => "Bearer #{access_token}" },
+      headers: agent_headers_for(access_token),
       as: :json
 
     assert_response :accepted
@@ -89,7 +89,9 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
     assert_equal "node-a", body.dig("nodes", 0, "name")
     assert_equal "starting", body.dig("nodes", 0, "environments", 0, "services", 0, "state")
     assert_equal hostname, body.dig("ingress", "hostname")
-    assert_equal "https://#{hostname}", body.dig("ingress", "public_url")
+    assert_nil body.dig("ingress", "public_url")
+    assert_equal [ "https://#{hostname}" ], body.dig("ingress", "configured_public_urls")
+    assert_equal "configured_tls_pending", body.dig("ingress", "public_url_status")
     assert_equal EnvironmentIngress::STATUS_READY, body.dig("ingress", "status")
 
     post "/api/v1/agent/status",
@@ -98,6 +100,10 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
         revision: release.revision,
         phase: "settled",
         message: "revision healthy",
+        ingress: {
+          tls_status: Node::INGRESS_TLS_READY,
+          tls_not_after: "2026-06-01T12:00:00Z"
+        },
         summary: {
           environments: 1,
           services: 1,
@@ -114,10 +120,11 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
           }
         ]
       },
-      headers: { "Authorization" => "Bearer #{access_token}" },
+      headers: agent_headers_for(access_token),
       as: :json
 
     assert_response :accepted
+    assert_equal Node::INGRESS_TLS_READY, node.reload.ingress_tls_status
 
     get "/api/v1/cli/deployments/#{deployment.id}",
       headers: auth_headers_for(user),
@@ -385,6 +392,13 @@ class ApiDeploymentProgressTest < ActionDispatch::IntegrationTest
   def auth_headers_for(user)
     _record, access_token, _refresh_token = ApiToken.issue!(user: user)
     { "Authorization" => "Bearer #{access_token}" }
+  end
+
+  def agent_headers_for(access_token)
+    {
+      "Authorization" => "Bearer #{access_token}",
+      "devopsellence-agent-capabilities" => Node::CAPABILITY_DIRECT_DNS_INGRESS
+    }
   end
 
   def json_body

@@ -515,7 +515,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       service_account_email: "env@runtime-proj.iam.gserviceaccount.com",
       current_release: release
     )
-    environment.deployments.create!(
+    deployment = environment.deployments.create!(
       release: release,
       sequence: 1,
       request_token: SecureRandom.hex(8),
@@ -529,8 +529,14 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
       status: EnvironmentIngress::STATUS_READY,
       provisioned_at: Time.current
     )
-    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a")
-    node.update!(environment: environment, desired_state_sequence: 1)
+    node, _access, _refresh = issue_test_node!(organization: organization, name: "node-a", public_ip: "198.51.100.10")
+    node.update!(environment: environment, desired_state_sequence: 1, ingress_tls_status: Node::INGRESS_TLS_READY)
+    deployment.deployment_node_statuses.create!(
+      node: node,
+      phase: DeploymentNodeStatus::PHASE_SETTLED,
+      message: "ok",
+      reported_at: Time.current
+    )
 
     get "/api/v1/cli/environments/#{environment.id}/status", headers: auth_headers_for(user), as: :json
 
@@ -545,6 +551,7 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_nil json_body["warning"]
     assert_equal hostname, json_body.dig("ingress", "hostname")
     assert_equal "https://#{hostname}", json_body.dig("ingress", "public_url")
+    assert_equal Node::INGRESS_TLS_READY, json_body.dig("ingress", "tls_status")
   end
 
   test "environment status warns when customer-managed environment has no assigned nodes" do
@@ -615,10 +622,14 @@ class ApiCliMvpTest < ActionDispatch::IntegrationTest
     assert_equal 1, json_body.fetch("assigned_nodes")
     assert_nil json_body["warning"]
     assert_equal hostname, json_body.dig("ingress", "hostname")
-    assert_equal "https://#{hostname}", json_body.dig("ingress", "public_url")
+    assert_nil json_body.dig("ingress", "public_url")
+    assert_equal [ "https://#{hostname}" ], json_body.dig("ingress", "configured_public_urls")
+    assert_equal "configured_tls_pending", json_body.dig("ingress", "public_url_status")
     assert_equal EnvironmentIngress::STATUS_READY, json_body.dig("ingress", "status")
     assert_equal hostname, json_body.fetch("hostname")
-    assert_equal "https://#{hostname}", json_body.fetch("public_url")
+    assert_nil json_body.fetch("public_url")
+    assert_equal [ "https://#{hostname}" ], json_body.fetch("configured_public_urls")
+    assert_equal "configured_tls_pending", json_body.fetch("public_url_status")
     assert_equal EnvironmentIngress::STATUS_READY, json_body.fetch("ingress_status")
   end
 

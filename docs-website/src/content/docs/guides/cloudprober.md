@@ -43,11 +43,12 @@ EOF
 Copy it to the node that will run Cloudprober:
 
 ```bash
-devopsellence node exec prod-1 -- install -d /etc/devopsellence
-scp cloudprober.cfg root@203.0.113.10:/etc/devopsellence/cloudprober.cfg
+scp cloudprober.cfg <user>@<host>:/tmp/cloudprober.cfg
+ssh <user>@<host> 'sudo install -d /etc/devopsellence && sudo install -m 0644 /tmp/cloudprober.cfg /etc/devopsellence/cloudprober.cfg && rm /tmp/cloudprober.cfg'
 ```
 
-Use the SSH user and host from your node record. Keep the source config in your
+Use the SSH user and host from your node record. The `sudo` step is needed when
+the SSH user cannot write under `/etc` directly. Keep the source config in your
 own infrastructure notes or configuration management. The node copy is a runtime
 input, not hidden devopsellence state.
 
@@ -90,22 +91,23 @@ devopsellence deploy
 devopsellence status
 ```
 
-If the node only has the default `web` label, add `worker` before deploying
-supporting services:
-
-```bash
-devopsellence node label set prod-1 --labels web,worker
-devopsellence deploy
-```
+This example includes an `http` port and health check, so devopsellence treats
+Cloudprober as a `web` service and can place it on the default `web` nodes. To
+run Cloudprober as a private worker-style service instead, omit `ports` and
+`healthcheck`, then place it on a node with a `worker` label.
 
 ## Inspect results
 
-Use service exec when you want to inspect Cloudprober from inside the service:
+In solo mode, use service exec when you want to inspect Cloudprober from inside
+the service:
 
 ```bash
 devopsellence exec cloudprober -- wget -qO- http://127.0.0.1:9313/status
 devopsellence exec cloudprober -- wget -qO- http://127.0.0.1:9313/metrics
 ```
+
+In shared mode today, inspect the node with direct SSH or your existing
+monitoring collector until shared exec tunnel support is available.
 
 Expose Cloudprober publicly only when you have a reason to do so and the
 endpoint is acceptable for your environment. For most teams, keep it private

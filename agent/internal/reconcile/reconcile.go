@@ -737,6 +737,7 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		Labels:     labels,
 		Log:        engine.CloneLogConfig(r.opts.LogConfig),
 		Network:    network,
+		Aliases:    []string{runtime.ServiceName},
 	}
 
 	return name, hash, spec, nil

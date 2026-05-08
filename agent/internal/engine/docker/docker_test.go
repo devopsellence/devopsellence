@@ -9,9 +9,10 @@ import (
 
 func TestBuildContainerCreateConfigSetsNetworkModeForManagedNetwork(t *testing.T) {
 	spec := engine.ContainerSpec{
-		Name:    "devopsellence-envoy",
-		Image:   "envoyproxy/envoy:latest",
+		Name:    "web",
+		Image:   "example/web:rev1",
 		Network: "devopsellence",
+		Aliases: []string{"web"},
 		Ports: []engine.PortBinding{{
 			ContainerPort: 8443,
 			HostPort:      8443,
@@ -31,6 +32,9 @@ func TestBuildContainerCreateConfigSetsNetworkModeForManagedNetwork(t *testing.T
 	}
 	if _, ok := networkingConfig.EndpointsConfig["devopsellence"]; !ok {
 		t.Fatalf("expected endpoint config for managed network")
+	}
+	if got := networkingConfig.EndpointsConfig["devopsellence"].Aliases; len(got) != 1 || got[0] != "web" {
+		t.Fatalf("network aliases = %#v, want web", got)
 	}
 }
 

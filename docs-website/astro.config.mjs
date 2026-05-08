@@ -45,6 +45,7 @@ export default defineConfig({
             { label: "CloudStack VMs", link: "/guides/cloudstack-vms/" },
             { label: "GitHub Actions", link: "/guides/github-actions/" },
             { label: "Secrets", link: "/guides/secrets/" },
+            { label: "Supporting services", link: "/guides/supporting-services/" },
             { label: "Ingress and TLS", link: "/guides/ingress-tls/" },
             { label: "Rollback", link: "/guides/rollback/" },
             { label: "Backup and restore", link: "/guides/backup-restore/" },

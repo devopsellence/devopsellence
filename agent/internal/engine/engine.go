@@ -54,6 +54,7 @@ type ContainerSpec struct {
 	Restart    *RestartPolicy
 	Log        *LogConfig
 	Network    string
+	Aliases    []string
 	Binds      []string
 	Ports      []PortBinding
 	ExtraHosts []string // e.g. ["host.docker.internal:host-gateway"]

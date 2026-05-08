@@ -275,6 +275,9 @@ func TestReconcileCreatesMultipleWorkersInOneEnvironment(t *testing.T) {
 		if spec.Labels[engine.LabelService] == "" {
 			t.Fatalf("missing service label: %#v", spec.Labels)
 		}
+		if len(spec.Aliases) != 1 || spec.Aliases[0] != spec.Labels[engine.LabelService] {
+			t.Fatalf("unexpected service alias: aliases=%#v labels=%#v", spec.Aliases, spec.Labels)
+		}
 	}
 }
 

@@ -68,3 +68,30 @@ environments:
 
 Services are explicit. Do not rely on fixed concepts such as one `web` and one
 `worker`; name the runtime units your app actually needs.
+
+Services can use the app image or a custom image. Leave `image` empty when the
+service should run the image built from this workspace. Set `image` for
+supporting services such as Redis, Memcached, backup agents, or separately
+built workers:
+
+```yaml
+services:
+  web:
+    env:
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - name: http
+        port: 3000
+    healthcheck:
+      path: /up
+      port: 3000
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - source: redis_data
+        target: /data
+```
+
+See [Supporting services](/guides/supporting-services/) for Redis, Memcached,
+and node-label details.

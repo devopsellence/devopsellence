@@ -46,6 +46,7 @@ export default defineConfig({
             { label: "GitHub Actions", link: "/guides/github-actions/" },
             { label: "Secrets", link: "/guides/secrets/" },
             { label: "Supporting services", link: "/guides/supporting-services/" },
+            { label: "Cloudprober", link: "/guides/cloudprober/" },
             { label: "Ingress and TLS", link: "/guides/ingress-tls/" },
             { label: "Rollback", link: "/guides/rollback/" },
             { label: "Backup and restore", link: "/guides/backup-restore/" },

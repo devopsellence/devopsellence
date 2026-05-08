@@ -100,6 +100,9 @@ func (m *Manager) Status(ingress *desiredstatepb.Ingress) *report.IngressStatus 
 		notAfter := cert.NotAfter.UTC()
 		return &report.IngressStatus{TLSStatus: "ready", TLSNotAfter: &notAfter}
 	}
+	if err != nil && !os.IsNotExist(err) {
+		return &report.IngressStatus{TLSStatus: "failed", TLSError: err.Error()}
+	}
 
 	if lastErr := m.lastError(); lastErr != "" {
 		return &report.IngressStatus{TLSStatus: "failed", TLSError: lastErr}

@@ -136,6 +136,25 @@ func TestStatusReportsLastAutoTLSErrorWhenCertificateMissing(t *testing.T) {
 	}
 }
 
+func TestStatusReportsCertificateParseError(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	if err := os.WriteFile(certPath, []byte("not a certificate"), 0o644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+
+	manager := New(Config{CertPath: certPath})
+	status := manager.Status(&desiredstatepb.Ingress{
+		Mode:  "public",
+		Hosts: []string{"app.example.com"},
+		Tls:   &desiredstatepb.IngressTLS{Mode: "auto"},
+	})
+
+	if status == nil || status.TLSStatus != "failed" || status.TLSError == "" {
+		t.Fatalf("status = %#v, want failed with certificate error", status)
+	}
+}
+
 func writeTestCertificate(t *testing.T, path string, hosts []string, notAfter time.Time) {
 	t.Helper()
 

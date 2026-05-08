@@ -257,7 +257,7 @@ func TestReconcileCreatesMultipleWorkersInOneEnvironment(t *testing.T) {
 
 	result, err := rec.Reconcile(context.Background(), desiredState(
 		workerService("default", map[string]string{"QUEUE": "default"}),
-		workerService("mailers", map[string]string{"QUEUE": "mailers"}),
+		workerService("Mail Queue", map[string]string{"QUEUE": "mailers"}),
 	))
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -275,9 +275,16 @@ func TestReconcileCreatesMultipleWorkersInOneEnvironment(t *testing.T) {
 		if spec.Labels[engine.LabelService] == "" {
 			t.Fatalf("missing service label: %#v", spec.Labels)
 		}
-		if len(spec.Aliases) != 1 || spec.Aliases[0] != spec.Labels[engine.LabelService] {
+		if len(spec.Aliases) != 1 {
 			t.Fatalf("unexpected service alias: aliases=%#v labels=%#v", spec.Aliases, spec.Labels)
 		}
+	}
+	aliases := map[string]bool{}
+	for _, spec := range eng.created {
+		aliases[spec.Aliases[0]] = true
+	}
+	if !aliases["default"] || !aliases["mail-queue"] {
+		t.Fatalf("unexpected service aliases: %#v", aliases)
 	}
 }
 

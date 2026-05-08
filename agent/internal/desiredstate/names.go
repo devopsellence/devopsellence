@@ -54,6 +54,14 @@ func ServiceContainerName(environmentName, serviceName, revision, hash string) (
 	return name, nil
 }
 
+func ServiceNetworkAlias(serviceName string) (string, error) {
+	alias := sanitize(serviceName)
+	if alias == "" {
+		return "", fmt.Errorf("service name sanitizes to empty")
+	}
+	return alias, nil
+}
+
 func EnvironmentNetworkPrefix(baseNetworkName string) string {
 	base := sanitize(baseNetworkName)
 	if base == "" {

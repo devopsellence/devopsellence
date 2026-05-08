@@ -33,3 +33,19 @@ func TestEnvironmentNetworkNameSanitizeEmpty(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestServiceNetworkAliasSanitizesServiceName(t *testing.T) {
+	alias, err := ServiceNetworkAlias("Mail Queue")
+	if err != nil {
+		t.Fatalf("alias error: %v", err)
+	}
+	if alias != "mail-queue" {
+		t.Fatalf("unexpected alias: %s", alias)
+	}
+}
+
+func TestServiceNetworkAliasSanitizeEmpty(t *testing.T) {
+	if _, err := ServiceNetworkAlias("!!!"); err == nil {
+		t.Fatal("expected error")
+	}
+}

@@ -712,6 +712,10 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, err
 	}
+	alias, err := desiredstate.ServiceNetworkAlias(runtime.ServiceName)
+	if err != nil {
+		return "", "", engine.ContainerSpec{}, err
+	}
 
 	env := make(map[string]string, len(service.Env))
 	for k, v := range service.Env {
@@ -737,7 +741,7 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		Labels:     labels,
 		Log:        engine.CloneLogConfig(r.opts.LogConfig),
 		Network:    network,
-		Aliases:    []string{runtime.ServiceName},
+		Aliases:    []string{alias},
 	}
 
 	return name, hash, spec, nil

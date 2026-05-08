@@ -37,12 +37,13 @@ class EnvironmentIngresses::EligibleNodesTest < ActiveSupport::TestCase
     create_node_status!(deployment: current_deployment, node: failed_node, phase: DeploymentNodeStatus::PHASE_ERROR)
 
     result = nil
-    status_queries = count_deployment_node_status_queries do
+    metrics = capture_deployment_node_status_work do
       result = EnvironmentIngresses::EligibleNodes.new(environment: environment.reload).call
     end
 
     assert_equal [ settled_node ], result
-    assert_equal 1, status_queries
+    assert_equal 1, metrics.fetch(:queries)
+    assert_equal 2, metrics.fetch(:rows)
   end
 
   private
@@ -74,14 +75,22 @@ class EnvironmentIngresses::EligibleNodesTest < ActiveSupport::TestCase
     )
   end
 
-  def count_deployment_node_status_queries(&block)
-    count = 0
-    subscriber = lambda do |_name, _started, _finished, _id, payload|
+  def capture_deployment_node_status_work(&block)
+    metrics = { queries: 0, rows: 0 }
+    sql_subscriber = lambda do |_name, _started, _finished, _id, payload|
       sql = payload[:sql].to_s
-      count += 1 if payload[:name] != "SCHEMA" && !payload[:cached] && sql.match?(/\bdeployment_node_statuses\b/i)
+      if payload[:name] != "SCHEMA" && !payload[:cached] && sql.match?(/\bdeployment_node_statuses\b/i)
+        metrics[:queries] += 1
+      end
+    end
+    instantiation_subscriber = lambda do |_name, _started, _finished, _id, payload|
+      metrics[:rows] += payload[:record_count] if payload[:class_name] == "DeploymentNodeStatus"
     end
 
-    ActiveSupport::Notifications.subscribed(subscriber, "sql.active_record", &block)
-    count
+    ActiveSupport::Notifications.subscribed(sql_subscriber, "sql.active_record") do
+      ActiveSupport::Notifications.subscribed(instantiation_subscriber, "instantiation.active_record", &block)
+    end
+
+    metrics
   end
 end

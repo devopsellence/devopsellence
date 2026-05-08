@@ -45,13 +45,20 @@ module EnvironmentIngresses
     def latest_deployment_node_statuses_by_node_id(node_ids, release:)
       return {} if node_ids.empty?
 
-      DeploymentNodeStatus
+      ranked_statuses = DeploymentNodeStatus
         .joins(:deployment)
         .where(node_id: node_ids, deployments: { environment_id: environment.id, release_id: release.id })
-        .order("deployment_node_statuses.node_id ASC, deployments.sequence DESC, deployment_node_statuses.reported_at DESC, deployment_node_statuses.id DESC")
-        .each_with_object({}) do |status, statuses_by_node_id|
-          statuses_by_node_id[status.node_id] ||= status
-        end
+        .select(
+          "deployment_node_statuses.*",
+          "ROW_NUMBER() OVER (PARTITION BY deployment_node_statuses.node_id " \
+            "ORDER BY deployments.sequence DESC, deployment_node_statuses.reported_at DESC, " \
+            "deployment_node_statuses.id DESC) AS latest_rank"
+        )
+
+      DeploymentNodeStatus
+        .from(ranked_statuses, :deployment_node_statuses)
+        .where(latest_rank: 1)
+        .index_by(&:node_id)
     end
   end
 end

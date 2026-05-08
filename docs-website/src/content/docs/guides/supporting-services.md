@@ -68,10 +68,12 @@ Memcached is usually disposable, so this example does not mount a volume.
 
 ## Scheduling
 
-Non-HTTP services are scheduled as worker services. Solo nodes created with the
-default labels only run `web` services, so add `worker` to any node that should
-host Redis, Memcached, background workers, backup services, or other private
-runtime units:
+Services with a port named `http`, a healthcheck, or the exact service name
+`web` are scheduled as `web`. Other services are scheduled as `worker`.
+
+Solo nodes created with the default labels only run `web` services, so add
+`worker` to any node that should host Redis, Memcached, background workers,
+backup services, or other private runtime units:
 
 ```bash
 devopsellence node label set prod-1 --labels web,worker

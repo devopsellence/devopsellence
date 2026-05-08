@@ -727,11 +727,14 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash service %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
 	}
 
-	alias, err := desiredstate.ServiceNetworkAlias(runtime.ServiceName)
-	if err != nil {
-		return "", "", engine.ContainerSpec{}, err
+	aliases := []string(nil)
+	if strings.TrimSpace(network) != "" {
+		alias, err := desiredstate.ServiceNetworkAlias(runtime.ServiceName)
+		if err != nil {
+			return "", "", engine.ContainerSpec{}, err
+		}
+		aliases = []string{alias}
 	}
-	aliases := []string{alias}
 	hash = runtimeContainerHash(hash, r.opts.LogConfig, network, aliases)
 	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
 	if err != nil {

@@ -916,6 +916,31 @@ func TestReconcileAppliesLogConfigToRuntimeContainers(t *testing.T) {
 	}
 }
 
+func TestReconcileOmitsAliasesWithoutRuntimeNetwork(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	service := workerService("worker", nil)
+	baseHash, err := desiredstate.HashService(service)
+	if err != nil {
+		t.Fatalf("hash service: %v", err)
+	}
+
+	rec := New(eng, Options{})
+	result, err := rec.Reconcile(context.Background(), desiredState(service))
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Created != 1 || len(eng.created) != 1 {
+		t.Fatalf("result=%#v created=%#v, want one created container", result, eng.created)
+	}
+	if eng.created[0].Network != "" || len(eng.created[0].Aliases) != 0 {
+		t.Fatalf("network=%q aliases=%#v, want no network aliases without runtime network", eng.created[0].Network, eng.created[0].Aliases)
+	}
+	if eng.created[0].Labels[engine.LabelHash] != baseHash {
+		t.Fatalf("hash = %q, want base hash %q", eng.created[0].Labels[engine.LabelHash], baseHash)
+	}
+}
+
 func TestReconcileRecreatesRuntimeContainerWhenNetworkChanges(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["busybox"] = true

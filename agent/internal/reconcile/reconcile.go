@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -501,13 +502,32 @@ func (r *Reconciler) environmentNetwork(environmentName string) (string, error) 
 	return desiredstate.EnvironmentNetworkName(r.opts.Network, environmentName)
 }
 
-func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig, network string) string {
+func runtimeContainerHash(baseHash string, logConfig *engine.LogConfig, network string, aliases []string) string {
 	logHash := engine.LogConfigHash(logConfig)
-	if logHash == "" && network == "" {
+	aliasHash := runtimeAliasHash(aliases)
+	if logHash == "" && network == "" && aliasHash == "" {
 		return baseHash
 	}
-	sum := sha256.Sum256([]byte(baseHash + "\x00" + logHash + "\x00" + strings.TrimSpace(network)))
+	hashInput := baseHash + "\x00" + logHash + "\x00" + strings.TrimSpace(network)
+	if aliasHash != "" {
+		hashInput += "\x00" + aliasHash
+	}
+	sum := sha256.Sum256([]byte(hashInput))
 	return hex.EncodeToString(sum[:])
+}
+
+func runtimeAliasHash(aliases []string) string {
+	normalized := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		if alias = strings.TrimSpace(alias); alias != "" {
+			normalized = append(normalized, alias)
+		}
+	}
+	if len(normalized) == 0 {
+		return ""
+	}
+	sort.Strings(normalized)
+	return strings.Join(normalized, "\x00")
 }
 
 func isPersistentEnvoyContainer(c engine.ContainerState, protectedNames []string) bool {
@@ -707,12 +727,13 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash service %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
 	}
 
-	hash = runtimeContainerHash(hash, r.opts.LogConfig, network)
-	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
+	alias, err := desiredstate.ServiceNetworkAlias(runtime.ServiceName)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, err
 	}
-	alias, err := desiredstate.ServiceNetworkAlias(runtime.ServiceName)
+	aliases := []string{alias}
+	hash = runtimeContainerHash(hash, r.opts.LogConfig, network, aliases)
+	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, err
 	}
@@ -741,7 +762,7 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 		Labels:     labels,
 		Log:        engine.CloneLogConfig(r.opts.LogConfig),
 		Network:    network,
-		Aliases:    []string{alias},
+		Aliases:    aliases,
 	}
 
 	return name, hash, spec, nil

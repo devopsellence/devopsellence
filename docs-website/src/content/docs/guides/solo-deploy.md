@@ -34,6 +34,9 @@ For app data, use an ordinary backup service with restic and the existing
 `secret`, `deploy`, `logs`, and `exec` commands. See
 [Backup and restore](/guides/backup-restore/).
 
+For Redis, Memcached, and other companion containers, add another service with
+a custom `image`. See [Supporting services](/guides/supporting-services/).
+
 To create a Hetzner-backed solo node:
 
 ```bash

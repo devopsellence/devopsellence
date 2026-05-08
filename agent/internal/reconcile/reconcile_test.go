@@ -257,7 +257,7 @@ func TestReconcileCreatesMultipleWorkersInOneEnvironment(t *testing.T) {
 
 	result, err := rec.Reconcile(context.Background(), desiredState(
 		workerService("default", map[string]string{"QUEUE": "default"}),
-		workerService("mailers", map[string]string{"QUEUE": "mailers"}),
+		workerService("Mail Queue", map[string]string{"QUEUE": "mailers"}),
 	))
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -275,6 +275,16 @@ func TestReconcileCreatesMultipleWorkersInOneEnvironment(t *testing.T) {
 		if spec.Labels[engine.LabelService] == "" {
 			t.Fatalf("missing service label: %#v", spec.Labels)
 		}
+		if len(spec.Aliases) != 1 {
+			t.Fatalf("unexpected service alias: aliases=%#v labels=%#v", spec.Aliases, spec.Labels)
+		}
+	}
+	aliases := map[string]bool{}
+	for _, spec := range eng.created {
+		aliases[spec.Aliases[0]] = true
+	}
+	if !aliases["default"] || !aliases["mail-queue"] {
+		t.Fatalf("unexpected service aliases: %#v", aliases)
 	}
 }
 
@@ -567,7 +577,7 @@ func TestReconcileRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	hash = runtimeContainerHash(hash, nil, "devopsellence-env-production")
+	hash = runtimeContainerHash(hash, nil, "devopsellence-env-production", []string{"worker"})
 	name, err := desiredstate.ServiceContainerName("production", "worker", "rev-1", hash)
 	if err != nil {
 		t.Fatalf("name: %v", err)
@@ -743,7 +753,7 @@ func TestReconcileContinuesHealthyCohostedServiceWhenPeerServiceFails(t *testing
 	if err != nil {
 		t.Fatalf("healthy network: %v", err)
 	}
-	healthyHash = runtimeContainerHash(healthyHash, nil, healthyNetwork)
+	healthyHash = runtimeContainerHash(healthyHash, nil, healthyNetwork, []string{"web"})
 	healthyName, err := desiredstate.ServiceContainerName("app-b-production", "web", "rev-b", healthyHash)
 	if err != nil {
 		t.Fatalf("healthy container name: %v", err)
@@ -906,6 +916,31 @@ func TestReconcileAppliesLogConfigToRuntimeContainers(t *testing.T) {
 	}
 }
 
+func TestReconcileOmitsAliasesWithoutRuntimeNetwork(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	service := workerService("worker", nil)
+	baseHash, err := desiredstate.HashService(service)
+	if err != nil {
+		t.Fatalf("hash service: %v", err)
+	}
+
+	rec := New(eng, Options{})
+	result, err := rec.Reconcile(context.Background(), desiredState(service))
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Created != 1 || len(eng.created) != 1 {
+		t.Fatalf("result=%#v created=%#v, want one created container", result, eng.created)
+	}
+	if eng.created[0].Network != "" || len(eng.created[0].Aliases) != 0 {
+		t.Fatalf("network=%q aliases=%#v, want no network aliases without runtime network", eng.created[0].Network, eng.created[0].Aliases)
+	}
+	if eng.created[0].Labels[engine.LabelHash] != baseHash {
+		t.Fatalf("hash = %q, want base hash %q", eng.created[0].Labels[engine.LabelHash], baseHash)
+	}
+}
+
 func TestReconcileRecreatesRuntimeContainerWhenNetworkChanges(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
@@ -942,6 +977,43 @@ func TestReconcileRecreatesRuntimeContainerWhenNetworkChanges(t *testing.T) {
 	}
 	if len(eng.created) != 1 || eng.created[0].Name == oldName || eng.created[0].Network != "devopsellence-env-production" {
 		t.Fatalf("expected replacement container on environment network, created=%#v", eng.created)
+	}
+}
+
+func TestReconcileRecreatesRuntimeContainerWhenAliasIsMissingFromHash(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	service := workerService("worker", nil)
+	oldHash, err := desiredstate.HashService(service)
+	if err != nil {
+		t.Fatalf("hash service: %v", err)
+	}
+	oldHash = runtimeContainerHash(oldHash, nil, "devopsellence-env-production", nil)
+	oldName, err := desiredstate.ServiceContainerName("production", "worker", "rev-1", oldHash)
+	if err != nil {
+		t.Fatalf("container name: %v", err)
+	}
+	eng.containers[oldName] = engine.ContainerState{
+		Name:        oldName,
+		Image:       "busybox",
+		Running:     true,
+		Managed:     true,
+		Hash:        oldHash,
+		Environment: "production",
+		Service:     "worker",
+		ServiceKind: "worker",
+	}
+
+	rec := New(eng, Options{Network: "devopsellence"})
+	result, err := rec.Reconcile(context.Background(), desiredState(service))
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Updated != 1 || result.Removed != 1 {
+		t.Fatalf("result = %#v, want updated=1 removed=1", result)
+	}
+	if len(eng.created) != 1 || eng.created[0].Name == oldName || len(eng.created[0].Aliases) != 1 || eng.created[0].Aliases[0] != "worker" {
+		t.Fatalf("expected replacement container with worker alias, created=%#v", eng.created)
 	}
 }
 

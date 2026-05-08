@@ -145,7 +145,7 @@ func buildContainerCreateConfig(spec engine.ContainerSpec) (*container.Config, *
 	if spec.Network != "" {
 		networkingConfig = &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
-				spec.Network: {},
+				spec.Network: {Aliases: spec.Aliases},
 			},
 		}
 	}

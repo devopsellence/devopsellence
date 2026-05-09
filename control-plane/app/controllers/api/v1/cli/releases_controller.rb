@@ -49,6 +49,7 @@ module Api
           ).call
           deployment = result.deployment
           assigned_nodes = environment.nodes.count
+          ingress = serialize_ingress(environment, release)
 
           render json: {
             deployment_id: deployment.id,
@@ -61,12 +62,14 @@ module Api
             warning: assignment_warning_for(environment, assigned_nodes),
             trial_expires_at: environment.nodes.maximum(:lease_expires_at)&.utc&.iso8601,
             ingress_strategy: environment.ingress_strategy,
-            hostname: environment.environment_ingress&.primary_hostname,
-            hosts: environment.environment_ingress&.hosts || [],
-            public_url: environment.environment_ingress&.public_url,
-            public_urls: environment.environment_ingress&.public_urls || [],
-            ingress_status: environment.environment_ingress&.status,
-            ingress: serialize_ingress(environment.environment_ingress)
+            hostname: ingress&.fetch(:hostname, nil),
+            hosts: ingress&.fetch(:hosts, []) || [],
+            public_url: ingress&.fetch(:public_url, nil),
+            public_urls: ingress&.fetch(:public_urls, []) || [],
+            configured_public_urls: ingress&.fetch(:configured_public_urls, []) || [],
+            public_url_status: ingress&.fetch(:public_url_status, nil),
+            ingress_status: ingress&.fetch(:status, nil),
+            ingress: ingress
           }, status: :created
         end
 
@@ -120,17 +123,12 @@ module Api
           ).to_h
         end
 
-        def serialize_ingress(ingress)
-          return nil unless ingress
-
-          {
-            hostname: ingress.primary_hostname,
-            hosts: ingress.hosts,
-            public_url: ingress.public_url,
-            public_urls: ingress.public_urls,
-            status: ingress.status,
-            last_error: ingress.last_error
-          }
+        def serialize_ingress(environment, release)
+          ::Cli::IngressStatusSerializer.new(
+            environment: environment,
+            ingress: environment.environment_ingress,
+            release: release
+          ).as_json
         end
 
         def publish_request_token

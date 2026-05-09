@@ -86,20 +86,16 @@ module Api
               environments: row.environments
             }
           end,
-            ingress: serialize_ingress(environment.environment_ingress)
+            ingress: serialize_ingress(environment, release)
           }
         end
 
-        def serialize_ingress(ingress)
-          return nil unless ingress
-
-          {
-            hostname: ingress.primary_hostname,
-            hosts: ingress.hosts,
-            public_url: ingress.public_url,
-            public_urls: ingress.public_urls,
-            status: ingress.status
-          }
+        def serialize_ingress(environment, release)
+          ::Cli::IngressStatusSerializer.new(
+            environment: environment,
+            ingress: environment.environment_ingress,
+            release: release
+          ).as_json
         end
 
         def serialize_release_task(deployment)

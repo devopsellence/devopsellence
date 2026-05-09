@@ -167,11 +167,15 @@ type DeploymentProgressNode struct {
 }
 
 type DeploymentProgressIngress struct {
-	Hostname   string   `json:"hostname"`
-	Hosts      []string `json:"hosts,omitempty"`
-	PublicURL  string   `json:"public_url"`
-	PublicURLs []string `json:"public_urls,omitempty"`
-	Status     string   `json:"status"`
+	Hostname             string   `json:"hostname"`
+	Hosts                []string `json:"hosts,omitempty"`
+	PublicURL            string   `json:"public_url"`
+	PublicURLs           []string `json:"public_urls,omitempty"`
+	ConfiguredPublicURLs []string `json:"configured_public_urls,omitempty"`
+	PublicURLStatus      string   `json:"public_url_status,omitempty"`
+	Status               string   `json:"status"`
+	TLSStatus            string   `json:"tls_status,omitempty"`
+	TLSError             string   `json:"tls_error,omitempty"`
 }
 
 type DeploymentProgress struct {

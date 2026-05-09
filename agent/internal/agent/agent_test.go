@@ -215,6 +215,18 @@ func (f *fakeEnvoy) WaitForRoute(ctx context.Context, path string) error {
 	return nil
 }
 
+type fakeIngressCert struct {
+	status *report.IngressStatus
+}
+
+func (f *fakeIngressCert) Ensure(ctx context.Context, ingress *desiredstatepb.Ingress, nodePeers []*desiredstatepb.NodePeer) error {
+	return nil
+}
+
+func (f *fakeIngressCert) Status(ingress *desiredstatepb.Ingress) *report.IngressStatus {
+	return f.status
+}
+
 type staticHTTPProber struct{}
 
 func (staticHTTPProber) Get(ctx context.Context, target string, timeout time.Duration) (int, error) {
@@ -274,6 +286,42 @@ func TestAgentReconcileE2E(t *testing.T) {
 	}
 	if !envoyManager.updated {
 		t.Fatal("expected envoy EDS update")
+	}
+}
+
+func TestAgentReportsIngressTLSStatus(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	desired := desiredWithWeb("rev-1")
+	desired.Ingress = &desiredstatepb.Ingress{
+		Mode:  "public",
+		Hosts: []string{"app.example.com"},
+		Tls:   &desiredstatepb.IngressTLS{Mode: "auto"},
+	}
+
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	certStatus := &report.IngressStatus{TLSStatus: "ready"}
+	reconciler := reconcile.New(eng, reconcile.Options{
+		Network:     "devopsellence",
+		WebPort:     3000,
+		Envoy:       &fakeEnvoy{},
+		IngressCert: &fakeIngressCert{status: certStatus},
+		HTTPProber:  staticHTTPProber{},
+	})
+	reporter := &captureReporter{}
+	metrics := observability.NewMetrics(prometheus.NewRegistry())
+	ag := New(&fakeAuthority{desired: desired, sequence: 7}, reconciler, reporter, time.Minute, logger, metrics, nil)
+
+	if err := ag.reconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(reporter.calls) != 1 {
+		t.Fatalf("reports = %d, want 1", len(reporter.calls))
+	}
+	if reporter.calls[0].Ingress == nil || reporter.calls[0].Ingress.TLSStatus != "ready" {
+		t.Fatalf("ingress = %#v, want ready TLS status", reporter.calls[0].Ingress)
 	}
 }
 
@@ -354,6 +402,25 @@ func TestSettledFingerprintDoesNotSuppressEnvironmentChangesForSameSequence(t *t
 
 	if first.suppresses(changed) {
 		t.Fatal("settled report suppression must not hide changed environment/service status")
+	}
+}
+
+func TestSettledFingerprintDoesNotSuppressIngressTLSChangesForSameSequence(t *testing.T) {
+	first := newReportFingerprint(7, report.Status{
+		Revision: "desired-rev",
+		Phase:    report.PhaseSettled,
+		Message:  "created=0 updated=0 removed=0 unchanged=1",
+		Ingress:  &report.IngressStatus{TLSStatus: "pending"},
+	})
+	changed := newReportFingerprint(7, report.Status{
+		Revision: "desired-rev",
+		Phase:    report.PhaseSettled,
+		Message:  "created=0 updated=0 removed=0 unchanged=1",
+		Ingress:  &report.IngressStatus{TLSStatus: "ready"},
+	})
+
+	if first.suppresses(changed) {
+		t.Fatal("settled report suppression must not hide changed ingress TLS status")
 	}
 }
 

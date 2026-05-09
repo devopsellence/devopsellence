@@ -9,10 +9,16 @@ module EnvironmentIngresses
     end
 
     def call
-      return [] unless environment.current_release
+      release = environment.current_release
+      return [] unless release
 
-      environment.nodes.order(:created_at).select do |node|
-        eligible_node?(node)
+      candidates = environment.nodes.order(:created_at).select do |node|
+        candidate_node?(node, release:)
+      end
+      latest_statuses = latest_deployment_node_statuses_by_node_id(candidates.map(&:id), release:)
+
+      candidates.select do |node|
+        latest_statuses[node.id]&.phase == DeploymentNodeStatus::PHASE_SETTLED
       end
     end
 
@@ -20,15 +26,14 @@ module EnvironmentIngresses
 
     attr_reader :environment, :stale_node_after, :clock
 
-    def eligible_node?(node)
-      release = environment.current_release
-      return false unless release&.ingress_scheduled_on?(node)
+    def candidate_node?(node, release:)
+      return false unless release.ingress_scheduled_on?(node)
       return false if node.public_ip.to_s.strip.blank?
       return false if node.provisioning_status != Node::PROVISIONING_READY
       return false unless node.supports_capability?(Node::CAPABILITY_DIRECT_DNS_INGRESS)
       return false unless fresh?(node)
 
-      latest_deployment_node_status_for(node)&.phase == DeploymentNodeStatus::PHASE_SETTLED
+      true
     end
 
     def fresh?(node)
@@ -37,16 +42,23 @@ module EnvironmentIngresses
       node.last_seen_at >= clock.call - stale_node_after
     end
 
-    def latest_deployment_node_status_for(node)
-      @latest_deployment_node_statuses ||= {}
-      return @latest_deployment_node_statuses[node.id] if @latest_deployment_node_statuses.key?(node.id)
+    def latest_deployment_node_statuses_by_node_id(node_ids, release:)
+      return {} if node_ids.empty?
 
-      status = DeploymentNodeStatus
+      ranked_statuses = DeploymentNodeStatus
         .joins(:deployment)
-        .where(node_id: node.id, deployments: { environment_id: environment.id, release_id: environment.current_release_id })
-        .order("deployments.sequence DESC, deployment_node_statuses.reported_at DESC, deployment_node_statuses.id DESC")
-        .first
-      @latest_deployment_node_statuses[node.id] = status
+        .where(node_id: node_ids, deployments: { environment_id: environment.id, release_id: release.id })
+        .select(
+          "deployment_node_statuses.*",
+          "ROW_NUMBER() OVER (PARTITION BY deployment_node_statuses.node_id " \
+            "ORDER BY deployments.sequence DESC, deployment_node_statuses.reported_at DESC, " \
+            "deployment_node_statuses.id DESC) AS latest_rank"
+        )
+
+      DeploymentNodeStatus
+        .from(ranked_statuses, :deployment_node_statuses)
+        .where(latest_rank: 1)
+        .index_by(&:node_id)
     end
   end
 end

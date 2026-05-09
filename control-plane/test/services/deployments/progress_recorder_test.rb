@@ -6,6 +6,49 @@ module Deployments
   class ProgressRecorderTest < ActiveSupport::TestCase
     include ActiveJob::TestHelper
 
+    test "records node ingress TLS status from agent report" do
+      organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
+      ensure_test_organization_runtime!(organization)
+      project = organization.projects.create!(name: "Project A")
+      environment = project.environments.create!(
+        name: "Production",
+        gcp_project_id: organization.gcp_project_id,
+        gcp_project_number: organization.gcp_project_number,
+        workload_identity_pool: organization.workload_identity_pool,
+        workload_identity_provider: organization.workload_identity_provider,
+        service_account_email: "env@#{organization.gcp_project_id}.iam.gserviceaccount.com",
+        runtime_kind: Environment::RUNTIME_CUSTOMER_NODES
+      )
+      release = project.releases.create!(
+        git_sha: "abcd1234",
+        image_digest: "sha256:abc",
+        image_repository: "api",
+        runtime_json: release_runtime_json,
+        revision: "rel-1"
+      )
+      environment.update!(current_release: release)
+      node, = issue_test_node!(organization: organization, name: "node-a")
+      node.update!(environment: environment)
+
+      ProgressRecorder.new(
+        node: node,
+        status: {
+          revision: release.revision,
+          phase: DeploymentNodeStatus::PHASE_SETTLED,
+          ingress: {
+            tls_status: Node::INGRESS_TLS_READY,
+            tls_not_after: "2026-06-01T12:00:00Z",
+            tls_error: ""
+          }
+        }
+      ).call
+
+      node.reload
+      assert_equal Node::INGRESS_TLS_READY, node.ingress_tls_status
+      assert_equal Time.zone.parse("2026-06-01T12:00:00Z"), node.ingress_tls_not_after
+      assert_nil node.ingress_tls_last_error
+    end
+
     test "release task success marks deployment succeeded and enqueues publish" do
       organization = Organization.create!(name: "org-#{SecureRandom.hex(3)}")
       ensure_test_organization_runtime!(organization)

@@ -321,6 +321,9 @@ func (a *App) ensureVibeTools() error {
 	if _, err := a.LookPath("rails"); err != nil {
 		return ExitError{Code: 2, Err: errors.New("rails not found; install Rails with mise-managed Ruby before running devopsellence vibe")}
 	}
+	if _, err := a.LookPath("git"); err != nil {
+		return ExitError{Code: 2, Err: errors.New("git not found; install git before running devopsellence vibe")}
+	}
 	return nil
 }
 

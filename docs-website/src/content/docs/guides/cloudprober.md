@@ -43,16 +43,18 @@ EOF
 Copy it to the node that will run Cloudprober:
 
 ```bash
-scp cloudprober.cfg <user>@<host>:/tmp/cloudprober.cfg
-ssh <user>@<host> 'sudo install -d /etc/devopsellence && sudo install -m 0600 /tmp/cloudprober.cfg /etc/devopsellence/cloudprober.cfg && rm /tmp/cloudprober.cfg'
+chmod 0600 cloudprober.cfg
+ssh <user>@<host> 'sudo sh -c "mkdir -p /etc/devopsellence && tmp=\$(mktemp /etc/devopsellence/cloudprober.cfg.XXXXXX) && chmod 0600 \"\$tmp\" && cat > \"\$tmp\" && mv \"\$tmp\" /etc/devopsellence/cloudprober.cfg"' < cloudprober.cfg
 ```
 
 Use the SSH user and host from your node record. The `sudo` step is needed when
-the SSH user cannot write under `/etc` directly. Keep the source config private;
-Cloudprober configs may grow alerting credentials over time. If your selected
-image runs as a non-root user, adjust the owner or group so the container can
-read the file without making it world-readable. The node copy is a runtime
-input, not hidden devopsellence state.
+the SSH user cannot write under `/etc` directly. This flow avoids a readable
+temporary copy under `/tmp` and does not change permissions on an existing
+`/etc/devopsellence` directory. Keep the source config private; Cloudprober
+configs may grow alerting credentials over time. If your selected image runs as
+a non-root user, adjust the owner or group so the container can read the file
+without making it world-readable. The node copy is a runtime input, not hidden
+devopsellence state.
 
 ## Add the service
 
@@ -96,7 +98,9 @@ devopsellence status
 This example includes an `http` port and health check, so devopsellence treats
 Cloudprober as a `web` service and can place it on the default `web` nodes. To
 run Cloudprober as a private worker-style service instead, omit `ports` and
-`healthcheck`, then place it on a node with a `worker` label.
+`healthcheck`, then place it on a node with a `worker` label. Without a
+healthcheck, devopsellence can still keep the container running, but it cannot
+report Cloudprober service health.
 
 ## Inspect results
 
@@ -136,7 +140,7 @@ Use devopsellence for the foundation:
 - pull and run the container;
 - mount the config file;
 - restart it when desired state changes;
-- show whether the service is healthy.
+- show whether the service is healthy when a healthcheck is configured.
 
 Use Cloudprober for monitoring behavior:
 

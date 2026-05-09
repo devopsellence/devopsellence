@@ -120,6 +120,76 @@ func TestRootSkillInstallWritesBundledSkill(t *testing.T) {
 	if payload["path"] != filepath.Join(skillsDir, "devopsellence") {
 		t.Fatalf("path = %#v, want %q", payload["path"], filepath.Join(skillsDir, "devopsellence"))
 	}
+	paths := jsonArrayFromMap(t, payload, "paths")
+	if len(paths) != 1 {
+		t.Fatalf("paths = %#v, want one explicit install target", paths)
+	}
+}
+
+func TestRootSkillInstallDefaultsToProjectSkillDirs(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "devopsellence.yml"), []byte("schema_version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(cwd, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	agentsPath := filepath.Join(cwd, ".agents", "skills", "devopsellence")
+	claudePath := filepath.Join(cwd, ".claude", "skills", "devopsellence")
+	if payload["path"] != agentsPath {
+		t.Fatalf("path = %#v, want %q", payload["path"], agentsPath)
+	}
+	if _, err := os.Stat(filepath.Join(agentsPath, "SKILL.md")); err != nil {
+		t.Fatalf("expected project agents skill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(claudePath, "SKILL.md")); err != nil {
+		t.Fatalf("expected project claude skill: %v", err)
+	}
+	paths := jsonArrayFromMap(t, payload, "paths")
+	if len(paths) != 2 {
+		t.Fatalf("paths = %#v, want agents and claude targets", paths)
+	}
+}
+
+func TestRootSkillInstallRejectsDirWithGlobalAsUsageError(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install", "--dir", t.TempDir(), "--global"})
+
+	err := cmd.Execute()
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+}
+
+func TestRootSkillInstallRequiresWorkspaceForDefaultProjectInstall(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install"})
+
+	err := cmd.Execute()
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "devopsellence.yml") || !strings.Contains(err.Error(), "--global") || !strings.Contains(err.Error(), "--dir <path>") {
+		t.Fatalf("error = %v, want workspace/global/dir guidance", err)
+	}
 }
 
 func TestRootModeFlagIsNotGlobal(t *testing.T) {

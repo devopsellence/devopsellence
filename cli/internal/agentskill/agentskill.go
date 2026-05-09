@@ -16,8 +16,27 @@ var bundled embed.FS
 type InstallResult struct {
 	Name    string
 	Path    string
+	Paths   []InstalledPath
 	Version string
 	Source  string
+}
+
+type InstalledPath struct {
+	Agent string
+	Scope string
+	Path  string
+}
+
+type InstallOptions struct {
+	SkillsDir     string
+	WorkspaceRoot string
+	Global        bool
+}
+
+type installTarget struct {
+	Agent     string
+	Scope     string
+	SkillsDir string
 }
 
 func DefaultSkillsDir() (string, error) {
@@ -28,20 +47,82 @@ func DefaultSkillsDir() (string, error) {
 	return filepath.Join(home, ".agents", "skills"), nil
 }
 
-func Install(skillsDir string, version string) (InstallResult, error) {
-	if skillsDir == "" {
-		defaultDir, err := DefaultSkillsDir()
-		if err != nil {
+func ProjectSkillsDir(workspaceRoot string) string {
+	return filepath.Join(workspaceRoot, ".agents", "skills")
+}
+
+func Install(opts InstallOptions, version string) (InstallResult, error) {
+	targets, err := installTargets(opts)
+	if err != nil {
+		return InstallResult{}, err
+	}
+
+	installed := make([]InstalledPath, 0, len(targets))
+	for _, target := range targets {
+		dest := filepath.Join(target.SkillsDir, Name)
+		if err := installTo(dest); err != nil {
 			return InstallResult{}, err
 		}
-		skillsDir = defaultDir
+		installed = append(installed, InstalledPath{
+			Agent: target.Agent,
+			Scope: target.Scope,
+			Path:  dest,
+		})
 	}
-	dest := filepath.Join(skillsDir, Name)
+	return InstallResult{Name: Name, Path: installed[0].Path, Paths: installed, Version: version, Source: "embedded"}, nil
+}
+
+func installTargets(opts InstallOptions) ([]installTarget, error) {
+	modes := 0
+	if opts.SkillsDir != "" {
+		modes++
+	}
+	if opts.WorkspaceRoot != "" {
+		modes++
+	}
+	if opts.Global {
+		modes++
+	}
+	if modes == 0 {
+		return nil, fmt.Errorf("missing install target: run from a devopsellence workspace, use --global, or pass --dir <path>")
+	}
+	if modes > 1 {
+		return nil, fmt.Errorf("conflicting install targets: use only one of a devopsellence workspace, --global, or --dir <path>")
+	}
+
+	if opts.SkillsDir != "" {
+		return []installTarget{{Agent: "agents", Scope: "custom", SkillsDir: opts.SkillsDir}}, nil
+	}
+
+	if opts.Global {
+		defaultDir, err := DefaultSkillsDir()
+		if err != nil {
+			return nil, err
+		}
+		targets := []installTarget{{Agent: "agents", Scope: "global", SkillsDir: defaultDir}}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		if isDir(filepath.Join(home, ".claude")) {
+			targets = append(targets, installTarget{Agent: "claude", Scope: "global", SkillsDir: filepath.Join(home, ".claude", "skills")})
+		}
+		return targets, nil
+	}
+
+	targets := []installTarget{{Agent: "agents", Scope: "project", SkillsDir: ProjectSkillsDir(opts.WorkspaceRoot)}}
+	if isDir(filepath.Join(opts.WorkspaceRoot, ".claude")) {
+		targets = append(targets, installTarget{Agent: "claude", Scope: "project", SkillsDir: filepath.Join(opts.WorkspaceRoot, ".claude", "skills")})
+	}
+	return targets, nil
+}
+
+func installTo(dest string) error {
 	if err := os.RemoveAll(dest); err != nil {
-		return InstallResult{}, fmt.Errorf("remove existing skill: %w", err)
+		return fmt.Errorf("remove existing skill: %w", err)
 	}
 	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return InstallResult{}, fmt.Errorf("create skill dir: %w", err)
+		return fmt.Errorf("create skill dir: %w", err)
 	}
 	if err := fs.WalkDir(bundled, Name, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -64,7 +145,12 @@ func Install(skillsDir string, version string) (InstallResult, error) {
 		}
 		return os.WriteFile(target, data, 0o644)
 	}); err != nil {
-		return InstallResult{}, fmt.Errorf("write bundled skill: %w", err)
+		return fmt.Errorf("write bundled skill: %w", err)
 	}
-	return InstallResult{Name: Name, Path: dest, Version: version, Source: "embedded"}, nil
+	return nil
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

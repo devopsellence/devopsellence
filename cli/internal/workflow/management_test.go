@@ -65,6 +65,15 @@ func TestInitWritesConfigOnly(t *testing.T) {
 	if hints := jsonArrayFromMap(t, runtimeContract, "agent_hints"); len(hints) != 2 {
 		t.Fatalf("runtime_contract.agent_hints = %#v, want shared init port and healthcheck hints", hints)
 	}
+	stepValues := jsonArrayFromMap(t, payload, "next_steps")
+	steps := make([]string, 0, len(stepValues))
+	for _, value := range stepValues {
+		steps = append(steps, stringValueAny(value))
+	}
+	nextSteps := strings.Join(steps, "\n")
+	if !strings.Contains(nextSteps, "devopsellence skill install") {
+		t.Fatalf("next_steps = %q, want agent skill install hint", nextSteps)
+	}
 }
 
 func TestInitRuntimeContractUsesSelectedEnvironmentOverlay(t *testing.T) {

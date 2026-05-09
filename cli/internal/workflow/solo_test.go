@@ -9877,6 +9877,9 @@ func TestSoloInitCreatesWorkspaceConfig(t *testing.T) {
 		steps = append(steps, stringValueAny(value))
 	}
 	nextSteps := strings.Join(steps, "\n")
+	if !strings.Contains(nextSteps, "devopsellence skill install") {
+		t.Fatalf("next_steps = %q, want agent skill install hint", nextSteps)
+	}
 	if !strings.Contains(nextSteps, "devopsellence node list --all # solo node names are global on this machine") {
 		t.Fatalf("next_steps = %q, want node-list collision guidance", nextSteps)
 	}

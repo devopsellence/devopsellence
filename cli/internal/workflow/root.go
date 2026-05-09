@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devopsellence/cli/internal/agentskill"
+	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/version"
 
 	"github.com/spf13/cobra"
@@ -514,26 +515,48 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	root.AddCommand(aliasCommand)
 
 	var skillInstallDir string
+	var skillInstallGlobal bool
 	skillCommand := &cobra.Command{Use: "skill", Short: "Manage bundled AI agent skill"}
 	skillInstallCommand := &cobra.Command{
 		Use:   "install",
 		Short: "Install the bundled devopsellence agent skill",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			result, installErr := agentskill.Install(skillInstallDir, version.String())
+			installOpts := agentskill.InstallOptions{
+				SkillsDir: skillInstallDir,
+				Global:    skillInstallGlobal,
+			}
+			if skillInstallDir == "" && !skillInstallGlobal {
+				discovered, discoverErr := discovery.Discover(app.Cwd)
+				if discoverErr != nil {
+					return ExitError{Code: 1, Err: discoverErr}
+				}
+				installOpts.WorkspaceRoot = discovered.WorkspaceRoot
+			}
+			result, installErr := agentskill.Install(installOpts, version.String())
 			if installErr != nil {
 				return ExitError{Code: 1, Err: installErr}
+			}
+			paths := make([]map[string]any, 0, len(result.Paths))
+			for _, target := range result.Paths {
+				paths = append(paths, map[string]any{
+					"agent": target.Agent,
+					"scope": target.Scope,
+					"path":  target.Path,
+				})
 			}
 			return app.Printer.PrintJSON(map[string]any{
 				"schema_version": outputSchemaVersion,
 				"action":         "installed",
 				"skill":          result.Name,
 				"path":           result.Path,
+				"paths":          paths,
 				"version":        result.Version,
 				"source":         result.Source,
 			})
 		},
 	}
-	skillInstallCommand.Flags().StringVar(&skillInstallDir, "dir", "", "Parent skills directory (default ~/.agents/skills)")
+	skillInstallCommand.Flags().StringVar(&skillInstallDir, "dir", "", "Parent skills directory (default <project>/.agents/skills)")
+	skillInstallCommand.Flags().BoolVar(&skillInstallGlobal, "global", false, "Install to user-level agent skill directories")
 	skillCommand.AddCommand(skillInstallCommand)
 	root.AddCommand(skillCommand)
 

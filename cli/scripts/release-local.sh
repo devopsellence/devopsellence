@@ -119,6 +119,8 @@ install_agent_skill() {
 
   if [[ -n "$AGENT_SKILLS_DIR" ]]; then
     skill_args+=(--dir "$AGENT_SKILLS_DIR")
+  else
+    skill_args+=(--global)
   fi
 
   echo "installing devopsellence agent skill..."

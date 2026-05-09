@@ -67,6 +67,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
     assert_includes response.body, '"$INSTALL_DIR/$TARGET_NAME" skill install'
+    assert_includes response.body, "skill_args+=(--global)"
     refute_includes response.body, "npx --yes skills add"
     assert_includes response.body, 'curl -fsSL "$INSTALL_SCRIPT_URL?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
   end
@@ -366,6 +367,10 @@ class InstallsTest < ActionDispatch::IntegrationTest
               --dir)
                 skills_dir="$2"
                 shift 2
+                ;;
+              --global)
+                skills_dir="$HOME/.agents/skills"
+                shift
                 ;;
               *)
                 echo "unexpected skill arg: $1" >&2

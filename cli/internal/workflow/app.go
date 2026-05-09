@@ -570,6 +570,11 @@ func (a *App) Init(ctx context.Context, opts InitOptions) error {
 			"project_slug":         initialized.Discovered.ProjectSlug,
 			"runtime_contract":     initRuntimeContract(resolvedConfig, initialized.Discovered, initRuntimeContractProvenance(initialized.Config, resolvedConfig, initialized.Environment.Name, initialized.CreatedConfig)),
 			"config":               initialized.Config,
+			"next_steps": []string{
+				"devopsellence skill install",
+				"devopsellence doctor",
+				"devopsellence deploy",
+			},
 		}
 		return nil
 	}

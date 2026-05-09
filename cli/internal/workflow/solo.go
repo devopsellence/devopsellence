@@ -6264,6 +6264,7 @@ func (a *App) SoloInit(context.Context, SoloInitOptions) error {
 		missing = append(missing, "node")
 	}
 	nextSteps := []string{
+		"devopsellence skill install",
 		"git init # if this app is not already a git checkout",
 		"git add . # include devopsellence.yml and app files",
 		"git commit -m 'initial deploy' # devopsellence deploys the current commit",

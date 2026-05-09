@@ -112,9 +112,11 @@ In shared mode today, inspect the node with direct SSH or your existing
 monitoring collector until shared exec tunnel support is available.
 
 Expose Cloudprober publicly only when you have a reason to do so and the
-endpoint is acceptable for your environment. For most teams, keep it private
-and let Prometheus, Grafana Agent, Datadog Agent, or another collector scrape it
-from the node network.
+endpoint is acceptable for your environment. For most teams, keep it private.
+A collector running as another service in the same environment can scrape
+`http://cloudprober:9313/metrics` over the environment Docker network. A
+host-level collector needs an explicit exposure path, such as ingress or
+separate host-port wiring outside devopsellence.
 
 ## Alerts and exporters
 

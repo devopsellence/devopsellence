@@ -237,7 +237,11 @@ func prepareVibeDirectory(path string, force bool) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect directory: %w", err)
 	}
-	return os.MkdirAll(path, 0o755)
+	parent := filepath.Dir(path)
+	if parent == "." || parent == path {
+		return nil
+	}
+	return os.MkdirAll(parent, 0o755)
 }
 
 func ensureGitRepository(ctx context.Context, path string) error {
@@ -254,10 +258,13 @@ func ensureGitRepository(ctx context.Context, path string) error {
 }
 
 func ensureInitialVibeCommit(ctx context.Context, path string) (bool, error) {
-	if output, err := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--verify", "HEAD").CombinedOutput(); err == nil {
+	if err := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--quiet", "--verify", "HEAD").Run(); err == nil {
 		return false, nil
-	} else if strings.TrimSpace(string(output)) != "" && !strings.Contains(string(output), "Needed a single revision") && !strings.Contains(string(output), "unknown revision") && !strings.Contains(string(output), "ambiguous argument") {
-		return false, fmt.Errorf("inspect git HEAD: %w: %s", err, strings.TrimSpace(string(output)))
+	} else {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || (exitErr.ExitCode() != 1 && exitErr.ExitCode() != 128) {
+			return false, fmt.Errorf("inspect git HEAD: %w", err)
+		}
 	}
 	if output, err := exec.CommandContext(ctx, "git", "-C", path, "add", ".").CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git add: %w: %s", err, strings.TrimSpace(string(output)))

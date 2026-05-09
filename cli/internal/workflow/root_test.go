@@ -207,6 +207,23 @@ func TestRootSkillInstallWritesRailsAppSkill(t *testing.T) {
 	}
 }
 
+func TestRootSkillInstallUnknownSkillIsUsageError(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install", "unknown-pack"})
+
+	err := cmd.Execute()
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("Execute() error = %T %[1]v, want ExitError", err)
+	}
+	if exitErr.Code != 2 {
+		t.Fatalf("ExitError.Code = %d, want 2", exitErr.Code)
+	}
+}
+
 func TestRootSkillInstallDefaultsToProjectSkillDirs(t *testing.T) {
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "devopsellence.yml"), []byte("schema_version: 1\n"), 0o644); err != nil {

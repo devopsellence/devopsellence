@@ -540,6 +540,9 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			if len(args) > 0 {
 				skillID = args[0]
 			}
+			if _, resolveErr := agentskill.Resolve(skillID); resolveErr != nil {
+				return ExitError{Code: 2, Err: resolveErr}
+			}
 			installOpts := agentskill.InstallOptions{
 				SkillsDir: skillInstallDir,
 				Global:    skillInstallGlobal,

@@ -44,12 +44,14 @@ Copy it to the node that will run Cloudprober:
 
 ```bash
 scp cloudprober.cfg <user>@<host>:/tmp/cloudprober.cfg
-ssh <user>@<host> 'sudo install -d /etc/devopsellence && sudo install -m 0644 /tmp/cloudprober.cfg /etc/devopsellence/cloudprober.cfg && rm /tmp/cloudprober.cfg'
+ssh <user>@<host> 'sudo install -d /etc/devopsellence && sudo install -m 0600 /tmp/cloudprober.cfg /etc/devopsellence/cloudprober.cfg && rm /tmp/cloudprober.cfg'
 ```
 
 Use the SSH user and host from your node record. The `sudo` step is needed when
-the SSH user cannot write under `/etc` directly. Keep the source config in your
-own infrastructure notes or configuration management. The node copy is a runtime
+the SSH user cannot write under `/etc` directly. Keep the source config private;
+Cloudprober configs may grow alerting credentials over time. If your selected
+image runs as a non-root user, adjust the owner or group so the container can
+read the file without making it world-readable. The node copy is a runtime
 input, not hidden devopsellence state.
 
 ## Add the service
@@ -98,8 +100,8 @@ run Cloudprober as a private worker-style service instead, omit `ports` and
 
 ## Inspect results
 
-In solo mode, use service exec when you want to inspect Cloudprober from inside
-the service:
+In solo mode, use `devopsellence exec` when you want to inspect Cloudprober from
+inside the service:
 
 ```bash
 devopsellence exec cloudprober -- wget -qO- http://127.0.0.1:9313/status

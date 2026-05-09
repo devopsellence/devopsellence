@@ -533,6 +533,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 				if discoverErr != nil {
 					return ExitError{Code: 1, Err: discoverErr}
 				}
+				if _, statErr := os.Stat(app.ConfigStore.PathFor(discovered.WorkspaceRoot)); statErr != nil {
+					if os.IsNotExist(statErr) {
+						return ExitError{Code: 2, Err: errors.New("no devopsellence workspace found; run from a directory containing devopsellence.yml, or use --global or --dir <path>")}
+					}
+					return ExitError{Code: 1, Err: statErr}
+				}
 				installOpts.WorkspaceRoot = discovered.WorkspaceRoot
 			}
 			result, installErr := agentskill.Install(installOpts, version.String())

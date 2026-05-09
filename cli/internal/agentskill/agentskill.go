@@ -84,10 +84,10 @@ func installTargets(opts InstallOptions) ([]installTarget, error) {
 		modes++
 	}
 	if modes == 0 {
-		return nil, fmt.Errorf("missing install target: set exactly one of WorkspaceRoot for project install, Global for user install, or SkillsDir for an explicit parent skills directory")
+		return nil, fmt.Errorf("missing install target: run from a devopsellence workspace, use --global, or pass --dir <path>")
 	}
 	if modes > 1 {
-		return nil, fmt.Errorf("conflicting install targets: set exactly one of WorkspaceRoot, Global, or SkillsDir")
+		return nil, fmt.Errorf("conflicting install targets: use only one of a devopsellence workspace, --global, or --dir <path>")
 	}
 
 	if opts.SkillsDir != "" {

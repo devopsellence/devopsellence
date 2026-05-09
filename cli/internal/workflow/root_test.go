@@ -175,6 +175,23 @@ func TestRootSkillInstallRejectsDirWithGlobalAsUsageError(t *testing.T) {
 	}
 }
 
+func TestRootSkillInstallRequiresWorkspaceForDefaultProjectInstall(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install"})
+
+	err := cmd.Execute()
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "devopsellence.yml") || !strings.Contains(err.Error(), "--global") || !strings.Contains(err.Error(), "--dir <path>") {
+		t.Fatalf("error = %v, want workspace/global/dir guidance", err)
+	}
+}
+
 func TestRootModeFlagIsNotGlobal(t *testing.T) {
 	t.Parallel()
 

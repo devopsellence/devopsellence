@@ -10,6 +10,7 @@ import (
 )
 
 const Name = "devopsellence"
+const RailsAppID = "rails-app"
 const RailsAppName = "devopsellence-rails-app"
 
 type Skill struct {
@@ -25,7 +26,7 @@ var skills = []Skill{
 		Description: "Operate devopsellence deployments, nodes, secrets, logs, diagnostics, and rollback.",
 	},
 	{
-		ID:          "rails-app",
+		ID:          RailsAppID,
 		Name:        RailsAppName,
 		Description: "Build, test, run, deploy, and scale the blessed devopsellence Rails app baseline.",
 	},

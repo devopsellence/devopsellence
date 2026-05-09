@@ -175,21 +175,29 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		"app_stack":        vibeAppStack,
 		"template_url":     templateURL,
 		"template_version": opts.TemplateVersion,
+		"skill_id":         agentskill.RailsAppID,
+		"skill_name":       agentskill.RailsAppName,
 		"skill":            agentskill.RailsAppName,
 		"skill_dir":        skillsDir,
 		"prompt_path":      promptPath,
 		"manifest_path":    manifestPath,
 		"initial_commit":   initialCommit,
 		"launch_requested": opts.Launch,
+		"launched":         false,
 		"next_commands":    nextCommands,
+	}
+	var launchErr error
+	if opts.Launch {
+		launchErr = a.launchVibeAgent(ctx, opts.AIAgent, target)
+		payload["launched"] = launchErr == nil
+		if launchErr != nil {
+			payload["launch_error"] = launchErr.Error()
+		}
 	}
 	if err := a.Printer.PrintJSON(payload); err != nil {
 		return err
 	}
-	if opts.Launch {
-		return a.launchVibeAgent(ctx, opts.AIAgent, target)
-	}
-	return nil
+	return launchErr
 }
 
 func (a *App) askVibeQuestion(reader *bufio.Reader, label string) (string, error) {

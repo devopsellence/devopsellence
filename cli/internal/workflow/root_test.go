@@ -39,6 +39,43 @@ printf '%s\n' 'coverage/' > "$target/.gitignore"
 printf '%s\n' 'FROM ruby:3.4' > "$target/Dockerfile"
 printf '%s\n' 'name: fake' > "$target/devopsellence.yml"
 `)
+	writeExecutable(t, filepath.Join(binDir, "git"), `#!/usr/bin/env bash
+set -euo pipefail
+cwd="$PWD"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -C)
+      cwd="$2"
+      shift 2
+      ;;
+    -c)
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+case "${1:-}" in
+  init)
+    mkdir -p "$cwd/.git"
+    ;;
+  rev-parse)
+    test -f "$cwd/.git/fake-head"
+    ;;
+  add)
+    exit 0
+    ;;
+  commit)
+    mkdir -p "$cwd/.git"
+    touch "$cwd/.git/fake-head"
+    ;;
+  *)
+    echo "unexpected git command: $*" >&2
+    exit 1
+    ;;
+esac
+`)
 	for _, agent := range agents {
 		writeExecutable(t, filepath.Join(binDir, agent), "#!/usr/bin/env bash\nexit 0\n")
 	}
@@ -317,6 +354,9 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if payload["template_version"] != defaultVibeTemplateVersion || payload["template_url"] != vibeTemplateURL(defaultVibeTemplateVersion) || payload["initial_commit"] != true {
 		t.Fatalf("payload = %#v, want pinned template and initial commit", payload)
 	}
+	if payload["skill_id"] != "rails-app" || payload["skill_name"] != "devopsellence-rails-app" || payload["launched"] != false {
+		t.Fatalf("payload = %#v, want stable skill metadata and no launched agent", payload)
+	}
 	for _, path := range []string{
 		filepath.Join(appDir, ".git"),
 		filepath.Join(appDir, ".mise.toml"),
@@ -440,6 +480,28 @@ func TestRootVibeNoAgentUsesGeneric(t *testing.T) {
 	path := filepath.Join(cwd, "rails-app", ".agents", "skills", "devopsellence-rails-app", "SKILL.md")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected rails app skill at %s: %v", path, err)
+	}
+}
+
+func TestRootVibeLaunchReportsSuccess(t *testing.T) {
+	cwd := t.TempDir()
+	installFakeVibeTools(t, "codex")
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "launched-app",
+		"--ai-agent", "codex",
+		"--idea", "Launch this app",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["launch_requested"] != true || payload["launched"] != true {
+		t.Fatalf("payload = %#v, want successful launch reported", payload)
 	}
 }
 

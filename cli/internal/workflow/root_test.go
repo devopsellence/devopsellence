@@ -274,15 +274,7 @@ func TestRootSkillInstallRejectsDirWithGlobalAsUsageError(t *testing.T) {
 }
 
 func TestRootSkillInstallRequiresWorkspaceForDefaultProjectInstall(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cwd, err := os.MkdirTemp(home, "devopsellence-no-workspace-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(cwd) })
+	cwd := filepath.Join(string(os.PathSeparator), "devopsellence-no-workspace-"+strings.ReplaceAll(t.Name(), "/", "-"))
 
 	var stdout bytes.Buffer
 	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
@@ -290,7 +282,7 @@ func TestRootSkillInstallRequiresWorkspaceForDefaultProjectInstall(t *testing.T)
 	cmd.SetErr(&stdout)
 	cmd.SetArgs([]string{"skill", "install"})
 
-	err = cmd.Execute()
+	err := cmd.Execute()
 	var exitErr ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
 		t.Fatalf("error = %#v, want ExitError code 2", err)

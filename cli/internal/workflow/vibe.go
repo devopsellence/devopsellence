@@ -409,7 +409,11 @@ func (a *App) launchVibeAgent(ctx context.Context, agent, cwd string) error {
 	if _, err := a.LookPath(binary); err != nil {
 		return ExitError{Code: 2, Err: fmt.Errorf("%s not found; rerun with --no-launch and start it manually from .agents/prompts/devopsellence-vibe.md", binary)}
 	}
-	cmd := exec.CommandContext(ctx, "sh", "-lc", vibeAgentCommand(agent))
+	prompt, err := os.ReadFile(filepath.Join(cwd, ".agents", "prompts", "devopsellence-vibe.md"))
+	if err != nil {
+		return fmt.Errorf("read vibe prompt: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, binary, string(prompt))
 	cmd.Dir = cwd
 	cmd.Stdin = a.In
 	cmd.Stdout = a.Printer.Err

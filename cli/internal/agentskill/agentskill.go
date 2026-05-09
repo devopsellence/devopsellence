@@ -16,12 +16,12 @@ var bundled embed.FS
 type InstallResult struct {
 	Name    string
 	Path    string
-	Paths   []InstallTarget
+	Paths   []InstalledPath
 	Version string
 	Source  string
 }
 
-type InstallTarget struct {
+type InstalledPath struct {
 	Agent string
 	Scope string
 	Path  string
@@ -31,6 +31,12 @@ type InstallOptions struct {
 	SkillsDir     string
 	WorkspaceRoot string
 	Global        bool
+}
+
+type installTarget struct {
+	Agent     string
+	Scope     string
+	SkillsDir string
 }
 
 func DefaultSkillsDir() (string, error) {
@@ -51,13 +57,13 @@ func Install(opts InstallOptions, version string) (InstallResult, error) {
 		return InstallResult{}, err
 	}
 
-	installed := make([]InstallTarget, 0, len(targets))
+	installed := make([]InstalledPath, 0, len(targets))
 	for _, target := range targets {
-		dest := filepath.Join(target.Path, Name)
+		dest := filepath.Join(target.SkillsDir, Name)
 		if err := installTo(dest); err != nil {
 			return InstallResult{}, err
 		}
-		installed = append(installed, InstallTarget{
+		installed = append(installed, InstalledPath{
 			Agent: target.Agent,
 			Scope: target.Scope,
 			Path:  dest,
@@ -66,12 +72,26 @@ func Install(opts InstallOptions, version string) (InstallResult, error) {
 	return InstallResult{Name: Name, Path: installed[0].Path, Paths: installed, Version: version, Source: "embedded"}, nil
 }
 
-func installTargets(opts InstallOptions) ([]InstallTarget, error) {
+func installTargets(opts InstallOptions) ([]installTarget, error) {
+	modes := 0
 	if opts.SkillsDir != "" {
-		if opts.Global {
-			return nil, fmt.Errorf("cannot use --dir with --global")
-		}
-		return []InstallTarget{{Agent: "agents", Scope: "custom", Path: opts.SkillsDir}}, nil
+		modes++
+	}
+	if opts.WorkspaceRoot != "" {
+		modes++
+	}
+	if opts.Global {
+		modes++
+	}
+	if modes == 0 {
+		return nil, fmt.Errorf("missing install target: set exactly one of WorkspaceRoot for project install, Global for user install, or SkillsDir for an explicit parent skills directory")
+	}
+	if modes > 1 {
+		return nil, fmt.Errorf("conflicting install targets: set exactly one of WorkspaceRoot, Global, or SkillsDir")
+	}
+
+	if opts.SkillsDir != "" {
+		return []installTarget{{Agent: "agents", Scope: "custom", SkillsDir: opts.SkillsDir}}, nil
 	}
 
 	if opts.Global {
@@ -79,23 +99,20 @@ func installTargets(opts InstallOptions) ([]InstallTarget, error) {
 		if err != nil {
 			return nil, err
 		}
-		targets := []InstallTarget{{Agent: "agents", Scope: "global", Path: defaultDir}}
+		targets := []installTarget{{Agent: "agents", Scope: "global", SkillsDir: defaultDir}}
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, err
 		}
 		if isDir(filepath.Join(home, ".claude")) {
-			targets = append(targets, InstallTarget{Agent: "claude", Scope: "global", Path: filepath.Join(home, ".claude", "skills")})
+			targets = append(targets, installTarget{Agent: "claude", Scope: "global", SkillsDir: filepath.Join(home, ".claude", "skills")})
 		}
 		return targets, nil
 	}
 
-	if opts.WorkspaceRoot == "" {
-		return nil, fmt.Errorf("missing workspace root")
-	}
-	targets := []InstallTarget{{Agent: "agents", Scope: "project", Path: ProjectSkillsDir(opts.WorkspaceRoot)}}
+	targets := []installTarget{{Agent: "agents", Scope: "project", SkillsDir: ProjectSkillsDir(opts.WorkspaceRoot)}}
 	if isDir(filepath.Join(opts.WorkspaceRoot, ".claude")) {
-		targets = append(targets, InstallTarget{Agent: "claude", Scope: "project", Path: filepath.Join(opts.WorkspaceRoot, ".claude", "skills")})
+		targets = append(targets, installTarget{Agent: "claude", Scope: "project", SkillsDir: filepath.Join(opts.WorkspaceRoot, ".claude", "skills")})
 	}
 	return targets, nil
 }

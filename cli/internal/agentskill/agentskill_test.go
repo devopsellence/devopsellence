@@ -3,6 +3,7 @@ package agentskill
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,8 +83,15 @@ func TestInstallGlobalUsesUserAgentSkillDirs(t *testing.T) {
 
 func TestInstallRejectsGlobalWithExplicitDir(t *testing.T) {
 	_, err := Install(InstallOptions{SkillsDir: t.TempDir(), Global: true}, "v1-test")
-	if err == nil {
-		t.Fatal("Install() error = nil, want --dir/--global conflict")
+	if err == nil || !strings.Contains(err.Error(), "set exactly one") {
+		t.Fatalf("Install() error = %v, want install target conflict", err)
+	}
+}
+
+func TestInstallRequiresTarget(t *testing.T) {
+	_, err := Install(InstallOptions{}, "v1-test")
+	if err == nil || !strings.Contains(err.Error(), "WorkspaceRoot") || !strings.Contains(err.Error(), "Global") || !strings.Contains(err.Error(), "SkillsDir") {
+		t.Fatalf("Install() error = %v, want actionable missing target error", err)
 	}
 }
 

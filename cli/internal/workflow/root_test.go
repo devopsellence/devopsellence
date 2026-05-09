@@ -161,6 +161,20 @@ func TestRootSkillInstallDefaultsToProjectSkillDirs(t *testing.T) {
 	}
 }
 
+func TestRootSkillInstallRejectsDirWithGlobalAsUsageError(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install", "--dir", t.TempDir(), "--global"})
+
+	err := cmd.Execute()
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+}
+
 func TestRootModeFlagIsNotGlobal(t *testing.T) {
 	t.Parallel()
 

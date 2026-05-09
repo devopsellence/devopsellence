@@ -521,6 +521,9 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Use:   "install",
 		Short: "Install the bundled devopsellence agent skill",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if skillInstallDir != "" && skillInstallGlobal {
+				return ExitError{Code: 2, Err: errors.New("cannot use --dir with --global")}
+			}
 			installOpts := agentskill.InstallOptions{
 				SkillsDir: skillInstallDir,
 				Global:    skillInstallGlobal,

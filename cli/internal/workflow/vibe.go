@@ -41,7 +41,7 @@ type vibeManifest struct {
 
 const (
 	vibeAppStack               = "rails-app"
-	defaultVibeTemplateVersion = "v0.1.0"
+	defaultVibeTemplateVersion = "v0.1.3"
 )
 
 var vibeSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)

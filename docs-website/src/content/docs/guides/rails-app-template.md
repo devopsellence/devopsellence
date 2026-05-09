@@ -23,7 +23,7 @@ devopsellence vibe my-crm --idea="A tiny CRM for solo consultants" --no-agent
 Pin a template release when reproducing a scaffold:
 
 ```bash
-devopsellence vibe my-crm --template-version=v0.1.0 --no-agent
+devopsellence vibe my-crm --template-version=v0.1.3 --no-agent
 ```
 
 The command runs Rails with the pinned template:
@@ -31,7 +31,7 @@ The command runs Rails with the pinned template:
 ```bash
 rails new my-crm \
   -d postgresql \
-  -m https://raw.githubusercontent.com/devopsellence/rails-app-template/v0.1.0/template.rb
+  -m https://raw.githubusercontent.com/devopsellence/rails-app-template/v0.1.3/template.rb
 ```
 
 ## Included Baseline

@@ -516,17 +516,34 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 
 	var skillInstallDir string
 	var skillInstallGlobal bool
-	skillCommand := &cobra.Command{Use: "skill", Short: "Manage bundled AI agent skill"}
-	skillInstallCommand := &cobra.Command{
-		Use:   "install",
-		Short: "Install the bundled devopsellence agent skill",
+	skillCommand := &cobra.Command{Use: "skill", Short: "Manage bundled AI agent skills"}
+	skillListCommand := &cobra.Command{
+		Use:   "list",
+		Short: "List bundled AI agent skills",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			return app.Printer.PrintJSON(map[string]any{
+				"schema_version": outputSchemaVersion,
+				"skills":         agentskill.Available(),
+				"source":         "embedded",
+			})
+		},
+	}
+	skillInstallCommand := &cobra.Command{
+		Use:   "install [skill]",
+		Short: "Install a bundled devopsellence agent skill",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
 			if skillInstallDir != "" && skillInstallGlobal {
 				return ExitError{Code: 2, Err: errors.New("cannot use --dir with --global")}
+			}
+			skillID := agentskill.Name
+			if len(args) > 0 {
+				skillID = args[0]
 			}
 			installOpts := agentskill.InstallOptions{
 				SkillsDir: skillInstallDir,
 				Global:    skillInstallGlobal,
+				Skill:     skillID,
 			}
 			if skillInstallDir == "" && !skillInstallGlobal {
 				discovered, discoverErr := discovery.Discover(app.Cwd)
@@ -556,6 +573,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return app.Printer.PrintJSON(map[string]any{
 				"schema_version": outputSchemaVersion,
 				"action":         "installed",
+				"id":             result.ID,
 				"skill":          result.Name,
 				"path":           result.Path,
 				"paths":          paths,
@@ -566,8 +584,31 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	skillInstallCommand.Flags().StringVar(&skillInstallDir, "dir", "", "Parent skills directory (default <project>/.agents/skills)")
 	skillInstallCommand.Flags().BoolVar(&skillInstallGlobal, "global", false, "Install to user-level agent skill directories")
-	skillCommand.AddCommand(skillInstallCommand)
+	skillCommand.AddCommand(skillListCommand, skillInstallCommand)
 	root.AddCommand(skillCommand)
+
+	var vibeOpts VibeOptions
+	var vibeNoLaunch bool
+	vibeOpts.Launch = true
+	vibeCommand := &cobra.Command{
+		Use:   "vibe [directory]",
+		Short: "Generate a blessed Rails app and start an AI-agent build loop",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				vibeOpts.Directory = args[0]
+			}
+			vibeOpts.Launch = !vibeNoLaunch
+			return app.Vibe(cmd.Context(), vibeOpts)
+		},
+	}
+	vibeCommand.Flags().StringVar(&vibeOpts.AIAgent, "ai-agent", "", "AI agent to seed: codex, claude, pi, or generic")
+	vibeCommand.Flags().StringVar(&vibeOpts.Idea, "idea", "", "App idea to seed into the AI agent prompt")
+	vibeCommand.Flags().StringVar(&vibeOpts.TemplateVersion, "template-version", defaultVibeTemplateVersion, "devopsellence Rails template version")
+	vibeCommand.Flags().BoolVar(&vibeNoLaunch, "no-launch", false, "Prepare the Rails app without starting the AI agent")
+	vibeCommand.Flags().BoolVar(&vibeOpts.NoAgent, "no-agent", false, "Prepare the Rails app and prompt without selecting or starting an AI agent")
+	vibeCommand.Flags().BoolVar(&vibeOpts.Force, "force", false, "Allow initializing a non-empty directory")
+	root.AddCommand(vibeCommand)
 
 	var initSharedOpts InitOptions
 	var initMode string

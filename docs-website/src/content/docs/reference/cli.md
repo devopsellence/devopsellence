@@ -56,3 +56,16 @@ devopsellence secret list
 devopsellence ingress set --service web --host app.example.com --tls-email ops@example.com
 devopsellence ingress check --wait 5m
 ```
+
+## Agent skills
+
+```bash
+devopsellence vibe my-app --ai-agent=codex --idea="A tiny CRM"
+devopsellence vibe my-app --idea="A tiny CRM" --no-agent
+devopsellence vibe my-app --ai-agent=claude --no-launch
+devopsellence skill list
+devopsellence skill install
+devopsellence skill install --global
+devopsellence skill install --dir .agents/skills
+devopsellence skill install rails-app --dir .agents/skills
+```

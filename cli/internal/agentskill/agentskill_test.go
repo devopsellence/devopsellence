@@ -26,6 +26,38 @@ func TestInstallWritesBundledSkill(t *testing.T) {
 	}
 }
 
+func TestInstallWritesRailsAppSkillByID(t *testing.T) {
+	dir := t.TempDir()
+	result, err := Install(InstallOptions{SkillsDir: dir, Skill: "rails-app"}, "v1-test")
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if result.ID != "rails-app" || result.Name != "devopsellence-rails-app" || result.Source != "embedded" {
+		t.Fatalf("result = %#v, want rails app skill", result)
+	}
+	path := filepath.Join(dir, "devopsellence-rails-app", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if !strings.Contains(string(data), "Rails") {
+		t.Fatalf("%s does not look like the Rails skill", path)
+	}
+}
+
+func TestAvailableIncludesRailsAppSkill(t *testing.T) {
+	got := Available()
+	var ids []string
+	for _, skill := range got {
+		ids = append(ids, skill.ID)
+	}
+	for _, want := range []string{"devopsellence", "rails-app"} {
+		if !containsString(ids, want) {
+			t.Fatalf("Available() ids = %v, missing %q", ids, want)
+		}
+	}
+}
+
 func TestInstallDefaultsToProjectAgentSkillDirs(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, ".claude"), 0o755); err != nil {
@@ -96,15 +128,28 @@ func TestInstallRequiresTarget(t *testing.T) {
 }
 
 func TestBundledSkillMatchesPublicSkill(t *testing.T) {
-	bundled, err := os.ReadFile(filepath.Join("devopsellence", "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
+	for _, skill := range Available() {
+		t.Run(skill.Name, func(t *testing.T) {
+			bundled, err := os.ReadFile(filepath.Join(skill.Name, "SKILL.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			public, err := os.ReadFile(filepath.Join("..", "..", "..", "skills", skill.Name, "SKILL.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(bundled) != string(public) {
+				t.Fatalf("bundled %s skill differs from skills/%s/SKILL.md", skill.Name, skill.Name)
+			}
+		})
 	}
-	public, err := os.ReadFile(filepath.Join("..", "..", "..", "skills", "devopsellence", "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
+}
+
+func containsString(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
 	}
-	if string(bundled) != string(public) {
-		t.Fatal("bundled devopsellence skill differs from skills/devopsellence/SKILL.md")
-	}
+	return false
 }

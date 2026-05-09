@@ -15,6 +15,36 @@ import (
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
+func installFakeVibeTools(t *testing.T, agents ...string) {
+	t.Helper()
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "mise"), "#!/usr/bin/env bash\nexit 0\n")
+	writeExecutable(t, filepath.Join(binDir, "rails"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" != "new" ]; then
+  echo "unexpected rails command: $*" >&2
+  exit 1
+fi
+target="$2"
+mkdir -p "$target/.agents/skills/devopsellence-rails-app" "$target/app/controllers" "$target/config"
+printf '%s\n' '---
+name: devopsellence-rails-app
+description: Fake test skill.
+---
+
+# Fake Rails App Skill
+' > "$target/.agents/skills/devopsellence-rails-app/SKILL.md"
+printf '%s\n' '[tools]' 'ruby = "3.4"' 'node = "24"' > "$target/.mise.toml"
+printf '%s\n' 'coverage/' > "$target/.gitignore"
+printf '%s\n' 'FROM ruby:3.4' > "$target/Dockerfile"
+printf '%s\n' 'name: fake' > "$target/devopsellence.yml"
+`)
+	for _, agent := range agents {
+		writeExecutable(t, filepath.Join(binDir, agent), "#!/usr/bin/env bash\nexit 0\n")
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestRootVersionCommand(t *testing.T) {
 	for _, args := range [][]string{{"version"}, {"--version"}} {
 		args := args
@@ -126,6 +156,57 @@ func TestRootSkillInstallWritesBundledSkill(t *testing.T) {
 	}
 }
 
+func TestRootSkillListIncludesRailsAppSkill(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "list"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	skills, ok := payload["skills"].([]any)
+	if !ok {
+		t.Fatalf("skills = %#v, want array", payload["skills"])
+	}
+	var ids []string
+	for _, raw := range skills {
+		skill, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("skill = %#v, want object", raw)
+		}
+		ids = append(ids, skill["id"].(string))
+	}
+	for _, want := range []string{"devopsellence", "rails-app"} {
+		if !stringSliceContains(ids, want) {
+			t.Fatalf("skill ids = %v, missing %q", ids, want)
+		}
+	}
+}
+
+func TestRootSkillInstallWritesRailsAppSkill(t *testing.T) {
+	skillsDir := t.TempDir()
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"skill", "install", "rails-app", "--dir", skillsDir})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["id"] != "rails-app" || payload["skill"] != "devopsellence-rails-app" || payload["source"] != "embedded" {
+		t.Fatalf("payload = %#v, want rails-app install result", payload)
+	}
+	path := filepath.Join(skillsDir, "devopsellence-rails-app", "SKILL.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected bundled skill at %s: %v", path, err)
+	}
+}
+
 func TestRootSkillInstallDefaultsToProjectSkillDirs(t *testing.T) {
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "devopsellence.yml"), []byte("schema_version: 1\n"), 0o644); err != nil {
@@ -176,13 +257,23 @@ func TestRootSkillInstallRejectsDirWithGlobalAsUsageError(t *testing.T) {
 }
 
 func TestRootSkillInstallRequiresWorkspaceForDefaultProjectInstall(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.MkdirTemp(home, "devopsellence-no-workspace-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cwd) })
+
 	var stdout bytes.Buffer
-	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stdout)
 	cmd.SetArgs([]string{"skill", "install"})
 
-	err := cmd.Execute()
+	err = cmd.Execute()
 	var exitErr ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
 		t.Fatalf("error = %#v, want ExitError code 2", err)
@@ -190,6 +281,190 @@ func TestRootSkillInstallRequiresWorkspaceForDefaultProjectInstall(t *testing.T)
 	if !strings.Contains(err.Error(), "devopsellence.yml") || !strings.Contains(err.Error(), "--global") || !strings.Contains(err.Error(), "--dir <path>") {
 		t.Fatalf("error = %v, want workspace/global/dir guidance", err)
 	}
+}
+
+func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	installFakeVibeTools(t)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "my-app",
+		"--ai-agent", "Codex",
+		"--idea", "A tiny CRM for solo consultants",
+		"--no-launch",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	appDir := filepath.Join(cwd, "my-app")
+	if payload["directory"] != appDir || payload["ai_agent"] != "codex" || payload["app_stack"] != "rails-app" || payload["launch_requested"] != false {
+		t.Fatalf("payload = %#v, want prepared codex rails workspace", payload)
+	}
+	if payload["template_version"] != defaultVibeTemplateVersion || payload["template_url"] != vibeTemplateURL(defaultVibeTemplateVersion) || payload["initial_commit"] != true {
+		t.Fatalf("payload = %#v, want pinned template and initial commit", payload)
+	}
+	for _, path := range []string{
+		filepath.Join(appDir, ".git"),
+		filepath.Join(appDir, ".mise.toml"),
+		filepath.Join(appDir, ".agents", "skills", "devopsellence", "SKILL.md"),
+		filepath.Join(appDir, ".agents", "skills", "devopsellence-rails-app", "SKILL.md"),
+		filepath.Join(appDir, ".agents", "devopsellence-vibe.json"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s: %v", path, err)
+		}
+	}
+	promptPath := filepath.Join(appDir, ".agents", "prompts", "devopsellence-vibe.md")
+	prompt, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Rails 8.1") {
+		t.Fatalf("prompt = %q, want seeded codex prompt", prompt)
+	}
+	nextCommands := jsonArrayFromMap(t, payload, "next_commands")
+	if !jsonArrayContains(nextCommands, `codex "$(cat .agents/prompts/devopsellence-vibe.md)"`) {
+		t.Fatalf("next_commands = %#v, want prompt-file command", nextCommands)
+	}
+	manifestData, err := os.ReadFile(filepath.Join(appDir, ".agents", "devopsellence-vibe.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest vibeManifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.TemplateVersion != defaultVibeTemplateVersion {
+		t.Fatalf("manifest = %#v, want repo-relative paths", manifest)
+	}
+}
+
+func TestRootVibeAppendsSecretPatternsToExistingGitignore(t *testing.T) {
+	cwd := t.TempDir()
+	installFakeVibeTools(t)
+	appDir := filepath.Join(cwd, "existing-app")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, ".gitignore"), []byte("coverage/\n!.env.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "existing-app",
+		"--ai-agent", "generic",
+		"--idea", "A tiny uptime API",
+		"--no-launch",
+		"--force",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(appDir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitignore := string(data)
+	for _, want := range []string{"coverage/", ".env", ".env.*", "!.env.example"} {
+		if !strings.Contains(gitignore, want) {
+			t.Fatalf(".gitignore = %q, missing %q", gitignore, want)
+		}
+	}
+	if strings.Index(gitignore, ".env.*") > strings.Index(gitignore, "!.env.example") {
+		t.Fatalf(".gitignore = %q, want .env.* before !.env.example", gitignore)
+	}
+
+	stdout.Reset()
+	cmd = NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "existing-app",
+		"--ai-agent", "generic",
+		"--idea", "A tiny uptime API",
+		"--no-launch",
+		"--force",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() second run error = %v", err)
+	}
+	data, err = os.ReadFile(filepath.Join(appDir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != gitignore {
+		t.Fatalf(".gitignore changed on second run:\nfirst=%q\nsecond=%q", gitignore, data)
+	}
+}
+
+func TestRootVibeNoAgentUsesGeneric(t *testing.T) {
+	cwd := t.TempDir()
+	installFakeVibeTools(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	input := bytes.NewBuffer(nil)
+	cmd := NewRootCommand(input, &stdout, &stderr, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "rails-app",
+		"--idea", "A tiny uptime page",
+		"--no-agent",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ai_agent"] != "generic" || payload["app_stack"] != "rails-app" || payload["launch_requested"] != false {
+		t.Fatalf("payload = %#v, want generic rails app workspace", payload)
+	}
+	path := filepath.Join(cwd, "rails-app", ".agents", "skills", "devopsellence-rails-app", "SKILL.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected rails app skill at %s: %v", path, err)
+	}
+}
+
+func TestRootVibeRejectsBlankPromptedAgent(t *testing.T) {
+	cwd := t.TempDir()
+	installFakeVibeTools(t, "codex", "claude")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	input := bytes.NewBufferString("\n")
+	cmd := NewRootCommand(input, &stdout, &stderr, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{
+		"vibe", "blank-agent",
+		"--idea", "A tiny uptime page",
+		"--no-launch",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing ai agent")
+	}
+	if !strings.Contains(err.Error(), "missing ai agent") {
+		t.Fatalf("error = %v, want missing ai agent", err)
+	}
+}
+
+func stringSliceContains(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRootModeFlagIsNotGlobal(t *testing.T) {

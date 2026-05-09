@@ -14,8 +14,17 @@ and the `devopsellence` CLI.
 devopsellence init --mode solo
 ```
 
-Start from an app that already has a Dockerfile. devopsellence does not install
-language toolchains or generate Rails, Node, or Go apps for you.
+Start from an app that already has a Dockerfile, or let devopsellence generate
+the blessed Rails baseline first.
+
+If you want Codex, Claude Code, Pi, or another AI coding agent to create or
+prepare the app first, start from the [Rails app template](/guides/rails-app-template/):
+
+```bash
+devopsellence vibe my-app --ai-agent=codex --idea="A tiny CRM"
+```
+
+Use `--no-agent` to generate the app and prompt without starting an AI agent.
 
 <ol class="command-sequence" start="2">
   <li>Commit the app before the first deploy.</li>

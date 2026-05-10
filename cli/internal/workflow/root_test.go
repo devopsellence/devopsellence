@@ -542,6 +542,17 @@ func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
 	if !jsonArrayContains(nextCommands, "devopsellence provider login hetzner --token <token>") {
 		t.Fatalf("next_commands = %#v, want secure Hetzner login hint", nextCommands)
 	}
+	manifestData, err := os.ReadFile(filepath.Join(appDir, ".agents", "devopsellence-vibe.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest vibeManifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if !stringSliceContains(manifest.NextCommands, "devopsellence provider login hetzner --token <token>") {
+		t.Fatalf("manifest.NextCommands = %#v, want secure Hetzner login hint", manifest.NextCommands)
+	}
 	promptData, err := os.ReadFile(filepath.Join(appDir, ".agents", "prompts", "devopsellence-vibe.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -876,6 +887,29 @@ func TestVibeAgentCommandIncludesEffort(t *testing.T) {
 		if got != tt.want {
 			t.Fatalf("vibeAgentCommand(%q, %q) = %q, want %q", tt.agent, tt.effort, got, tt.want)
 		}
+	}
+}
+
+func TestNormalizeVibeLater(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "empty", value: "", want: vibeDomainLater},
+		{name: "none", value: "none", want: vibeDomainLater},
+		{name: "no", value: "no", want: vibeDomainLater},
+		{name: "lower later", value: "later", want: vibeDomainLater},
+		{name: "title later", value: "Later", want: vibeDomainLater},
+		{name: "upper later", value: "LATER", want: vibeDomainLater},
+		{name: "domain", value: "crm.example.com", want: "crm.example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeVibeLater(tt.value); got != tt.want {
+				t.Fatalf("normalizeVibeLater(%q) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
 	}
 }
 

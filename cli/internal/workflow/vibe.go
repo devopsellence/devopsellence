@@ -184,7 +184,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	}
 
 	agentCommand := vibeAgentCommand(opts.AIAgent, opts.AgentEffort)
-	manifestNextCommands := []string{agentCommand}
+	nextCommands := vibeNextCommands(target, agentCommand, intent)
 	manifest := vibeManifest{
 		SchemaVersion:    outputSchemaVersion,
 		AIAgent:          opts.AIAgent,
@@ -197,9 +197,8 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		PromptPath:       filepath.Join(".agents", "prompts", "devopsellence-vibe.md"),
 		Idea:             opts.Idea,
 		DeploymentIntent: intent,
-		NextCommands:     manifestNextCommands,
+		NextCommands:     nextCommands,
 	}
-	nextCommands := vibeNextCommands(target, agentCommand, intent)
 	manifestPath := filepath.Join(agentsDir, "devopsellence-vibe.json")
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -447,7 +446,7 @@ func normalizeVibeServerStrategy(value string) (string, error) {
 
 func normalizeVibeLater(value string) string {
 	value = strings.TrimSpace(value)
-	if value == "" || strings.EqualFold(value, "none") || strings.EqualFold(value, "no") {
+	if value == "" || strings.EqualFold(value, vibeDomainLater) || strings.EqualFold(value, "none") || strings.EqualFold(value, "no") {
 		return vibeDomainLater
 	}
 	return value

@@ -1158,6 +1158,23 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 	if setPayload["reference"] != nil {
 		t.Fatalf("reference = %#v, want omitted for plaintext secret", setPayload["reference"])
 	}
+	warnings := jsonArrayFromMap(t, setPayload, "warnings")
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want plaintext storage warning", warnings)
+	}
+	warning := stringValueAny(warnings[0])
+	for _, want := range []string{
+		"stored unencrypted in the local devopsellence solo state file",
+		"demos or local operator-managed deployments only",
+		"devopsellence secret set 'DATABASE_URL' --service 'web' --env 'staging' --store 1password --op-ref op://<vault>/<item>/<field>",
+	} {
+		if !strings.Contains(warning, want) {
+			t.Fatalf("warning = %q, want %q", warning, want)
+		}
+	}
+	if strings.Contains(warning, "postgres://staging") {
+		t.Fatalf("warning leaks secret value: %q", warning)
+	}
 	if setPayload["state_path"] != solo.DefaultStatePath() {
 		t.Fatalf("state_path = %#v, want solo state path", setPayload["state_path"])
 	}

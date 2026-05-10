@@ -55,6 +55,7 @@ func (f *fakeEngine) CreateAndStart(_ context.Context, spec engine.ContainerSpec
 		Image:       spec.Image,
 		Running:     true,
 		Hash:        spec.Labels[engine.LabelHash],
+		Revision:    spec.Labels[engine.LabelRevision],
 		Environment: spec.Labels[engine.LabelEnvironment],
 		Service:     spec.Labels[engine.LabelService],
 		ServiceKind: spec.Labels[engine.LabelServiceKind],

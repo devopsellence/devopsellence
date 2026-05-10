@@ -66,7 +66,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "PATH_EXPORT='export PATH=\"'\"$INSTALL_DIR\"':$PATH\"'"
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
-    assert_includes response.body, '$INSTALL_DIR/$TARGET_NAME skill install --global'
+    assert_includes response.body, "\"$INSTALL_DIR/$TARGET_NAME\" skill install --global"
     refute_includes response.body, "npx --yes skills add"
   end
 
@@ -92,7 +92,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
-    assert_includes response.body, "$INSTALL_DIR/$TARGET_NAME skill install --global"
+    assert_includes response.body, "\"$INSTALL_DIR/$TARGET_NAME\" skill install --global"
     refute_includes response.body, 'curl -fsSL "$BASE_URL/lfg.sh'
   end
 

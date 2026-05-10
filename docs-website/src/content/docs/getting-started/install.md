@@ -16,7 +16,7 @@ devopsellence is AI-operator-first. To install the matching Codex skill without
 requiring npm or `npx`:
 
 ```bash
-devopsellence skill install --global
+~/.local/bin/devopsellence skill install --global
 ```
 
 Verify the workstation:

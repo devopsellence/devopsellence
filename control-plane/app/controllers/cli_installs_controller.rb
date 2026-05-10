@@ -212,7 +212,7 @@ class CliInstallsController < ActionController::Base
       esac
 
       echo "agent skill available; install it with:"
-      echo "  $INSTALL_DIR/$TARGET_NAME skill install --global"
+      echo "  \"$INSTALL_DIR/$TARGET_NAME\" skill install --global"
     SH
   end
 end

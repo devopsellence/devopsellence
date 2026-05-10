@@ -28,7 +28,7 @@ Already have a Dockerized app:
 
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
-devopsellence skill install --global
+~/.local/bin/devopsellence skill install --global
 cd my-app
 codex e "Deploy this app with devopsellence solo."
 ```

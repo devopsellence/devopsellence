@@ -30,7 +30,7 @@ asking it to invent production shell choreography.
 
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
-devopsellence skill install --global
+~/.local/bin/devopsellence skill install --global
 cd my-app
 codex "deploy with devopsellence solo"
 ```

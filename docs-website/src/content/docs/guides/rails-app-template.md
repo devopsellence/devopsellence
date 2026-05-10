@@ -1,13 +1,17 @@
 ---
-title: Rails app template
-description: Start a production-minded Rails app with devopsellence, mise, and a local AI-agent skill.
+title: Build a web app with vibe
+description: Start a batteries-included Rails app with an AI-first build, test, and deploy workflow.
 ---
 
-`devopsellence vibe` creates one blessed Rails app shape instead of asking you
-to choose a stack. It uses the devopsellence Rails template, writes a local
-agent skill, seeds a prompt, initializes git, and can launch Codex, Claude Code,
-Pi, or another agent with high effort/thinking enabled and a simple autonomy
-choice.
+`devopsellence vibe` turns an app idea into a production-minded web app
+workspace for an AI coding agent. It picks one blessed Rails baseline, writes a
+local agent skill, captures deploy intent, seeds a prompt, initializes git, and
+can launch Codex, Claude Code, Pi, or another agent with high effort/thinking
+enabled and a simple autonomy choice.
+
+This feature is experimental inside devopsellence. It lives here for now so
+releases and maintenance stay simple, but the app-building workflow will likely
+move into its own companion project as the boundary becomes clearer.
 
 Run it without `--idea` to use the intake wizard. You can press Ctrl+C during
 the questions to stop before files are generated.
@@ -96,7 +100,7 @@ Start Claude with full local access inside an isolated devbox:
 devopsellence vibe my-crm --ai-agent=claude --autonomy=full-access
 ```
 
-The command runs Rails with the pinned template:
+The command currently uses Rails and the pinned template as the scaffold engine:
 
 ```bash
 rails new my-crm \

@@ -3194,10 +3194,11 @@ func soloSecretConfigRef(record solo.SecretRecord) config.SecretRef {
 }
 
 func soloPlaintextSecretWarning(name, serviceName, environment string) string {
-	command := fmt.Sprintf("devopsellence secret set %s --service %s --env %s --store 1password --op-ref op://<vault>/<item>/<field>",
+	command := fmt.Sprintf("devopsellence secret set %s --service %s --env %s --store 1password --op-ref %s",
 		shellQuote(name),
 		shellQuote(serviceName),
 		shellQuote(environment),
+		shellQuote("op://<vault>/<item>/<field>"),
 	)
 	return "solo plaintext secrets are stored unencrypted in the local devopsellence solo state file for this machine; use this for demos or local operator-managed deployments only. For production, save the secret in 1Password and replace this local value with: " + command
 }

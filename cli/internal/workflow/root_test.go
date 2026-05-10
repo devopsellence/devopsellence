@@ -1166,7 +1166,7 @@ func TestRootSoloSecretSetHonorsEnvironmentAndService(t *testing.T) {
 	for _, want := range []string{
 		"stored unencrypted in the local devopsellence solo state file",
 		"demos or local operator-managed deployments only",
-		"devopsellence secret set 'DATABASE_URL' --service 'web' --env 'staging' --store 1password --op-ref op://<vault>/<item>/<field>",
+		"devopsellence secret set 'DATABASE_URL' --service 'web' --env 'staging' --store 1password --op-ref 'op://<vault>/<item>/<field>'",
 	} {
 		if !strings.Contains(warning, want) {
 			t.Fatalf("warning = %q, want %q", warning, want)

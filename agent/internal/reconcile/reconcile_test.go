@@ -3,6 +3,7 @@ package reconcile
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -23,6 +24,7 @@ type fakeEngine struct {
 	removed      []string
 	stopped      []string
 	pulled       []string
+	pullErr      error
 	inspectCalls int
 	networkIP    map[string]string
 	networks     []string
@@ -100,6 +102,9 @@ func (f *fakeEngine) ImageExists(_ context.Context, image string) (bool, error) 
 func (f *fakeEngine) PullImage(_ context.Context, image string, _ *engine.RegistryAuth) error {
 	f.pulled = append(f.pulled, image)
 	f.ops = append(f.ops, "pull:"+image)
+	if f.pullErr != nil {
+		return f.pullErr
+	}
 	f.images[image] = true
 	return nil
 }
@@ -643,9 +648,34 @@ func TestReconcileRemoveExtra(t *testing.T) {
 
 func TestReconcileMissingImage(t *testing.T) {
 	eng := newFakeEngine()
+	eng.pullErr = errors.New("not found")
 	rec := New(eng, Options{Network: "devopsellence", StopTimeout: 10 * time.Second})
 	if _, err := rec.Reconcile(context.Background(), desiredState(&desiredstatepb.Service{Name: "worker", Kind: "worker", Image: "missing"})); err == nil {
 		t.Fatal("expected error")
+	} else if !strings.Contains(err.Error(), "pull image missing: not found") {
+		t.Fatalf("error = %v, want image pull failure", err)
+	}
+	if len(eng.pulled) != 1 || eng.pulled[0] != "missing" {
+		t.Fatalf("pulled = %#v, want missing image pull attempted", eng.pulled)
+	}
+}
+
+func TestReconcilePullsMissingPublicAccessoryImageWithoutAuth(t *testing.T) {
+	eng := newFakeEngine()
+	rec := New(eng, Options{Network: "devopsellence", StopTimeout: 10 * time.Second})
+	result, err := rec.Reconcile(context.Background(), desiredState(&desiredstatepb.Service{
+		Name:  "postgres",
+		Kind:  "accessory",
+		Image: "postgres:16",
+	}))
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Created != 1 {
+		t.Fatalf("expected created=1 got %d", result.Created)
+	}
+	if len(eng.pulled) != 1 || eng.pulled[0] != "postgres:16" {
+		t.Fatalf("expected postgres image pull, got %v", eng.pulled)
 	}
 }
 
@@ -768,6 +798,7 @@ func TestReconcileContinuesHealthyCohostedServiceWhenPeerServiceFails(t *testing
 		Service:     "web",
 		ServiceKind: "web",
 	}
+	eng.pullErr = errors.New("not found")
 
 	unhealthy := webService(80, "/up")
 	unhealthy.Image = "missing"
@@ -786,7 +817,7 @@ func TestReconcileContinuesHealthyCohostedServiceWhenPeerServiceFails(t *testing
 	if err == nil {
 		t.Fatal("expected failing peer service error")
 	}
-	if !strings.Contains(err.Error(), "image not found locally: missing") {
+	if !strings.Contains(err.Error(), "pull image missing: not found") {
 		t.Fatalf("error = %v, want missing image error", err)
 	}
 	if result.Unchanged != 1 {

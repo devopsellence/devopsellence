@@ -973,13 +973,16 @@ PY
       output = ssh_to_node!("cat #{@status_path} 2>/dev/null || echo '{}'")
       begin
         status = JSON.parse(output)
-        status["revision"] == revision && status["phase"] == "settled"
+        status["revision"] == revision &&
+          status["phase"] == "settled" &&
+          !status.key?("task") &&
+          production_db_service_status(status)
       rescue JSON::ParserError
         false
       end
     end
 
-    environment = status.fetch("environments").find { |entry| entry["name"] == "production" }
+    environment = status.fetch("environments", []).find { |entry| entry["name"] == "production" }
     raise "accessory bootstrap status missing production environment: #{status.inspect}" unless environment
 
     service = environment.fetch("services").find { |entry| entry["name"] == "db" }
@@ -995,6 +998,11 @@ PY
     raise "db accessory container not running for revision #{revision}" if db_containers.empty?
 
     puts "[ok] Release task resolved accessory DNS before runtime reconcile: #{db_containers.join(', ')}"
+  end
+
+  def production_db_service_status(status)
+    environment = status.fetch("environments", []).find { |entry| entry["name"] == "production" }
+    environment&.fetch("services", [])&.find { |entry| entry["name"] == "db" }
   end
 
   def build_release_task_accessory_image!
@@ -1396,12 +1404,19 @@ PY
     managed_networks.each do |network|
       run!("docker", "network", "rm", network, chdir: MONOREPO_ROOT.to_s, timeout: 60)
     end
-    run!("docker", "image", "rm", "-f", @node_image, chdir: MONOREPO_ROOT.to_s, timeout: 60)
-    run!("docker", "image", "rm", "-f", @release_task_accessory_image, chdir: MONOREPO_ROOT.to_s, timeout: 60) if @release_task_accessory_image
+    remove_image_if_present(@node_image)
+    remove_image_if_present(@release_task_accessory_image)
     FileUtils.rm_rf(@state_dir)
     FileUtils.rm_rf(@app_root_dir)
   rescue StandardError => e
     puts "[warn] cleanup error: #{e.message}"
+  end
+
+  def remove_image_if_present(image)
+    return if image.to_s.empty?
+    return unless system_success?("docker", "image", "inspect", image, chdir: MONOREPO_ROOT.to_s)
+
+    run!("docker", "image", "rm", "-f", image, chdir: MONOREPO_ROOT.to_s, timeout: 60)
   end
 
   def resolve_checkout_root

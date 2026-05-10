@@ -2281,7 +2281,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		payload["configured_public_urls"] = configuredPublicURLs
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
 		appendPayloadWarning(soloPublicURLWarning(cfg, environmentName))
-	} else if !soloPublicIngressConfigured(cfg) {
+	} else if soloPublicIngressKnownUnconfigured(cfg) {
 		payload["public_url_status"] = "not_configured"
 		if statusRuntimeVerified {
 			payload["public_url_message"] = "internal health OK, but no public ingress is configured; run `devopsellence ingress set" + soloEnvFlag(environmentName) + " --host <hostname> --service <service>` to publish it"
@@ -2974,6 +2974,10 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 
 func soloPublicIngressConfigured(cfg *config.ProjectConfig) bool {
 	return cfg != nil && cfg.Ingress != nil
+}
+
+func soloPublicIngressKnownUnconfigured(cfg *config.ProjectConfig) bool {
+	return cfg != nil && cfg.Ingress == nil
 }
 
 func ingressConfiguredPublicURLs(cfg *config.ProjectConfig) []string {

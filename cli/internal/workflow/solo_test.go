@@ -1214,6 +1214,79 @@ func TestSoloStatusIncludesPublicURLs(t *testing.T) {
 	}
 }
 
+func TestSoloStatusReportsInternalHealthWhenNoPublicIngressConfigured(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"time":"2026-04-27T10:42:45Z","revision":"rev","phase":"settled","summary":{"environments":1,"services":1}}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "rev")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not want public_urls without ingress", payload)
+	}
+	if _, ok := payload["configured_public_urls"]; ok {
+		t.Fatalf("payload = %#v, did not want configured_public_urls without ingress", payload)
+	}
+	if payload["public_url_status"] != "not_configured" {
+		t.Fatalf("public_url_status = %#v, want not_configured", payload["public_url_status"])
+	}
+	message := stringValueAny(payload["public_url_message"])
+	if !strings.Contains(message, "internal health OK") || !strings.Contains(message, "no public ingress is configured") {
+		t.Fatalf("public_url_message = %q, want internal-health/no-ingress guidance", message)
+	}
+	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
+	if runtimeVerified["ready"] != true || runtimeVerified["desired_state_revision"] != true || runtimeVerified["healthcheck"] != true {
+		t.Fatalf("runtime_verified = %#v, want internal runtime ready", runtimeVerified)
+	}
+}
+
+func TestSoloStatusDoesNotClaimNoIngressWhenConfigUnknown(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"time":"2026-04-27T10:42:45Z","revision":"rev","phase":"settled","summary":{"environments":1,"services":1}}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{
+		"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+	}}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{Nodes: []string{"node-a"}}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if _, ok := payload["public_url_status"]; ok {
+		t.Fatalf("payload = %#v, did not want public_url_status when config is unknown", payload)
+	}
+	if _, ok := payload["public_url_message"]; ok {
+		t.Fatalf("payload = %#v, did not want public_url_message when config is unknown", payload)
+	}
+}
+
 func TestSoloStatusUsesResolvedEnvironmentOverlay(t *testing.T) {
 	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
 	workspaceRoot := t.TempDir()

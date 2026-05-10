@@ -11,7 +11,6 @@ class CliInstallsController < ActionController::Base
     # For curl | bash installs, default the downloader to the exact host serving
     # the script so callers do not need to pass --base-url explicitly.
     default_base_url = ShellQuoting.single_quote(request.base_url)
-    script_install_url = ShellQuoting.single_quote("#{request.base_url}/lfg.sh")
     default_version = ShellQuoting.single_quote(params[:version].to_s.presence || Devopsellence::RuntimeConfig.current.stable_version)
 
     <<~SH
@@ -22,15 +21,12 @@ class CliInstallsController < ActionController::Base
       if [[ -z "$BASE_URL" ]]; then
         BASE_URL=#{default_base_url}
       fi
-      INSTALL_SCRIPT_URL=#{script_install_url}
       CLI_VERSION="${DEVOPSELLENCE_CLI_VERSION:-}"
       if [[ -z "$CLI_VERSION" ]]; then
         CLI_VERSION=#{default_version}
       fi
       CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
-      INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"
-      AGENT_SKILLS_DIR="${DEVOPSELLENCE_AGENT_SKILLS_DIR:-}"
       TARGET_NAME="devopsellence"
 
       while [[ $# -gt 0 ]]; do
@@ -57,10 +53,6 @@ class CliInstallsController < ActionController::Base
             ;;
           --install-dir=*)
             INSTALL_DIR="${1#*=}"
-            shift
-            ;;
-          --install-agent-skill)
-            INSTALL_AGENT_SKILL=1
             shift
             ;;
           *)
@@ -166,19 +158,6 @@ class CliInstallsController < ActionController::Base
         printf '"%s"' "$value"
       }
 
-      install_agent_skill() {
-        local skill_args=()
-
-        if [[ -n "$AGENT_SKILLS_DIR" ]]; then
-          skill_args+=(--dir "$AGENT_SKILLS_DIR")
-        else
-          skill_args+=(--global)
-        fi
-
-        echo "installing devopsellence agent skill..."
-        "$INSTALL_DIR/$TARGET_NAME" skill install "${skill_args[@]}"
-      }
-
       echo "downloading devopsellence CLI..."
       curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BIN"
       curl -fsSL "$CHECKSUM_URL" -o "$TMP_SUMS"
@@ -232,15 +211,8 @@ class CliInstallsController < ActionController::Base
           ;;
       esac
 
-      case "$INSTALL_AGENT_SKILL" in
-        1|true|TRUE|yes|YES)
-          install_agent_skill
-          ;;
-        *)
-          echo "agent skill available; install CLI + skill together with:"
-          echo "  curl -fsSL \"$INSTALL_SCRIPT_URL?version=$CLI_VERSION\" | bash -s -- --install-agent-skill"
-          ;;
-      esac
+      echo "agent skill available; install it with:"
+      echo "  \"$INSTALL_DIR/$TARGET_NAME\" skill install --global"
     SH
   end
 end

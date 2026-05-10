@@ -1798,6 +1798,57 @@ func TestIngressCheckPersistsSuccessfulReadinessRecord(t *testing.T) {
 	}
 }
 
+func TestIngressCheckWarnsWhenSuccessfulReadinessRecordCannotBeSaved(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"127.0.0.1"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "127.0.0.1", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := t.TempDir()
+	soloState := solo.NewStateStore(filepath.Join(stateDir, "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stateDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(stateDir, 0o755)
+	})
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.IngressCheck(context.Background(), IngressCheckOptions{}); err != nil {
+		t.Fatalf("IngressCheck() error = %v, want success with warning", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != true {
+		t.Fatalf("payload ok = %v, want true", payload["ok"])
+	}
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	if len(warnings) != 1 || !strings.Contains(stringValueAny(warnings[0]), "local readiness record could not be saved") {
+		t.Fatalf("warnings = %#v, want readiness record save warning", warnings)
+	}
+}
+
 func TestRecordSuccessfulSoloIngressCheckToStorePreservesFreshState(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))

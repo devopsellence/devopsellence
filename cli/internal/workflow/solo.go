@@ -6868,7 +6868,7 @@ func (a *App) IngressCheck(ctx context.Context, opts IngressCheckOptions) error 
 			report.Environment = environmentName
 			if report.OK {
 				if err := recordSuccessfulSoloIngressCheckToStore(a.SoloState, workspaceRoot, environmentName, report); err != nil {
-					return err
+					report.Warnings = append(report.Warnings, "ingress check succeeded, but the local readiness record could not be saved: "+err.Error())
 				}
 			}
 
@@ -7359,6 +7359,7 @@ type ingressDNSReportResult struct {
 	ExpectedIPs   []string               `json:"expected_ips"`
 	Hosts         []ingressDNSHostResult `json:"hosts"`
 	Hints         []ingressHint          `json:"hints,omitempty"`
+	Warnings      []string               `json:"warnings,omitempty"`
 	NextSteps     []string               `json:"next_steps,omitempty"`
 }
 

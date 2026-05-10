@@ -4359,6 +4359,65 @@ func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
 	}
 }
 
+func TestUnexpectedPublicListeningPortsAllowsDevopsellenceEnvoyPort(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:8000 0.0.0.0:* users:((\"docker-proxy\",pid=1234,fd=4))",
+		"LISTEN 0 4096 0.0.0.0:8001 0.0.0.0:* users:((\"docker-proxy\",pid=1235,fd=4))",
+	}
+	expected := map[string]bool{"8000": true}
+	ports := unexpectedPublicListeningPorts(lines, 22, expected)
+	if !reflect.DeepEqual(ports, []string{"8001"}) {
+		t.Fatalf("unexpected ports = %#v, want only non-envoy port flagged", ports)
+	}
+	details := expectedPublicListeningPortDetails(lines, expected)
+	if len(details) != 1 || !strings.Contains(details[0], "Envoy listener") {
+		t.Fatalf("expected details = %#v, want Envoy explanation", details)
+	}
+}
+
+func TestUnexpectedPublicListeningPortsFlagsUnattributedEnvoyPort(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:8000 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 22)
+	if !reflect.DeepEqual(ports, []string{"8000"}) {
+		t.Fatalf("unexpected ports = %#v, want unattributed 8000 flagged", ports)
+	}
+	details := expectedPublicListeningPortDetails(lines)
+	if len(details) != 0 {
+		t.Fatalf("expected details = %#v, want no Envoy explanation without attribution", details)
+	}
+}
+
+func TestExpectedDevopsellenceEnvoyPublicPortsFromDockerSnapshot(t *testing.T) {
+	snapshot := map[string]any{
+		"containers": map[string]any{"items": []any{
+			map[string]any{
+				"Names": "devopsellence-envoy",
+				"Ports": "0.0.0.0:8000->8000/tcp, :::8000->8000/tcp, 0.0.0.0:8001->8001/tcp",
+			},
+			map[string]any{
+				"Names": "not-devopsellence-envoy-copy",
+				"Ports": "0.0.0.0:8002->8000/tcp",
+			},
+			map[string]any{
+				"Names":  "other",
+				"Labels": "devopsellence.managed=true,devopsellence.system=envoy",
+				"Ports":  "0.0.0.0:8000->8000/tcp",
+			},
+			map[string]any{
+				"Names":  "other",
+				"Labels": "devopsellence.system=envoy",
+				"Ports":  "0.0.0.0:8003->8000/tcp",
+			},
+		}},
+	}
+	ports := expectedDevopsellenceEnvoyPublicPortsFromDockerSnapshot(snapshot)
+	if !reflect.DeepEqual(ports, map[string]bool{"8000": true}) {
+		t.Fatalf("expected managed public ports = %#v, want only devopsellence envoy port", ports)
+	}
+}
+
 func TestUnexpectedPublicListeningPortsAllowsDevopsellenceACMEBackend(t *testing.T) {
 	lines := []string{
 		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=9))",

@@ -4259,7 +4259,8 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	payload["ports"] = ports
 	portLines, _ := ports["lines"].([]string)
 	portsTruncated, _ := ports["truncated"].(bool)
-	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated, ports)
+	expectedManagedPublicPorts := expectedDevopsellenceEnvoyPublicPortsFromDockerSnapshot(dockerSnapshot)
+	security := a.soloNodeSecurityDiagnostics(ctx, node, portLines, portsTruncated, ports, expectedManagedPublicPorts)
 	payload["security"] = security
 	if !diagnosticSectionsOK(agent, dockerSnapshot, ports) {
 		diagnoseOK = false
@@ -4528,20 +4529,20 @@ func soloAgentObservedVersion(observed string) string {
 	return ""
 }
 
-func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) map[string]any {
-	checks := soloNodeSecurityChecks(ctx, node, portLines, portsTruncated, portDiagnostic)
+func (a *App) soloNodeSecurityDiagnostics(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any, expectedManagedPublicPorts ...map[string]bool) map[string]any {
+	checks := soloNodeSecurityChecks(ctx, node, portLines, portsTruncated, portDiagnostic, expectedManagedPublicPorts...)
 	items, ok := soloNodeSecurityCheckItems(checks)
 	return map[string]any{"ok": ok, "checks": items}
 }
 
-func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) []soloSecurityCheck {
+func soloNodeSecurityChecks(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any, expectedManagedPublicPorts ...map[string]bool) []soloSecurityCheck {
 	return []soloSecurityCheck{
 		soloSSHPasswordAuthCheck(ctx, node),
 		soloAgentStatePermissionsCheck(ctx, node),
 		soloTLSKeyPermissionsCheck(ctx, node),
 		soloDockerSocketMountsCheck(ctx, node),
 		soloPrivilegedContainersCheck(ctx, node),
-		soloPublicListeningPortsCheck(ctx, node, portLines, portsTruncated, portDiagnostic),
+		soloPublicListeningPortsCheck(ctx, node, portLines, portsTruncated, portDiagnostic, expectedManagedPublicPorts...),
 	}
 }
 
@@ -4747,7 +4748,7 @@ func soloPrivilegedContainersCheck(ctx context.Context, node config.Node) soloSe
 	return check
 }
 
-func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any) soloSecurityCheck {
+func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLines []string, portsTruncated bool, portDiagnostic map[string]any, expectedManagedPublicPorts ...map[string]bool) soloSecurityCheck {
 	check := soloSecurityCheck{Name: "public_listening_ports", OK: true, Severity: "medium"}
 	if portDiagnostic != nil && portDiagnostic["ok"] != true {
 		check.OK = false
@@ -4777,8 +4778,8 @@ func soloPublicListeningPortsCheck(ctx context.Context, node config.Node, portLi
 		check.NextAction = "install ss or netstat on the node, then rerun devopsellence node diagnose"
 		return check
 	}
-	expectedDetails := expectedPublicListeningPortDetails(portLines)
-	ports := unexpectedPublicListeningPorts(portLines, node.Port)
+	expectedDetails := expectedPublicListeningPortDetails(portLines, expectedManagedPublicPorts...)
+	ports := unexpectedPublicListeningPorts(portLines, node.Port, expectedManagedPublicPorts...)
 	if len(ports) > 0 {
 		check.OK = false
 		check.Observed = "unexpected public listening ports: " + strings.Join(ports, ", ")
@@ -4849,7 +4850,7 @@ func hasListenAddress(line string) bool {
 	return false
 }
 
-func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
+func unexpectedPublicListeningPorts(lines []string, sshPort int, expectedManagedPublicPorts ...map[string]bool) []string {
 	if sshPort == 0 {
 		sshPort = 22
 	}
@@ -4857,7 +4858,7 @@ func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
 	seen := map[string]bool{}
 	for _, line := range lines {
 		for _, port := range publicPortsFromListeningLine(line) {
-			if expected[port] || expectedDevopsellenceACMEListener(line, port) || seen[port] {
+			if expected[port] || expectedManagedPublicPort(port, expectedManagedPublicPorts...) || expectedDevopsellenceACMEListener(line, port) || seen[port] {
 				continue
 			}
 			seen[port] = true
@@ -4871,19 +4872,115 @@ func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
 	return ports
 }
 
-func expectedPublicListeningPortDetails(lines []string) []string {
+func expectedPublicListeningPortDetails(lines []string, expectedManagedPublicPorts ...map[string]bool) []string {
 	seenACME := false
+	seenEnvoy := false
 	for _, line := range lines {
 		for _, port := range publicPortsFromListeningLine(line) {
 			if expectedDevopsellenceACMEListener(line, port) {
 				seenACME = true
 			}
+			if port == "8000" && expectedManagedPublicPort(port, expectedManagedPublicPorts...) {
+				seenEnvoy = true
+			}
 		}
 	}
-	if !seenACME {
+	details := []string{}
+	if seenEnvoy {
+		details = append(details, "8000 is the devopsellence Envoy listener published by the managed Envoy container")
+	}
+	if seenACME {
+		details = append(details, "15980 is the devopsellence agent ACME HTTP-01 listener used for auto TLS challenges")
+	}
+	return details
+}
+
+func expectedManagedPublicPort(port string, expectedManagedPublicPorts ...map[string]bool) bool {
+	for _, ports := range expectedManagedPublicPorts {
+		if ports[port] {
+			return true
+		}
+	}
+	return false
+}
+
+func expectedDevopsellenceEnvoyPublicPortsFromRemote(ctx context.Context, node config.Node) map[string]bool {
+	diag := runRemoteDiagnostic(ctx, node, remoteDockerPSJSONCommand())
+	if diag.Err != nil || diag.ExitCode != 0 {
 		return nil
 	}
-	return []string{"15980 is the devopsellence agent ACME HTTP-01 listener used for auto TLS challenges"}
+	items := []any{}
+	for _, line := range splitNonFinalEmptyLines(diag.Stdout) {
+		line = strings.TrimSpace(line)
+		if line == "" || line == soloDiagnoseTruncatedMarker {
+			continue
+		}
+		var item map[string]any
+		if err := json.Unmarshal([]byte(line), &item); err == nil {
+			items = append(items, item)
+		}
+	}
+	return expectedDevopsellenceEnvoyPublicPortsFromItems(items)
+}
+
+func expectedDevopsellenceEnvoyPublicPortsFromDockerSnapshot(snapshot map[string]any) map[string]bool {
+	containers, _ := snapshot["containers"].(map[string]any)
+	return expectedDevopsellenceEnvoyPublicPortsFromItems(containers["items"])
+}
+
+func expectedDevopsellenceEnvoyPublicPortsFromItems(value any) map[string]bool {
+	items, _ := value.([]any)
+	expected := map[string]bool{}
+	for _, item := range items {
+		container, ok := item.(map[string]any)
+		if !ok || !devopsellenceEnvoyContainer(container) {
+			continue
+		}
+		for _, port := range dockerPublishedPublicPorts(stringFromAny(container["Ports"])) {
+			if port != "8000" {
+				continue
+			}
+			expected[port] = true
+		}
+	}
+	if len(expected) == 0 {
+		return nil
+	}
+	return expected
+}
+
+func devopsellenceEnvoyContainer(container map[string]any) bool {
+	name := strings.TrimPrefix(strings.TrimSpace(strings.ToLower(stringFromAny(container["Names"]))), "/")
+	labels := strings.ToLower(stringFromAny(container["Labels"]))
+	return name == "devopsellence-envoy" || (dockerLabelsContain(labels, "devopsellence.managed=true") && dockerLabelsContain(labels, "devopsellence.system=envoy"))
+}
+
+func dockerLabelsContain(labels, expected string) bool {
+	for _, label := range strings.Split(labels, ",") {
+		if strings.TrimSpace(label) == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func dockerPublishedPublicPorts(ports string) []string {
+	result := []string{}
+	seen := map[string]bool{}
+	for _, item := range strings.Split(ports, ",") {
+		published := strings.TrimSpace(strings.SplitN(item, "->", 2)[0])
+		if published == "" || published == item {
+			continue
+		}
+		host, port, ok := splitListenAddress(published)
+		if !ok || !isPublicListenHost(host) || seen[port] {
+			continue
+		}
+		seen[port] = true
+		result = append(result, port)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func expectedDevopsellenceACMEListener(line, port string) bool {
@@ -5450,7 +5547,8 @@ func (a *App) soloRuntimeDoctorChecks(ctx context.Context, opts SoloDoctorOption
 			failed = true
 		}
 		results = append(results, soloRuntimeStatusReportCheckResult(name, statusReportCheck))
-		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false, nil) {
+		expectedManagedPublicPorts := expectedDevopsellenceEnvoyPublicPortsFromRemote(ctx, node)
+		for _, check := range soloNodeSecurityChecks(ctx, node, nil, false, nil, expectedManagedPublicPorts) {
 			result := soloRuntimeSecurityCheckResult(name, check)
 			if !check.OK {
 				failed = true

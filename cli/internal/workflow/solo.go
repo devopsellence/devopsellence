@@ -1471,7 +1471,7 @@ func (a *App) republishPreparedNodes(ctx context.Context, prepared map[string]pr
 				}
 			}
 			for _, image := range inputs.images {
-				present, err := remoteNodeHasImage(ctx, node, image)
+				present, err := remoteNodeHasImageReference(ctx, node, image)
 				if err != nil {
 					appendSoloRepublishError(&mu, &errs, name, "remote image check", err)
 					return
@@ -1494,7 +1494,7 @@ func (a *App) republishPreparedNodes(ctx context.Context, prepared map[string]pr
 					return
 				}
 				if strings.TrimSpace(check.id) != "" {
-					present, err := remoteNodeHasImage(ctx, node, check.id)
+					present, err := remoteNodeHasImageReference(ctx, node, check.id)
 					if err != nil {
 						appendSoloRepublishError(&mu, &errs, name, "remote image id check", err)
 						return
@@ -1918,8 +1918,8 @@ func desiredStateRevision(data []byte) (string, error) {
 	return payload.Revision, nil
 }
 
-func remoteNodeHasImage(ctx context.Context, node config.Node, imageTag string) (bool, error) {
-	out, err := solo.RunSSH(ctx, node, remoteDockerImageInspectCommand(imageTag), nil)
+func remoteNodeHasImageReference(ctx context.Context, node config.Node, reference string) (bool, error) {
+	out, err := solo.RunSSH(ctx, node, remoteDockerImageInspectCommand(reference), nil)
 	if err != nil {
 		return false, err
 	}
@@ -8754,8 +8754,8 @@ func remoteDockerLoadCommand() string {
 	return "if docker info >/dev/null 2>&1; then gunzip | docker load; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then gunzip | sudo -n docker load; else echo 'Docker is not reachable. Add this SSH user to the docker group or enable passwordless sudo for docker.' >&2; docker info >/dev/null 2>&1; exit 1; fi"
 }
 
-func remoteDockerImageInspectCommand(imageTag string) string {
-	quotedImage := shellQuote(imageTag)
+func remoteDockerImageInspectCommand(reference string) string {
+	quotedImage := shellQuote(reference)
 	return fmt.Sprintf("if docker image inspect %s >/dev/null 2>&1; then echo present; elif command -v sudo >/dev/null 2>&1 && sudo -n docker image inspect %s >/dev/null 2>&1; then echo present; else echo missing; fi", quotedImage, quotedImage)
 }
 

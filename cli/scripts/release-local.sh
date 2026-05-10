@@ -5,8 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLI_DIR="$ROOT_DIR/cli"
 TARGET_NAME="devopsellence"
 INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
-INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"
-AGENT_SKILLS_DIR="${DEVOPSELLENCE_AGENT_SKILLS_DIR:-}"
 
 OS_RAW="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH_RAW="$(uname -m)"
@@ -114,24 +112,5 @@ case ":$PATH:" in
     ;;
 esac
 
-install_agent_skill() {
-  local skill_args=()
-
-  if [[ -n "$AGENT_SKILLS_DIR" ]]; then
-    skill_args+=(--dir "$AGENT_SKILLS_DIR")
-  else
-    skill_args+=(--global)
-  fi
-
-  echo "installing devopsellence agent skill..."
-  "$INSTALL_DIR/$TARGET_NAME" skill install "${skill_args[@]}"
-}
-
-case "$INSTALL_AGENT_SKILL" in
-  1|true|TRUE|yes|YES)
-    install_agent_skill
-    ;;
-  *)
-    echo "agent skill available; rerun installer with DEVOPSELLENCE_INSTALL_AGENT_SKILL=1"
-    ;;
-esac
+echo "agent skill available; install it with:"
+echo "  $INSTALL_DIR/$TARGET_NAME skill install --global"

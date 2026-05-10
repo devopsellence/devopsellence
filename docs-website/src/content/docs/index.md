@@ -27,13 +27,14 @@ approval loop; the node agent stays deterministic.
 Already have a Dockerized app:
 
 ```bash
-curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash
+devopsellence skill install --global
 cd my-app
 codex e "Deploy this app with devopsellence solo."
 ```
 
-`--install-agent-skill` installs the matching skill from the CLI itself; it does
-not require npm or `npx`.
+`devopsellence skill install` installs the matching skill from the CLI itself;
+it does not require npm or `npx`.
 
 Starting from an idea:
 

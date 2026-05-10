@@ -57,19 +57,17 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
     assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
     assert_includes response.body, 'INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"'
-    assert_includes response.body, 'INSTALL_AGENT_SKILL="${DEVOPSELLENCE_INSTALL_AGENT_SKILL:-}"'
-    assert_includes response.body, 'AGENT_SKILLS_DIR="${DEVOPSELLENCE_AGENT_SKILLS_DIR:-}"'
-    assert_includes response.body, "INSTALL_SCRIPT_URL='https://dev.devopsellence.com/lfg.sh'"
-    assert_includes response.body, "--install-agent-skill"
+    refute_includes response.body, "INSTALL_SCRIPT_URL"
+    refute_includes response.body, "DEVOPSELLENCE_INSTALL_AGENT_SKILL"
+    refute_includes response.body, "DEVOPSELLENCE_AGENT_SKILLS_DIR"
+    refute_includes response.body, "--install-agent-skill"
     assert_includes response.body, 'INSTALL_DIR="$HOME/.local/bin"'
     refute_includes response.body, 'INSTALL_DIR="/usr/local/bin"'
     assert_includes response.body, "PATH_EXPORT='export PATH=\"'\"$INSTALL_DIR\"':$PATH\"'"
     assert_includes response.body, "echo '$PATH_EXPORT' >> $RC_FILE"
     assert_includes response.body, "source $RC_FILE"
-    assert_includes response.body, '"$INSTALL_DIR/$TARGET_NAME" skill install'
-    assert_includes response.body, "skill_args+=(--global)"
+    assert_includes response.body, '$INSTALL_DIR/$TARGET_NAME skill install --global'
     refute_includes response.body, "npx --yes skills add"
-    assert_includes response.body, 'curl -fsSL "$INSTALL_SCRIPT_URL?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
   end
 
   test "cli install script ignores configured public base url when choosing default download host" do
@@ -83,19 +81,18 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_includes response.body, 'BASE_URL="${DEVOPSELLENCE_BASE_URL:-}"'
     assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
-    assert_includes response.body, "INSTALL_SCRIPT_URL='https://dev.devopsellence.com/lfg.sh'"
+    refute_includes response.body, "INSTALL_SCRIPT_URL"
     refute_includes response.body, "https://app.devopsellence.com"
   end
 
-  test "cli install script skill rerun command keeps script host separate from download override" do
+  test "cli install script skill hint uses the installed cli" do
     https!
     host! "dev.devopsellence.com"
     get "/lfg.sh"
 
     assert_response :success
     assert_includes response.body, "BASE_URL='https://dev.devopsellence.com'"
-    assert_includes response.body, "INSTALL_SCRIPT_URL='https://dev.devopsellence.com/lfg.sh'"
-    assert_includes response.body, 'curl -fsSL "$INSTALL_SCRIPT_URL?version=$CLI_VERSION" | bash -s -- --install-agent-skill'
+    assert_includes response.body, "$INSTALL_DIR/$TARGET_NAME skill install --global"
     refute_includes response.body, 'curl -fsSL "$BASE_URL/lfg.sh'
   end
 
@@ -124,7 +121,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_includes installed_cli, "prerelease build"
   end
 
-  test "cli install script can install the embedded agent skill when requested" do
+  test "cli install script leaves agent skill install to the cli command" do
     get "/lfg.sh", params: { version: "master-0053792f6aec" }
 
     assert_response :success
@@ -132,34 +129,16 @@ class InstallsTest < ActionDispatch::IntegrationTest
     stdout, stderr, status, installed_cli, installed_skill = run_cli_install_script(
       response.body,
       version: "master-0053792f6aec",
-      install_agent_skill: true
-    )
-
-    assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
-    assert_includes stdout, "installing devopsellence agent skill"
-    assert_includes stdout, '"action":"installed"'
-    assert_includes stdout, '"source":"embedded"'
-    assert_includes installed_cli, "prerelease build"
-    assert_equal "skill for master-0053792f6aec\n", installed_skill
-  end
-
-  test "cli install script installs requested agent skill without npx" do
-    get "/lfg.sh", params: { version: "master-0053792f6aec" }
-
-    assert_response :success
-
-    stdout, stderr, status, installed_cli, installed_skill = run_cli_install_script(
-      response.body,
-      version: "master-0053792f6aec",
-      install_agent_skill: true,
       include_npx: false
     )
 
     assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
-    assert_includes stdout, '"action":"installed"'
-    assert_includes stdout, '"source":"embedded"'
+    refute_includes stdout, "installing devopsellence agent skill"
+    refute_includes stdout, '"action":"installed"'
+    assert_includes stdout, "agent skill available; install it with:"
+    assert_includes stdout, "skill install --global"
     assert_includes installed_cli, "prerelease build"
-    assert_equal "skill for master-0053792f6aec\n", installed_skill
+    assert_nil installed_skill
   end
 
   test "cli install script defaults to user local bin on linux" do
@@ -294,7 +273,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
   private
 
-  def run_cli_install_script(script_body, version:, install_dir: :explicit, install_agent_skill: false, include_npx: true)
+  def run_cli_install_script(script_body, version:, install_dir: :explicit, include_npx: true)
     Dir.mktmpdir("devopsellence-cli-install-test") do |tmpdir|
       fixtures_dir = File.join(tmpdir, "fixtures")
       fakebin_dir = File.join(tmpdir, "fakebin")
@@ -471,8 +450,6 @@ class InstallsTest < ActionDispatch::IntegrationTest
         "DEVOPSELLENCE_BASE_URL" => "https://downloads.devopsellence.test"
       }
       env["DEVOPSELLENCE_CLI_INSTALL_DIR"] = effective_install_dir if effective_install_dir
-      env["DEVOPSELLENCE_INSTALL_AGENT_SKILL"] = "1" if install_agent_skill
-
       working_dir = File.join(tmpdir, "work")
       FileUtils.mkdir_p(working_dir)
       stdout, stderr, status = Open3.capture3(env, script_path, chdir: working_dir)

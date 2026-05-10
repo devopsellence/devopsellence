@@ -29,13 +29,14 @@ asking it to invent production shell choreography.
 ### Quickstart
 
 ```bash
-curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- --install-agent-skill
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash
+devopsellence skill install --global
 cd my-app
 codex "deploy with devopsellence solo"
 ```
 
-`--install-agent-skill` installs the matching devopsellence agent skill from
-the CLI itself; it does not require npm or `npx`.
+`devopsellence skill install` installs the matching devopsellence agent skill
+from the CLI itself; it does not require npm or `npx`.
 
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 

@@ -283,13 +283,12 @@ func (r *Reconciler) ensureImage(ctx context.Context, image string) error {
 		return fmt.Errorf("inspect image %s: %w", image, err)
 	}
 	if !exists {
-		if r.opts.ImagePullAuth == nil {
-			return fmt.Errorf("image not found locally: %s", image)
-		}
 		var auth *engine.RegistryAuth
-		auth, err = r.opts.ImagePullAuth.AuthForImage(ctx, image)
-		if err != nil {
-			return fmt.Errorf("resolve image pull auth for %s: %w", image, err)
+		if r.opts.ImagePullAuth != nil {
+			auth, err = r.opts.ImagePullAuth.AuthForImage(ctx, image)
+			if err != nil {
+				return fmt.Errorf("resolve image pull auth for %s: %w", image, err)
+			}
 		}
 		if err := r.engine.PullImage(ctx, image, auth); err != nil {
 			return fmt.Errorf("pull image %s: %w", image, err)

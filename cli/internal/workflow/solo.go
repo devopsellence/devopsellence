@@ -2972,10 +2972,6 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 	return publicURLsForHosts(scheme, hosts)
 }
 
-func soloPublicIngressConfigured(cfg *config.ProjectConfig) bool {
-	return cfg != nil && cfg.Ingress != nil
-}
-
 func soloPublicIngressKnownUnconfigured(cfg *config.ProjectConfig) bool {
 	return cfg != nil && cfg.Ingress == nil
 }

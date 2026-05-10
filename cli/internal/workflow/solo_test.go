@@ -2347,7 +2347,7 @@ func TestSoloDoctorScopesRuntimeChecksToCurrentEnvironment(t *testing.T) {
 	}
 }
 
-func TestSoloDoctorFailsWhenAgentStatusReportMissingAtExpectedPath(t *testing.T) {
+func TestSoloDoctorWarnsWhenAgentStatusReportMissingBeforeFirstDeploy(t *testing.T) {
 	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: soloStatusMissingSentinel + "\n"}})
 
 	workspaceRoot := t.TempDir()
@@ -2377,9 +2377,70 @@ func TestSoloDoctorFailsWhenAgentStatusReportMissingAtExpectedPath(t *testing.T)
 		ConfigStore: config.NewStore(),
 		Cwd:         workspaceRoot,
 	}
+	if err := app.SoloDoctor(context.Background()); err != nil {
+		t.Fatalf("SoloDoctor() error = %v, want missing status warning before first deploy", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ok"] != true {
+		t.Fatalf("payload ok = %#v, want true", payload["ok"])
+	}
+	checks := jsonArrayFromMap(t, payload, "runtime_checks")
+	for _, item := range checks {
+		check := jsonMapFromAny(t, item)
+		if check["check"] == "agent_status_report" {
+			if check["ok"] != true || check["severity"] != "warning" || !strings.Contains(stringValueAny(check["detail"]), "no workload deployed yet") || !strings.Contains(stringValueAny(check["detail"]), "/var/lib/devopsellence/status.json") {
+				t.Fatalf("agent_status_report = %#v, want no-workload warning", check)
+			}
+			if check["next_action"] != "devopsellence deploy" {
+				t.Fatalf("agent_status_report next_action = %#v, want runnable deploy command", check["next_action"])
+			}
+			warnings := jsonArrayFromMap(t, payload, "warnings")
+			if len(warnings) != 1 || !strings.Contains(stringValueAny(warnings[0]), "no workload deployed yet") {
+				t.Fatalf("warnings = %#v, want no-workload warning", warnings)
+			}
+			if _, ok := payload["next_steps"]; ok {
+				t.Fatalf("next_steps = %#v, want no failure next steps", payload["next_steps"])
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime_checks = %#v, want agent_status_report", checks)
+}
+
+func TestSoloDoctorFailsWhenAgentStatusReportMissingForCurrentRelease(t *testing.T) {
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: soloStatusMissingSentinel + "\n"}})
+
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commitTestRepo(t, workspaceRoot)
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"node-a": {Host: "203.0.113.10", User: "root"},
+		},
+	}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "abc1234")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Printer:     output.New(&stdout, io.Discard),
+		Docker:      &fakeDocker{},
+		SoloState:   soloState,
+		ConfigStore: config.NewStore(),
+		Cwd:         workspaceRoot,
+	}
 	err := app.SoloDoctor(context.Background())
 	if err == nil {
-		t.Fatal("SoloDoctor() error = nil, want missing status report failure")
+		t.Fatal("SoloDoctor() error = nil, want missing status report failure for current release")
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	if payload["ok"] != false {
@@ -2391,6 +2452,23 @@ func TestSoloDoctorFailsWhenAgentStatusReportMissingAtExpectedPath(t *testing.T)
 		if check["check"] == "agent_status_report" {
 			if check["ok"] != false || !strings.Contains(stringValueAny(check["detail"]), "/var/lib/devopsellence/status.json") {
 				t.Fatalf("agent_status_report = %#v, want expected status path failure", check)
+			}
+			if strings.Contains(stringValueAny(check["next_action"]), "agent install") {
+				t.Fatalf("agent_status_report next_action = %q, want diagnose guidance", stringValueAny(check["next_action"]))
+			}
+			steps := jsonArrayFromMap(t, payload, "next_steps")
+			wantSteps := []any{
+				"devopsellence node diagnose 'node-a'",
+				"ssh -p 22 'root@203.0.113.10' true",
+			}
+			if !reflect.DeepEqual(steps, wantSteps) {
+				t.Fatalf("next_steps = %#v, want runnable diagnose and SSH guidance", steps)
+			}
+			for _, step := range steps {
+				text := stringValueAny(step)
+				if strings.HasPrefix(text, "run ") || strings.Contains(text, " and ") || strings.Contains(text, "agent install") {
+					t.Fatalf("next_steps = %#v, want runnable diagnose guidance without agent install/prose", steps)
+				}
 			}
 			return
 		}
@@ -4412,7 +4490,7 @@ exit 255
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
 		Nodes: map[string]config.Node{
-			"node-a": {Host: "203.0.113.10", User: "root", Port: 22},
+			"node-a": {Host: "203.0.113.10", User: "root"},
 		},
 	}
 	if err := soloState.Write(current); err != nil {

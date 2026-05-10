@@ -14,6 +14,7 @@
 #      deploy, check status
 #   5. Assert: app container running, status.json settled, secrets resolved
 #   6. Restart the agent, deploy a second release, rollback, and detach cleanup
+#   7. Verify release tasks can resolve pre-bootstrapped accessory services
 #
 # Usage:
 #   ruby test/e2e/solo_e2e.rb
@@ -173,6 +174,7 @@ class SoloE2E
     @envoy_https_port = available_port(33_000 + SecureRandom.random_number(1000))
     @node_container = "devopsellence-solo-node-#{@run_id}"
     @node_image = "devopsellence/solo-e2e-node:#{@run_id}"
+    @release_task_accessory_image = "devopsellence/solo-e2e-release-accessory:#{@run_id}"
     @run_labels = {
       "devopsellence.e2e" => "1",
       "devopsellence.e2e.run_id" => @run_id,
@@ -217,6 +219,7 @@ class SoloE2E
     step("rollback") { rollback_to_previous_release! }
     step("assert rollback") { assert_runtime_state!(expected_workload_revision: @initial_workload_revision, expected_plain_env: "hello-solo") }
     step("detach cleanup") { assert_detach_cleanup! }
+    step("release task accessory bootstrap") { assert_release_task_bootstraps_accessory! }
 
     puts "\n[ok] solo e2e passed"
   ensure
@@ -931,6 +934,79 @@ PY
     puts "[ok] Detach cleared desired state and removed workload containers"
   end
 
+  def assert_release_task_bootstraps_accessory!
+    build_release_task_accessory_image!
+    revision = "release-accessory-#{@run_id.tr("-", "_")}"
+    desired = {
+      "schemaVersion" => 2,
+      "revision" => revision,
+      "environments" => [
+        {
+          "name" => "production",
+          "revision" => revision,
+          "services" => [
+            {
+              "name" => "db",
+              "kind" => "accessory",
+              "image" => @release_task_accessory_image,
+              "entrypoint" => ["/bin/sh", "-c"],
+              "command" => ["trap : TERM INT; while true; do sleep 60; done"]
+            }
+          ],
+          "tasks" => [
+            {
+              "name" => "release",
+              "image" => @release_task_accessory_image,
+              "entrypoint" => ["/bin/sh", "-c"],
+              "command" => ["getent hosts db >/dev/null"]
+            }
+          ]
+        }
+      ]
+    }
+    desired_payload = JSON.pretty_generate(desired)
+    quoted_path = Shellwords.escape(@desired_state_path)
+    ssh_to_node_with_stdin!("cat > #{quoted_path} && touch #{quoted_path}", desired_payload)
+
+    status = nil
+    wait_until!(timeout: 120) do
+      output = ssh_to_node!("cat #{@status_path} 2>/dev/null || echo '{}'")
+      begin
+        status = JSON.parse(output)
+        status["revision"] == revision && status["phase"] == "settled"
+      rescue JSON::ParserError
+        false
+      end
+    end
+
+    environment = status.fetch("environments").find { |entry| entry["name"] == "production" }
+    raise "accessory bootstrap status missing production environment: #{status.inspect}" unless environment
+
+    service = environment.fetch("services").find { |entry| entry["name"] == "db" }
+    raise "accessory bootstrap status missing db service: #{status.inspect}" unless service
+    raise "db service kind = #{service['kind'].inspect}, want accessory" unless service["kind"] == "accessory"
+
+    db_containers = ssh_to_node!(
+      "docker ps --filter label=devopsellence.managed=true " \
+      "--filter label=devopsellence.service=db " \
+      "--filter label=devopsellence.revision=#{Shellwords.escape(revision)} " \
+      "--format '{{.Names}} {{.Status}}'"
+    ).lines.map(&:strip).reject(&:empty?)
+    raise "db accessory container not running for revision #{revision}" if db_containers.empty?
+
+    puts "[ok] Release task resolved accessory DNS before runtime reconcile: #{db_containers.join(', ')}"
+  end
+
+  def build_release_task_accessory_image!
+    image_dir = @image_build_dir.join("release-accessory")
+    FileUtils.rm_rf(image_dir)
+    FileUtils.mkdir_p(image_dir)
+    image_dir.join("Dockerfile").write(<<~DOCKERFILE)
+      FROM alpine:3.22
+    DOCKERFILE
+    run!("docker", "build", "-t", @release_task_accessory_image, image_dir.to_s, chdir: MONOREPO_ROOT.to_s, timeout: 300)
+  end
+
   def current_revision
     @current_revision ||= capture!("git", "rev-parse", "--short=7", "HEAD", chdir: @app_dir.to_s).strip
   end
@@ -948,6 +1024,22 @@ PY
       "root@127.0.0.1",
       command,
       chdir: MONOREPO_ROOT.to_s
+    )
+  end
+
+  def ssh_to_node_with_stdin!(command, input)
+    run!(
+      "ssh",
+      "-o", "BatchMode=yes",
+      "-o", "StrictHostKeyChecking=no",
+      "-o", "UserKnownHostsFile=/dev/null",
+      "-i", @ssh_private_key.to_s,
+      "-p", @ssh_port.to_s,
+      "root@127.0.0.1",
+      command,
+      chdir: MONOREPO_ROOT.to_s,
+      timeout: 30,
+      input: input
     )
   end
 
@@ -1305,6 +1397,7 @@ PY
       run!("docker", "network", "rm", network, chdir: MONOREPO_ROOT.to_s, timeout: 60)
     end
     run!("docker", "image", "rm", "-f", @node_image, chdir: MONOREPO_ROOT.to_s, timeout: 60)
+    run!("docker", "image", "rm", "-f", @release_task_accessory_image, chdir: MONOREPO_ROOT.to_s, timeout: 60) if @release_task_accessory_image
     FileUtils.rm_rf(@state_dir)
     FileUtils.rm_rf(@app_root_dir)
   rescue StandardError => e

@@ -83,6 +83,20 @@ devopsellence deploy
 In shared mode, use the same config shape. The control plane and node agent use
 the same desired-state model; only image publication and secret storage differ.
 
+## Release tasks
+
+Treat companion services as runtime dependencies that may need their own
+readiness checks before a release task uses them. A release task can run after
+devopsellence has published desired state, but a container may exist before the
+service inside it accepts connections.
+
+Release tasks that need a database, cache, or queue should include retry or wait
+logic before running migrations or setup commands.
+
+Current `devopsellence.yml` supporting services are scheduled as workload
+services. They do not yet expose first-class dependency or readiness settings,
+so do not rely on this as a complete sidecar dependency system.
+
 ## Operational notes
 
 Use named volumes for state you expect to keep across deploys. For Redis, that

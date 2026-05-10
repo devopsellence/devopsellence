@@ -365,7 +365,7 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	payload := decodeJSONOutput(t, &stdout)
 	projectsDir := filepath.Join(home, defaultVibeProjectsDirName)
 	appDir := filepath.Join(projectsDir, "my-app")
-	if payload["directory"] != appDir || payload["projects_dir"] != projectsDir || payload["ai_agent"] != "codex" || payload["agent_effort"] != "high" || payload["app_stack"] != "rails-app" || payload["launch_requested"] != false {
+	if payload["directory"] != appDir || payload["projects_dir"] != projectsDir || payload["ai_agent"] != "codex" || payload["agent_effort"] != "high" || payload["agent_autonomy"] != "builder" || payload["app_stack"] != "rails-app" || payload["launch_requested"] != false {
 		t.Fatalf("payload = %#v, want prepared codex rails workspace", payload)
 	}
 	intent := jsonMapFromAny(t, payload["deployment_intent"])
@@ -394,11 +394,11 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Rails 8.1") {
+	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Agent autonomy") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Rails 8.1") {
 		t.Fatalf("prompt = %q, want seeded codex prompt", prompt)
 	}
 	nextCommands := jsonArrayFromMap(t, payload, "next_commands")
-	if !jsonArrayContains(nextCommands, "codex -c 'model_reasoning_effort=\"high\"' 'Read .agents/prompts/devopsellence-vibe.md and follow it.'") {
+	if !jsonArrayContains(nextCommands, "codex --sandbox 'workspace-write' --ask-for-approval 'on-request' -c 'model_reasoning_effort=\"high\"' 'Read .agents/prompts/devopsellence-vibe.md and follow it.'") {
 		t.Fatalf("next_commands = %#v, want prompt-file agent command", nextCommands)
 	}
 	manifestData, err := os.ReadFile(filepath.Join(appDir, ".agents", "devopsellence-vibe.json"))
@@ -409,7 +409,7 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.AgentEffort != "high" || manifest.TemplateVersion != defaultVibeTemplateVersion || manifest.DeploymentIntent.DeployGoal != "prepare-solo" {
+	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultVibeTemplateVersion || manifest.DeploymentIntent.DeployGoal != "prepare-solo" {
 		t.Fatalf("manifest = %#v, want repo-relative paths", manifest)
 	}
 }
@@ -503,6 +503,7 @@ func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
 	var stderr bytes.Buffer
 	input := bytes.NewBufferString(strings.Join([]string{
 		"A tiny CRM for consultants",
+		"full-access",
 		"Track contacts and follow-ups",
 		"dry-run",
 		"solo",
@@ -523,13 +524,16 @@ func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v\nstderr=%s", err, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Ctrl+C") || !strings.Contains(stderr.String(), "Server plan") {
+	if !strings.Contains(stderr.String(), "Ctrl+C") || !strings.Contains(stderr.String(), "Agent freedom") || !strings.Contains(stderr.String(), "Server plan") {
 		t.Fatalf("stderr = %q, want wizard guidance and questions", stderr.String())
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	appDir := filepath.Join(home, defaultVibeProjectsDirName, "crm-app")
 	if payload["directory"] != appDir {
 		t.Fatalf("payload = %#v, want app under projects dir", payload)
+	}
+	if payload["agent_autonomy"] != "full-access" {
+		t.Fatalf("payload = %#v, want full-access agent autonomy", payload)
 	}
 	intent := jsonMapFromAny(t, payload["deployment_intent"])
 	if intent["deploy_goal"] != "dry-run" || intent["server_strategy"] != "hetzner" || intent["provider_auth_status"] != "missing" || intent["server_target"] != "prod-1" {
@@ -554,6 +558,9 @@ func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
 	if !stringSliceContains(manifest.NextCommands, "devopsellence provider login hetzner --token <token>") {
 		t.Fatalf("manifest.NextCommands = %#v, want secure Hetzner login hint", manifest.NextCommands)
 	}
+	if manifest.AgentAutonomy != "full-access" {
+		t.Fatalf("manifest.AgentAutonomy = %q, want full-access", manifest.AgentAutonomy)
+	}
 	promptData, err := os.ReadFile(filepath.Join(appDir, ".agents", "prompts", "devopsellence-vibe.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -561,6 +568,8 @@ func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
 	prompt := string(promptData)
 	for _, want := range []string{
 		"Track contacts and follow-ups",
+		"full access",
+		"isolated VM",
 		"Hetzner auth is missing",
 		"run devopsellence deploy --dry-run",
 		"Cloudflare DNS changes only after the user confirms",
@@ -733,7 +742,7 @@ func TestRootVibeLaunchReportsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "-c\nmodel_reasoning_effort=\"high\"\nRead .agents/prompts/devopsellence-vibe.md and follow it.\n" {
+	if string(data) != "--sandbox\nworkspace-write\n--ask-for-approval\non-request\n-c\nmodel_reasoning_effort=\"high\"\nRead .agents/prompts/devopsellence-vibe.md and follow it.\n" {
 		t.Fatalf("agent args = %q, want codex high-effort prompt-file launch", data)
 	}
 }
@@ -825,6 +834,32 @@ func TestRootVibeRejectsUnsupportedAgentEffort(t *testing.T) {
 	}
 }
 
+func TestRootVibeRejectsUnsupportedAgentAutonomy(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	installFakeVibeTools(t)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "my-app",
+		"--ai-agent", "generic",
+		"--autonomy", "reckless",
+		"--idea", "A tiny uptime page",
+		"--no-launch",
+	})
+
+	err := cmd.Execute()
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "unsupported agent autonomy") {
+		t.Fatalf("error = %v, want unsupported autonomy guidance", err)
+	}
+}
+
 func TestRootVibeRejectsUnsupportedDeployGoal(t *testing.T) {
 	cwd := t.TempDir()
 	setFakeVibeHome(t, cwd)
@@ -853,41 +888,86 @@ func TestRootVibeRejectsUnsupportedDeployGoal(t *testing.T) {
 
 func TestVibeAgentCommandIncludesEffort(t *testing.T) {
 	tests := []struct {
-		agent  string
-		effort string
-		want   string
+		agent    string
+		effort   string
+		autonomy string
+		want     string
 	}{
 		{
-			agent:  "codex",
-			effort: "high",
-			want:   "codex -c 'model_reasoning_effort=\"high\"' 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
+			agent:    "codex",
+			effort:   "high",
+			autonomy: "builder",
+			want:     "codex --sandbox 'workspace-write' --ask-for-approval 'on-request' -c 'model_reasoning_effort=\"high\"' 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
 		},
 		{
-			agent:  "claude",
-			effort: "high",
-			want:   "claude --effort high 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
+			agent:    "claude",
+			effort:   "high",
+			autonomy: "builder",
+			want:     "claude --permission-mode 'auto' --effort high 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
 		},
 		{
-			agent:  "pi",
-			effort: "high",
-			want:   "pi --thinking high 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
+			agent:    "pi",
+			effort:   "high",
+			autonomy: "builder",
+			want:     "pi --thinking high 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
 		},
 		{
-			agent:  "codex",
-			effort: "default",
-			want:   "codex 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
+			agent:    "codex",
+			effort:   "default",
+			autonomy: "careful",
+			want:     "codex --sandbox 'workspace-write' --ask-for-approval 'untrusted' 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
 		},
 		{
-			agent:  "generic",
-			effort: "high",
-			want:   "cat .agents/prompts/devopsellence-vibe.md",
+			agent:    "codex",
+			effort:   "high",
+			autonomy: "full-access",
+			want:     "codex --dangerously-bypass-approvals-and-sandbox -c 'model_reasoning_effort=\"high\"' 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
+		},
+		{
+			agent:    "claude",
+			effort:   "high",
+			autonomy: "full-access",
+			want:     "claude --dangerously-skip-permissions --effort high 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
+		},
+		{
+			agent:    "generic",
+			effort:   "high",
+			autonomy: "full-access",
+			want:     "cat .agents/prompts/devopsellence-vibe.md",
 		},
 	}
 	for _, tt := range tests {
-		got := vibeAgentCommand(tt.agent, tt.effort)
+		got := vibeAgentCommand(tt.agent, tt.effort, tt.autonomy)
 		if got != tt.want {
-			t.Fatalf("vibeAgentCommand(%q, %q) = %q, want %q", tt.agent, tt.effort, got, tt.want)
+			t.Fatalf("vibeAgentCommand(%q, %q, %q) = %q, want %q", tt.agent, tt.effort, tt.autonomy, got, tt.want)
 		}
+	}
+}
+
+func TestNormalizeVibeAgentAutonomy(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "empty", value: "", want: defaultVibeAgentAutonomy},
+		{name: "default", value: "default", want: defaultVibeAgentAutonomy},
+		{name: "careful", value: "careful", want: "careful"},
+		{name: "builder", value: "builder", want: "builder"},
+		{name: "full", value: "full", want: "full-access"},
+		{name: "full access", value: "full access", want: "full-access"},
+		{name: "full_access", value: "full_access", want: "full-access"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeVibeAgentAutonomy(tt.value)
+			if err != nil {
+				t.Fatalf("normalizeVibeAgentAutonomy(%q) error = %v", tt.value, err)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeVibeAgentAutonomy(%q) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
 	}
 }
 

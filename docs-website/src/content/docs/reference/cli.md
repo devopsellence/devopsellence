@@ -63,6 +63,8 @@ devopsellence ingress check --wait 5m
 devopsellence vibe my-app
 devopsellence vibe my-app --ai-agent=codex --idea="A tiny CRM"
 devopsellence vibe my-app --ai-agent=codex --agent-effort=default --idea="A tiny CRM"
+devopsellence vibe my-app --ai-agent=codex --autonomy=careful --idea="A tiny CRM"
+devopsellence vibe my-app --ai-agent=claude --autonomy=full-access --idea="A tiny CRM"
 devopsellence vibe my-app --projects-dir ~/Work/apps --idea="A tiny CRM"
 devopsellence vibe my-app --deploy-goal=dry-run --server=hetzner --server-target=prod-1 --domain=app.example.com --tls-email=ops@example.com
 devopsellence vibe my-app --services=managed-postgres,object-storage,email,cloudflare-dns --idea="A tiny CRM"

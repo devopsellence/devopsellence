@@ -3136,7 +3136,7 @@ func (a *App) soloSecretsSet(opts SoloSecretsSetOptions) error {
 		payload["reference"] = record.Reference
 	}
 	if record.Store == solo.SecretStorePlaintext {
-		payload["warnings"] = []string{soloPlaintextSecretWarning(record)}
+		payload["warnings"] = []string{soloPlaintextSecretWarning(record.Name, record.ServiceName, record.Environment)}
 	}
 	if a.SoloState != nil && strings.TrimSpace(a.SoloState.Path) != "" {
 		payload["state_path"] = a.SoloState.Path
@@ -3193,11 +3193,11 @@ func soloSecretConfigRef(record solo.SecretRecord) config.SecretRef {
 	return config.SecretRef{Name: record.Name, Secret: secret}
 }
 
-func soloPlaintextSecretWarning(record solo.SecretRecord) string {
+func soloPlaintextSecretWarning(name, serviceName, environment string) string {
 	command := fmt.Sprintf("devopsellence secret set %s --service %s --env %s --store 1password --op-ref op://<vault>/<item>/<field>",
-		shellQuote(record.Name),
-		shellQuote(record.ServiceName),
-		shellQuote(record.Environment),
+		shellQuote(name),
+		shellQuote(serviceName),
+		shellQuote(environment),
 	)
 	return "solo plaintext secrets are stored unencrypted in the local devopsellence solo state file for this machine; use this for demos or local operator-managed deployments only. For production, save the secret in 1Password and replace this local value with: " + command
 }

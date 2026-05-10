@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,7 @@ type fakeEngine struct {
 	images     map[string]bool
 	created    []engine.ContainerSpec
 	waitCalls  []string
+	ops        []string
 }
 
 func newFakeEngine() *fakeEngine {
@@ -110,6 +112,7 @@ func (f *fakeEngine) ListManaged(ctx context.Context) ([]engine.ContainerState, 
 
 func (f *fakeEngine) CreateAndStart(ctx context.Context, spec engine.ContainerSpec) error {
 	f.created = append(f.created, spec)
+	f.ops = append(f.ops, "create:"+spec.Name)
 	f.containers[spec.Name] = engine.ContainerState{
 		Name:        spec.Name,
 		Image:       spec.Image,
@@ -131,6 +134,7 @@ func (f *fakeEngine) Start(ctx context.Context, name string) error {
 
 func (f *fakeEngine) Wait(ctx context.Context, name string) (int64, error) {
 	f.waitCalls = append(f.waitCalls, name)
+	f.ops = append(f.ops, "wait:"+name)
 	return 0, nil
 }
 
@@ -545,11 +549,17 @@ func TestNoReportWhenNoDesiredState(t *testing.T) {
 	}
 }
 
-func TestReleaseTaskRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
+func TestReleaseTaskBootstrapsAccessoryBeforeTaskThenRuntimeContainers(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
 	desired := desiredWithWeb("rev-1")
 	desired.Environments[0].Services[0].Command = []string{"sh", "-c", "sleep 1"}
+	desired.Environments[0].Services = append(desired.Environments[0].Services, &desiredstatepb.Service{
+		Name:    "postgres",
+		Kind:    "accessory",
+		Image:   "postgres:16",
+		Command: []string{"postgres"},
+	})
 	desired.Environments[0].Tasks = []*desiredstatepb.Task{{
 		Name:    "release",
 		Image:   "busybox",
@@ -558,6 +568,7 @@ func TestReleaseTaskRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
 
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
+	eng.images["postgres:16"] = true
 	reconciler := reconcile.New(eng, reconcile.Options{
 		Network:    "devopsellence",
 		WebPort:    3000,
@@ -584,9 +595,27 @@ func TestReleaseTaskRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
 	if reporter.calls[1].Phase != report.PhaseSettled || reporter.calls[1].Task != nil {
 		t.Fatalf("expected final settled runtime report, got %#v", reporter.calls[1])
 	}
-	if len(eng.containers) != 1 {
+	postgresCreate := findOp(eng.ops, "create:svc-production-postgres-")
+	releaseWait := findOp(eng.ops, "wait:svc-release-rev-1-")
+	webCreate := findOp(eng.ops, "create:svc-production-web-")
+	if postgresCreate == -1 || releaseWait == -1 || webCreate == -1 {
+		t.Fatalf("missing expected operation, ops=%#v", eng.ops)
+	}
+	if !(postgresCreate < releaseWait && releaseWait < webCreate) {
+		t.Fatalf("expected accessory create before release task and web create after, ops=%#v", eng.ops)
+	}
+	if len(eng.containers) != 2 {
 		t.Fatalf("expected runtime container after release task, got %#v", eng.containers)
 	}
+}
+
+func findOp(ops []string, prefix string) int {
+	for i, op := range ops {
+		if strings.HasPrefix(op, prefix) {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestEnvironmentTasksAreSatisfiedPerEnvironment(t *testing.T) {

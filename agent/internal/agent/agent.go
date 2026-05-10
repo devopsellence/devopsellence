@@ -128,7 +128,23 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		return err
 	}
 
-	for _, task := range desiredstate.RuntimeTasks(desired) {
+	tasks := desiredstate.RuntimeTasks(desired)
+	if len(tasks) > 0 {
+		result, err := a.reconciler.ReconcileSupportServices(ctx, desired)
+		if err != nil {
+			a.metrics.ReconcileErrors.Inc()
+			a.reportStatus(ctx, report.Status{
+				Time:     start,
+				Phase:    report.PhaseError,
+				Revision: desired.Revision,
+				Error:    err.Error(),
+			}, fetched.Sequence)
+			return err
+		}
+		a.recordReconcileResult(result)
+	}
+
+	for _, task := range tasks {
 		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, task.EnvironmentName, task.EnvironmentRevision, task.Task, true); err != nil {
 			a.metrics.ReconcileErrors.Inc()
 			return err
@@ -147,9 +163,7 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		return err
 	}
 
-	a.metrics.ContainersCreated.Add(float64(result.Created))
-	a.metrics.ContainersUpdated.Add(float64(result.Updated))
-	a.metrics.ContainersRemoved.Add(float64(result.Removed))
+	a.recordReconcileResult(result)
 
 	diskCareStatus := a.runDiskCare(ctx, desired, fetched.Sequence)
 
@@ -185,6 +199,12 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+func (a *Agent) recordReconcileResult(result reconcile.Result) {
+	a.metrics.ContainersCreated.Add(float64(result.Created))
+	a.metrics.ContainersUpdated.Add(float64(result.Updated))
+	a.metrics.ContainersRemoved.Add(float64(result.Removed))
 }
 
 func (a *Agent) runDiskCare(ctx context.Context, desired *desiredstatepb.DesiredState, sequence int64) *report.DiskCareStatus {

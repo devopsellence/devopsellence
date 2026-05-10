@@ -12,18 +12,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/devopsellence/cli/internal/state"
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
+const sshConfigEnv = "DEVOPSELLENCE_SSH_CONFIG"
+
 func sshArgs(node config.Node, command string) []string {
-	args := []string{
+	args := []string{}
+	if configPath := sshConfigPathOverride(); configPath != "" {
+		args = append(args, "-F", configPath)
+	}
+	args = append(args,
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-p", strconv.Itoa(node.Port),
-	}
+	)
 	if knownHostsPath := managedKnownHostsPath(node); knownHostsPath != "" {
 		args = append(args, "-o", "UserKnownHostsFile="+knownHostsPath)
 	}
@@ -32,6 +39,18 @@ func sshArgs(node config.Node, command string) []string {
 	}
 	args = append(args, fmt.Sprintf("%s@%s", node.User, node.Host), command)
 	return args
+}
+
+func sshConfigPathOverride() string {
+	value := strings.TrimSpace(os.Getenv(sshConfigEnv))
+	switch strings.ToLower(value) {
+	case "", "default":
+		return ""
+	case "none":
+		return os.DevNull
+	default:
+		return value
+	}
 }
 
 func managedKnownHostsPath(node config.Node) string {

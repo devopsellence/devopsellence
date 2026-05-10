@@ -63,6 +63,35 @@ func TestSSHArgsUseManagedKnownHostsForProviderNodes(t *testing.T) {
 	}
 }
 
+func TestSSHArgsUseSSHConfigOverride(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+	t.Setenv(sshConfigEnv, "/dev/null")
+	node := config.Node{User: "root", Host: "203.0.113.10", Port: 22}
+
+	got := sshArgs(node, "true")
+	want := []string{
+		"-F", "/dev/null",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-p", "22",
+		"-o", "UserKnownHostsFile=" + managedKnownHostsPath(node),
+		"root@203.0.113.10",
+		"true",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sshArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSSHArgsUseDevNullForNoneSSHConfigOverride(t *testing.T) {
+	t.Setenv(sshConfigEnv, "none")
+	if got := sshConfigPathOverride(); got != os.DevNull {
+		t.Fatalf("sshConfigPathOverride() = %q, want %q", got, os.DevNull)
+	}
+}
+
 func TestRemoveKnownHostsDeletesManagedFile(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)

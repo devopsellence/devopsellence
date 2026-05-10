@@ -1442,6 +1442,7 @@ func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nod
 func (a *App) republishPreparedNodes(ctx context.Context, prepared map[string]preparedNodePublication) (map[string]string, error) {
 	type localImageCheck struct {
 		once sync.Once
+		id   string
 		err  error
 	}
 	var mu sync.Mutex
@@ -1470,7 +1471,7 @@ func (a *App) republishPreparedNodes(ctx context.Context, prepared map[string]pr
 				}
 			}
 			for _, image := range inputs.images {
-				present, err := remoteNodeHasImage(ctx, node, image)
+				present, err := remoteNodeHasImageReference(ctx, node, image)
 				if err != nil {
 					appendSoloRepublishError(&mu, &errs, name, "remote image check", err)
 					return
@@ -1486,11 +1487,27 @@ func (a *App) republishPreparedNodes(ctx context.Context, prepared map[string]pr
 				}
 				localImageChecksMu.Unlock()
 				check.once.Do(func() {
-					check.err = a.ensureLocalSoloSnapshotImage(ctx, image)
+					check.id, check.err = a.localSoloSnapshotImageID(ctx, image)
 				})
 				if check.err != nil {
 					appendSoloRepublishError(&mu, &errs, name, "local image precheck", check.err)
 					return
+				}
+				if strings.TrimSpace(check.id) != "" {
+					present, err := remoteNodeHasImageReference(ctx, node, check.id)
+					if err != nil {
+						appendSoloRepublishError(&mu, &errs, name, "remote image id check", err)
+						return
+					}
+					if present {
+						progress := a.soloProgress("devopsellence deploy", map[string]any{"node": name, "image": image, "step": "image_transfer"})
+						progress("Remote image content already present; tagging image.")
+						if err := remoteTagNodeImage(ctx, node, check.id, image); err != nil {
+							appendSoloRepublishError(&mu, &errs, name, "remote image tag", err)
+							return
+						}
+						continue
+					}
 				}
 				if err := transferImage(ctx, node, image, a.soloProgress("devopsellence deploy", map[string]any{"node": name, "image": image, "step": "image_transfer"})); err != nil {
 					appendSoloRepublishError(&mu, &errs, name, "image transfer", err)
@@ -1901,12 +1918,17 @@ func desiredStateRevision(data []byte) (string, error) {
 	return payload.Revision, nil
 }
 
-func remoteNodeHasImage(ctx context.Context, node config.Node, imageTag string) (bool, error) {
-	out, err := solo.RunSSH(ctx, node, remoteDockerImageInspectCommand(imageTag), nil)
+func remoteNodeHasImageReference(ctx context.Context, node config.Node, reference string) (bool, error) {
+	out, err := solo.RunSSH(ctx, node, remoteDockerImageInspectCommand(reference), nil)
 	if err != nil {
 		return false, err
 	}
 	return strings.TrimSpace(out) == "present", nil
+}
+
+func remoteTagNodeImage(ctx context.Context, node config.Node, source, target string) error {
+	_, err := solo.RunSSH(ctx, node, remoteDockerImageTagCommand(source, target), nil)
+	return err
 }
 
 func (a *App) soloProgress(operation string, fields map[string]any) func(string) {
@@ -2002,16 +2024,29 @@ func soloDoctorSSHNextStep(node config.Node) string {
 }
 
 func (a *App) ensureLocalSoloSnapshotImage(ctx context.Context, imageTag string) error {
+	_, err := a.localSoloSnapshotImageID(ctx, imageTag)
+	return err
+}
+
+func (a *App) localSoloSnapshotImageID(ctx context.Context, imageTag string) (string, error) {
 	if strings.TrimSpace(imageTag) == "" {
-		return nil
+		return "", nil
 	}
 	if a.Docker == nil {
-		return errors.New("docker client is not configured")
+		return "", errors.New("docker client is not configured")
+	}
+	id, err := a.Docker.ImageID(ctx, imageTag)
+	if err != nil {
+		return "", fmt.Errorf("local snapshot image %q is unavailable; rebuild or redeploy the attached workspace before republishing solo node state: %w", imageTag, err)
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", fmt.Errorf("local snapshot image %q is unavailable; Docker returned an empty image ID", imageTag)
 	}
 	if _, err := a.Docker.ImageMetadata(ctx, imageTag); err != nil {
-		return fmt.Errorf("local snapshot image %q is unavailable; rebuild or redeploy the attached workspace before republishing solo node state: %w", imageTag, err)
+		return "", fmt.Errorf("local snapshot image %q is unavailable; rebuild or redeploy the attached workspace before republishing solo node state: %w", imageTag, err)
 	}
-	return nil
+	return id, nil
 }
 
 func soloNodeDesiredStateInputs(current solo.State, nodeName string) ([]desiredstate.DeploySnapshot, map[string]string, []desiredstate.NodePeer, []string, error) {
@@ -8719,9 +8754,15 @@ func remoteDockerLoadCommand() string {
 	return "if docker info >/dev/null 2>&1; then gunzip | docker load; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then gunzip | sudo -n docker load; else echo 'Docker is not reachable. Add this SSH user to the docker group or enable passwordless sudo for docker.' >&2; docker info >/dev/null 2>&1; exit 1; fi"
 }
 
-func remoteDockerImageInspectCommand(imageTag string) string {
-	quotedImage := shellQuote(imageTag)
+func remoteDockerImageInspectCommand(reference string) string {
+	quotedImage := shellQuote(reference)
 	return fmt.Sprintf("if docker image inspect %s >/dev/null 2>&1; then echo present; elif command -v sudo >/dev/null 2>&1 && sudo -n docker image inspect %s >/dev/null 2>&1; then echo present; else echo missing; fi", quotedImage, quotedImage)
+}
+
+func remoteDockerImageTagCommand(source, target string) string {
+	quotedSource := shellQuote(source)
+	quotedTarget := shellQuote(target)
+	return fmt.Sprintf("if docker image inspect %[1]s >/dev/null 2>&1; then docker tag %[1]s %[2]s; elif command -v sudo >/dev/null 2>&1 && sudo -n docker image inspect %[1]s >/dev/null 2>&1; then sudo -n docker tag %[1]s %[2]s; else echo 'Docker image %[1]s is not present on the node.' >&2; exit 1; fi", quotedSource, quotedTarget)
 }
 
 func remoteReadFileCommand(path string) string {

@@ -168,6 +168,7 @@ type DockerClient interface {
 	Login(ctx context.Context, registryHost, username, password, configDir string) error
 	WithTemporaryConfig(ctx context.Context, fn func(string) error) error
 	BuildAndPush(ctx context.Context, contextPath, dockerfile, target string, platforms []string, configDir string, update, log func(string)) (string, error)
+	ImageID(ctx context.Context, reference string) (string, error)
 	ImageMetadata(ctx context.Context, reference string) (docker.ImageMetadata, error)
 }
 

@@ -245,6 +245,14 @@ func (Runner) ImageMetadata(ctx context.Context, reference string) (ImageMetadat
 	return parseImageMetadata(output)
 }
 
+func (Runner) ImageID(ctx context.Context, reference string) (string, error) {
+	output, err := run(ctx, nil, "", nil, "docker", "image", "inspect", reference, "--format", "{{.Id}}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
 func parseImageMetadata(output string) (ImageMetadata, error) {
 	output = strings.TrimSpace(output)
 	if output == "" || output == "null" {

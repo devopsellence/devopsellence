@@ -20,6 +20,7 @@ type VibeOptions struct {
 	Directory         string
 	AIAgent           string
 	AgentEffort       string
+	AgentAutonomy     string
 	Idea              string
 	FirstWorkflow     string
 	DeployGoal        string
@@ -40,6 +41,7 @@ type vibeManifest struct {
 	SchemaVersion    int                  `json:"schema_version"`
 	AIAgent          string               `json:"ai_agent"`
 	AgentEffort      string               `json:"agent_effort"`
+	AgentAutonomy    string               `json:"agent_autonomy"`
 	DetectedAgents   []string             `json:"detected_agents"`
 	AppStack         string               `json:"app_stack"`
 	TemplateURL      string               `json:"template_url"`
@@ -69,6 +71,7 @@ const (
 	vibeAppStack               = "rails-app"
 	defaultVibeProjectsDirName = "devopsellence-projects"
 	defaultVibeAgentEffort     = "high"
+	defaultVibeAgentAutonomy   = "builder"
 	defaultVibeDeployGoal      = "prepare-solo"
 	defaultVibeMode            = "solo"
 	defaultVibeServerStrategy  = "none"
@@ -86,6 +89,11 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		return err
 	}
 	opts.AgentEffort = agentEffort
+	agentAutonomy, err := normalizeVibeAgentAutonomy(opts.AgentAutonomy)
+	if err != nil {
+		return err
+	}
+	opts.AgentAutonomy = agentAutonomy
 	reader := bufio.NewReader(a.In)
 	wizardMode := strings.TrimSpace(opts.Idea) == ""
 	if wizardMode {
@@ -137,6 +145,13 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if len(opts.Idea) > 4096 {
 		return ExitError{Code: 2, Err: errors.New("app idea is too long; keep it under 4096 characters")}
 	}
+	if wizardMode {
+		autonomy, err := a.askVibeAgentAutonomy(reader, opts.AgentAutonomy)
+		if err != nil {
+			return err
+		}
+		opts.AgentAutonomy = autonomy
+	}
 	intent, err := a.resolveVibeDeploymentIntent(reader, opts, wizardMode)
 	if err != nil {
 		return err
@@ -177,18 +192,19 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		return err
 	}
 
-	prompt := vibePrompt(opts.AIAgent, templateURL, opts.Idea, intent)
+	prompt := vibePrompt(opts.AIAgent, opts.AgentAutonomy, templateURL, opts.Idea, intent)
 	promptPath := filepath.Join(promptsDir, "devopsellence-vibe.md")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return fmt.Errorf("write prompt: %w", err)
 	}
 
-	agentCommand := vibeAgentCommand(opts.AIAgent, opts.AgentEffort)
+	agentCommand := vibeAgentCommand(opts.AIAgent, opts.AgentEffort, opts.AgentAutonomy)
 	nextCommands := vibeNextCommands(target, agentCommand, intent)
 	manifest := vibeManifest{
 		SchemaVersion:    outputSchemaVersion,
 		AIAgent:          opts.AIAgent,
 		AgentEffort:      opts.AgentEffort,
+		AgentAutonomy:    opts.AgentAutonomy,
 		DetectedAgents:   detectedAgents,
 		AppStack:         vibeAppStack,
 		TemplateURL:      templateURL,
@@ -222,6 +238,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		"projects_dir":      projectsDir,
 		"ai_agent":          opts.AIAgent,
 		"agent_effort":      opts.AgentEffort,
+		"agent_autonomy":    opts.AgentAutonomy,
 		"detected_agents":   detectedAgents,
 		"app_stack":         vibeAppStack,
 		"template_url":      templateURL,
@@ -240,7 +257,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	}
 	var launchErr error
 	if opts.Launch {
-		launchErr = a.launchVibeAgent(ctx, opts.AIAgent, opts.AgentEffort, target)
+		launchErr = a.launchVibeAgent(ctx, opts.AIAgent, opts.AgentEffort, opts.AgentAutonomy, target)
 		payload["launched"] = launchErr == nil
 		if launchErr != nil {
 			payload["launch_error"] = launchErr.Error()
@@ -279,6 +296,15 @@ func (a *App) askVibeQuestionDefault(reader *bufio.Reader, label, defaultValue s
 		return strings.TrimSpace(defaultValue), nil
 	}
 	return answer, nil
+}
+
+func (a *App) askVibeAgentAutonomy(reader *bufio.Reader, defaultValue string) (string, error) {
+	_, _ = fmt.Fprintln(a.Printer.Err, "Agent freedom: builder edits files and runs local commands; careful asks more; full-access skips agent sandbox/approval prompts and is only for isolated VMs/containers.")
+	autonomy, err := a.askVibeQuestionDefault(reader, "Agent freedom (builder, careful, full-access)", firstNonEmpty(defaultValue, defaultVibeAgentAutonomy))
+	if err != nil {
+		return "", err
+	}
+	return normalizeVibeAgentAutonomy(autonomy)
 }
 
 func (a *App) resolveVibeDeploymentIntent(reader *bufio.Reader, opts VibeOptions, ask bool) (vibeDeploymentIntent, error) {
@@ -543,6 +569,25 @@ func normalizeVibeAgentEffort(effort string) (string, error) {
 	}
 }
 
+func normalizeVibeAgentAutonomy(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "-")
+	value = strings.Join(strings.Fields(value), "-")
+	if value == "" || value == "default" {
+		value = defaultVibeAgentAutonomy
+	}
+	switch value {
+	case "careful":
+		return "careful", nil
+	case "builder", "build":
+		return "builder", nil
+	case "full", "full-access":
+		return "full-access", nil
+	default:
+		return "", ExitError{Code: 2, Err: fmt.Errorf("unsupported agent autonomy %q; use careful, builder, or full-access", value)}
+	}
+}
+
 func resolveVibeTarget(cwd, directory, idea, projectsDir string) (string, string, error) {
 	target := strings.TrimSpace(directory)
 	if target == "" {
@@ -734,7 +779,7 @@ func vibeTemplateURL(version string) string {
 	return "https://raw.githubusercontent.com/devopsellence/rails-app-template/" + version + "/template.rb"
 }
 
-func vibePrompt(agent, templateURL, idea string, intent vibeDeploymentIntent) string {
+func vibePrompt(agent, autonomy, templateURL, idea string, intent vibeDeploymentIntent) string {
 	var firstLine string
 	switch agent {
 	case "codex":
@@ -763,6 +808,12 @@ func vibePrompt(agent, templateURL, idea string, intent vibeDeploymentIntent) st
 		"- TLS email: " + firstNonEmpty(intent.TLSEmail, "ask before configuring ingress"),
 		"- External services: " + strings.Join(intent.Services, ", "),
 		"",
+		"Agent autonomy:",
+		"- Level: " + vibeAgentAutonomyLabel(autonomy),
+	}
+	lines = append(lines, vibeAgentAutonomyPromptLines(autonomy)...)
+	lines = append(lines,
+		"",
 		"Use .agents/skills/devopsellence-rails-app for app-building guidance.",
 		"Use .agents/skills/devopsellence for deploy, secrets, logs, status, rollback, and node operations.",
 		"Stay inside the blessed Rails baseline: Rails 8.1, PostgreSQL, Hotwire, Tailwind, Solid Queue/Cache/Cable, Active Storage, Sentry, OpenTelemetry, Minitest, Docker, and mise.",
@@ -772,7 +823,7 @@ func vibePrompt(agent, templateURL, idea string, intent vibeDeploymentIntent) st
 		"- Do not write provider tokens, API keys, passwords, or secret values into prompts, manifests, git, logs, or commits.",
 		"- Before any production mutation, run devopsellence deploy --dry-run and summarize the plan.",
 		"- Ask the user before provisioning nodes, changing DNS, setting secrets, or running a real deploy.",
-	}
+	)
 	lines = append(lines, vibeDeployGoalPromptLines(intent)...)
 	lines = append(lines, vibeServerPromptLines(intent)...)
 	lines = append(lines, vibeServicesPromptLines(intent)...)
@@ -791,6 +842,37 @@ func vibePromptServerPlan(intent vibeDeploymentIntent) string {
 		return "provision Hetzner node " + firstNonEmpty(intent.ServerTarget, "prod-1") + " (auth " + firstNonEmpty(intent.ProviderAuthStatus, "unknown") + ")"
 	default:
 		return "no server yet"
+	}
+}
+
+func vibeAgentAutonomyLabel(autonomy string) string {
+	switch autonomy {
+	case "careful":
+		return "careful"
+	case "full-access":
+		return "full access"
+	default:
+		return "builder"
+	}
+}
+
+func vibeAgentAutonomyPromptLines(autonomy string) []string {
+	switch autonomy {
+	case "careful":
+		return []string{
+			"- Ask before most meaningful changes. Keep edits small and explain the next step before changing behavior.",
+			"- Low-risk read-only inspection is okay without pausing.",
+		}
+	case "full-access":
+		return []string{
+			"- The agent command may run without sandbox or approval prompts. This is only appropriate inside an isolated VM, container, or disposable devbox.",
+			"- Even with full access, ask before reading secrets, spending money, provisioning infrastructure, changing DNS, deploying to production, deleting data, or running destructive git commands.",
+		}
+	default:
+		return []string{
+			"- Edit project files and run local build/test commands without pausing for every step.",
+			"- Ask before reading secrets, spending money, provisioning infrastructure, changing DNS, deploying to production, deleting data, or running destructive git commands.",
+		}
 	}
 }
 
@@ -860,12 +942,13 @@ func vibeNextCommands(target, agentCommand string, intent vibeDeploymentIntent) 
 	return append(commands, agentCommand)
 }
 
-func vibeAgentCommand(agent, effort string) string {
+func vibeAgentCommand(agent, effort, autonomy string) string {
 	if agent == "generic" {
 		return "cat .agents/prompts/devopsellence-vibe.md"
 	}
 	parts := []string{agent}
-	for _, arg := range vibeAgentEffortArgs(agent, effort) {
+	args := append(vibeAgentAutonomyArgs(agent, autonomy), vibeAgentEffortArgs(agent, effort)...)
+	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") || arg == effort {
 			parts = append(parts, arg)
 		} else {
@@ -874,6 +957,31 @@ func vibeAgentCommand(agent, effort string) string {
 	}
 	parts = append(parts, shellQuote(vibePromptInstruction))
 	return strings.Join(parts, " ")
+}
+
+func vibeAgentAutonomyArgs(agent, autonomy string) []string {
+	switch agent {
+	case "codex":
+		switch autonomy {
+		case "careful":
+			return []string{"--sandbox", "workspace-write", "--ask-for-approval", "untrusted"}
+		case "full-access":
+			return []string{"--dangerously-bypass-approvals-and-sandbox"}
+		default:
+			return []string{"--sandbox", "workspace-write", "--ask-for-approval", "on-request"}
+		}
+	case "claude":
+		switch autonomy {
+		case "careful":
+			return []string{"--permission-mode", "default"}
+		case "full-access":
+			return []string{"--dangerously-skip-permissions"}
+		default:
+			return []string{"--permission-mode", "auto"}
+		}
+	default:
+		return nil
+	}
 }
 
 func vibeAgentEffortArgs(agent, effort string) []string {
@@ -892,7 +1000,7 @@ func vibeAgentEffortArgs(agent, effort string) []string {
 	}
 }
 
-func (a *App) launchVibeAgent(ctx context.Context, agent, effort, cwd string) error {
+func (a *App) launchVibeAgent(ctx context.Context, agent, effort, autonomy, cwd string) error {
 	if agent == "generic" {
 		return nil
 	}
@@ -900,7 +1008,8 @@ func (a *App) launchVibeAgent(ctx context.Context, agent, effort, cwd string) er
 	if _, err := a.LookPath(binary); err != nil {
 		return ExitError{Code: 2, Err: fmt.Errorf("%s not found; rerun with --no-launch and start it manually from .agents/prompts/devopsellence-vibe.md", binary)}
 	}
-	args := append(vibeAgentEffortArgs(agent, effort), vibePromptInstruction)
+	args := append(vibeAgentAutonomyArgs(agent, autonomy), vibeAgentEffortArgs(agent, effort)...)
+	args = append(args, vibePromptInstruction)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = cwd
 	cmd.Stdin = a.In

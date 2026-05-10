@@ -6,7 +6,8 @@ description: Start a production-minded Rails app with devopsellence, mise, and a
 `devopsellence vibe` creates one blessed Rails app shape instead of asking you
 to choose a stack. It uses the devopsellence Rails template, writes a local
 agent skill, seeds a prompt, initializes git, and can launch Codex, Claude Code,
-Pi, or another agent with high effort/thinking enabled.
+Pi, or another agent with high effort/thinking enabled and a simple autonomy
+choice.
 
 Run it without `--idea` to use the intake wizard. You can press Ctrl+C during
 the questions to stop before files are generated.
@@ -31,6 +32,7 @@ directory with `--projects-dir` or `DEVOPSELLENCE_PROJECTS_DIR`.
 The wizard captures deploy intent before the agent starts:
 
 - first workflow the agent should build;
+- agent freedom: builder, careful, or full-access;
 - build only, prepare for solo deploy, dry-run, or deploy after approval;
 - solo now, shared later, or decide later;
 - no server yet, an existing server, or a Hetzner node;
@@ -41,6 +43,13 @@ The wizard captures deploy intent before the agent starts:
 This intent is written to `.agents/devopsellence-vibe.json` and summarized in
 `.agents/prompts/devopsellence-vibe.md`. Tokens and secret values are never
 written there.
+
+The default autonomy is `builder`: the agent can edit files and run local
+build/test commands, but the prompt still tells it to ask before secrets, paid
+infrastructure, DNS changes, production deploys, destructive git commands, or
+data deletion. `careful` asks more often. `full-access` starts Codex or Claude
+without sandbox/approval prompts and is only appropriate inside an isolated VM,
+container, or disposable devbox.
 
 Prepare for a Hetzner-backed solo deploy without starting the agent:
 
@@ -79,6 +88,12 @@ Use the agent's own configured effort instead of the devopsellence default:
 
 ```bash
 devopsellence vibe my-crm --ai-agent=codex --agent-effort=default
+```
+
+Start Claude with full local access inside an isolated devbox:
+
+```bash
+devopsellence vibe my-crm --ai-agent=claude --autonomy=full-access
 ```
 
 The command runs Rails with the pinned template:

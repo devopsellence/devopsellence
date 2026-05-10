@@ -45,8 +45,8 @@ cd ~/devopsellence-projects/my-app
 Bare app names created by `devopsellence vibe` land under
 `~/devopsellence-projects`. Pass `./my-app` or an absolute path when the app
 should be created somewhere else. The intake wizard asks for the app idea,
-first workflow, solo deploy intent, server plan, domain, and service choices
-before scaffolding; press Ctrl+C during the questions to stop.
+agent freedom, first workflow, solo deploy intent, server plan, domain, and
+service choices before scaffolding; press Ctrl+C during the questions to stop.
 
 - [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
   one VM.

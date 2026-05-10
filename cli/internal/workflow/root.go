@@ -607,6 +607,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	vibeCommand.Flags().StringVar(&vibeOpts.AIAgent, "ai-agent", "", "AI agent to seed: codex, claude, pi, or generic")
 	vibeCommand.Flags().StringVar(&vibeOpts.AgentEffort, "agent-effort", defaultVibeAgentEffort, "AI agent effort/thinking level: default, low, medium, high, or xhigh")
+	vibeCommand.Flags().StringVar(&vibeOpts.AgentAutonomy, "autonomy", defaultVibeAgentAutonomy, "Agent freedom: careful, builder, or full-access")
 	vibeCommand.Flags().StringVar(&vibeOpts.Idea, "idea", "", "App idea to seed into the AI agent prompt")
 	vibeCommand.Flags().StringVar(&vibeOpts.FirstWorkflow, "first-workflow", "", "First product workflow for the agent to build")
 	vibeCommand.Flags().StringVar(&vibeOpts.DeployGoal, "deploy-goal", defaultVibeDeployGoal, "Build/deploy goal: build-only, prepare-solo, dry-run, or deploy-with-approval")

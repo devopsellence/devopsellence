@@ -36,7 +36,7 @@ codex "deploy with devopsellence solo"
 ```
 
 `devopsellence skill install` installs the matching devopsellence agent skill
-from the CLI itself; it does not require npm or `npx`.
+from the CLI itself.
 
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 

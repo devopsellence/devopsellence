@@ -33,8 +33,8 @@ cd my-app
 codex e "Deploy this app with devopsellence solo."
 ```
 
-`devopsellence skill install` installs the matching skill from the CLI itself;
-it does not require npm or `npx`.
+`devopsellence skill install` installs the matching AI agent skill from the CLI
+itself.
 
 Starting from an idea:
 

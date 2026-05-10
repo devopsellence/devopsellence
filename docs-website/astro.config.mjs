@@ -42,6 +42,7 @@ export default defineConfig({
           items: [
             { label: "Deploy with solo", link: "/guides/solo-deploy/" },
             { label: "Deploy with shared", link: "/guides/shared-deploy/" },
+            { label: "Rails app template", link: "/guides/rails-app-template/" },
             { label: "CloudStack VMs", link: "/guides/cloudstack-vms/" },
             { label: "GitHub Actions", link: "/guides/github-actions/" },
             { label: "Secrets", link: "/guides/secrets/" },

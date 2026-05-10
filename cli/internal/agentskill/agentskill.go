@@ -6,14 +6,37 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 const Name = "devopsellence"
+const RailsAppID = "rails-app"
+const RailsAppName = "devopsellence-rails-app"
 
-//go:embed all:devopsellence
+type Skill struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+var skills = []Skill{
+	{
+		ID:          "devopsellence",
+		Name:        Name,
+		Description: "Operate devopsellence deployments, nodes, secrets, logs, diagnostics, and rollback.",
+	},
+	{
+		ID:          RailsAppID,
+		Name:        RailsAppName,
+		Description: "Build, test, run, deploy, and scale the blessed devopsellence Rails app baseline.",
+	},
+}
+
+//go:embed all:devopsellence all:devopsellence-rails-app
 var bundled embed.FS
 
 type InstallResult struct {
+	ID      string
 	Name    string
 	Path    string
 	Paths   []InstalledPath
@@ -31,6 +54,7 @@ type InstallOptions struct {
 	SkillsDir     string
 	WorkspaceRoot string
 	Global        bool
+	Skill         string
 }
 
 type installTarget struct {
@@ -51,7 +75,31 @@ func ProjectSkillsDir(workspaceRoot string) string {
 	return filepath.Join(workspaceRoot, ".agents", "skills")
 }
 
+func Available() []Skill {
+	result := append([]Skill(nil), skills...)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+	return result
+}
+
+func Resolve(idOrName string) (Skill, error) {
+	if idOrName == "" {
+		idOrName = Name
+	}
+	for _, skill := range skills {
+		if idOrName == skill.ID || idOrName == skill.Name {
+			return skill, nil
+		}
+	}
+	return Skill{}, fmt.Errorf("unknown skill %q", idOrName)
+}
+
 func Install(opts InstallOptions, version string) (InstallResult, error) {
+	skill, err := Resolve(opts.Skill)
+	if err != nil {
+		return InstallResult{}, err
+	}
 	targets, err := installTargets(opts)
 	if err != nil {
 		return InstallResult{}, err
@@ -59,8 +107,8 @@ func Install(opts InstallOptions, version string) (InstallResult, error) {
 
 	installed := make([]InstalledPath, 0, len(targets))
 	for _, target := range targets {
-		dest := filepath.Join(target.SkillsDir, Name)
-		if err := installTo(dest); err != nil {
+		dest := filepath.Join(target.SkillsDir, skill.Name)
+		if err := installTo(dest, skill.Name); err != nil {
 			return InstallResult{}, err
 		}
 		installed = append(installed, InstalledPath{
@@ -69,7 +117,7 @@ func Install(opts InstallOptions, version string) (InstallResult, error) {
 			Path:  dest,
 		})
 	}
-	return InstallResult{Name: Name, Path: installed[0].Path, Paths: installed, Version: version, Source: "embedded"}, nil
+	return InstallResult{ID: skill.ID, Name: skill.Name, Path: installed[0].Path, Paths: installed, Version: version, Source: "embedded"}, nil
 }
 
 func installTargets(opts InstallOptions) ([]installTarget, error) {
@@ -117,18 +165,18 @@ func installTargets(opts InstallOptions) ([]installTarget, error) {
 	return targets, nil
 }
 
-func installTo(dest string) error {
+func installTo(dest, skillName string) error {
 	if err := os.RemoveAll(dest); err != nil {
 		return fmt.Errorf("remove existing skill: %w", err)
 	}
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return fmt.Errorf("create skill dir: %w", err)
 	}
-	if err := fs.WalkDir(bundled, Name, func(path string, entry fs.DirEntry, walkErr error) error {
+	if err := fs.WalkDir(bundled, skillName, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		rel, err := filepath.Rel(Name, path)
+		rel, err := filepath.Rel(skillName, path)
 		if err != nil {
 			return err
 		}

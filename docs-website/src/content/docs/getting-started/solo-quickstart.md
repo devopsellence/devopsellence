@@ -15,7 +15,7 @@ devopsellence init --mode solo
 ```
 
 Start from an app that already has a Dockerfile, or let devopsellence prepare an
-AI-first web app workspace first.
+AI-first web app workspace.
 
 If you want Codex, Claude Code, Pi, or another AI coding agent to create or
 prepare the app first, start from [Build with vibe](/guides/rails-app-template/):

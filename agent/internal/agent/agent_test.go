@@ -92,6 +92,7 @@ type fakeEngine struct {
 	images     map[string]bool
 	created    []engine.ContainerSpec
 	waitCalls  []string
+	listCalls  int
 	ops        []string
 }
 
@@ -103,6 +104,7 @@ func newFakeEngine() *fakeEngine {
 }
 
 func (f *fakeEngine) ListManaged(ctx context.Context) ([]engine.ContainerState, error) {
+	f.listCalls++
 	out := make([]engine.ContainerState, 0, len(f.containers))
 	for _, c := range f.containers {
 		out = append(out, c)
@@ -606,6 +608,58 @@ func TestReleaseTaskBootstrapsAccessoryBeforeTaskThenRuntimeContainers(t *testin
 	}
 	if len(eng.containers) != 2 {
 		t.Fatalf("expected runtime container after release task, got %#v", eng.containers)
+	}
+}
+
+func TestSatisfiedReleaseTaskSkipsSupportServiceBootstrapPass(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	desired := desiredWithWeb("rev-1")
+	desired.Environments[0].Services = append(desired.Environments[0].Services, &desiredstatepb.Service{
+		Name:  "postgres",
+		Kind:  "accessory",
+		Image: "postgres:16",
+	})
+	task := &desiredstatepb.Task{
+		Name:    "release",
+		Image:   "busybox",
+		Command: []string{"sh", "-c", "echo migrate"},
+	}
+	desired.Environments[0].Tasks = []*desiredstatepb.Task{task}
+
+	store := lifecycle.NewStore(filepath.Join(t.TempDir(), "lifecycle-state.json"))
+	taskHash, err := desiredstate.HashTask(task)
+	if err != nil {
+		t.Fatalf("hash task: %v", err)
+	}
+	if err := store.MarkSatisfied(taskStoreName("production", "release"), 9, taskHash); err != nil {
+		t.Fatalf("mark task satisfied: %v", err)
+	}
+
+	eng := newFakeEngine()
+	eng.images["busybox"] = true
+	eng.images["postgres:16"] = true
+	reconciler := reconcile.New(eng, reconcile.Options{
+		Network:    "devopsellence",
+		WebPort:    3000,
+		Envoy:      &fakeEnvoy{},
+		HTTPProber: staticHTTPProber{},
+	})
+	reporter := &captureReporter{}
+	metrics := observability.NewMetrics(prometheus.NewRegistry())
+	ag := New(&fakeAuthority{desired: desired, sequence: 9}, reconciler, reporter, time.Minute, logger, metrics, store)
+
+	if err := ag.reconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(eng.waitCalls) != 0 {
+		t.Fatalf("wait calls = %d, want 0", len(eng.waitCalls))
+	}
+	if eng.listCalls != 2 {
+		t.Fatalf("managed list calls = %d, want 2", eng.listCalls)
+	}
+	if len(reporter.calls) != 1 || reporter.calls[0].Phase != report.PhaseSettled {
+		t.Fatalf("expected only final settled report, got %#v", reporter.calls)
 	}
 }
 

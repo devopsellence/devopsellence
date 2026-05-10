@@ -129,10 +129,13 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	}
 
 	tasks := desiredstate.RuntimeTasks(desired)
-	if len(tasks) > 0 {
+	supportServicesReady := false
+	ensureSupportServices := func() error {
+		if supportServicesReady {
+			return nil
+		}
 		result, err := a.reconciler.ReconcileSupportServices(ctx, desired)
 		if err != nil {
-			a.metrics.ReconcileErrors.Inc()
 			a.reportStatus(ctx, report.Status{
 				Time:     start,
 				Phase:    report.PhaseError,
@@ -142,10 +145,12 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 			return err
 		}
 		a.recordReconcileResult(result)
+		supportServicesReady = true
+		return nil
 	}
 
 	for _, task := range tasks {
-		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, task.EnvironmentName, task.EnvironmentRevision, task.Task, true); err != nil {
+		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, task.EnvironmentName, task.EnvironmentRevision, task.Task, true, ensureSupportServices); err != nil {
 			a.metrics.ReconcileErrors.Inc()
 			return err
 		}
@@ -233,10 +238,10 @@ func (a *Agent) runDiskCare(ctx context.Context, desired *desiredstatepb.Desired
 }
 
 func (a *Agent) runTaskOnce(ctx context.Context, sequence int64, revision string, task *desiredstatepb.Task) error {
-	return a.ensureTaskSatisfied(ctx, sequence, desiredstate.DefaultEnvironmentName, revision, task, false)
+	return a.ensureTaskSatisfied(ctx, sequence, desiredstate.DefaultEnvironmentName, revision, task, false, nil)
 }
 
-func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environmentName string, revision string, task *desiredstatepb.Task, suppressSuccessReport bool) error {
+func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environmentName string, revision string, task *desiredstatepb.Task, suppressSuccessReport bool, beforeRun func() error) error {
 	taskHash, err := desiredstate.HashTask(task)
 	if err != nil {
 		a.reportStatus(ctx, report.Status{
@@ -255,6 +260,11 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environ
 	storeName := taskStoreName(environmentName, task.GetName())
 	if a.taskStore != nil && a.taskStore.Satisfied(storeName, sequence, taskHash) {
 		return nil
+	}
+	if beforeRun != nil {
+		if err := beforeRun(); err != nil {
+			return err
+		}
 	}
 
 	start := time.Now()

@@ -79,7 +79,7 @@ esac
 	for _, agent := range agents {
 		writeExecutable(t, filepath.Join(binDir, agent), "#!/usr/bin/env bash\nexit 0\n")
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+"/usr/bin:/bin")
 }
 
 func TestRootVersionCommand(t *testing.T) {
@@ -377,8 +377,8 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 		t.Fatalf("prompt = %q, want seeded codex prompt", prompt)
 	}
 	nextCommands := jsonArrayFromMap(t, payload, "next_commands")
-	if !jsonArrayContains(nextCommands, `codex "$(cat .agents/prompts/devopsellence-vibe.md)"`) {
-		t.Fatalf("next_commands = %#v, want prompt-file command", nextCommands)
+	if !jsonArrayContains(nextCommands, "cat .agents/prompts/devopsellence-vibe.md") {
+		t.Fatalf("next_commands = %#v, want prompt inspection command", nextCommands)
 	}
 	manifestData, err := os.ReadFile(filepath.Join(appDir, ".agents", "devopsellence-vibe.json"))
 	if err != nil {
@@ -502,6 +502,42 @@ func TestRootVibeLaunchReportsSuccess(t *testing.T) {
 	payload := decodeJSONOutput(t, &stdout)
 	if payload["launch_requested"] != true || payload["launched"] != true {
 		t.Fatalf("payload = %#v, want successful launch reported", payload)
+	}
+}
+
+func TestRootVibeRejectsMissingLaunchAgentBeforeScaffold(t *testing.T) {
+	cwd := t.TempDir()
+	installFakeVibeTools(t)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "missing-agent",
+		"--ai-agent", "codex",
+		"--idea", "Launch this app",
+	})
+
+	err := cmd.Execute()
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "missing-agent")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("generated app exists after missing agent preflight: %v", statErr)
+	}
+}
+
+func TestPrepareVibeDirectoryRejectsFileAsUsageError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(path, []byte("nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := prepareVibeDirectory(path, false)
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
 	}
 }
 

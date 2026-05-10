@@ -77,6 +77,11 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if opts.AIAgent == "generic" {
 		opts.Launch = false
 	}
+	if opts.Launch {
+		if _, err := a.LookPath(opts.AIAgent); err != nil {
+			return ExitError{Code: 2, Err: fmt.Errorf("%s not found; rerun with --no-launch and start it manually from .agents/prompts/devopsellence-vibe.md", opts.AIAgent)}
+		}
+	}
 	if strings.TrimSpace(opts.Idea) == "" {
 		idea, err := a.askVibeQuestion(reader, "App idea")
 		if err != nil {
@@ -243,7 +248,7 @@ func prepareVibeDirectory(path string, force bool) error {
 		return nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect directory: %w", err)
+		return ExitError{Code: 2, Err: fmt.Errorf("%s is not an inspectable directory: %w", path, err)}
 	}
 	parent := filepath.Dir(path)
 	if parent == "." || parent == path {
@@ -397,16 +402,7 @@ func vibePrompt(agent, templateURL, idea string) string {
 }
 
 func vibeAgentCommand(agent string) string {
-	switch agent {
-	case "codex":
-		return `codex "$(cat .agents/prompts/devopsellence-vibe.md)"`
-	case "claude":
-		return `claude "$(cat .agents/prompts/devopsellence-vibe.md)"`
-	case "pi":
-		return `pi "$(cat .agents/prompts/devopsellence-vibe.md)"`
-	default:
-		return "cat .agents/prompts/devopsellence-vibe.md"
-	}
+	return "cat .agents/prompts/devopsellence-vibe.md"
 }
 
 func (a *App) launchVibeAgent(ctx context.Context, agent, cwd string) error {

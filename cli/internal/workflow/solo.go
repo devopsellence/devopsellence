@@ -2269,6 +2269,7 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		warnings, _ := payload["warnings"].([]string)
 		payload["warnings"] = append(warnings, message)
 	}
+	statusRuntimeVerified := allSettled && hasCurrent && readErrors == 0 && statusErrors == 0 && statusMismatches == 0 && missingStatuses == 0
 	if len(verifiedPublicURLs) > 0 {
 		if allSettled {
 			payload["public_urls"] = verifiedPublicURLs
@@ -2280,8 +2281,14 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		payload["configured_public_urls"] = configuredPublicURLs
 		payload["public_url_status"] = soloPublicURLStatus(cfg)
 		appendPayloadWarning(soloPublicURLWarning(cfg, environmentName))
+	} else if !soloPublicIngressConfigured(cfg) {
+		payload["public_url_status"] = "not_configured"
+		if statusRuntimeVerified {
+			payload["public_url_message"] = "internal health OK, but no public ingress is configured; run `devopsellence ingress set" + soloEnvFlag(environmentName) + " --host <hostname> --service <service>` to publish it"
+		} else {
+			payload["public_url_message"] = "no public ingress configured; run `devopsellence ingress set" + soloEnvFlag(environmentName) + " --host <hostname> --service <service>` to publish it"
+		}
 	}
-	statusRuntimeVerified := allSettled && hasCurrent && readErrors == 0 && statusErrors == 0 && statusMismatches == 0 && missingStatuses == 0
 	payload["runtime_verified"] = soloRuntimeVerifiedPayload(soloRuntimeVerification{
 		DesiredStateRevision: statusRuntimeVerified,
 		Healthcheck:          statusRuntimeVerified,
@@ -2945,7 +2952,7 @@ func soloPlannedDNSCheck(cfg *config.ProjectConfig, nodes map[string]config.Node
 }
 
 func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Node) []string {
-	if cfg == nil || len(nodes) == 0 {
+	if cfg == nil || cfg.Ingress == nil || len(nodes) == 0 {
 		return nil
 	}
 	scheme := ingressURLScheme(cfg)
@@ -2963,6 +2970,10 @@ func soloStatusPublicURLs(cfg *config.ProjectConfig, nodes map[string]config.Nod
 		}
 	}
 	return publicURLsForHosts(scheme, hosts)
+}
+
+func soloPublicIngressConfigured(cfg *config.ProjectConfig) bool {
+	return cfg != nil && cfg.Ingress != nil
 }
 
 func ingressConfiguredPublicURLs(cfg *config.ProjectConfig) []string {

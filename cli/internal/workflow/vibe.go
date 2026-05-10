@@ -42,6 +42,7 @@ type vibeManifest struct {
 const (
 	vibeAppStack               = "rails-app"
 	defaultVibeTemplateVersion = "v0.1.3"
+	vibePromptInstruction      = "Read .agents/prompts/devopsellence-vibe.md and follow it."
 )
 
 var vibeSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
@@ -402,7 +403,10 @@ func vibePrompt(agent, templateURL, idea string) string {
 }
 
 func vibeAgentCommand(agent string) string {
-	return "cat .agents/prompts/devopsellence-vibe.md"
+	if agent == "generic" {
+		return "cat .agents/prompts/devopsellence-vibe.md"
+	}
+	return agent + " '" + vibePromptInstruction + "'"
 }
 
 func (a *App) launchVibeAgent(ctx context.Context, agent, cwd string) error {
@@ -413,11 +417,7 @@ func (a *App) launchVibeAgent(ctx context.Context, agent, cwd string) error {
 	if _, err := a.LookPath(binary); err != nil {
 		return ExitError{Code: 2, Err: fmt.Errorf("%s not found; rerun with --no-launch and start it manually from .agents/prompts/devopsellence-vibe.md", binary)}
 	}
-	prompt, err := os.ReadFile(filepath.Join(cwd, ".agents", "prompts", "devopsellence-vibe.md"))
-	if err != nil {
-		return fmt.Errorf("read vibe prompt: %w", err)
-	}
-	cmd := exec.CommandContext(ctx, binary, string(prompt))
+	cmd := exec.CommandContext(ctx, binary, vibePromptInstruction)
 	cmd.Dir = cwd
 	cmd.Stdin = a.In
 	cmd.Stdout = a.Printer.Err

@@ -377,8 +377,8 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 		t.Fatalf("prompt = %q, want seeded codex prompt", prompt)
 	}
 	nextCommands := jsonArrayFromMap(t, payload, "next_commands")
-	if !jsonArrayContains(nextCommands, "cat .agents/prompts/devopsellence-vibe.md") {
-		t.Fatalf("next_commands = %#v, want prompt inspection command", nextCommands)
+	if !jsonArrayContains(nextCommands, "codex 'Read .agents/prompts/devopsellence-vibe.md and follow it.'") {
+		t.Fatalf("next_commands = %#v, want prompt-file agent command", nextCommands)
 	}
 	manifestData, err := os.ReadFile(filepath.Join(appDir, ".agents", "devopsellence-vibe.json"))
 	if err != nil {

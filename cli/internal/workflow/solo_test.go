@@ -10835,6 +10835,33 @@ func TestIngressSetPreservesExistingServiceWhenFlagOmitted(t *testing.T) {
 	}
 }
 
+func TestIngressSetWarnsIPHostIsHTTPOnlyWithTLSOff(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", config.DefaultEnvironment)
+	if _, err := config.Write(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{
+		Cwd:         dir,
+		ConfigStore: config.NewStore(),
+		Printer:     output.New(&stdout, io.Discard),
+	}
+	if err := app.IngressSet(context.Background(), IngressSetOptions{
+		Hosts:   []string{"203.0.113.10"},
+		TLSMode: "off",
+	}); err != nil {
+		t.Fatalf("IngressSet() error = %v", err)
+	}
+
+	payload := decodeJSONOutput(t, &stdout)
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	if len(warnings) != 1 || !strings.Contains(stringValueAny(warnings[0]), "HTTP only") || !strings.Contains(stringValueAny(warnings[0]), "DNS hostname") {
+		t.Fatalf("warnings = %#v, want IP host HTTP-only/TLS guidance", warnings)
+	}
+}
+
 func TestIngressSetWritesSelectedEnvironmentOverlay(t *testing.T) {
 	t.Setenv("DEVOPSELLENCE_ENVIRONMENT", "staging")
 

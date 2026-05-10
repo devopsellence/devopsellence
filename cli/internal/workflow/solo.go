@@ -6631,13 +6631,38 @@ func (a *App) IngressSet(_ context.Context, opts IngressSetOptions) error {
 		return err
 	}
 
-	return a.Printer.PrintJSON(map[string]any{
+	payload := map[string]any{
 		"schema_version": outputSchemaVersion,
 		"environment":    selectedEnvironment,
 		"ingress":        ingress,
 		"config_path":    a.ConfigStore.PathFor(discovered.WorkspaceRoot),
-	})
+	}
+	if warnings := ingressSetWarnings(hosts, tlsMode); len(warnings) > 0 {
+		payload["warnings"] = warnings
+	}
+	return a.Printer.PrintJSON(payload)
+}
 
+func ingressSetWarnings(hosts []string, tlsMode string) []string {
+	if !ingressHostsIncludeIP(hosts) {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(tlsMode)) {
+	case "off":
+		return []string{"IP ingress hosts are HTTP only with --tls-mode off; use a DNS hostname with --tls-mode auto or manual for TLS/HTTPS."}
+	default:
+		return []string{"IP ingress hosts do not work with ACME/browser-valid HTTPS; use a DNS hostname for TLS/HTTPS, or set --tls-mode off for HTTP only."}
+	}
+}
+
+func ingressHostsIncludeIP(hosts []string) bool {
+	for _, host := range hosts {
+		value := strings.Trim(strings.TrimSpace(host), "[]")
+		if net.ParseIP(value) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) SoloIngressCertInstall(ctx context.Context, opts SoloIngressCertInstallOptions) error {

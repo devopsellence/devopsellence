@@ -718,24 +718,10 @@ func containerInspectSummary(info engine.ContainerInfo) string {
 
 func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string, string, engine.ContainerSpec, error) {
 	service := runtime.Service
-	network, err := r.environmentNetwork(runtime.EnvironmentName)
-	if err != nil {
-		return "", "", engine.ContainerSpec{}, err
-	}
-	hash, err := desiredstate.HashService(service)
+	hash, network, aliases, err := r.runtimeServiceHash(runtime)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash service %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
 	}
-
-	aliases := []string(nil)
-	if strings.TrimSpace(network) != "" {
-		alias, err := desiredstate.ServiceNetworkAlias(runtime.ServiceName)
-		if err != nil {
-			return "", "", engine.ContainerSpec{}, err
-		}
-		aliases = []string{alias}
-	}
-	hash = runtimeContainerHash(hash, r.opts.LogConfig, network, aliases)
 	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
 	if err != nil {
 		return "", "", engine.ContainerSpec{}, err
@@ -769,6 +755,26 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 	}
 
 	return name, hash, spec, nil
+}
+
+func (r *Reconciler) runtimeServiceHash(runtime desiredstate.RuntimeService) (string, string, []string, error) {
+	network, err := r.environmentNetwork(runtime.EnvironmentName)
+	if err != nil {
+		return "", "", nil, err
+	}
+	hash, err := desiredstate.HashService(runtime.Service)
+	if err != nil {
+		return "", "", nil, err
+	}
+	aliases := []string(nil)
+	if strings.TrimSpace(network) != "" {
+		alias, err := desiredstate.ServiceNetworkAlias(runtime.ServiceName)
+		if err != nil {
+			return "", "", nil, err
+		}
+		aliases = []string{alias}
+	}
+	return runtimeContainerHash(hash, r.opts.LogConfig, network, aliases), network, aliases, nil
 }
 
 func (r *Reconciler) specForTask(environmentName string, task *desiredstatepb.Task, revision string, network string) (string, string, engine.ContainerSpec, error) {

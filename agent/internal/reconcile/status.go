@@ -114,23 +114,15 @@ func (r *Reconciler) serviceStatus(ctx context.Context, service *desiredstatepb.
 }
 
 func (r *Reconciler) expectedRuntimeServiceHash(environmentName, serviceName string, service *desiredstatepb.Service) string {
-	hash, err := desiredstate.HashService(service)
+	hash, _, _, err := r.runtimeServiceHash(desiredstate.RuntimeService{
+		EnvironmentName: environmentName,
+		ServiceName:     serviceName,
+		Service:         service,
+	})
 	if err != nil {
 		return ""
 	}
-	network, err := r.environmentNetwork(environmentName)
-	if err != nil {
-		return ""
-	}
-	aliases := []string(nil)
-	if strings.TrimSpace(network) != "" {
-		alias, err := desiredstate.ServiceNetworkAlias(serviceName)
-		if err != nil {
-			return ""
-		}
-		aliases = []string{alias}
-	}
-	return runtimeContainerHash(hash, r.opts.LogConfig, network, aliases)
+	return hash
 }
 
 func serviceRevisionStatus(current *engine.ContainerState, environmentRevision, expectedHash string) (string, string) {

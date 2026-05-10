@@ -3266,6 +3266,8 @@ type fakeDocker struct {
 	loginRegistry    string
 	updates          []string
 	delay            time.Duration
+	imageID          string
+	imageIDErr       error
 	imageMetadata    docker.ImageMetadata
 	imageMetadataErr error
 }
@@ -3302,6 +3304,16 @@ func (f *fakeDocker) ImageMetadata(_ context.Context, _ string) (docker.ImageMet
 	return f.imageMetadata, f.imageMetadataErr
 }
 
+func (f *fakeDocker) ImageID(_ context.Context, _ string) (string, error) {
+	if f.imageIDErr != nil {
+		return "", f.imageIDErr
+	}
+	if f.imageID != "" {
+		return f.imageID, nil
+	}
+	return "sha256:fake-image-id", nil
+}
+
 type dockerUnavailableStub struct{}
 
 func (d *dockerUnavailableStub) Installed() bool { return true }
@@ -3322,6 +3334,10 @@ func (d *dockerUnavailableStub) BuildAndPush(_ context.Context, _, _, _ string, 
 
 func (d *dockerUnavailableStub) ImageMetadata(_ context.Context, _ string) (docker.ImageMetadata, error) {
 	panic("unexpected ImageMetadata call")
+}
+
+func (d *dockerUnavailableStub) ImageID(_ context.Context, _ string) (string, error) {
+	panic("unexpected ImageID call")
 }
 
 func makeRubyRoot(t *testing.T, moduleName string) string {

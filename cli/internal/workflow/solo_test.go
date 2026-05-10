@@ -903,7 +903,21 @@ if [[ "$command" == "true" ]]; then
   fi
   exit 0
 fi
+if [[ "$command" == *"docker tag"* ]]; then
+  exit 0
+fi
+
 if [[ "$command" == *"docker image inspect"* ]]; then
+  missing_image="${DEVOPSELLENCE_FAKE_SSH_IMAGE_TAG_MISSING:-}"
+  present_image_id="${DEVOPSELLENCE_FAKE_SSH_IMAGE_ID_PRESENT:-}"
+  if [[ -n "$present_image_id" && "$command" == *"$present_image_id"* ]]; then
+    printf 'present\n'
+    exit 0
+  fi
+  if [[ -n "$missing_image" && "$command" == *"$missing_image"* ]]; then
+    printf 'missing\n'
+    exit 0
+  fi
   printf 'present\n'
   exit 0
 fi
@@ -5325,6 +5339,67 @@ func TestRepublishNodesReportsRemoteDockerCheck(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "[web-a] remote docker check:") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRepublishNodesTagsExistingRemoteImageIDInsteadOfStreaming(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	commandLog := filepath.Join(t.TempDir(), "ssh-commands.log")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_COMMAND_LOG", commandLog)
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_IMAGE_TAG_MISSING", "demo:abc1234")
+	t.Setenv("DEVOPSELLENCE_FAKE_SSH_IMAGE_ID_PRESENT", "sha256:local-image")
+	installFakeSoloCommands(t, nil)
+
+	app := &App{
+		Printer:     output.New(io.Discard, io.Discard),
+		Docker:      &fakeDocker{imageID: "sha256:local-image"},
+		ConfigStore: config.NewStore(),
+	}
+	current := solo.State{
+		Nodes: map[string]config.Node{
+			"web-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}},
+		},
+		Attachments: map[string]solo.AttachmentRecord{
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				NodeNames:     []string{"web-a"},
+			},
+		},
+		Snapshots: map[string]desiredstate.DeploySnapshot{
+			workspaceRoot + "\nproduction": {
+				WorkspaceRoot: workspaceRoot,
+				WorkspaceKey:  workspaceRoot,
+				Environment:   "production",
+				Revision:      "abc1234",
+				Image:         "demo:abc1234",
+				Metadata:      desiredstate.SnapshotMetadata{ConfigPath: filepath.Join(workspaceRoot, "devopsellence.yml")},
+			},
+		},
+	}
+
+	revisions, err := app.republishNodes(context.Background(), current, []string{"web-a"})
+	if err != nil {
+		t.Fatalf("republish: %v", err)
+	}
+	if strings.TrimSpace(revisions["web-a"]) == "" {
+		t.Fatalf("revisions = %#v, want web-a desired-state revision", revisions)
+	}
+	data, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := string(data)
+	if !strings.Contains(commands, "docker tag 'sha256:local-image' 'demo:abc1234'") {
+		t.Fatalf("commands = %s, want remote docker tag", commands)
+	}
+	if strings.Contains(commands, "docker load") {
+		t.Fatalf("commands = %s, did not expect image stream", commands)
 	}
 }
 
@@ -10608,7 +10683,21 @@ if [[ "$command" == *"desired-state set-override"* ]]; then
   exit 0
 fi
 
+if [[ "$command" == *"docker tag"* ]]; then
+  exit 0
+fi
+
 if [[ "$command" == *"docker image inspect"* ]]; then
+  missing_image="${DEVOPSELLENCE_FAKE_SSH_IMAGE_TAG_MISSING:-}"
+  present_image_id="${DEVOPSELLENCE_FAKE_SSH_IMAGE_ID_PRESENT:-}"
+  if [[ -n "$present_image_id" && "$command" == *"$present_image_id"* ]]; then
+    printf 'present\n'
+    exit 0
+  fi
+  if [[ -n "$missing_image" && "$command" == *"$missing_image"* ]]; then
+    printf 'missing\n'
+    exit 0
+  fi
   printf 'present\n'
   exit 0
 fi

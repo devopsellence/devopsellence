@@ -4226,7 +4226,7 @@ func (a *App) SoloNodeDiagnose(ctx context.Context, opts SoloNodeDiagnoseOptions
 	diagnoseOK := soloChecksOK(checks)
 	payload["ok"] = diagnoseOK
 	if soloCheckFailed(checks, "ssh") {
-		payload["next_steps"] = []string{fmt.Sprintf("ssh -p %d %s true", node.Port, shellQuote(node.User+"@"+node.Host))}
+		payload["next_steps"] = []string{soloDoctorSSHNextStep(node)}
 		return a.printSoloDiagnoseResult(payload, diagnoseOK)
 	}
 	agentVersion := collectRemoteText(ctx, node, remoteAgentVersionCommand())

@@ -4490,7 +4490,7 @@ exit 255
 	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
 	current := solo.State{
 		Nodes: map[string]config.Node{
-			"node-a": {Host: "203.0.113.10", User: "root", Port: 22},
+			"node-a": {Host: "203.0.113.10", User: "root"},
 		},
 	}
 	if err := soloState.Write(current); err != nil {

@@ -6,12 +6,61 @@ description: Start a production-minded Rails app with devopsellence, mise, and a
 `devopsellence vibe` creates one blessed Rails app shape instead of asking you
 to choose a stack. It uses the devopsellence Rails template, writes a local
 agent skill, seeds a prompt, initializes git, and can launch Codex, Claude Code,
-Pi, or another agent.
+Pi, or another agent with high effort/thinking enabled.
+
+Run it without `--idea` to use the intake wizard. You can press Ctrl+C during
+the questions to stop before files are generated.
+
+```bash
+devopsellence vibe my-crm
+```
 
 ```bash
 devopsellence vibe my-crm \
   --ai-agent=codex \
   --idea="A tiny CRM for solo consultants"
+cd ~/devopsellence-projects/my-crm
+```
+
+Bare app names land under `~/devopsellence-projects`. Pass `./my-crm` or an
+absolute path when the app should be created somewhere else. Override the base
+directory with `--projects-dir` or `DEVOPSELLENCE_PROJECTS_DIR`.
+
+## Deployment Intake
+
+The wizard captures deploy intent before the agent starts:
+
+- first workflow the agent should build;
+- build only, prepare for solo deploy, dry-run, or deploy after approval;
+- solo now, shared later, or decide later;
+- no server yet, an existing server, or a Hetzner node;
+- domain and TLS email;
+- external service plans such as managed Postgres, object storage, email, and
+  Cloudflare DNS.
+
+This intent is written to `.agents/devopsellence-vibe.json` and summarized in
+`.agents/prompts/devopsellence-vibe.md`. Tokens and secret values are never
+written there.
+
+Prepare for a Hetzner-backed solo deploy without starting the agent:
+
+```bash
+devopsellence vibe my-crm \
+  --idea="A tiny CRM for solo consultants" \
+  --server=hetzner \
+  --server-target=prod-1 \
+  --deploy-goal=dry-run \
+  --domain=crm.example.com \
+  --tls-email=ops@example.com \
+  --services=managed-postgres,cloudflare-dns \
+  --no-agent
+```
+
+If Hetzner auth is missing, the prompt tells the agent to stop before
+provisioning and ask the user to run:
+
+```bash
+devopsellence provider login hetzner --token <token>
 ```
 
 Prepare the app and prompt without starting an agent:
@@ -24,6 +73,12 @@ Pin a template release when reproducing a scaffold:
 
 ```bash
 devopsellence vibe my-crm --template-version=v0.1.3 --no-agent
+```
+
+Use the agent's own configured effort instead of the devopsellence default:
+
+```bash
+devopsellence vibe my-crm --ai-agent=codex --agent-effort=default
 ```
 
 The command runs Rails with the pinned template:

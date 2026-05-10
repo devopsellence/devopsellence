@@ -958,7 +958,7 @@ PY
               "name" => "release",
               "image" => @release_task_accessory_image,
               "entrypoint" => ["/bin/sh", "-c"],
-              "command" => ["getent hosts db >/dev/null"]
+              "command" => ["getent hosts db >/dev/null && sleep 5"]
             }
           ]
         }
@@ -967,6 +967,20 @@ PY
     desired_payload = JSON.pretty_generate(desired)
     quoted_path = Shellwords.escape(@desired_state_path)
     ssh_to_node_with_stdin!("cat > #{quoted_path} && touch #{quoted_path}", desired_payload)
+
+    wait_until!(timeout: 120) do
+      output = ssh_to_node!("cat #{@status_path} 2>/dev/null || echo '{}'")
+      begin
+        status = JSON.parse(output)
+        task = status["task"]
+        status["revision"] == revision &&
+          task &&
+          task["name"] == "release" &&
+          task["phase"] == "reconciling"
+      rescue JSON::ParserError
+        false
+      end
+    end
 
     status = nil
     wait_until!(timeout: 120) do

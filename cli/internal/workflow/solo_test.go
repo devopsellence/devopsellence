@@ -2391,6 +2391,9 @@ func TestSoloDoctorWarnsWhenAgentStatusReportMissingBeforeFirstDeploy(t *testing
 			if check["ok"] != true || check["severity"] != "warning" || !strings.Contains(stringValueAny(check["detail"]), "no workload deployed yet") || !strings.Contains(stringValueAny(check["detail"]), "/var/lib/devopsellence/status.json") {
 				t.Fatalf("agent_status_report = %#v, want no-workload warning", check)
 			}
+			if check["next_action"] != "devopsellence deploy" {
+				t.Fatalf("agent_status_report next_action = %#v, want runnable deploy command", check["next_action"])
+			}
 			warnings := jsonArrayFromMap(t, payload, "warnings")
 			if len(warnings) != 1 || !strings.Contains(stringValueAny(warnings[0]), "no workload deployed yet") {
 				t.Fatalf("warnings = %#v, want no-workload warning", warnings)

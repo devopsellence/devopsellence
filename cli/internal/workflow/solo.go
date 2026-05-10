@@ -4441,7 +4441,7 @@ func soloAgentStatusReportCheck(ctx context.Context, node config.Node, allowMiss
 		if allowMissing {
 			check.Observed = "no workload deployed yet; no status report expected at " + statusPath
 			check.Severity = "warning"
-			check.NextAction = "run devopsellence deploy when ready to publish the first workload"
+			check.NextAction = "devopsellence deploy"
 			return check
 		}
 		check.OK = false

@@ -6651,7 +6651,7 @@ func ingressSetWarnings(hosts []string, tlsMode string) []string {
 	case "off":
 		return []string{"IP ingress hosts are HTTP only with --tls-mode off; use a DNS hostname with --tls-mode auto or manual for TLS/HTTPS."}
 	default:
-		return []string{"IP ingress hosts do not work with ACME/browser-valid HTTPS; use a DNS hostname for TLS/HTTPS, or set --tls-mode off for HTTP only."}
+		return []string{"ACME/browser-trusted TLS for IP ingress hosts requires a certificate with the IP address in the SAN; use a DNS hostname for automatic TLS, install a trusted manual certificate with an IP SAN, or set --tls-mode off for HTTP only."}
 	}
 }
 

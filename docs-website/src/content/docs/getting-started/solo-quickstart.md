@@ -14,22 +14,7 @@ and the `devopsellence` CLI.
 devopsellence init --mode solo
 ```
 
-Start from an app that already has a Dockerfile, or let devopsellence prepare an
-AI-first web app workspace.
-
-If you want Codex, Claude Code, Pi, or another AI coding agent to create or
-prepare the app first, start from [Build with vibe](/guides/rails-app-template/):
-
-```bash
-devopsellence vibe my-app
-cd ~/devopsellence-projects/my-app
-```
-
-Bare app names land under `~/devopsellence-projects`. Pass `./my-app` or an
-absolute path when the app should be created somewhere else. The wizard asks for
-agent freedom and deploy intent before scaffolding; press Ctrl+C during the
-questions to stop. Use `--no-agent` to generate the app and prompt without
-starting an AI agent.
+Start from an app that already has a Dockerfile.
 
 <ol class="command-sequence" start="2">
   <li>Commit the app before the first deploy.</li>

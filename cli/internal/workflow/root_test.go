@@ -16,7 +16,7 @@ import (
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
 )
 
-func installFakeVibeTools(t *testing.T, agents ...string) {
+func installFakeVibeTools(t *testing.T, agents ...string) string {
 	t.Helper()
 	binDir := t.TempDir()
 	writeExecutable(t, filepath.Join(binDir, "mise"), "#!/usr/bin/env bash\nexit 0\n")
@@ -77,6 +77,15 @@ case "${1:-}" in
     ;;
 esac
 `)
+	requestedAgents := map[string]bool{}
+	for _, agent := range agents {
+		requestedAgents[agent] = true
+	}
+	for _, agent := range vibeAgentPreference {
+		if !requestedAgents[agent] {
+			writeExecutable(t, filepath.Join(binDir, agent), "#!/usr/bin/env bash\nexit 127\n")
+		}
+	}
 	for _, agent := range agents {
 		writeExecutable(t, filepath.Join(binDir, agent), `#!/usr/bin/env bash
 set -euo pipefail
@@ -86,7 +95,8 @@ fi
 exit 0
 `)
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+"/usr/bin:/bin")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return binDir
 }
 
 func setFakeVibeHome(t *testing.T, cwd string) string {
@@ -369,8 +379,8 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 		t.Fatalf("payload = %#v, want prepared codex rails workspace", payload)
 	}
 	intent := jsonMapFromAny(t, payload["deployment_intent"])
-	if intent["deploy_goal"] != "prepare-solo" || intent["devopsellence_mode"] != "solo" || intent["server_strategy"] != "none" {
-		t.Fatalf("deployment_intent = %#v, want solo prepare defaults", intent)
+	if intent["deploy_goal"] != "deploy-ready" || intent["devopsellence_mode"] != "solo" || intent["server_strategy"] != "none" {
+		t.Fatalf("deployment_intent = %#v, want solo deploy-ready defaults", intent)
 	}
 	if payload["template_version"] != defaultVibeTemplateVersion || payload["template_url"] != vibeTemplateURL(defaultVibeTemplateVersion) || payload["initial_commit"] != true {
 		t.Fatalf("payload = %#v, want pinned template and initial commit", payload)
@@ -394,7 +404,7 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Agent autonomy") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Rails 8.1") {
+	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Agent autonomy") || !strings.Contains(string(prompt), "sequencing the work yourself") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Rails 8.1") {
 		t.Fatalf("prompt = %q, want seeded codex prompt", prompt)
 	}
 	nextCommands := jsonArrayFromMap(t, payload, "next_commands")
@@ -409,7 +419,7 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultVibeTemplateVersion || manifest.DeploymentIntent.DeployGoal != "prepare-solo" {
+	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultVibeTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want repo-relative paths", manifest)
 	}
 }
@@ -495,24 +505,13 @@ func TestRootVibeUsesProjectsDirEnvironment(t *testing.T) {
 	}
 }
 
-func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
+func TestRootVibeWizardOnlyAsksForAppIdea(t *testing.T) {
 	cwd := t.TempDir()
 	home := setFakeVibeHome(t, cwd)
 	installFakeVibeTools(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	input := bytes.NewBufferString(strings.Join([]string{
-		"A tiny CRM for consultants",
-		"full-access",
-		"Track contacts and follow-ups",
-		"dry-run",
-		"solo",
-		"hetzner",
-		"prod-1",
-		"crm.example.com",
-		"ops@example.com",
-		"managed-postgres,cloudflare-dns",
-	}, "\n") + "\n")
+	input := bytes.NewBufferString("A tiny CRM for consultants\n")
 	cmd := NewRootCommand(input, &stdout, &stderr, cwd)
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
@@ -524,28 +523,29 @@ func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v\nstderr=%s", err, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Ctrl+C") || !strings.Contains(stderr.String(), "Agent freedom") || !strings.Contains(stderr.String(), "Server plan") {
-		t.Fatalf("stderr = %q, want wizard guidance and questions", stderr.String())
+	if !strings.Contains(stderr.String(), "Ctrl+C") || !strings.Contains(stderr.String(), "App idea") {
+		t.Fatalf("stderr = %q, want vibe intake and app idea prompt", stderr.String())
+	}
+	for _, unwanted := range []string{"Agent freedom", "Server plan", "External services", "devopsellence mode"} {
+		if strings.Contains(stderr.String(), unwanted) {
+			t.Fatalf("stderr = %q, want no %q prompt", stderr.String(), unwanted)
+		}
 	}
 	payload := decodeJSONOutput(t, &stdout)
 	appDir := filepath.Join(home, defaultVibeProjectsDirName, "crm-app")
 	if payload["directory"] != appDir {
 		t.Fatalf("payload = %#v, want app under projects dir", payload)
 	}
-	if payload["agent_autonomy"] != "full-access" {
-		t.Fatalf("payload = %#v, want full-access agent autonomy", payload)
+	if payload["ai_agent"] != "generic" || payload["agent_autonomy"] != "builder" {
+		t.Fatalf("payload = %#v, want generic builder defaults", payload)
 	}
 	intent := jsonMapFromAny(t, payload["deployment_intent"])
-	if intent["deploy_goal"] != "dry-run" || intent["server_strategy"] != "hetzner" || intent["provider_auth_status"] != "missing" || intent["server_target"] != "prod-1" {
-		t.Fatalf("deployment_intent = %#v, want hetzner dry-run intent", intent)
+	if intent["deploy_goal"] != "deploy-ready" || intent["server_strategy"] != "none" || intent["first_workflow"] != "derive from the app idea" {
+		t.Fatalf("deployment_intent = %#v, want deploy-ready defaults", intent)
 	}
 	services := jsonArrayFromMap(t, intent, "services")
-	if !jsonArrayContains(services, "managed-postgres") || !jsonArrayContains(services, "cloudflare-dns") {
-		t.Fatalf("services = %#v, want managed postgres and Cloudflare DNS", services)
-	}
-	nextCommands := jsonArrayFromMap(t, payload, "next_commands")
-	if !jsonArrayContains(nextCommands, "devopsellence provider login hetzner --token <token>") {
-		t.Fatalf("next_commands = %#v, want secure Hetzner login hint", nextCommands)
+	if len(services) != 1 || services[0] != "later" {
+		t.Fatalf("services = %#v, want later by default", services)
 	}
 	manifestData, err := os.ReadFile(filepath.Join(appDir, ".agents", "devopsellence-vibe.json"))
 	if err != nil {
@@ -555,11 +555,8 @@ func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if !stringSliceContains(manifest.NextCommands, "devopsellence provider login hetzner --token <token>") {
-		t.Fatalf("manifest.NextCommands = %#v, want secure Hetzner login hint", manifest.NextCommands)
-	}
-	if manifest.AgentAutonomy != "full-access" {
-		t.Fatalf("manifest.AgentAutonomy = %q, want full-access", manifest.AgentAutonomy)
+	if manifest.AgentAutonomy != "builder" || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
+		t.Fatalf("manifest = %#v, want builder deploy-ready defaults", manifest)
 	}
 	promptData, err := os.ReadFile(filepath.Join(appDir, ".agents", "prompts", "devopsellence-vibe.md"))
 	if err != nil {
@@ -567,12 +564,10 @@ func TestRootVibeWizardCollectsDeployIntent(t *testing.T) {
 	}
 	prompt := string(promptData)
 	for _, want := range []string{
-		"Track contacts and follow-ups",
-		"full access",
-		"isolated VM",
-		"Hetzner auth is missing",
-		"run devopsellence deploy --dry-run",
-		"Cloudflare DNS changes only after the user confirms",
+		"A tiny CRM for consultants",
+		"sequencing the work yourself",
+		"Make the app deploy-ready",
+		"No server is selected yet",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
@@ -771,6 +766,40 @@ func TestRootVibeRejectsMissingLaunchAgentBeforeScaffold(t *testing.T) {
 	}
 }
 
+func TestRootVibeRejectsUnreadyLaunchAgentBeforeScaffold(t *testing.T) {
+	cwd := t.TempDir()
+	home := setFakeVibeHome(t, cwd)
+	binDir := installFakeVibeTools(t, "codex")
+	writeExecutable(t, filepath.Join(binDir, "codex"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "login" ] && [ "${2:-}" = "status" ]; then
+  exit 1
+fi
+exit 0
+`)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "unready-agent",
+		"--ai-agent", "codex",
+		"--idea", "Launch this app",
+	})
+
+	err := cmd.Execute()
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("error = %#v, want ExitError code 2", err)
+	}
+	if !strings.Contains(err.Error(), "setup check failed") {
+		t.Fatalf("error = %v, want setup-check guidance", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, defaultVibeProjectsDirName, "unready-agent")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("generated app exists after unready agent preflight: %v", statErr)
+	}
+}
+
 func TestPrepareVibeDirectoryRejectsFileAsUsageError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(path, []byte("nope"), 0o644); err != nil {
@@ -784,27 +813,105 @@ func TestPrepareVibeDirectoryRejectsFileAsUsageError(t *testing.T) {
 	}
 }
 
-func TestRootVibeRejectsBlankPromptedAgent(t *testing.T) {
+func TestRootVibeAutoSelectsUsableAgentByPreference(t *testing.T) {
 	cwd := t.TempDir()
-	installFakeVibeTools(t, "codex", "claude")
+	setFakeVibeHome(t, cwd)
+	installFakeVibeTools(t, "opencode", "pi", "claude", "codex")
 	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	input := bytes.NewBufferString("\n")
-	cmd := NewRootCommand(input, &stdout, &stderr, cwd)
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
 	cmd.SetOut(&stdout)
-	cmd.SetErr(&stderr)
+	cmd.SetErr(&stdout)
 	cmd.SetArgs([]string{
-		"vibe", "blank-agent",
+		"vibe", "preferred-agent",
 		"--idea", "A tiny uptime page",
 		"--no-launch",
 	})
 
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("Execute() error = nil, want missing ai agent")
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "missing ai agent") {
-		t.Fatalf("error = %v, want missing ai agent", err)
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ai_agent"] != "codex" {
+		t.Fatalf("payload = %#v, want codex selected first", payload)
+	}
+	detected := jsonArrayFromMap(t, payload, "detected_agents")
+	want := []string{"codex", "claude", "pi", "opencode"}
+	if len(detected) != len(want) {
+		t.Fatalf("detected_agents = %#v, want %v", detected, want)
+	}
+	for i, item := range detected {
+		if item != want[i] {
+			t.Fatalf("detected_agents = %#v, want %v", detected, want)
+		}
+	}
+}
+
+func TestRootVibeSkipsUnreadyAutoDetectedAgent(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	binDir := installFakeVibeTools(t, "codex", "claude")
+	writeExecutable(t, filepath.Join(binDir, "codex"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "login" ] && [ "${2:-}" = "status" ]; then
+  exit 1
+fi
+exit 0
+`)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "fallback-agent",
+		"--idea", "A tiny uptime page",
+		"--no-launch",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ai_agent"] != "claude" {
+		t.Fatalf("payload = %#v, want claude after codex setup probe fails", payload)
+	}
+	detected := jsonArrayFromMap(t, payload, "detected_agents")
+	if len(detected) != 1 || detected[0] != "claude" {
+		t.Fatalf("detected_agents = %#v, want only claude", detected)
+	}
+}
+
+func TestRootVibeNoLaunchExplicitAgentSkipsProbe(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	binDir := installFakeVibeTools(t, "codex")
+	writeExecutable(t, filepath.Join(binDir, "codex"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "login" ] && [ "${2:-}" = "status" ]; then
+  exit 1
+fi
+exit 0
+`)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "manual-agent",
+		"--ai-agent", "codex",
+		"--idea", "A tiny uptime page",
+		"--no-launch",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ai_agent"] != "codex" || payload["launch_requested"] != false {
+		t.Fatalf("payload = %#v, want explicit codex without launch", payload)
+	}
+	detected := jsonArrayFromMap(t, payload, "detected_agents")
+	if len(detected) != 0 {
+		t.Fatalf("detected_agents = %#v, want no setup probes for explicit no-launch agent", detected)
 	}
 }
 
@@ -910,6 +1017,12 @@ func TestVibeAgentCommandIncludesEffort(t *testing.T) {
 			effort:   "high",
 			autonomy: "builder",
 			want:     "pi --thinking high 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
+		},
+		{
+			agent:    "opencode",
+			effort:   "high",
+			autonomy: "builder",
+			want:     "opencode --prompt 'Read .agents/prompts/devopsellence-vibe.md and follow it.'",
 		},
 		{
 			agent:    "codex",

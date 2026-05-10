@@ -36,23 +36,8 @@ codex e "Deploy this app with devopsellence solo."
 `devopsellence skill install` installs the matching AI agent skill from the CLI
 itself.
 
-Starting from an idea:
-
-```bash
-devopsellence vibe my-app
-cd ~/devopsellence-projects/my-app
-```
-
-Bare app names created by `devopsellence vibe` land under
-`~/devopsellence-projects`. Pass `./my-app` or an absolute path when the app
-should be created somewhere else. The intake wizard asks for the app idea,
-agent freedom, first workflow, solo deploy intent, server plan, domain, and
-service choices before scaffolding; press Ctrl+C during the questions to stop.
-
 - [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
   one VM.
-- [Build with vibe](/guides/rails-app-template/) for turning an app idea into a
-  batteries-included Rails workspace with local agent skills and deploy intent.
 - [Ingress and TLS](/guides/ingress-tls/) for hostnames, DNS checks, and HTTPS
   verification.
 - [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app

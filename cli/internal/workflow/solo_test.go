@@ -4394,11 +4394,21 @@ func TestExpectedDevopsellenceEnvoyPublicPortsFromDockerSnapshot(t *testing.T) {
 		"containers": map[string]any{"items": []any{
 			map[string]any{
 				"Names": "devopsellence-envoy",
-				"Ports": "0.0.0.0:8000->8000/tcp, :::8000->8000/tcp",
+				"Ports": "0.0.0.0:8000->8000/tcp, :::8000->8000/tcp, 0.0.0.0:8001->8001/tcp",
 			},
 			map[string]any{
-				"Names": "other",
-				"Ports": "0.0.0.0:8001->8000/tcp",
+				"Names": "not-devopsellence-envoy-copy",
+				"Ports": "0.0.0.0:8002->8000/tcp",
+			},
+			map[string]any{
+				"Names":  "other",
+				"Labels": "devopsellence.managed=true,devopsellence.system=envoy",
+				"Ports":  "0.0.0.0:8000->8000/tcp",
+			},
+			map[string]any{
+				"Names":  "other",
+				"Labels": "devopsellence.system=envoy",
+				"Ports":  "0.0.0.0:8003->8000/tcp",
 			},
 		}},
 	}

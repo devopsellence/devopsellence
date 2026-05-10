@@ -4937,6 +4937,9 @@ func expectedDevopsellenceEnvoyPublicPortsFromItems(value any) map[string]bool {
 			continue
 		}
 		for _, port := range dockerPublishedPublicPorts(stringFromAny(container["Ports"])) {
+			if port != "8000" {
+				continue
+			}
 			expected[port] = true
 		}
 	}
@@ -4947,9 +4950,18 @@ func expectedDevopsellenceEnvoyPublicPortsFromItems(value any) map[string]bool {
 }
 
 func devopsellenceEnvoyContainer(container map[string]any) bool {
-	name := strings.ToLower(stringFromAny(container["Names"]))
+	name := strings.TrimPrefix(strings.TrimSpace(strings.ToLower(stringFromAny(container["Names"]))), "/")
 	labels := strings.ToLower(stringFromAny(container["Labels"]))
-	return strings.Contains(name, "devopsellence-envoy") || strings.Contains(labels, "devopsellence.system=envoy")
+	return name == "devopsellence-envoy" || (dockerLabelsContain(labels, "devopsellence.managed=true") && dockerLabelsContain(labels, "devopsellence.system=envoy"))
+}
+
+func dockerLabelsContain(labels, expected string) bool {
+	for _, label := range strings.Split(labels, ",") {
+		if strings.TrimSpace(label) == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func dockerPublishedPublicPorts(ports string) []string {

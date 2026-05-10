@@ -2454,12 +2454,18 @@ func TestSoloDoctorFailsWhenAgentStatusReportMissingForCurrentRelease(t *testing
 				t.Fatalf("agent_status_report next_action = %q, want diagnose guidance", stringValueAny(check["next_action"]))
 			}
 			steps := jsonArrayFromMap(t, payload, "next_steps")
-			joinedSteps := ""
-			for _, step := range steps {
-				joinedSteps += stringValueAny(step) + "\n"
+			wantSteps := []any{
+				"devopsellence node diagnose 'node-a'",
+				"ssh -p 22 'root@203.0.113.10' true",
 			}
-			if len(steps) == 0 || strings.Contains(joinedSteps, "agent install") {
-				t.Fatalf("next_steps = %#v, want diagnose guidance without agent install", steps)
+			if !reflect.DeepEqual(steps, wantSteps) {
+				t.Fatalf("next_steps = %#v, want runnable diagnose and SSH guidance", steps)
+			}
+			for _, step := range steps {
+				text := stringValueAny(step)
+				if strings.HasPrefix(text, "run ") || strings.Contains(text, " and ") || strings.Contains(text, "agent install") {
+					t.Fatalf("next_steps = %#v, want runnable diagnose guidance without agent install/prose", steps)
+				}
 			}
 			return
 		}

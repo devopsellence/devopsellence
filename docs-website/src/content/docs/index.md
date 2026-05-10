@@ -50,8 +50,8 @@ service choices before scaffolding; press Ctrl+C during the questions to stop.
 
 - [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
   one VM.
-- [Rails app template](/guides/rails-app-template/) for turning an app idea into
-  a production-minded Rails workspace with local agent skills.
+- [Build with vibe](/guides/rails-app-template/) for turning an app idea into a
+  batteries-included Rails workspace with local agent skills and deploy intent.
 - [Ingress and TLS](/guides/ingress-tls/) for hostnames, DNS checks, and HTTPS
   verification.
 - [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app

@@ -14,11 +14,11 @@ and the `devopsellence` CLI.
 devopsellence init --mode solo
 ```
 
-Start from an app that already has a Dockerfile, or let devopsellence generate
-the blessed Rails baseline first.
+Start from an app that already has a Dockerfile, or let devopsellence prepare an
+AI-first web app workspace first.
 
 If you want Codex, Claude Code, Pi, or another AI coding agent to create or
-prepare the app first, start from the [Rails app template](/guides/rails-app-template/):
+prepare the app first, start from [Build with vibe](/guides/rails-app-template/):
 
 ```bash
 devopsellence vibe my-app

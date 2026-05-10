@@ -95,7 +95,7 @@ fi
 exit 0
 `)
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+"/bin")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return binDir
 }
 
@@ -792,8 +792,8 @@ exit 0
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
 		t.Fatalf("error = %#v, want ExitError code 2", err)
 	}
-	if !strings.Contains(err.Error(), "not ready") {
-		t.Fatalf("error = %v, want not-ready guidance", err)
+	if !strings.Contains(err.Error(), "setup check failed") {
+		t.Fatalf("error = %v, want setup-check guidance", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(home, defaultVibeProjectsDirName, "unready-agent")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("generated app exists after unready agent preflight: %v", statErr)

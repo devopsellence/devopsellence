@@ -69,21 +69,23 @@ type vibeDeploymentIntent struct {
 }
 
 const (
-	vibeAppStack               = "rails-app"
-	defaultVibeProjectsDirName = "devopsellence-projects"
-	defaultVibeAgentEffort     = "high"
-	defaultVibeAgentAutonomy   = "builder"
-	defaultVibeDeployGoal      = "deploy-ready"
-	defaultVibeMode            = "solo"
-	defaultVibeServerStrategy  = "none"
-	defaultVibeTemplateVersion = "v0.1.3"
-	vibeDomainLater            = "later"
-	vibePromptInstruction      = "Read .agents/prompts/devopsellence-vibe.md and follow it."
-	vibeAgentProbeTimeout      = 2 * time.Second
+	vibeAppStack                 = "rails-app"
+	defaultVibeProjectsDirName   = "devopsellence-projects"
+	defaultVibeAgentEffort       = "high"
+	defaultVibeAgentAutonomy     = "builder"
+	defaultVibeDeployGoal        = "deploy-ready"
+	defaultVibeMode              = "solo"
+	defaultVibeServerStrategy    = "none"
+	defaultVibeTemplateVersion   = "v0.1.3"
+	vibeDomainLater              = "later"
+	vibePromptInstruction        = "Read .agents/prompts/devopsellence-vibe.md and follow it."
+	defaultVibeAgentProbeTimeout = 5 * time.Second
 )
 
 var vibeSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
 var vibeAgentPreference = []string{"codex", "claude", "pi", "opencode"}
+
+var errVibeAgentProbeTimeout = errors.New("agent readiness probe timed out")
 
 func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	opts.AIAgent = strings.ToLower(strings.TrimSpace(opts.AIAgent))
@@ -102,10 +104,12 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if wizardMode {
 		_, _ = fmt.Fprintln(a.Printer.Err, "devopsellence vibe intake. Press Ctrl+C anytime before scaffolding to stop.")
 	}
-	detectedAgents := a.detectVibeAgents(ctx)
+	var detectedAgents []string
 	if opts.NoAgent {
 		opts.AIAgent = "generic"
 		opts.Launch = false
+	} else {
+		detectedAgents = a.detectVibeAgents(ctx)
 	}
 	if opts.AIAgent == "" && len(detectedAgents) > 0 {
 		opts.AIAgent = detectedAgents[0]
@@ -113,9 +117,6 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if opts.AIAgent == "" {
 		opts.AIAgent = "generic"
 		opts.Launch = false
-	}
-	if opts.AIAgent == "" {
-		return ExitError{Code: 2, Err: errors.New("missing ai agent; choose codex, claude, pi, opencode, or generic")}
 	}
 	if !supportedVibeAgent(opts.AIAgent) {
 		return ExitError{Code: 2, Err: fmt.Errorf("unsupported ai agent %q; use codex, claude, pi, opencode, or generic", opts.AIAgent)}
@@ -454,7 +455,7 @@ func supportedVibeAgent(agent string) bool {
 func (a *App) detectVibeAgents(ctx context.Context) []string {
 	var agents []string
 	for _, name := range vibeAgentPreference {
-		if a.vibeAgentUsable(ctx, name) {
+		if a.probeVibeAgent(ctx, name) == nil {
 			agents = append(agents, name)
 		}
 	}
@@ -462,28 +463,49 @@ func (a *App) detectVibeAgents(ctx context.Context) []string {
 }
 
 func (a *App) ensureVibeAgentUsable(ctx context.Context, agent string) error {
-	if a.vibeAgentUsable(ctx, agent) {
+	err := a.probeVibeAgent(ctx, agent)
+	if err == nil {
 		return nil
 	}
-	if _, err := a.LookPath(agent); err != nil {
+	if errors.Is(err, exec.ErrNotFound) {
 		return ExitError{Code: 2, Err: fmt.Errorf("%s not found; rerun with --no-launch and start it manually from .agents/prompts/devopsellence-vibe.md", agent)}
 	}
-	return ExitError{Code: 2, Err: fmt.Errorf("%s is installed but not ready for non-interactive launch; check its login/config, or rerun with --no-launch and start it manually from .agents/prompts/devopsellence-vibe.md", agent)}
+	if errors.Is(err, errVibeAgentProbeTimeout) {
+		return ExitError{Code: 2, Err: fmt.Errorf("%s setup check timed out after %s; set DEVOPSELLENCE_VIBE_AGENT_PROBE_TIMEOUT=10s, or rerun with --no-launch and start it manually from .agents/prompts/devopsellence-vibe.md", agent, vibeAgentProbeTimeout())}
+	}
+	return ExitError{Code: 2, Err: fmt.Errorf("%s setup check failed (%v); check its login/config, or rerun with --no-launch and start it manually from .agents/prompts/devopsellence-vibe.md", agent, err)}
 }
 
-func (a *App) vibeAgentUsable(ctx context.Context, agent string) bool {
+func (a *App) probeVibeAgent(ctx context.Context, agent string) error {
 	if agent == "" || agent == "generic" {
-		return false
+		return errors.New("missing agent")
 	}
 	path, err := a.LookPath(agent)
 	if err != nil {
-		return false
+		return err
 	}
 	args := vibeAgentProbeArgs(agent)
-	probeCtx, cancel := context.WithTimeout(ctx, vibeAgentProbeTimeout)
+	timeout := vibeAgentProbeTimeout()
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, path, args...)
-	return cmd.Run() == nil
+	err = cmd.Run()
+	if probeCtx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("%w after %s", errVibeAgentProbeTimeout, timeout)
+	}
+	return err
+}
+
+func vibeAgentProbeTimeout() time.Duration {
+	value := strings.TrimSpace(os.Getenv("DEVOPSELLENCE_VIBE_AGENT_PROBE_TIMEOUT"))
+	if value == "" {
+		return defaultVibeAgentProbeTimeout
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return defaultVibeAgentProbeTimeout
+	}
+	return duration
 }
 
 func vibeAgentProbeArgs(agent string) []string {

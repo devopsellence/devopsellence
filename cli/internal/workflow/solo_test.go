@@ -4374,6 +4374,20 @@ func TestUnexpectedPublicListeningPortsAllowsDevopsellenceEnvoyPort(t *testing.T
 	}
 }
 
+func TestUnexpectedPublicListeningPortsFlagsUnattributedEnvoyPort(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:8000 0.0.0.0:*",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 22)
+	if !reflect.DeepEqual(ports, []string{"8000"}) {
+		t.Fatalf("unexpected ports = %#v, want unattributed 8000 flagged", ports)
+	}
+	details := expectedPublicListeningPortDetails(lines)
+	if len(details) != 0 {
+		t.Fatalf("expected details = %#v, want no Envoy explanation without attribution", details)
+	}
+}
+
 func TestUnexpectedPublicListeningPortsAllowsDevopsellenceACMEBackend(t *testing.T) {
 	lines := []string{
 		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=9))",

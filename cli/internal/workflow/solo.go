@@ -4853,11 +4853,11 @@ func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
 	if sshPort == 0 {
 		sshPort = 22
 	}
-	expected := map[string]bool{strconv.Itoa(sshPort): true, "80": true, "443": true, "8000": true}
+	expected := map[string]bool{strconv.Itoa(sshPort): true, "80": true, "443": true}
 	seen := map[string]bool{}
 	for _, line := range lines {
 		for _, port := range publicPortsFromListeningLine(line) {
-			if expected[port] || expectedDevopsellenceACMEListener(line, port) || seen[port] {
+			if expected[port] || expectedDevopsellenceEnvoyListener(line, port) || expectedDevopsellenceACMEListener(line, port) || seen[port] {
 				continue
 			}
 			seen[port] = true
@@ -4879,7 +4879,7 @@ func expectedPublicListeningPortDetails(lines []string) []string {
 			if expectedDevopsellenceACMEListener(line, port) {
 				seenACME = true
 			}
-			if expectedDevopsellenceEnvoyListener(port) {
+			if expectedDevopsellenceEnvoyListener(line, port) {
 				seenEnvoy = true
 			}
 		}
@@ -4894,8 +4894,12 @@ func expectedPublicListeningPortDetails(lines []string) []string {
 	return details
 }
 
-func expectedDevopsellenceEnvoyListener(port string) bool {
-	return port == "8000"
+func expectedDevopsellenceEnvoyListener(line, port string) bool {
+	if port != "8000" {
+		return false
+	}
+	normalized := strings.ToLower(line)
+	return strings.Contains(normalized, "devopsellence") || strings.Contains(normalized, "envoy") || strings.Contains(normalized, "docker-proxy")
 }
 
 func expectedDevopsellenceACMEListener(line, port string) bool {

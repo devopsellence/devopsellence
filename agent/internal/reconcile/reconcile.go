@@ -96,10 +96,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 	return r.reconcile(ctx, desired, reconcileScope{prune: true, syncEnvoy: true})
 }
 
-func (r *Reconciler) ReconcileSupportServices(ctx context.Context, desired *desiredstatepb.DesiredState) (Result, error) {
+func (r *Reconciler) ReconcileSupportServices(ctx context.Context, desired *desiredstatepb.DesiredState, environmentName string) (Result, error) {
+	environmentName = strings.TrimSpace(environmentName)
 	return r.reconcile(ctx, desired, reconcileScope{
 		include: func(service desiredstate.RuntimeService) bool {
-			return service.ServiceKind == desiredstate.ServiceKindAccessory
+			return service.EnvironmentName == environmentName && service.ServiceKind == desiredstate.ServiceKindAccessory
 		},
 	})
 }

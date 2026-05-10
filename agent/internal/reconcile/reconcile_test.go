@@ -646,16 +646,34 @@ func TestReconcileRemoveExtra(t *testing.T) {
 	}
 }
 
-func TestReconcileSupportServicesOnlyCreatesAccessoriesWithoutPruning(t *testing.T) {
+func TestReconcileSupportServicesOnlyCreatesEnvironmentAccessoriesWithoutPruning(t *testing.T) {
 	eng := newFakeEngine()
 	eng.images["postgres:16"] = true
 	eng.containers["old-web"] = engine.ContainerState{Name: "old-web", Image: "httpbin", Running: true, Hash: "x", Environment: "production", Service: "web", ServiceKind: "web"}
+	eng.pullErr = errors.New("unrelated environment should not be pulled")
 
 	rec := New(eng, Options{Network: "devopsellence", StopTimeout: 10 * time.Second})
-	result, err := rec.ReconcileSupportServices(context.Background(), desiredState(
-		webService(80, "/up"),
-		&desiredstatepb.Service{Name: "postgres", Kind: "accessory", Image: "postgres:16"},
-	))
+	result, err := rec.ReconcileSupportServices(context.Background(), &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      "node-plan-1",
+		Environments: []*desiredstatepb.Environment{
+			{
+				Name:     "production",
+				Revision: "rev-1",
+				Services: []*desiredstatepb.Service{
+					webService(80, "/up"),
+					{Name: "postgres", Kind: "accessory", Image: "postgres:16"},
+				},
+			},
+			{
+				Name:     "staging",
+				Revision: "rev-1",
+				Services: []*desiredstatepb.Service{
+					{Name: "postgres", Kind: "accessory", Image: "private/postgres:16"},
+				},
+			},
+		},
+	}, "production")
 	if err != nil {
 		t.Fatalf("reconcile support services: %v", err)
 	}

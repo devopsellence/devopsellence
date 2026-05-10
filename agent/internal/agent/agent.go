@@ -21,7 +21,7 @@ import (
 type Agent struct {
 	authority              authority.Authority
 	reporter               report.Reporter
-	reconciler             *reconcile.Reconciler
+	reconciler             runtimeReconciler
 	diagnoser              Diagnoser
 	diskCare               DiskCare
 	diskCareMinInterval    time.Duration
@@ -40,6 +40,14 @@ type Diagnoser interface {
 	RunOnce(ctx context.Context, desiredStateSequence int64) error
 }
 
+type runtimeReconciler interface {
+	Reconcile(ctx context.Context, desired *desiredstatepb.DesiredState) (reconcile.Result, error)
+	ReconcileSupportServices(ctx context.Context, desired *desiredstatepb.DesiredState, environmentName string) (reconcile.Result, error)
+	RunTask(ctx context.Context, environmentName string, revision string, task *desiredstatepb.Task) (reconcile.TaskResult, error)
+	CurrentStatus(ctx context.Context, desired *desiredstatepb.DesiredState) (*report.Summary, []report.EnvironmentStatus, error)
+	IngressStatus(desired *desiredstatepb.DesiredState) *report.IngressStatus
+}
+
 // DiskCare performs best-effort node-local cleanup after successful reconcile.
 type DiskCare interface {
 	Run(ctx context.Context, desired *desiredstatepb.DesiredState) (*report.DiskCareStatus, error)
@@ -47,7 +55,7 @@ type DiskCare interface {
 
 const defaultDiskCareMinInterval = 5 * time.Minute
 
-func New(authority authority.Authority, reconciler *reconcile.Reconciler, reporter report.Reporter, interval time.Duration, logger *slog.Logger, metrics *observability.Metrics, taskStore *lifecycle.Store) *Agent {
+func New(authority authority.Authority, reconciler runtimeReconciler, reporter report.Reporter, interval time.Duration, logger *slog.Logger, metrics *observability.Metrics, taskStore *lifecycle.Store) *Agent {
 	return &Agent{
 		authority:           authority,
 		reconciler:          reconciler,
@@ -128,8 +136,34 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		return err
 	}
 
-	for _, task := range desiredstate.RuntimeTasks(desired) {
-		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, task.EnvironmentName, task.EnvironmentRevision, task.Task, true); err != nil {
+	tasks := desiredstate.RuntimeTasks(desired)
+	supportServicesReady := map[string]bool{}
+	supportResult := reconcile.Result{}
+	ensureSupportServices := func(environmentName string) error {
+		if supportServicesReady[environmentName] {
+			return nil
+		}
+		result, err := a.reconciler.ReconcileSupportServices(ctx, desired, environmentName)
+		if err != nil {
+			a.reportStatus(ctx, report.Status{
+				Time:     start,
+				Phase:    report.PhaseError,
+				Revision: desired.Revision,
+				Error:    err.Error(),
+			}, fetched.Sequence)
+			return err
+		}
+		a.recordReconcileResult(result)
+		supportResult = addReconcileMutations(supportResult, result)
+		supportServicesReady[environmentName] = true
+		return nil
+	}
+
+	for _, task := range tasks {
+		beforeRun := func() error {
+			return ensureSupportServices(task.EnvironmentName)
+		}
+		if err := a.ensureTaskSatisfied(ctx, fetched.Sequence, task.EnvironmentName, task.EnvironmentRevision, task.Task, true, beforeRun); err != nil {
 			a.metrics.ReconcileErrors.Inc()
 			return err
 		}
@@ -147,9 +181,8 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		return err
 	}
 
-	a.metrics.ContainersCreated.Add(float64(result.Created))
-	a.metrics.ContainersUpdated.Add(float64(result.Updated))
-	a.metrics.ContainersRemoved.Add(float64(result.Removed))
+	a.recordReconcileResult(result)
+	reportResult := addReconcileMutations(result, supportResult)
 
 	diskCareStatus := a.runDiskCare(ctx, desired, fetched.Sequence)
 
@@ -169,7 +202,7 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 		Time:         start,
 		Phase:        report.PhaseSettled,
 		Revision:     desired.Revision,
-		Message:      fmt.Sprintf("created=%d updated=%d removed=%d unchanged=%d", result.Created, result.Updated, result.Removed, result.Unchanged),
+		Message:      fmt.Sprintf("created=%d updated=%d removed=%d unchanged=%d", reportResult.Created, reportResult.Updated, reportResult.Removed, reportResult.Unchanged),
 		Summary:      summary,
 		Ingress:      a.reconciler.IngressStatus(desired),
 		DiskCare:     diskCareStatus,
@@ -177,14 +210,27 @@ func (a *Agent) reconcileOnce(ctx context.Context) error {
 	}, fetched.Sequence)
 
 	a.logger.Info("reconcile ok",
-		"created", result.Created,
-		"updated", result.Updated,
-		"removed", result.Removed,
-		"unchanged", result.Unchanged,
+		"created", reportResult.Created,
+		"updated", reportResult.Updated,
+		"removed", reportResult.Removed,
+		"unchanged", reportResult.Unchanged,
 		"duration", time.Since(start).String(),
 	)
 
 	return nil
+}
+
+func (a *Agent) recordReconcileResult(result reconcile.Result) {
+	a.metrics.ContainersCreated.Add(float64(result.Created))
+	a.metrics.ContainersUpdated.Add(float64(result.Updated))
+	a.metrics.ContainersRemoved.Add(float64(result.Removed))
+}
+
+func addReconcileMutations(total reconcile.Result, delta reconcile.Result) reconcile.Result {
+	total.Created += delta.Created
+	total.Updated += delta.Updated
+	total.Removed += delta.Removed
+	return total
 }
 
 func (a *Agent) runDiskCare(ctx context.Context, desired *desiredstatepb.DesiredState, sequence int64) *report.DiskCareStatus {
@@ -213,10 +259,10 @@ func (a *Agent) runDiskCare(ctx context.Context, desired *desiredstatepb.Desired
 }
 
 func (a *Agent) runTaskOnce(ctx context.Context, sequence int64, revision string, task *desiredstatepb.Task) error {
-	return a.ensureTaskSatisfied(ctx, sequence, desiredstate.DefaultEnvironmentName, revision, task, false)
+	return a.ensureTaskSatisfied(ctx, sequence, desiredstate.DefaultEnvironmentName, revision, task, false, nil)
 }
 
-func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environmentName string, revision string, task *desiredstatepb.Task, suppressSuccessReport bool) error {
+func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environmentName string, revision string, task *desiredstatepb.Task, suppressSuccessReport bool, beforeRun func() error) error {
 	taskHash, err := desiredstate.HashTask(task)
 	if err != nil {
 		a.reportStatus(ctx, report.Status{
@@ -235,6 +281,11 @@ func (a *Agent) ensureTaskSatisfied(ctx context.Context, sequence int64, environ
 	storeName := taskStoreName(environmentName, task.GetName())
 	if a.taskStore != nil && a.taskStore.Satisfied(storeName, sequence, taskHash) {
 		return nil
+	}
+	if beforeRun != nil {
+		if err := beforeRun(); err != nil {
+			return err
+		}
 	}
 
 	start := time.Now()

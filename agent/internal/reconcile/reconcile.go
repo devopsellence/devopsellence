@@ -79,6 +79,12 @@ type TaskResult struct {
 	ExitCode int64
 }
 
+type reconcileScope struct {
+	include   func(desiredstate.RuntimeService) bool
+	prune     bool
+	syncEnvoy bool
+}
+
 func New(eng engine.Engine, opts Options) *Reconciler {
 	if opts.HTTPProber == nil {
 		opts.HTTPProber = newDefaultHTTPProber()
@@ -87,13 +93,26 @@ func New(eng engine.Engine, opts Options) *Reconciler {
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.DesiredState) (Result, error) {
+	return r.reconcile(ctx, desired, reconcileScope{prune: true, syncEnvoy: true})
+}
+
+func (r *Reconciler) ReconcileSupportServices(ctx context.Context, desired *desiredstatepb.DesiredState, environmentName string) (Result, error) {
+	environmentName = strings.TrimSpace(environmentName)
+	return r.reconcile(ctx, desired, reconcileScope{
+		include: func(service desiredstate.RuntimeService) bool {
+			return service.EnvironmentName == environmentName && service.ServiceKind == desiredstate.ServiceKindAccessory
+		},
+	})
+}
+
+func (r *Reconciler) reconcile(ctx context.Context, desired *desiredstatepb.DesiredState, scope reconcileScope) (Result, error) {
 	result := Result{}
-	runtimeServices := desiredstate.RuntimeServices(desired)
+	runtimeServices := selectedRuntimeServices(desiredstate.RuntimeServices(desired), scope.include)
 	workloadNetworks, err := r.ensureRuntimeNetworks(ctx, runtimeServices)
 	if err != nil {
 		return result, err
 	}
-	if len(workloadNetworks) == 0 {
+	if scope.syncEnvoy && len(workloadNetworks) == 0 {
 		if err := r.syncEnvoyWorkloadNetworks(ctx, workloadNetworks); err != nil {
 			return result, err
 		}
@@ -132,6 +151,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 	if reconcileErr != nil {
 		return result, reconcileErr
 	}
+	if !scope.prune {
+		return result, nil
+	}
 	for _, c := range existing {
 		if _, ok := desiredByService[containerServiceKey(c)]; ok {
 			continue
@@ -146,6 +168,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, desired *desiredstatepb.Desi
 	}
 
 	return result, nil
+}
+
+func selectedRuntimeServices(services []desiredstate.RuntimeService, include func(desiredstate.RuntimeService) bool) []desiredstate.RuntimeService {
+	if include == nil {
+		return services
+	}
+	selected := make([]desiredstate.RuntimeService, 0, len(services))
+	for _, service := range services {
+		if include(service) {
+			selected = append(selected, service)
+		}
+	}
+	return selected
 }
 
 func (r *Reconciler) RunTask(ctx context.Context, environmentName string, revision string, task *desiredstatepb.Task) (TaskResult, error) {

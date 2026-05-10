@@ -646,6 +646,51 @@ func TestReconcileRemoveExtra(t *testing.T) {
 	}
 }
 
+func TestReconcileSupportServicesOnlyCreatesEnvironmentAccessoriesWithoutPruning(t *testing.T) {
+	eng := newFakeEngine()
+	eng.images["postgres:16"] = true
+	eng.containers["old-web"] = engine.ContainerState{Name: "old-web", Image: "httpbin", Running: true, Hash: "x", Environment: "production", Service: "web", ServiceKind: "web"}
+	eng.pullErr = errors.New("unrelated environment should not be pulled")
+
+	rec := New(eng, Options{Network: "devopsellence", StopTimeout: 10 * time.Second})
+	result, err := rec.ReconcileSupportServices(context.Background(), &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      "node-plan-1",
+		Environments: []*desiredstatepb.Environment{
+			{
+				Name:     "production",
+				Revision: "rev-1",
+				Services: []*desiredstatepb.Service{
+					webService(80, "/up"),
+					{Name: "postgres", Kind: "accessory", Image: "postgres:16"},
+				},
+			},
+			{
+				Name:     "staging",
+				Revision: "rev-1",
+				Services: []*desiredstatepb.Service{
+					{Name: "postgres", Kind: "accessory", Image: "private/postgres:16"},
+				},
+			},
+		},
+	}, "production")
+	if err != nil {
+		t.Fatalf("reconcile support services: %v", err)
+	}
+	if result.Created != 1 || result.Removed != 0 {
+		t.Fatalf("expected created=1 removed=0 got %#v", result)
+	}
+	if len(eng.created) != 1 || eng.created[0].Labels[engine.LabelService] != "postgres" {
+		t.Fatalf("expected only postgres created, got %#v", eng.created)
+	}
+	if _, ok := eng.containers["old-web"]; !ok {
+		t.Fatal("expected existing web container to remain")
+	}
+	if len(eng.removed) != 0 {
+		t.Fatalf("expected no removals, got %#v", eng.removed)
+	}
+}
+
 func TestReconcileMissingImage(t *testing.T) {
 	eng := newFakeEngine()
 	eng.pullErr = errors.New("not found")

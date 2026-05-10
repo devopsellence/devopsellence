@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +93,7 @@ type fakeEngine struct {
 	images     map[string]bool
 	created    []engine.ContainerSpec
 	waitCalls  []string
+	ops        []string
 }
 
 func newFakeEngine() *fakeEngine {
@@ -110,6 +113,7 @@ func (f *fakeEngine) ListManaged(ctx context.Context) ([]engine.ContainerState, 
 
 func (f *fakeEngine) CreateAndStart(ctx context.Context, spec engine.ContainerSpec) error {
 	f.created = append(f.created, spec)
+	f.ops = append(f.ops, "create:"+spec.Name)
 	f.containers[spec.Name] = engine.ContainerState{
 		Name:        spec.Name,
 		Image:       spec.Image,
@@ -131,6 +135,7 @@ func (f *fakeEngine) Start(ctx context.Context, name string) error {
 
 func (f *fakeEngine) Wait(ctx context.Context, name string) (int64, error) {
 	f.waitCalls = append(f.waitCalls, name)
+	f.ops = append(f.ops, "wait:"+name)
 	return 0, nil
 }
 
@@ -231,6 +236,35 @@ type staticHTTPProber struct{}
 
 func (staticHTTPProber) Get(ctx context.Context, target string, timeout time.Duration) (int, error) {
 	return 200, nil
+}
+
+type spyReconciler struct {
+	supportCalls  []string
+	runTaskCalls  []string
+	reconcileRuns int
+}
+
+func (s *spyReconciler) Reconcile(context.Context, *desiredstatepb.DesiredState) (reconcile.Result, error) {
+	s.reconcileRuns++
+	return reconcile.Result{}, nil
+}
+
+func (s *spyReconciler) ReconcileSupportServices(_ context.Context, _ *desiredstatepb.DesiredState, environmentName string) (reconcile.Result, error) {
+	s.supportCalls = append(s.supportCalls, environmentName)
+	return reconcile.Result{}, nil
+}
+
+func (s *spyReconciler) RunTask(_ context.Context, environmentName string, _ string, task *desiredstatepb.Task) (reconcile.TaskResult, error) {
+	s.runTaskCalls = append(s.runTaskCalls, environmentName+"/"+task.GetName())
+	return reconcile.TaskResult{}, nil
+}
+
+func (s *spyReconciler) CurrentStatus(context.Context, *desiredstatepb.DesiredState) (*report.Summary, []report.EnvironmentStatus, error) {
+	return &report.Summary{}, nil, nil
+}
+
+func (s *spyReconciler) IngressStatus(*desiredstatepb.DesiredState) *report.IngressStatus {
+	return nil
 }
 
 func TestAgentReconcileE2E(t *testing.T) {
@@ -545,11 +579,17 @@ func TestNoReportWhenNoDesiredState(t *testing.T) {
 	}
 }
 
-func TestReleaseTaskRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
+func TestReleaseTaskBootstrapsAccessoryBeforeTaskThenRuntimeContainers(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
 	desired := desiredWithWeb("rev-1")
 	desired.Environments[0].Services[0].Command = []string{"sh", "-c", "sleep 1"}
+	desired.Environments[0].Services = append(desired.Environments[0].Services, &desiredstatepb.Service{
+		Name:    "postgres",
+		Kind:    "accessory",
+		Image:   "postgres:16",
+		Command: []string{"postgres"},
+	})
 	desired.Environments[0].Tasks = []*desiredstatepb.Task{{
 		Name:    "release",
 		Image:   "busybox",
@@ -558,6 +598,7 @@ func TestReleaseTaskRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
 
 	eng := newFakeEngine()
 	eng.images["busybox"] = true
+	eng.images["postgres:16"] = true
 	reconciler := reconcile.New(eng, reconcile.Options{
 		Network:    "devopsellence",
 		WebPort:    3000,
@@ -584,9 +625,114 @@ func TestReleaseTaskRunsBeforeReconcilingRuntimeContainers(t *testing.T) {
 	if reporter.calls[1].Phase != report.PhaseSettled || reporter.calls[1].Task != nil {
 		t.Fatalf("expected final settled runtime report, got %#v", reporter.calls[1])
 	}
-	if len(eng.containers) != 1 {
+	if !strings.Contains(reporter.calls[1].Message, "created=2") {
+		t.Fatalf("expected support and runtime creates in final message, got %q", reporter.calls[1].Message)
+	}
+	postgresCreate := findOp(eng.ops, "create:svc-production-postgres-")
+	releaseWait := findOp(eng.ops, "wait:svc-release-rev-1-")
+	webCreate := findOp(eng.ops, "create:svc-production-web-")
+	if postgresCreate == -1 || releaseWait == -1 || webCreate == -1 {
+		t.Fatalf("missing expected operation, ops=%#v", eng.ops)
+	}
+	if !(postgresCreate < releaseWait && releaseWait < webCreate) {
+		t.Fatalf("expected accessory create before release task and web create after, ops=%#v", eng.ops)
+	}
+	if len(eng.containers) != 2 {
 		t.Fatalf("expected runtime container after release task, got %#v", eng.containers)
 	}
+}
+
+func TestReleaseTaskBootstrapsSupportServicesForTaskEnvironment(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	desired := &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      "rev-1",
+		Environments: []*desiredstatepb.Environment{
+			{
+				Name:     "production",
+				Revision: "rev-1",
+				Tasks: []*desiredstatepb.Task{{
+					Name:    "release",
+					Image:   "busybox",
+					Command: []string{"sh", "-c", "echo migrate"},
+				}},
+			},
+			{Name: "staging", Revision: "rev-1"},
+		},
+	}
+	reconciler := &spyReconciler{}
+	reporter := &captureReporter{}
+	metrics := observability.NewMetrics(prometheus.NewRegistry())
+	ag := New(&fakeAuthority{desired: desired, sequence: 9}, reconciler, reporter, time.Minute, logger, metrics, lifecycle.NewStore(filepath.Join(t.TempDir(), "lifecycle-state.json")))
+
+	if err := ag.reconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !reflect.DeepEqual(reconciler.supportCalls, []string{"production"}) {
+		t.Fatalf("support calls = %#v, want production only", reconciler.supportCalls)
+	}
+	if !reflect.DeepEqual(reconciler.runTaskCalls, []string{"production/release"}) {
+		t.Fatalf("task calls = %#v, want production release", reconciler.runTaskCalls)
+	}
+}
+
+func TestSatisfiedReleaseTaskSkipsSupportServiceBootstrapPass(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	desired := &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      "rev-1",
+		Environments: []*desiredstatepb.Environment{{
+			Name:     "production",
+			Revision: "rev-1",
+		}},
+	}
+	task := &desiredstatepb.Task{
+		Name:    "release",
+		Image:   "busybox",
+		Command: []string{"sh", "-c", "echo migrate"},
+	}
+	desired.Environments[0].Tasks = []*desiredstatepb.Task{task}
+
+	store := lifecycle.NewStore(filepath.Join(t.TempDir(), "lifecycle-state.json"))
+	taskHash, err := desiredstate.HashTask(task)
+	if err != nil {
+		t.Fatalf("hash task: %v", err)
+	}
+	if err := store.MarkSatisfied(taskStoreName("production", "release"), 9, taskHash); err != nil {
+		t.Fatalf("mark task satisfied: %v", err)
+	}
+
+	reconciler := &spyReconciler{}
+	reporter := &captureReporter{}
+	metrics := observability.NewMetrics(prometheus.NewRegistry())
+	ag := New(&fakeAuthority{desired: desired, sequence: 9}, reconciler, reporter, time.Minute, logger, metrics, store)
+
+	if err := ag.reconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(reconciler.supportCalls) != 0 {
+		t.Fatalf("support calls = %#v, want none", reconciler.supportCalls)
+	}
+	if len(reconciler.runTaskCalls) != 0 {
+		t.Fatalf("task calls = %#v, want none", reconciler.runTaskCalls)
+	}
+	if reconciler.reconcileRuns != 1 {
+		t.Fatalf("runtime reconcile calls = %d, want 1", reconciler.reconcileRuns)
+	}
+	if len(reporter.calls) != 1 || reporter.calls[0].Phase != report.PhaseSettled {
+		t.Fatalf("expected only final settled report, got %#v", reporter.calls)
+	}
+}
+
+func findOp(ops []string, prefix string) int {
+	for i, op := range ops {
+		if strings.HasPrefix(op, prefix) {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestEnvironmentTasksAreSatisfiedPerEnvironment(t *testing.T) {

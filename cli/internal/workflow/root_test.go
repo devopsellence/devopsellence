@@ -880,6 +880,41 @@ exit 0
 	}
 }
 
+func TestRootVibeNoLaunchExplicitAgentSkipsProbe(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	binDir := installFakeVibeTools(t, "codex")
+	writeExecutable(t, filepath.Join(binDir, "codex"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "login" ] && [ "${2:-}" = "status" ]; then
+  exit 1
+fi
+exit 0
+`)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "manual-agent",
+		"--ai-agent", "codex",
+		"--idea", "A tiny uptime page",
+		"--no-launch",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["ai_agent"] != "codex" || payload["launch_requested"] != false {
+		t.Fatalf("payload = %#v, want explicit codex without launch", payload)
+	}
+	detected := jsonArrayFromMap(t, payload, "detected_agents")
+	if len(detected) != 0 {
+		t.Fatalf("detected_agents = %#v, want no setup probes for explicit no-launch agent", detected)
+	}
+}
+
 func TestRootVibeRejectsUnsupportedAgentEffort(t *testing.T) {
 	cwd := t.TempDir()
 	setFakeVibeHome(t, cwd)

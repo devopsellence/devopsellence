@@ -104,11 +104,11 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if wizardMode {
 		_, _ = fmt.Fprintln(a.Printer.Err, "devopsellence vibe intake. Press Ctrl+C anytime before scaffolding to stop.")
 	}
-	var detectedAgents []string
+	detectedAgents := []string{}
 	if opts.NoAgent {
 		opts.AIAgent = "generic"
 		opts.Launch = false
-	} else {
+	} else if opts.AIAgent == "" {
 		detectedAgents = a.detectVibeAgents(ctx)
 	}
 	if opts.AIAgent == "" && len(detectedAgents) > 0 {

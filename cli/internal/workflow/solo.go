@@ -4853,7 +4853,7 @@ func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
 	if sshPort == 0 {
 		sshPort = 22
 	}
-	expected := map[string]bool{strconv.Itoa(sshPort): true, "80": true, "443": true}
+	expected := map[string]bool{strconv.Itoa(sshPort): true, "80": true, "443": true, "8000": true}
 	seen := map[string]bool{}
 	for _, line := range lines {
 		for _, port := range publicPortsFromListeningLine(line) {
@@ -4873,17 +4873,29 @@ func unexpectedPublicListeningPorts(lines []string, sshPort int) []string {
 
 func expectedPublicListeningPortDetails(lines []string) []string {
 	seenACME := false
+	seenEnvoy := false
 	for _, line := range lines {
 		for _, port := range publicPortsFromListeningLine(line) {
 			if expectedDevopsellenceACMEListener(line, port) {
 				seenACME = true
 			}
+			if expectedDevopsellenceEnvoyListener(port) {
+				seenEnvoy = true
+			}
 		}
 	}
-	if !seenACME {
-		return nil
+	details := []string{}
+	if seenEnvoy {
+		details = append(details, "8000 is the devopsellence Envoy listener used before public ingress is configured")
 	}
-	return []string{"15980 is the devopsellence agent ACME HTTP-01 listener used for auto TLS challenges"}
+	if seenACME {
+		details = append(details, "15980 is the devopsellence agent ACME HTTP-01 listener used for auto TLS challenges")
+	}
+	return details
+}
+
+func expectedDevopsellenceEnvoyListener(port string) bool {
+	return port == "8000"
 }
 
 func expectedDevopsellenceACMEListener(line, port string) bool {

@@ -4359,6 +4359,21 @@ func TestUnexpectedPublicListeningPortsAllowsConfiguredSSHPort(t *testing.T) {
 	}
 }
 
+func TestUnexpectedPublicListeningPortsAllowsDevopsellenceEnvoyPort(t *testing.T) {
+	lines := []string{
+		"LISTEN 0 4096 0.0.0.0:8000 0.0.0.0:* users:((\"docker-proxy\",pid=1234,fd=4))",
+		"LISTEN 0 4096 0.0.0.0:8001 0.0.0.0:* users:((\"docker-proxy\",pid=1235,fd=4))",
+	}
+	ports := unexpectedPublicListeningPorts(lines, 22)
+	if !reflect.DeepEqual(ports, []string{"8001"}) {
+		t.Fatalf("unexpected ports = %#v, want only non-envoy port flagged", ports)
+	}
+	details := expectedPublicListeningPortDetails(lines)
+	if len(details) != 1 || !strings.Contains(details[0], "Envoy listener") {
+		t.Fatalf("expected details = %#v, want Envoy explanation", details)
+	}
+}
+
 func TestUnexpectedPublicListeningPortsAllowsDevopsellenceACMEBackend(t *testing.T) {
 	lines := []string{
 		"LISTEN 0 4096 0.0.0.0:15980 0.0.0.0:* users:((\"devopsellence\",pid=1234,fd=9))",

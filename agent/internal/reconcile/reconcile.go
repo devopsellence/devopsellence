@@ -720,7 +720,7 @@ func (r *Reconciler) specForService(runtime desiredstate.RuntimeService) (string
 	service := runtime.Service
 	hash, network, aliases, err := r.runtimeServiceHash(runtime)
 	if err != nil {
-		return "", "", engine.ContainerSpec{}, fmt.Errorf("hash service %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
+		return "", "", engine.ContainerSpec{}, fmt.Errorf("compute runtime service hash for %s/%s: %w", runtime.EnvironmentName, runtime.ServiceName, err)
 	}
 	name, err := desiredstate.ServiceContainerName(runtime.EnvironmentName, runtime.ServiceName, runtime.EnvironmentRevision, hash)
 	if err != nil {

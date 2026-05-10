@@ -36,6 +36,8 @@ For app data, use an ordinary backup service with restic and the existing
 
 For Redis, Memcached, and other companion containers, add another service with
 a custom `image`. See [Supporting services](/guides/supporting-services/).
+Release tasks that need a companion service should also account for service
+readiness before running migrations or setup commands.
 
 To create a Hetzner-backed solo node:
 

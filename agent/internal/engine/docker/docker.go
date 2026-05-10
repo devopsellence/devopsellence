@@ -68,6 +68,7 @@ func (e *Engine) listContainers(ctx context.Context, filters client.Filters) ([]
 			Running:     c.State == "running",
 			Managed:     c.Labels[engine.LabelManaged] == "true",
 			Hash:        c.Labels[engine.LabelHash],
+			Revision:    c.Labels[engine.LabelRevision],
 			Environment: c.Labels[engine.LabelEnvironment],
 			Service:     c.Labels[engine.LabelService],
 			ServiceKind: c.Labels[engine.LabelServiceKind],

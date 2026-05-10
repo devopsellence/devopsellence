@@ -42,6 +42,64 @@ func TestCurrentStatusPrefersErrorOverReconcilingForEnvironmentPhase(t *testing.
 	}
 }
 
+func TestCurrentStatusExplainsReusedPreviousRevisionService(t *testing.T) {
+	eng := newFakeEngine()
+	service := workerService("postgres", nil)
+	hash, err := desiredstate.HashService(service)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	rec := New(eng, Options{Network: "devopsellence", StopTimeout: time.Second})
+	network, err := rec.environmentNetwork("production")
+	if err != nil {
+		t.Fatalf("environment network: %v", err)
+	}
+	alias, err := desiredstate.ServiceNetworkAlias("postgres")
+	if err != nil {
+		t.Fatalf("service alias: %v", err)
+	}
+	hash = runtimeContainerHash(hash, nil, network, []string{alias})
+	name, err := desiredstate.ServiceContainerName("production", "postgres", "oldsha", hash)
+	if err != nil {
+		t.Fatalf("service container name: %v", err)
+	}
+	eng.containers[name] = engine.ContainerState{
+		Name:        name,
+		Running:     true,
+		Hash:        hash,
+		Revision:    "oldsha",
+		Environment: "production",
+		Service:     "postgres",
+		ServiceKind: "worker",
+	}
+
+	_, environments, err := rec.CurrentStatus(context.Background(), &desiredstatepb.DesiredState{
+		SchemaVersion: 2,
+		Revision:      "node-rev",
+		Environments: []*desiredstatepb.Environment{{
+			Name:     "production",
+			Revision: "newsha",
+			Services: []*desiredstatepb.Service{service},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("current status: %v", err)
+	}
+	if len(environments) != 1 || len(environments[0].Services) != 1 {
+		t.Fatalf("environments = %#v, want one service", environments)
+	}
+	status := environments[0].Services[0]
+	if status.ContainerRevision != "oldsha" {
+		t.Fatalf("container_revision = %q, want oldsha", status.ContainerRevision)
+	}
+	if status.RevisionStatus != "reused_from_previous_release" {
+		t.Fatalf("revision_status = %q, want reused_from_previous_release", status.RevisionStatus)
+	}
+	if status.RevisionMessage == "" {
+		t.Fatalf("revision_message empty, want previous-release explanation")
+	}
+}
+
 func TestCurrentStatusKeepsEnvironmentStatusesSeparate(t *testing.T) {
 	eng := newFakeEngine()
 	prodName, err := desiredstate.ServiceContainerName("production", "web", "rev-1", "hash-prod")

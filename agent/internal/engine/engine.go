@@ -163,6 +163,7 @@ type ContainerState struct {
 	Running     bool
 	Managed     bool
 	Hash        string
+	Revision    string
 	Environment string
 	Service     string
 	ServiceKind string

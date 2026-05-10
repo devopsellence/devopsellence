@@ -37,13 +37,16 @@ type EnvironmentStatus struct {
 }
 
 type ServiceStatus struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind,omitempty"`
-	Phase     Phase  `json:"phase,omitempty"`
-	Container string `json:"container,omitempty"`
-	State     string `json:"state,omitempty"`
-	Health    string `json:"health,omitempty"`
-	Hash      string `json:"hash,omitempty"`
+	Name              string `json:"name"`
+	Kind              string `json:"kind,omitempty"`
+	Phase             Phase  `json:"phase,omitempty"`
+	Container         string `json:"container,omitempty"`
+	ContainerRevision string `json:"container_revision,omitempty"`
+	RevisionStatus    string `json:"revision_status,omitempty"`
+	RevisionMessage   string `json:"revision_message,omitempty"`
+	State             string `json:"state,omitempty"`
+	Health            string `json:"health,omitempty"`
+	Hash              string `json:"hash,omitempty"`
 }
 
 type TaskStatus struct {

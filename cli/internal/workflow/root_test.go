@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/devopsellence/cli/internal/solo"
 	"github.com/devopsellence/cli/internal/state"
@@ -910,6 +911,16 @@ func TestNormalizeVibeLater(t *testing.T) {
 				t.Fatalf("normalizeVibeLater(%q) = %q, want %q", tt.value, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTruncateVibeTextPreservesUTF8(t *testing.T) {
+	got := truncateVibeText("abå😊cd", 4)
+	if got != "abå😊" {
+		t.Fatalf("truncateVibeText() = %q, want rune-boundary truncation", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateVibeText() returned invalid UTF-8: %q", got)
 	}
 }
 

@@ -495,10 +495,14 @@ func normalizeVibeServices(value string) ([]string, error) {
 
 func truncateVibeText(value string, max int) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= max {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= max {
 		return value
 	}
-	return strings.TrimSpace(value[:max])
+	return strings.TrimSpace(string(runes[:max]))
 }
 
 func supportedVibeAgent(agent string) bool {

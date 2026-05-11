@@ -1446,7 +1446,7 @@ func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nod
 }
 
 func explainCohostedIngressConflict(err error, snapshots []desiredstate.DeploySnapshot) error {
-	if err == nil || len(snapshots) < 2 || !strings.Contains(err.Error(), "cannot merge ingress for co-hosted environments with different settings") {
+	if err == nil || len(snapshots) < 2 || !strings.Contains(err.Error(), desiredstate.CohostedIngressDifferentSettingsErrorPrefix) {
 		return err
 	}
 	return fmt.Errorf("%w; co-hosted ingress settings: %s", err, cohostedIngressSettingsSummary(snapshots))
@@ -5950,6 +5950,8 @@ func railsSecretKeyBaseCheck(workspaceRoot string, cfg config.ProjectConfig, env
 	return "", fmt.Errorf("Rails app detected, but service %q does not configure SECRET_KEY_BASE; run `bin/rails secret | devopsellence secret set SECRET_KEY_BASE --service %s --env %s --stdin` before deploying", serviceName, shellQuote(serviceName), shellQuote(environmentName))
 }
 
+var railsGemRegexp = regexp.MustCompile(`(?m)^\s*gem\s+['"]rails['"]`)
+
 func workspaceLooksLikeRails(workspaceRoot string) bool {
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "bin", "rails")); err == nil {
 		return true
@@ -5958,7 +5960,7 @@ func workspaceLooksLikeRails(workspaceRoot string) bool {
 	if err != nil {
 		return false
 	}
-	return regexp.MustCompile(`(?m)^\s*gem\s+['"]rails['"]`).Match(data)
+	return railsGemRegexp.Match(data)
 }
 
 func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {

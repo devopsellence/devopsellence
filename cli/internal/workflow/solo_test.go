@@ -2271,6 +2271,53 @@ func TestCheckIngressBeforeDeployTreatsAutoTLSModeCaseInsensitively(t *testing.T
 	}
 }
 
+func TestCheckIngressBeforeDeployAllowsManualTLSWithoutConcreteHostnames(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "manual"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := (&App{}).checkIngressBeforeDeploy(ctx, &cfg, map[string]config.Node{
+		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+	}, false)
+	if err != nil {
+		t.Fatalf("checkIngressBeforeDeploy() error = %v, want nil", err)
+	}
+}
+
+func TestCheckIngressBeforeDeployRequiresDNSForConcreteHTTPHost(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+	oldLookup := ingressDNSLookupHost
+	ingressDNSLookupHost = func(context.Context, string) ([]string, error) {
+		return nil, errors.New("lookup failed")
+	}
+	t.Cleanup(func() { ingressDNSLookupHost = oldLookup })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := (&App{}).checkIngressBeforeDeploy(ctx, &cfg, map[string]config.Node{
+		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+	}, false)
+	if err == nil {
+		t.Fatal("checkIngressBeforeDeploy() error = nil, want DNS readiness failure")
+	}
+	if !strings.Contains(err.Error(), "ingress DNS is not ready") || !strings.Contains(err.Error(), "update DNS") {
+		t.Fatalf("error = %q, want DNS mismatch guidance", err.Error())
+	}
+}
+
 func TestCheckIngressBeforeDeployIncludesSSLIPHintFields(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -6636,7 +6683,7 @@ func TestSoloDeployDryRunUsesExplicitEnvironmentWithoutDNS(t *testing.T) {
 	}
 }
 
-func TestSoloDeployDryRunDoesNotRequireDNSPreflightForManualTLS(t *testing.T) {
+func TestSoloDeployDryRunPlansRequiredDNSPreflightForManualTLS(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -6672,8 +6719,8 @@ func TestSoloDeployDryRunDoesNotRequireDNSPreflightForManualTLS(t *testing.T) {
 		t.Fatalf("payload = %#v, want TLS pending dry-run", payload)
 	}
 	planned := jsonMapFromAny(t, payload["planned_dns_check"])
-	if planned["live_lookup"] != false || planned["required"] != false || planned["skipped"] != false || planned["check_command"] != "devopsellence ingress check --env 'production'" {
-		t.Fatalf("planned_dns_check = %#v, want optional manual-TLS DNS check", planned)
+	if planned["live_lookup"] != false || planned["required"] != true || planned["skipped"] != false || planned["check_command"] != "devopsellence ingress check --env 'production'" {
+		t.Fatalf("planned_dns_check = %#v, want required manual-TLS DNS check", planned)
 	}
 }
 

@@ -3027,7 +3027,7 @@ func ingressRequiresDNSPreflight(cfg *config.ProjectConfig) bool {
 	if cfg == nil || cfg.Ingress == nil {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(cfg.Ingress.TLS.Mode), "auto")
+	return len(concreteIngressHosts(cfg)) > 0 || strings.EqualFold(strings.TrimSpace(cfg.Ingress.TLS.Mode), "auto")
 }
 
 func soloPublicURLStatus(cfg *config.ProjectConfig) string {
@@ -7559,6 +7559,7 @@ type ingressTLSProbeResult struct {
 }
 
 var ingressTLSProbe = defaultIngressTLSProbe
+var ingressDNSLookupHost = net.DefaultResolver.LookupHost
 
 type ingressHint struct {
 	Code            string            `json:"code"`
@@ -7611,11 +7612,19 @@ func ingressReadinessErrorKind(report ingressDNSReportResult) string {
 	return "ingress_dns_not_ready"
 }
 
-const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
+const (
+	soloStatusMissingSentinel  = "__DEVOPSELLENCE_STATUS_MISSING__"
+	ingressDNSPreflightTimeout = 30 * time.Second
+)
 
 func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.Node, skip bool, environment ...string) error {
 	if skip || !ingressRequiresDNSPreflight(cfg) {
 		return nil
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ingressDNSPreflightTimeout)
+		defer cancel()
 	}
 	report, err := ingressDNSReport(ctx, cfg, nodes, firstNonEmpty(environment...))
 	if err != nil {
@@ -7678,7 +7687,7 @@ func ingressReadinessReport(ctx context.Context, cfg *config.ProjectConfig, sele
 	}
 	for _, host := range hosts {
 		result := ingressDNSHostResult{Host: host}
-		resolved, err := net.DefaultResolver.LookupHost(ctx, host)
+		resolved, err := ingressDNSLookupHost(ctx, host)
 		if err != nil {
 			result.Error = err.Error()
 		}

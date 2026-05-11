@@ -1,9 +1,11 @@
 package solo
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/devopsellence/devopsellence/deployment-core/pkg/deploycore/config"
@@ -89,6 +91,18 @@ func TestSSHArgsUseDevNullForNoneSSHConfigOverride(t *testing.T) {
 	t.Setenv(sshConfigEnv, "none")
 	if got := sshConfigPathOverride(); got != os.DevNull {
 		t.Fatalf("sshConfigPathOverride() = %q, want %q", got, os.DevNull)
+	}
+}
+
+func TestSSHErrorSuggestsSkippingBadLocalSSHConfig(t *testing.T) {
+	err := (&SSHError{
+		User:   "root",
+		Host:   "203.0.113.10",
+		Err:    errors.New("exit status 255"),
+		Stderr: "Bad owner or permissions on /home/alice/.ssh/config\n",
+	}).Error()
+	if !strings.Contains(err, "DEVOPSELLENCE_SSH_CONFIG=none") {
+		t.Fatalf("SSHError.Error() = %q, want SSH config recovery hint", err)
 	}
 }
 

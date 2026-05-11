@@ -113,6 +113,8 @@ type NodePeerJSON struct {
 
 type ScopedSecrets map[string]map[string]string
 
+const CohostedIngressDifferentSettingsErrorPrefix = "cannot merge ingress for co-hosted environments with different settings"
+
 func (s ScopedSecrets) ValuesForService(serviceName string) map[string]string {
 	merged := map[string]string{}
 	for key, value := range s[""] {
@@ -418,7 +420,7 @@ func mergeIngressForNode(labels []string, snapshots []DeploySnapshot, environmen
 			if merged.RedirectHTTP != snapshot.Ingress.RedirectHTTP {
 				differingSettings = append(differingSettings, "redirect_http")
 			}
-			return nil, fmt.Errorf("cannot merge ingress for co-hosted environments with different settings: %s", strings.Join(differingSettings, ", "))
+			return nil, fmt.Errorf("%s: %s", CohostedIngressDifferentSettingsErrorPrefix, strings.Join(differingSettings, ", "))
 		}
 		for _, host := range snapshot.Ingress.Hosts {
 			if hostSet[host] {

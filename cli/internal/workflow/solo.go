@@ -231,7 +231,13 @@ type soloNodeStatus struct {
 	Phase        string                      `json:"phase"`
 	Revision     string                      `json:"revision"`
 	Error        string                      `json:"error,omitempty"`
+	Ingress      *soloNodeIngressStatus      `json:"ingress,omitempty"`
 	Environments []soloNodeStatusEnvironment `json:"environments"`
+}
+
+type soloNodeIngressStatus struct {
+	TLSStatus string `json:"tls_status,omitempty"`
+	TLSError  string `json:"tls_error,omitempty"`
 }
 
 type soloNodeStatusEnvironment struct {
@@ -1424,7 +1430,7 @@ func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nod
 			NodePeers:    inputs.peers,
 		})
 		if err != nil {
-			errs = append(errs, soloRepublishErrorEntry{node: nodeName, operation: "build desired state", err: err})
+			errs = append(errs, soloRepublishErrorEntry{node: nodeName, operation: "build desired state", err: explainCohostedIngressConflict(err, inputs.snapshots)})
 			continue
 		}
 		prepared[nodeName] = preparedNodePublication{
@@ -1437,6 +1443,45 @@ func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nod
 		return nil, &soloRepublishError{entries: errs}
 	}
 	return prepared, nil
+}
+
+func explainCohostedIngressConflict(err error, snapshots []desiredstate.DeploySnapshot) error {
+	if err == nil || len(snapshots) < 2 || !strings.Contains(err.Error(), desiredstate.CohostedIngressDifferentSettingsErrorPrefix) {
+		return err
+	}
+	return fmt.Errorf("%w; co-hosted ingress settings: %s", err, cohostedIngressSettingsSummary(snapshots))
+}
+
+func cohostedIngressSettingsSummary(snapshots []desiredstate.DeploySnapshot) string {
+	items := []string{}
+	for _, snapshot := range snapshots {
+		if snapshot.Ingress == nil {
+			continue
+		}
+		items = append(items, fmt.Sprintf("%s (%s): hosts=%s tls=%s redirect_http=%t",
+			firstNonEmpty(strings.TrimSpace(snapshot.Environment), "unknown"),
+			firstNonEmpty(strings.TrimSpace(snapshot.WorkspaceRoot), strings.TrimSpace(snapshot.WorkspaceKey), "unknown-workspace"),
+			strings.Join(snapshot.Ingress.Hosts, ","),
+			cohostedIngressTLSSummary(snapshot.Ingress.TLS),
+			snapshot.Ingress.RedirectHTTP,
+		))
+	}
+	if len(items) == 0 {
+		return "none"
+	}
+	sort.Strings(items)
+	return strings.Join(items, "; ")
+}
+
+func cohostedIngressTLSSummary(tls desiredstate.IngressTLSJSON) string {
+	parts := []string{"mode=" + firstNonEmpty(strings.TrimSpace(tls.Mode), "off")}
+	if email := strings.TrimSpace(tls.Email); email != "" {
+		parts = append(parts, "email="+email)
+	}
+	if ca := strings.TrimSpace(tls.CADirectoryURL); ca != "" {
+		parts = append(parts, "ca_directory_url="+ca)
+	}
+	return strings.Join(parts, ",")
 }
 
 func (a *App) republishPreparedNodes(ctx context.Context, prepared map[string]preparedNodePublication) (map[string]string, error) {
@@ -2208,6 +2253,14 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 	statusMismatches := 0
 	missingStatuses := 0
 	allSettled := true
+	ingressTLSStatuses := map[string]string{}
+	ingressTLSErrors := map[string]string{}
+	ingressNodes := map[string]bool{}
+	for name, node := range nodes {
+		if soloNodeCanRunIngress(node, cfg) {
+			ingressNodes[name] = true
+		}
+	}
 
 	for name, node := range nodes {
 		result, err := readNodeStatus(ctx, node)
@@ -2238,6 +2291,14 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 			})
 
 			continue
+		}
+		if ingressNodes[name] && result.Status.Ingress != nil {
+			if tlsStatus := strings.TrimSpace(result.Status.Ingress.TLSStatus); tlsStatus != "" {
+				ingressTLSStatuses[name] = tlsStatus
+			}
+			if tlsErr := strings.TrimSpace(result.Status.Ingress.TLSError); tlsErr != "" {
+				ingressTLSErrors[name] = tlsErr
+			}
 		}
 
 		if !localReleaseKnown {
@@ -2314,8 +2375,20 @@ func (a *App) SoloStatus(ctx context.Context, opts SoloStatusOptions) error {
 		}
 	} else if len(configuredPublicURLs) > 0 {
 		payload["configured_public_urls"] = configuredPublicURLs
-		payload["public_url_status"] = soloPublicURLStatus(cfg)
-		appendPayloadWarning(soloPublicURLWarning(cfg, environmentName))
+		publicURLStatus := soloPublicURLStatus(cfg)
+		publicURLWarning := soloPublicURLWarning(cfg, environmentName)
+		if ingressRequiresTLSReadiness(cfg) && allIngressNodesReportTLSReady(ingressNodes, ingressTLSStatuses) {
+			publicURLStatus = "configured_tls_ready"
+			publicURLWarning = "HTTPS public URLs are configured and node certificates report ready, but endpoint reachability has not been verified yet; run `devopsellence ingress check" + soloEnvFlag(environmentName) + " --wait 5m` before treating them as externally reachable"
+		}
+		payload["public_url_status"] = publicURLStatus
+		if len(ingressTLSStatuses) > 0 {
+			payload["ingress_tls_status"] = ingressTLSStatuses
+		}
+		if len(ingressTLSErrors) > 0 {
+			payload["ingress_tls_errors"] = ingressTLSErrors
+		}
+		appendPayloadWarning(publicURLWarning)
 	} else if soloPublicIngressKnownUnconfigured(cfg) {
 		payload["public_url_status"] = "not_configured"
 		if statusRuntimeVerified {
@@ -3035,6 +3108,18 @@ func soloPublicURLStatus(cfg *config.ProjectConfig) string {
 		return "configured_tls_pending"
 	}
 	return "configured_pending"
+}
+
+func allIngressNodesReportTLSReady(ingressNodes map[string]bool, statuses map[string]string) bool {
+	if len(ingressNodes) == 0 {
+		return false
+	}
+	for nodeName := range ingressNodes {
+		if !strings.EqualFold(strings.TrimSpace(statuses[nodeName]), "ready") {
+			return false
+		}
+	}
+	return true
 }
 
 func soloPublicURLWarning(cfg *config.ProjectConfig, environment ...string) string {
@@ -5744,6 +5829,17 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 		return a.ConfigStore.PathFor(discovered.WorkspaceRoot), nil
 	})
 
+	addCheck("rails_secret_key_base", func() (string, error) {
+		if discoveryErr != nil {
+			return "", discoveryErr
+		}
+		if cfg == nil {
+			return "skipped: config unavailable", nil
+		}
+		environmentName := a.effectiveEnvironment("", cfg)
+		return railsSecretKeyBaseCheck(discovered.WorkspaceRoot, *cfg, environmentName)
+	})
+
 	addCheck("nodes", func() (string, error) {
 		var err error
 		current, err = a.readSoloState()
@@ -5828,6 +5924,43 @@ func (a *App) SoloDoctor(ctx context.Context) error {
 	}
 	return nil
 
+}
+
+func railsSecretKeyBaseCheck(workspaceRoot string, cfg config.ProjectConfig, environmentName string) (string, error) {
+	if !workspaceLooksLikeRails(workspaceRoot) {
+		return "not a Rails app", nil
+	}
+	resolved, err := config.ResolveEnvironmentConfig(cfg, environmentName)
+	if err != nil {
+		return "", err
+	}
+	serviceName, ok := resolved.PrimaryWebServiceName()
+	if !ok {
+		return "Rails app detected; no primary web service configured", nil
+	}
+	service := resolved.Services[serviceName]
+	if _, ok := service.Env["SECRET_KEY_BASE"]; ok {
+		return "SECRET_KEY_BASE configured in service env", nil
+	}
+	for _, ref := range service.SecretRefs {
+		if strings.EqualFold(strings.TrimSpace(ref.Name), "SECRET_KEY_BASE") {
+			return "SECRET_KEY_BASE configured as a service secret_ref", nil
+		}
+	}
+	return "", fmt.Errorf("Rails app detected, but service %q does not configure SECRET_KEY_BASE; run `bin/rails secret | devopsellence secret set SECRET_KEY_BASE --service %s --env %s --stdin` before deploying", serviceName, shellQuote(serviceName), shellQuote(environmentName))
+}
+
+var railsGemRegexp = regexp.MustCompile(`(?m)^\s*gem\s+['"]rails['"]`)
+
+func workspaceLooksLikeRails(workspaceRoot string) bool {
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "bin", "rails")); err == nil {
+		return true
+	}
+	data, err := os.ReadFile(filepath.Join(workspaceRoot, "Gemfile"))
+	if err != nil {
+		return false
+	}
+	return railsGemRegexp.Match(data)
 }
 
 func (a *App) SoloNodeCreate(ctx context.Context, opts SoloNodeCreateOptions) error {

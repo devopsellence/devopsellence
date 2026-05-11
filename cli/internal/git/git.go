@@ -20,13 +20,17 @@ func (Client) CurrentSHA(root string) (string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("could not determine git SHA from %s. commit the app and run inside a git checkout", root)
+		return "", currentSHAError(root)
 	}
 	sha := strings.TrimSpace(out.String())
 	if !shaPattern.MatchString(sha) {
-		return "", fmt.Errorf("could not determine git SHA from %s. commit the app and run inside a git checkout", root)
+		return "", currentSHAError(root)
 	}
 	return sha, nil
+}
+
+func currentSHAError(root string) error {
+	return fmt.Errorf("could not determine git SHA from %s. commit the app and run inside a git checkout. For a fresh app, run `git add .` and `git commit -m 'initial deploy'` first", root)
 }
 
 func (Client) StatusEntries(root string, ignorePaths []string) ([]string, error) {

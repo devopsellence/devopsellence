@@ -1657,6 +1657,65 @@ func TestSoloStatusTreatsTLSVerifiedCheckAsReadyPublicURL(t *testing.T) {
 	}
 }
 
+func TestSoloStatusSurfacesAgentTLSReadyBeforeEndpointVerification(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"app.example.com"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "app.example.com", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "auto"},
+	}
+	if _, err := config.Write(workspaceRoot, cfg); err != nil {
+		t.Fatal(err)
+	}
+	installFakeSoloCommands(t, []fakeSSHResponse{{stdout: `{"revision":"rev","phase":"settled","ingress":{"tls_status":"ready"},"summary":{"environments":1,"services":1}}` + "\n"}})
+
+	soloState := solo.NewStateStore(filepath.Join(t.TempDir(), "solo-state.json"))
+	current := solo.State{Nodes: map[string]config.Node{"node-a": {Host: "203.0.113.10", User: "root", Labels: []string{config.DefaultWebRole}}}}
+	if _, _, err := current.AttachNode(workspaceRoot, "production", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	seedSoloCurrentRelease(t, &current, workspaceRoot, "production", "rev")
+	if err := soloState.Write(current); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &App{Printer: output.New(&stdout, io.Discard), SoloState: soloState, ConfigStore: config.NewStore(), Cwd: workspaceRoot}
+	if err := app.SoloStatus(context.Background(), SoloStatusOptions{}); err != nil {
+		t.Fatalf("SoloStatus() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	if payload["public_url_status"] != "configured_tls_ready" {
+		t.Fatalf("public_url_status = %#v, want configured_tls_ready", payload["public_url_status"])
+	}
+	statuses := jsonMapFromAny(t, payload["ingress_tls_status"])
+	if statuses["node-a"] != "ready" {
+		t.Fatalf("ingress_tls_status = %#v, want node-a ready", statuses)
+	}
+	if _, ok := payload["public_urls"]; ok {
+		t.Fatalf("payload = %#v, node TLS readiness alone must not emit verified public_urls", payload)
+	}
+	warnings := jsonArrayFromMap(t, payload, "warnings")
+	foundIngressCheckGuidance := false
+	for _, warning := range warnings {
+		if strings.Contains(stringValueAny(warning), "devopsellence ingress check --env 'production' --wait 5m") {
+			foundIngressCheckGuidance = true
+			break
+		}
+	}
+	if !foundIngressCheckGuidance {
+		t.Fatalf("warnings = %#v, want ingress check guidance", warnings)
+	}
+	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])
+	if runtimeVerified["tls"] != false || runtimeVerified["endpoint_probe"] != false {
+		t.Fatalf("runtime_verified = %#v, endpoint TLS should remain unverified", runtimeVerified)
+	}
+}
+
 func TestSoloVerifiedIngressPublicURLsRejectsRecordWhenSelectedNodesHaveNoWebIPs(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -11448,10 +11507,55 @@ func TestPrepareRepublishPlansReportsCohostedIngressSettingsBeforePublish(t *tes
 	if !strings.Contains(err.Error(), "cannot merge ingress for co-hosted environments with different settings") || !strings.Contains(err.Error(), "TLS") || !strings.Contains(err.Error(), "redirect_http") {
 		t.Fatalf("prepareRepublishPlans() error = %v, want TLS/redirect_http mismatch", err)
 	}
+	for _, want := range []string{"co-hosted ingress settings", "hosts=a.example.com", "hosts=b.example.com", "tls=mode=off", "tls=mode=manual", "redirect_http=false", "redirect_http=true"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("prepareRepublishPlans() error = %v, want %q", err, want)
+		}
+	}
 	for _, nodeName := range []string{"node-a", "node-b"} {
 		if !strings.Contains(err.Error(), "["+nodeName+"] build desired state:") {
 			t.Fatalf("prepareRepublishPlans() error = %v, want %s planning error", err, nodeName)
 		}
+	}
+}
+
+func TestRailsSecretKeyBaseCheckFailsWhenRailsAppMissingSecret(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "Gemfile"), []byte(`gem "rails"`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+
+	_, err := railsSecretKeyBaseCheck(workspaceRoot, cfg, "production")
+	if err == nil {
+		t.Fatal("railsSecretKeyBaseCheck() error = nil, want missing SECRET_KEY_BASE")
+	}
+	for _, want := range []string{"Rails app detected", "SECRET_KEY_BASE", "bin/rails secret", "devopsellence secret set SECRET_KEY_BASE"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("railsSecretKeyBaseCheck() error = %v, want %q", err, want)
+		}
+	}
+}
+
+func TestRailsSecretKeyBaseCheckAcceptsSecretRef(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "bin", "rails"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	service := cfg.Services[config.DefaultWebServiceName]
+	service.SecretRefs = []config.SecretRef{{Name: "SECRET_KEY_BASE", Secret: "devopsellence://plaintext/SECRET_KEY_BASE"}}
+	cfg.Services[config.DefaultWebServiceName] = service
+
+	detail, err := railsSecretKeyBaseCheck(workspaceRoot, cfg, "production")
+	if err != nil {
+		t.Fatalf("railsSecretKeyBaseCheck() error = %v", err)
+	}
+	if !strings.Contains(detail, "secret_ref") {
+		t.Fatalf("detail = %q, want secret_ref", detail)
 	}
 }
 

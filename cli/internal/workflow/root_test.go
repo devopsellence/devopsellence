@@ -2,8 +2,10 @@ package workflow
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,9 @@ func installFakeVibeTools(t *testing.T, agents ...string) string {
 	writeExecutable(t, filepath.Join(binDir, "mise"), "#!/usr/bin/env bash\nexit 0\n")
 	writeExecutable(t, filepath.Join(binDir, "rails"), `#!/usr/bin/env bash
 set -euo pipefail
+if [ -n "${VIBE_RAILS_ARGS_FILE:-}" ]; then
+  printf '%s\n' "$@" > "$VIBE_RAILS_ARGS_FILE"
+fi
 if [ "${1:-}" != "new" ]; then
   echo "unexpected rails command: $*" >&2
   exit 1
@@ -358,6 +363,8 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	cwd := t.TempDir()
 	home := setFakeVibeHome(t, cwd)
 	installFakeVibeTools(t)
+	railsArgsPath := filepath.Join(cwd, "rails-args.txt")
+	t.Setenv("VIBE_RAILS_ARGS_FILE", railsArgsPath)
 	var stdout bytes.Buffer
 	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
 	cmd.SetOut(&stdout)
@@ -382,7 +389,8 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if intent["deploy_goal"] != "deploy-ready" || intent["devopsellence_mode"] != "solo" || intent["server_strategy"] != "none" {
 		t.Fatalf("deployment_intent = %#v, want solo deploy-ready defaults", intent)
 	}
-	if payload["template_version"] != defaultVibeTemplateVersion || payload["template_url"] != vibeTemplateURL(defaultVibeTemplateVersion) || payload["initial_commit"] != true {
+	defaultTemplateVersion := defaultVibeTemplateVersion()
+	if payload["template_version"] != defaultTemplateVersion || payload["template_url"] != vibeTemplateURL(defaultTemplateVersion) || payload["initial_commit"] != true {
 		t.Fatalf("payload = %#v, want pinned template and initial commit", payload)
 	}
 	if payload["skill_id"] != "rails-app" || payload["skill_name"] != "devopsellence-rails-app" || payload["launched"] != false {
@@ -404,8 +412,25 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Agent autonomy") || !strings.Contains(string(prompt), "sequencing the work yourself") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Rails 8.1") {
+	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Agent autonomy") || !strings.Contains(string(prompt), "ask the user to confirm before changing app behavior") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Rails 8.1") || !strings.Contains(string(prompt), "SQLite by default") || !strings.Contains(string(prompt), "stack-expansion follow-ups") {
 		t.Fatalf("prompt = %q, want seeded codex prompt", prompt)
+	}
+	if strings.Contains(string(prompt), "then begin building without asking") {
+		t.Fatalf("prompt = %q, want builder autonomy to wait for confirmation", prompt)
+	}
+	railsArgs, err := os.ReadFile(railsArgsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(railsArgs), "-d\nsqlite3\n") || strings.Contains(string(railsArgs), "postgresql") {
+		t.Fatalf("rails args = %q, want explicit sqlite3 app generation", railsArgs)
+	}
+	railsSkill, err := os.ReadFile(filepath.Join(appDir, ".agents", "skills", "devopsellence-rails-app", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(railsSkill), "SQLite-first MVPs") || !strings.Contains(string(railsSkill), "Stack Expansion") {
+		t.Fatalf("rails app skill = %q, want SQLite-first bundled skill", railsSkill)
 	}
 	nextCommands := jsonArrayFromMap(t, payload, "next_commands")
 	if !jsonArrayContains(nextCommands, "codex --sandbox 'workspace-write' --ask-for-approval 'on-request' -c 'model_reasoning_effort=\"high\"' 'Read .agents/prompts/devopsellence-vibe.md and follow it.'") {
@@ -419,7 +444,7 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultVibeTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
+	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want repo-relative paths", manifest)
 	}
 }
@@ -572,6 +597,84 @@ func TestRootVibeWizardOnlyAsksForAppIdea(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestRootVibeWizardCancelDuringAppIdea(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd := NewRootCommand(reader, &stdout, &stderr, cwd)
+	cmd.SetContext(ctx)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{
+		"vibe", "crm-app",
+		"--no-agent",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want cancellation")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 130 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute() error = %#v, want exit 130 context canceled", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no structured missing-idea error on cancel", stdout.String())
+	}
+}
+
+func TestRootVibeRejectsTooShortIdea(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "tiny-app",
+		"--idea", "todo",
+		"--no-agent",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want too-short idea error")
+	}
+	if !strings.Contains(err.Error(), "too short") || !strings.Contains(err.Error(), "10") {
+		t.Fatalf("Execute() error = %v, want min length error", err)
+	}
+}
+
+func TestReadVibeTerminalLineSupportsCursorEditing(t *testing.T) {
+	var output bytes.Buffer
+	input := bytes.NewBufferString("ab\x1b[Dc\r")
+	got, err := readVibeTerminalLine(input, &output, "App idea: ")
+	if err != nil {
+		t.Fatalf("readVibeTerminalLine() error = %v", err)
+	}
+	if got != "acb" {
+		t.Fatalf("readVibeTerminalLine() = %q, want cursor-edited input", got)
+	}
+}
+
+func TestVibePlanApprovalPromptLine(t *testing.T) {
+	for _, autonomy := range []string{"careful", "builder"} {
+		got := vibePlanApprovalPromptLine(autonomy)
+		if !strings.Contains(got, "ask the user to confirm") {
+			t.Fatalf("vibePlanApprovalPromptLine(%q) = %q, want confirmation gate", autonomy, got)
+		}
+	}
+	got := vibePlanApprovalPromptLine("full-access")
+	if !strings.Contains(got, "begin building without asking") {
+		t.Fatalf("vibePlanApprovalPromptLine(full-access) = %q, want autonomous implementation", got)
 	}
 }
 

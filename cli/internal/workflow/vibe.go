@@ -6,15 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devopsellence/cli/internal/agentskill"
 	"github.com/devopsellence/cli/internal/version"
+	"golang.org/x/term"
 )
 
 type VibeOptions struct {
@@ -76,10 +79,12 @@ const (
 	defaultVibeDeployGoal        = "deploy-ready"
 	defaultVibeMode              = "solo"
 	defaultVibeServerStrategy    = "none"
-	defaultVibeTemplateVersion   = "v0.1.3"
+	defaultVibeTemplateRef       = "master"
 	vibeDomainLater              = "later"
 	vibePromptInstruction        = "Read .agents/prompts/devopsellence-vibe.md and follow it."
 	defaultVibeAgentProbeTimeout = 5 * time.Second
+	minVibeIdeaLength            = 10
+	maxVibeIdeaLength            = 4096
 )
 
 var vibeSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
@@ -99,7 +104,6 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		return err
 	}
 	opts.AgentAutonomy = agentAutonomy
-	reader := bufio.NewReader(a.In)
 	wizardMode := strings.TrimSpace(opts.Idea) == ""
 	if wizardMode {
 		_, _ = fmt.Fprintln(a.Printer.Err, "devopsellence vibe intake. Press Ctrl+C anytime before scaffolding to stop.")
@@ -130,7 +134,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		}
 	}
 	if strings.TrimSpace(opts.Idea) == "" {
-		idea, err := a.askVibeQuestion(reader, "App idea")
+		idea, err := a.askVibeQuestion(ctx, "App idea")
 		if err != nil {
 			return err
 		}
@@ -139,8 +143,11 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if strings.TrimSpace(opts.Idea) == "" {
 		return ExitError{Code: 2, Err: errors.New("missing app idea")}
 	}
-	if len(opts.Idea) > 4096 {
-		return ExitError{Code: 2, Err: errors.New("app idea is too long; keep it under 4096 characters")}
+	if utf8.RuneCountInString(opts.Idea) < minVibeIdeaLength {
+		return ExitError{Code: 2, Err: fmt.Errorf("app idea is too short; write at least %d characters", minVibeIdeaLength)}
+	}
+	if utf8.RuneCountInString(opts.Idea) > maxVibeIdeaLength {
+		return ExitError{Code: 2, Err: fmt.Errorf("app idea is too long; keep it under %d characters", maxVibeIdeaLength)}
 	}
 	intent, err := a.resolveVibeDeploymentIntent(opts)
 	if err != nil {
@@ -148,7 +155,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	}
 	opts.TemplateVersion = strings.TrimSpace(opts.TemplateVersion)
 	if opts.TemplateVersion == "" {
-		opts.TemplateVersion = defaultVibeTemplateVersion
+		opts.TemplateVersion = defaultVibeTemplateVersion()
 	}
 	templateURL := vibeTemplateURL(opts.TemplateVersion)
 	if err := a.ensureVibeTools(); err != nil {
@@ -173,6 +180,9 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		return fmt.Errorf("create prompts dir: %w", err)
 	}
 	if _, err := agentskill.Install(agentskill.InstallOptions{SkillsDir: skillsDir, Skill: agentskill.Name}, version.String()); err != nil {
+		return err
+	}
+	if _, err := agentskill.Install(agentskill.InstallOptions{SkillsDir: skillsDir, Skill: agentskill.RailsAppID}, version.String()); err != nil {
 		return err
 	}
 	if err := ensureVibeRailsAppSkill(target); err != nil {
@@ -259,13 +269,85 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	return launchErr
 }
 
-func (a *App) askVibeQuestion(reader *bufio.Reader, label string) (string, error) {
-	_, _ = fmt.Fprintf(a.Printer.Err, "%s: ", label)
-	answer, err := reader.ReadString('\n')
+func (a *App) askVibeQuestion(ctx context.Context, label string) (string, error) {
+	prompt := label + ": "
+	answer, terminal, err := a.askVibeTerminalQuestion(ctx, prompt)
+	if !terminal {
+		_, _ = fmt.Fprint(a.Printer.Err, prompt)
+		answer, err = readVibeLine(ctx, bufio.NewReader(a.In))
+	}
+	if errors.Is(err, context.Canceled) {
+		return "", vibeCanceledError()
+	}
 	if err != nil && strings.TrimSpace(answer) == "" {
 		return "", ExitError{Code: 2, Err: fmt.Errorf("missing %s; pass it with a flag for non-interactive use", strings.ToLower(label))}
 	}
 	return strings.TrimSpace(answer), nil
+}
+
+func (a *App) askVibeTerminalQuestion(ctx context.Context, prompt string) (string, bool, error) {
+	file, ok := a.In.(*os.File)
+	if !ok || !term.IsTerminal(int(file.Fd())) {
+		return "", false, nil
+	}
+	oldState, err := term.MakeRaw(int(file.Fd()))
+	if err != nil {
+		return "", false, nil
+	}
+	defer func() {
+		_ = term.Restore(int(file.Fd()), oldState)
+	}()
+	if err := ctx.Err(); err != nil {
+		return "", true, err
+	}
+	answer, err := readVibeTerminalLine(file, firstNonNilWriter(a.Printer.Err), prompt)
+	if errors.Is(err, io.EOF) {
+		_, _ = fmt.Fprintln(a.Printer.Err)
+		return "", true, context.Canceled
+	}
+	return answer, true, err
+}
+
+func readVibeTerminalLine(reader io.Reader, writer io.Writer, prompt string) (string, error) {
+	line, err := term.NewTerminal(readWriter{Reader: reader, Writer: writer}, prompt).ReadLine()
+	if errors.Is(err, term.ErrPasteIndicator) {
+		err = nil
+	}
+	return line, err
+}
+
+func readVibeLine(ctx context.Context, reader *bufio.Reader) (string, error) {
+	type result struct {
+		answer string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		answer, err := reader.ReadString('\n')
+		done <- result{answer: answer, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-done:
+		return result.answer, result.err
+	}
+}
+
+func vibeCanceledError() error {
+	return ExitError{Code: 130, Err: RenderedError{Err: context.Canceled}}
+}
+
+type readWriter struct {
+	io.Reader
+	io.Writer
+}
+
+func firstNonNilWriter(writer io.Writer) io.Writer {
+	if writer == nil {
+		return io.Discard
+	}
+	return writer
 }
 
 func (a *App) resolveVibeDeploymentIntent(opts VibeOptions) (vibeDeploymentIntent, error) {
@@ -702,7 +784,7 @@ func ensureVibeGitignore(path string) error {
 
 func (a *App) ensureVibeTools() error {
 	if _, err := a.LookPath("mise"); err != nil {
-		return ExitError{Code: 2, Err: errors.New("mise not found; install mise before running devopsellence vibe")}
+		return ExitError{Code: 2, Err: errors.New("mise not found; install mise before running devopsellence vibe: https://mise.jdx.dev/getting-started.html")}
 	}
 	if _, err := a.LookPath("rails"); err != nil {
 		return ExitError{Code: 2, Err: errors.New("rails not found; install Rails with mise-managed Ruby before running devopsellence vibe")}
@@ -714,7 +796,7 @@ func (a *App) ensureVibeTools() error {
 }
 
 func (a *App) generateVibeRailsApp(ctx context.Context, target, templateURL string, force bool) error {
-	args := []string{"new", target, "-d", "postgresql", "-m", templateURL}
+	args := []string{"new", target, "-d", "sqlite3", "-m", templateURL}
 	if force {
 		args = append(args, "--force")
 	}
@@ -741,7 +823,15 @@ func ensureVibeRailsAppSkill(target string) error {
 }
 
 func vibeTemplateURL(version string) string {
-	return "https://raw.githubusercontent.com/devopsellence/rails-app-template/" + version + "/template.rb"
+	return "https://raw.githubusercontent.com/devopsellence/devopsellence/" + version + "/vibe-templates/rails-app/template.rb"
+}
+
+func defaultVibeTemplateVersion() string {
+	value := strings.TrimSpace(version.Version)
+	if value == "" || value == "dev" || value == "unknown" {
+		return defaultVibeTemplateRef
+	}
+	return value
 }
 
 func vibePrompt(agent, autonomy, templateURL, idea string, intent vibeDeploymentIntent) string {
@@ -781,8 +871,9 @@ func vibePrompt(agent, autonomy, templateURL, idea string, intent vibeDeployment
 		"",
 		"Use .agents/skills/devopsellence-rails-app for app-building guidance.",
 		"Use .agents/skills/devopsellence for deploy, secrets, logs, status, rollback, and node operations.",
-		"Start by deriving the MVP and sequencing the work yourself. Write a short implementation plan, then begin building without asking the user to choose the task order unless product ambiguity blocks progress.",
-		"Stay inside the blessed Rails baseline: Rails 8.1, PostgreSQL, Hotwire, Tailwind, Solid Queue/Cache/Cable, Active Storage, Sentry, OpenTelemetry, Minitest, Docker, and mise.",
+		vibePlanApprovalPromptLine(autonomy),
+		"Stay inside the blessed Rails MVP baseline: Rails 8.1, SQLite by default, Hotwire, Tailwind, Solid Queue/Cache/Cable, Active Storage only when needed, Minitest, Docker, and mise.",
+		"Treat managed PostgreSQL, backup/restore, object storage, Sentry, OpenTelemetry, Cloudflare DNS, and other external services as stack-expansion follow-ups once the MVP needs them.",
 		"Do not add Redis, Sidekiq, React, GraphQL, Elasticsearch, Kubernetes, or an admin framework unless the product need is explicit.",
 		"",
 		"Deployment rules:",
@@ -798,6 +889,13 @@ func vibePrompt(agent, autonomy, templateURL, idea string, intent vibeDeployment
 		"",
 	)
 	return strings.Join(lines, "\n")
+}
+
+func vibePlanApprovalPromptLine(autonomy string) string {
+	if autonomy == "full-access" {
+		return "Start by deriving the MVP and sequencing the work yourself. Write a short implementation plan, then begin building without asking the user to choose the task order unless product ambiguity blocks progress."
+	}
+	return "Start by deriving the MVP and sequencing the work yourself. Write a short implementation plan, then ask the user to confirm before changing app behavior or adding product code."
 }
 
 func vibePromptServerPlan(intent vibeDeploymentIntent) string {

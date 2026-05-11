@@ -597,6 +597,42 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 	if manifest.AppStack != "index-php" || manifest.AppStackName != "index.php" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want index.php stack metadata", manifest)
 	}
+	for _, path := range []string{".mise.toml", "Dockerfile", "public/index.php", "scripts/check"} {
+		assertFilesEqual(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", path), filepath.Join(appDir, path))
+	}
+	assertGeneratedTemplateFile(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", "README.md"), filepath.Join(appDir, "README.md"), "index-php-app", "tiny-notes")
+	assertGeneratedTemplateFile(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", "devopsellence.yml"), filepath.Join(appDir, "devopsellence.yml"), "index-php-app", "tiny-notes")
+}
+
+func assertFilesEqual(t *testing.T, wantPath, gotPath string) {
+	t.Helper()
+	want, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", wantPath, err)
+	}
+	got, err := os.ReadFile(gotPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", gotPath, err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("%s differs from %s", gotPath, wantPath)
+	}
+}
+
+func assertGeneratedTemplateFile(t *testing.T, wantPath, gotPath, templateName, generatedName string) {
+	t.Helper()
+	want, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", wantPath, err)
+	}
+	got, err := os.ReadFile(gotPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", gotPath, err)
+	}
+	expected := strings.ReplaceAll(string(want), templateName, generatedName)
+	if string(got) != expected {
+		t.Fatalf("%s differs from %s after template name replacement", gotPath, wantPath)
+	}
 }
 
 func TestRootVibeRejectsTemplateVersionFlag(t *testing.T) {

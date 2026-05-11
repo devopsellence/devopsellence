@@ -47,7 +47,7 @@ Use this skill inside apps generated from the devopsellence index.php template.
 4. Run the narrowest useful command first, then broader checks before handoff:
    - `mise install`
    - `scripts/check`
-   - `php -S 127.0.0.1:8000 -t public` for manual local smoke checks
+   - `php -S 127.0.0.1:8000 -t public public/index.php` for manual local smoke checks
    - `docker build .` when deploy packaging changed
 5. Keep production concerns wired while building features: health checks, persistent SQLite volume, secrets, logs, and deploy config.
 

@@ -43,7 +43,9 @@ Start with one PHP web process and SQLite. Add capabilities deliberately when th
 - Durable uploads: move uploaded files to S3-compatible object storage when files must survive node replacement or be shared across nodes.
 - Email: add a transactional email provider only when the product sends real user-facing mail.
 - Monitoring: add Sentry/OpenTelemetry only when production error reporting, traces, or alerting are needed.
-- DNS/CDN: add Cloudflare DNS/CDN after the user confirms the zone, hostname, and mutation plan.
+- Cloudflare-first edge: once the app needs a real domain, public traffic, media, or abuse protection, prefer Cloudflare as the first external platform to evaluate for domain registration/renewal, DNS, CDN caching, image resizing, R2 object storage, Stream video, Turnstile CAPTCHA, DDoS protection, WAF rules, and Cloudflare Tunnel in front of the VPS.
+- Hetzner VPS: keep the app runtime on a normal VPS, commonly Hetzner in solo mode, and treat Cloudflare as the edge/services layer rather than the primary app host.
+- Cloudflare email: consider Cloudflare email capabilities only after confirming the current product fit and limitations; do not assume it replaces a transactional email provider by default.
 
 Keep every expansion visible in the implementation plan. Prefer explicit follow-up tasks over silently adding services during the first feature slice.
 

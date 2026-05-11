@@ -2271,6 +2271,28 @@ func TestCheckIngressBeforeDeployTreatsAutoTLSModeCaseInsensitively(t *testing.T
 	}
 }
 
+func TestCheckIngressBeforeDeployRequiresDNSForConcreteHTTPHost(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"definitely-not-resolving-devopsellence-test.invalid"},
+		Rules: []config.IngressRuleConfig{{
+			Match:  config.IngressMatchConfig{Host: "definitely-not-resolving-devopsellence-test.invalid", PathPrefix: "/"},
+			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
+		}},
+		TLS: config.IngressTLSConfig{Mode: "off"},
+	}
+
+	err := (&App{}).checkIngressBeforeDeploy(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+	}, false)
+	if err == nil {
+		t.Fatal("checkIngressBeforeDeploy() error = nil, want DNS readiness failure")
+	}
+	if !strings.Contains(err.Error(), "ingress DNS is not ready") || !strings.Contains(err.Error(), "update DNS") {
+		t.Fatalf("error = %q, want DNS mismatch guidance", err.Error())
+	}
+}
+
 func TestCheckIngressBeforeDeployIncludesSSLIPHintFields(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -6636,7 +6658,7 @@ func TestSoloDeployDryRunUsesExplicitEnvironmentWithoutDNS(t *testing.T) {
 	}
 }
 
-func TestSoloDeployDryRunDoesNotRequireDNSPreflightForManualTLS(t *testing.T) {
+func TestSoloDeployDryRunPlansRequiredDNSPreflightForManualTLS(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
@@ -6672,8 +6694,8 @@ func TestSoloDeployDryRunDoesNotRequireDNSPreflightForManualTLS(t *testing.T) {
 		t.Fatalf("payload = %#v, want TLS pending dry-run", payload)
 	}
 	planned := jsonMapFromAny(t, payload["planned_dns_check"])
-	if planned["live_lookup"] != false || planned["required"] != false || planned["skipped"] != false || planned["check_command"] != "devopsellence ingress check --env 'production'" {
-		t.Fatalf("planned_dns_check = %#v, want optional manual-TLS DNS check", planned)
+	if planned["live_lookup"] != false || planned["required"] != true || planned["skipped"] != false || planned["check_command"] != "devopsellence ingress check --env 'production'" {
+		t.Fatalf("planned_dns_check = %#v, want required manual-TLS DNS check", planned)
 	}
 }
 

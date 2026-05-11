@@ -2,6 +2,7 @@ package solo
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,6 +21,7 @@ type Authority struct {
 	// cached state for change detection
 	modTime time.Time
 	size    int64
+	digest  [sha256.Size]byte
 	desired *authority.FetchResult
 }
 
@@ -39,24 +41,38 @@ func (a *Authority) Fetch(_ context.Context) (*authority.FetchResult, error) {
 		return nil, fmt.Errorf("stat desired state file: %w", err)
 	}
 
-	// Return cached result if file hasn't changed.
-	if a.desired != nil && info.ModTime().Equal(a.modTime) && info.Size() == a.size {
+	data, err := os.ReadFile(a.path)
+	if err != nil {
+		return nil, fmt.Errorf("read desired state file: %w", err)
+	}
+	digest := sha256.Sum256(data)
+
+	// Return cached result if file content hasn't changed. The content digest
+	// keeps rapid solo republish operations safe on filesystems with coarse
+	// timestamp resolution.
+	if a.desired != nil && info.ModTime().Equal(a.modTime) && info.Size() == a.size && digest == a.digest {
 		return a.desired, nil
 	}
 
-	desired, present, err := desiredstatecache.LoadOverride(a.path)
+	desired, present, err := desiredstatecache.ParseOverride(data)
 	if err != nil {
 		return nil, fmt.Errorf("load desired state: %w", err)
 	}
+	a.modTime = info.ModTime()
+	a.size = info.Size()
+	a.digest = digest
 	if !present {
+		a.desired = nil
 		return nil, authority.ErrNoDesiredState
 	}
 
-	a.modTime = info.ModTime()
-	a.size = info.Size()
+	sequence := info.ModTime().UnixMilli()
+	if a.desired != nil && sequence <= a.desired.Sequence {
+		sequence = a.desired.Sequence + 1
+	}
 	a.desired = &authority.FetchResult{
 		Desired:  desired,
-		Sequence: info.ModTime().UnixMilli(),
+		Sequence: sequence,
 	}
 
 	a.logger.Info("loaded desired state from file", "path", a.path, "revision", desired.GetRevision())

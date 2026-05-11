@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/devopsellence/devopsellence/agent/internal/authority"
 	"github.com/devopsellence/devopsellence/agent/internal/observability"
@@ -67,6 +68,53 @@ func TestFetch_CachesOnSameFile(t *testing.T) {
 
 	if r1 != r2 {
 		t.Error("expected cached result to be the same pointer")
+	}
+}
+
+func TestFetch_ReReadsSameSizeSameModTimeOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "desired-state-override.json")
+	modTime := time.Unix(1_700_000_000, 0)
+
+	state1 := `{"schemaVersion":2,"revision":"v1","environments":[]}`
+	state2 := `{"schemaVersion":2,"revision":"v2","environments":[]}`
+	if len(state1) != len(state2) {
+		t.Fatalf("test states must have same size: %d != %d", len(state1), len(state2))
+	}
+	if err := os.WriteFile(path, []byte(state1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(path, observability.NewLogger(0))
+	r1, err := a.Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.Desired.GetRevision() != "v1" {
+		t.Fatalf("revision = %q, want v1", r1.Desired.GetRevision())
+	}
+
+	if err := os.WriteFile(path, []byte(state2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := a.Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2 == r1 {
+		t.Fatal("Fetch returned cached result after same-size same-modtime overwrite")
+	}
+	if r2.Desired.GetRevision() != "v2" {
+		t.Fatalf("revision = %q, want v2", r2.Desired.GetRevision())
+	}
+	if r2.Sequence <= r1.Sequence {
+		t.Fatalf("sequence = %d, want greater than %d", r2.Sequence, r1.Sequence)
 	}
 }
 

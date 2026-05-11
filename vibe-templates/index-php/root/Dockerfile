@@ -13,6 +13,21 @@ RUN apt-get update \
   && chown -R www-data:www-data /app/data /var/www/html \
   && chmod 700 /app/data
 
+RUN php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)" \
+  && php_version="${php_fpm#/usr/sbin/php-fpm}" \
+  && cat > "/etc/php/${php_version}/fpm/conf.d/99-index-php-production.ini" <<'PHPINI'
+expose_php = Off
+display_errors = Off
+display_startup_errors = Off
+log_errors = On
+error_reporting = E_ALL
+html_errors = Off
+cgi.fix_pathinfo = 0
+session.use_strict_mode = 1
+session.cookie_httponly = 1
+session.cookie_samesite = Lax
+PHPINI
+
 RUN cat > /etc/nginx/conf.d/default.conf <<'NGINX'
 server {
     listen 80;

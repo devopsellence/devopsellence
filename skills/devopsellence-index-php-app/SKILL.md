@@ -29,6 +29,7 @@ Use this skill inside apps generated from the devopsellence index.php template.
 - Keep state-changing routes on POST. Add CSRF tokens before introducing sessions, login, account settings, billing, or destructive actions.
 - Validate uploads and file paths before adding file storage. Do not trust client filenames, MIME types, extensions, or relative paths.
 - Use `password_hash` and `password_verify` for passwords if auth is added; never invent password storage.
+- Keep production PHP settings boring and explicit in Docker: hide PHP version headers, disable displayed errors, log errors, keep `E_ALL`, disable `cgi.fix_pathinfo`, and use strict/HttpOnly/SameSite session defaults.
 
 ## Schema Changes
 

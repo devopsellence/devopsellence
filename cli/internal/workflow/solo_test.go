@@ -2271,6 +2271,22 @@ func TestCheckIngressBeforeDeployTreatsAutoTLSModeCaseInsensitively(t *testing.T
 	}
 }
 
+func TestCheckIngressBeforeDeployAllowsManualTLSWithoutConcreteHostnames(t *testing.T) {
+	cfg := config.DefaultProjectConfig("solo", "demo", "production")
+	cfg.Ingress = &config.IngressConfig{
+		Hosts: []string{"*"},
+		Rules: []config.IngressRuleConfig{{Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName}}},
+		TLS:   config.IngressTLSConfig{Mode: "manual"},
+	}
+
+	err := (&App{}).checkIngressBeforeDeploy(context.Background(), &cfg, map[string]config.Node{
+		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
+	}, false)
+	if err != nil {
+		t.Fatalf("checkIngressBeforeDeploy() error = %v, want nil", err)
+	}
+}
+
 func TestCheckIngressBeforeDeployRequiresDNSForConcreteHTTPHost(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{

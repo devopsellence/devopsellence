@@ -3027,7 +3027,7 @@ func ingressRequiresDNSPreflight(cfg *config.ProjectConfig) bool {
 	if cfg == nil || cfg.Ingress == nil {
 		return false
 	}
-	return len(concreteIngressHosts(cfg)) > 0 || ingressRequiresTLSReadiness(cfg)
+	return len(concreteIngressHosts(cfg)) > 0 || strings.EqualFold(strings.TrimSpace(cfg.Ingress.TLS.Mode), "auto")
 }
 
 func soloPublicURLStatus(cfg *config.ProjectConfig) string {

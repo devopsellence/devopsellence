@@ -60,8 +60,8 @@ func (a *Authority) Fetch(_ context.Context) (*authority.FetchResult, error) {
 
 	// Return cached result if file content hasn't changed. The content digest
 	// keeps rapid solo republish operations safe on filesystems with coarse
-	// timestamp resolution.
-	if a.desired != nil && info.ModTime().Equal(a.modTime) && info.Size() == a.size && digest == a.digest {
+	// timestamp resolution while avoiding reconciles for metadata-only changes.
+	if a.desired != nil && digest == a.digest {
 		return a.desired, nil
 	}
 

@@ -71,6 +71,35 @@ func TestFetch_CachesOnSameFile(t *testing.T) {
 	}
 }
 
+func TestFetch_CachesSameContentWithNewModTime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "desired-state-override.json")
+
+	state := `{"schemaVersion":2,"revision":"v1","environments":[]}`
+	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(path, observability.NewLogger(0))
+	r1, err := a.Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newModTime := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, newModTime, newModTime); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := a.Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if r1 != r2 {
+		t.Fatal("expected metadata-only change to reuse cached result")
+	}
+}
+
 func TestFetch_ReReadsSameSizeSameModTimeOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "desired-state-override.json")

@@ -1033,10 +1033,20 @@ const vibeIndexPHPIndex = `<?php
 declare(strict_types=1);
 
 $dbPath = getenv('DB_PATH') ?: dirname(__DIR__) . '/data/app.sqlite';
+$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+if ($path === '/healthz') {
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true]) . "\n";
+    exit;
+}
+
 $dbDir = dirname($dbPath);
 if (!is_dir($dbDir) && !mkdir($dbDir, 0700, true) && !is_dir($dbDir)) {
+    error_log('Unable to create SQLite data directory: ' . $dbDir);
     http_response_code(500);
-    throw new RuntimeException('Unable to create SQLite data directory');
+    header('Content-Type: text/plain; charset=utf-8');
+    echo "internal server error\n";
+    exit;
 }
 
 $db = new PDO('sqlite:' . $dbPath, null, null, [
@@ -1050,13 +1060,6 @@ $db->exec('CREATE TABLE IF NOT EXISTS notes (
     body TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )');
-
-$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-if ($path === '/healthz') {
-    header('Content-Type: application/json');
-    echo json_encode(['ok' => true]) . "\n";
-    exit;
-}
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $body = trim((string)($_POST['body'] ?? ''));

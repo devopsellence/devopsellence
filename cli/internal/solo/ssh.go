@@ -92,10 +92,19 @@ func (e *SSHError) Error() string {
 	if e == nil {
 		return "ssh error"
 	}
+	hint := sshConfigRecoveryHint(e.Stderr)
 	if e.Stderr != "" {
-		return fmt.Sprintf("ssh %s@%s: %v: %s", e.User, e.Host, e.Err, e.Stderr)
+		return fmt.Sprintf("ssh %s@%s: %v: %s%s", e.User, e.Host, e.Err, e.Stderr, hint)
 	}
-	return fmt.Sprintf("ssh %s@%s: %v", e.User, e.Host, e.Err)
+	return fmt.Sprintf("ssh %s@%s: %v%s", e.User, e.Host, e.Err, hint)
+}
+
+func sshConfigRecoveryHint(stderr string) string {
+	lower := strings.ToLower(stderr)
+	if strings.Contains(lower, "bad owner or permissions") && strings.Contains(lower, ".ssh/config") {
+		return " Set DEVOPSELLENCE_SSH_CONFIG=none to skip the local SSH config for devopsellence, or fix ~/.ssh/config ownership and permissions."
+	}
+	return ""
 }
 
 func (e *SSHError) Unwrap() error {

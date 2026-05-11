@@ -1446,7 +1446,7 @@ func (a *App) prepareRepublishPlans(ctx context.Context, current solo.State, nod
 }
 
 func explainCohostedIngressConflict(err error, snapshots []desiredstate.DeploySnapshot) error {
-	if err == nil || len(snapshots) < 2 || !strings.Contains(err.Error(), "cannot merge ingress for co-hosted environments") {
+	if err == nil || len(snapshots) < 2 || !strings.Contains(err.Error(), "cannot merge ingress for co-hosted environments with different settings") {
 		return err
 	}
 	return fmt.Errorf("%w; co-hosted ingress settings: %s", err, cohostedIngressSettingsSummary(snapshots))

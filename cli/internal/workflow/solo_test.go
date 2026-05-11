@@ -1700,7 +1700,14 @@ func TestSoloStatusSurfacesAgentTLSReadyBeforeEndpointVerification(t *testing.T)
 		t.Fatalf("payload = %#v, node TLS readiness alone must not emit verified public_urls", payload)
 	}
 	warnings := jsonArrayFromMap(t, payload, "warnings")
-	if len(warnings) == 0 || !strings.Contains(stringValueAny(warnings[0]), "devopsellence ingress check --env 'production' --wait 5m") {
+	foundIngressCheckGuidance := false
+	for _, warning := range warnings {
+		if strings.Contains(stringValueAny(warning), "devopsellence ingress check --env 'production' --wait 5m") {
+			foundIngressCheckGuidance = true
+			break
+		}
+	}
+	if !foundIngressCheckGuidance {
 		t.Fatalf("warnings = %#v, want ingress check guidance", warnings)
 	}
 	runtimeVerified := jsonMapFromAny(t, payload["runtime_verified"])

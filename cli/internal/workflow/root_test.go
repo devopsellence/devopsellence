@@ -572,7 +572,7 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"FROM nginx:latest", "php-fpm", "php-sqlite3", "sqlite3", "env[DB_PATH] = $DB_PATH", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
+	for _, want := range []string{"FROM nginx:latest", "php8.4-fpm", "php8.4-sqlite3", "sqlite3", "env[DB_PATH] = $DB_PATH", "chown www-data:www-data /app/data", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
 		if !strings.Contains(string(dockerfile), want) {
 			t.Fatalf("Dockerfile missing %q:\n%s", want, dockerfile)
 		}
@@ -597,6 +597,28 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 	}
 	if manifest.AppStack != "index-php" || manifest.AppStackName != "index.php" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want index.php stack metadata", manifest)
+	}
+}
+
+func TestRootVibeRejectsTemplateVersionFlag(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	installFakeIndexPHPVibeTools(t)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "tiny-notes",
+		"--stack", "index.php",
+		"--idea", "A tiny notes board for solo founders",
+		"--template-version", "v1-test",
+		"--no-launch",
+	})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unknown flag: --template-version") {
+		t.Fatalf("error = %v, want unknown template-version flag", err)
 	}
 }
 

@@ -3,7 +3,7 @@ FROM nginx:latest
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends php-fpm php-sqlite3 sqlite3 \
+  && apt-get install -y --no-install-recommends php8.4-fpm php8.4-sqlite3 sqlite3 \
   && rm -rf /var/lib/apt/lists/* \
   && php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)" \
   && php_version="${php_fpm#/usr/sbin/php-fpm}" \
@@ -35,6 +35,8 @@ NGINX
 RUN cat > /usr/local/bin/start-index-php <<'SH'
 #!/usr/bin/env sh
 set -eu
+mkdir -p /app/data
+chown www-data:www-data /app/data
 php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)"
 "$php_fpm" -D
 exec nginx -g 'daemon off;'

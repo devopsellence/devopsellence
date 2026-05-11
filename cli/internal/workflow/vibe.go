@@ -36,7 +36,6 @@ type VibeOptions struct {
 	TLSEmail          string
 	Services          string
 	ProjectsDir       string
-	TemplateVersion   string
 	Launch            bool
 	NoAgent           bool
 	Force             bool
@@ -204,11 +203,8 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if err != nil {
 		return err
 	}
-	opts.TemplateVersion = strings.TrimSpace(opts.TemplateVersion)
-	if opts.TemplateVersion == "" {
-		opts.TemplateVersion = defaultVibeTemplateVersion()
-	}
-	templateURL := vibeTemplateURL(stackSpec.ID, opts.TemplateVersion)
+	templateVersion := defaultVibeTemplateVersion()
+	templateURL := vibeTemplateURL(stackSpec.ID, templateVersion)
 	if err := a.ensureVibeTools(stackSpec.ID); err != nil {
 		return err
 	}
@@ -260,7 +256,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		AppStack:         stackSpec.ID,
 		AppStackName:     stackSpec.Name,
 		TemplateURL:      templateURL,
-		TemplateVersion:  opts.TemplateVersion,
+		TemplateVersion:  templateVersion,
 		SkillDir:         filepath.Join(".agents", "skills"),
 		PromptPath:       filepath.Join(".agents", "prompts", "devopsellence-vibe.md"),
 		Idea:             opts.Idea,
@@ -295,7 +291,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		"app_stack":         stackSpec.ID,
 		"app_stack_name":    stackSpec.Name,
 		"template_url":      templateURL,
-		"template_version":  opts.TemplateVersion,
+		"template_version":  templateVersion,
 		"skill_id":          stackSpec.SkillID,
 		"skill_name":        stackSpec.SkillName,
 		"skill":             stackSpec.SkillName,
@@ -926,7 +922,7 @@ const vibeIndexPHPDockerfile = `FROM nginx:latest
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends php-fpm php-sqlite3 sqlite3 \
+  && apt-get install -y --no-install-recommends php8.4-fpm php8.4-sqlite3 sqlite3 \
   && rm -rf /var/lib/apt/lists/* \
   && php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)" \
   && php_version="${php_fpm#/usr/sbin/php-fpm}" \
@@ -958,6 +954,8 @@ NGINX
 RUN cat > /usr/local/bin/start-index-php <<'SH'
 #!/usr/bin/env sh
 set -eu
+mkdir -p /app/data
+chown www-data:www-data /app/data
 php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)"
 "$php_fpm" -D
 exec nginx -g 'daemon off;'

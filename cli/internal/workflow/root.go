@@ -619,7 +619,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	vibeCommand.Flags().StringVar(&vibeOpts.TLSEmail, "tls-email", "", "TLS email to use when configuring ingress")
 	vibeCommand.Flags().StringVar(&vibeOpts.Services, "services", "later", "Comma-separated external services: later, managed-postgres, object-storage, email, cloudflare-dns")
 	vibeCommand.Flags().StringVar(&vibeOpts.ProjectsDir, "projects-dir", "", "Directory for bare app names (default ~/devopsellence-projects or DEVOPSELLENCE_PROJECTS_DIR)")
-	vibeCommand.Flags().StringVar(&vibeOpts.TemplateVersion, "template-version", defaultVibeTemplateVersion(), "devopsellence vibe template git ref")
 	vibeCommand.Flags().BoolVar(&vibeNoLaunch, "no-launch", false, "Prepare the app without starting the AI agent")
 	vibeCommand.Flags().BoolVar(&vibeOpts.NoAgent, "no-agent", false, "Prepare the app and prompt without selecting or starting an AI agent")
 	vibeCommand.Flags().BoolVar(&vibeOpts.Force, "force", false, "Allow initializing a non-empty directory")

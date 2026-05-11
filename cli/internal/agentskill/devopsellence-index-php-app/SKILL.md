@@ -22,6 +22,14 @@ Use this skill inside apps generated from the devopsellence index.php template.
 - Extra hosted services, observability vendors, or managed databases before the app has real production pressure.
 - A second deployment system. Use devopsellence for deploy, secrets, logs, status, rollback, and node operations.
 
+## Security Baseline
+
+- Use PDO prepared statements for every query that includes user-controlled values. Never build SQL by concatenating request params, cookies, headers, or path parts.
+- Escape HTML output with `htmlspecialchars(..., ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')` unless the value is intentionally trusted markup.
+- Keep state-changing routes on POST. Add CSRF tokens before introducing sessions, login, account settings, billing, or destructive actions.
+- Validate uploads and file paths before adding file storage. Do not trust client filenames, MIME types, extensions, or relative paths.
+- Use `password_hash` and `password_verify` for passwords if auth is added; never invent password storage.
+
 ## Build Loop
 
 1. Inspect the app and the user's request.

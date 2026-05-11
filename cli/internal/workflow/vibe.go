@@ -1240,6 +1240,7 @@ func vibeStackPromptLines(stack string) []string {
 		return []string{
 			"Stay inside the index.php baseline: PHP 8.4, nginx latest with PHP-FPM, one public/index.php entrypoint, PDO SQLite, no build step, Docker, and mise.",
 			"Use jQuery only when it keeps the product simpler than plain JavaScript. Do not add Laravel, Symfony, React, Next.js, Vite, Node build tooling, Redis, or Postgres unless the product need is explicit.",
+			"Keep the PHP security baseline explicit: PDO prepared statements for user-controlled SQL values, htmlspecialchars for HTML output, POST for state changes, CSRF tokens before sessions/auth/destructive forms, safe upload validation, and password_hash/password_verify if auth is added.",
 			"Keep SQLite on one writable node with a persistent volume. Treat managed PostgreSQL, email, monitoring, and multi-node writes as stack-expansion follow-ups once the MVP needs them.",
 			"When the MVP needs a real domain, public traffic, media, or abuse protection, prefer Cloudflare as the first edge/services expansion: domains, DNS, CDN caching, image resizing, R2 object storage, Stream video, Turnstile, WAF/DDoS, and Tunnel in front of the VPS.",
 			"Keep the app runtime on a normal VPS, commonly Hetzner in solo mode; Cloudflare is the edge/services layer, not a second deployment system.",

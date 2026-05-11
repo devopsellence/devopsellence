@@ -582,7 +582,7 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 			t.Fatalf("devopsellence.yml missing %q:\n%s", want, devopsellenceConfig)
 		}
 	}
-	for _, want := range []string{"App stack: index.php (index-php)", "devopsellence-index-php-app", "nginx latest with PHP-FPM", "Cloudflare as the first edge/services expansion", "Start as one file", "Keep SQLite on one writable node"} {
+	for _, want := range []string{"App stack: index.php (index-php)", "devopsellence-index-php-app", "nginx latest with PHP-FPM", "PDO prepared statements", "htmlspecialchars", "Cloudflare as the first edge/services expansion", "Start as one file", "Keep SQLite on one writable node"} {
 		if !strings.Contains(string(prompt), want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}

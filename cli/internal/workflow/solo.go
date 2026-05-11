@@ -7611,11 +7611,19 @@ func ingressReadinessErrorKind(report ingressDNSReportResult) string {
 	return "ingress_dns_not_ready"
 }
 
-const soloStatusMissingSentinel = "__DEVOPSELLENCE_STATUS_MISSING__"
+const (
+	soloStatusMissingSentinel  = "__DEVOPSELLENCE_STATUS_MISSING__"
+	ingressDNSPreflightTimeout = 30 * time.Second
+)
 
 func (a *App) checkIngressBeforeDeploy(ctx context.Context, cfg *config.ProjectConfig, nodes map[string]config.Node, skip bool, environment ...string) error {
 	if skip || !ingressRequiresDNSPreflight(cfg) {
 		return nil
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ingressDNSPreflightTimeout)
+		defer cancel()
 	}
 	report, err := ingressDNSReport(ctx, cfg, nodes, firstNonEmpty(environment...))
 	if err != nil {

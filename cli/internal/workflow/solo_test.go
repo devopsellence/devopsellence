@@ -2279,7 +2279,9 @@ func TestCheckIngressBeforeDeployAllowsManualTLSWithoutConcreteHostnames(t *test
 		TLS:   config.IngressTLSConfig{Mode: "manual"},
 	}
 
-	err := (&App{}).checkIngressBeforeDeploy(context.Background(), &cfg, map[string]config.Node{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := (&App{}).checkIngressBeforeDeploy(ctx, &cfg, map[string]config.Node{
 		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
 	}, false)
 	if err != nil {
@@ -2298,7 +2300,9 @@ func TestCheckIngressBeforeDeployRequiresDNSForConcreteHTTPHost(t *testing.T) {
 		TLS: config.IngressTLSConfig{Mode: "off"},
 	}
 
-	err := (&App{}).checkIngressBeforeDeploy(context.Background(), &cfg, map[string]config.Node{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := (&App{}).checkIngressBeforeDeploy(ctx, &cfg, map[string]config.Node{
 		"node-a": {Host: "127.0.0.1", User: "root", Labels: []string{config.DefaultWebRole}},
 	}, false)
 	if err == nil {

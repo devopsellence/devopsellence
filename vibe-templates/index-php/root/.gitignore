@@ -1,0 +1,12 @@
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*
+
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+tmp/
+log/

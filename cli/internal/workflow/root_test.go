@@ -104,6 +104,51 @@ exit 0
 	return binDir
 }
 
+func installFakeIndexPHPVibeTools(t *testing.T) string {
+	t.Helper()
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "mise"), "#!/usr/bin/env bash\nexit 0\n")
+	writeExecutable(t, filepath.Join(binDir, "git"), `#!/usr/bin/env bash
+set -euo pipefail
+cwd="$PWD"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -C)
+      cwd="$2"
+      shift 2
+      ;;
+    -c)
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+case "${1:-}" in
+  init)
+    mkdir -p "$cwd/.git"
+    ;;
+  rev-parse)
+    test -f "$cwd/.git/fake-head"
+    ;;
+  add)
+    exit 0
+    ;;
+  commit)
+    mkdir -p "$cwd/.git"
+    touch "$cwd/.git/fake-head"
+    ;;
+  *)
+    echo "unexpected git command: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return binDir
+}
+
 func setFakeVibeHome(t *testing.T, cwd string) string {
 	t.Helper()
 	home := filepath.Join(cwd, "home")
@@ -390,7 +435,7 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 		t.Fatalf("deployment_intent = %#v, want solo deploy-ready defaults", intent)
 	}
 	defaultTemplateVersion := defaultVibeTemplateVersion()
-	if payload["template_version"] != defaultTemplateVersion || payload["template_url"] != vibeTemplateURL(defaultTemplateVersion) || payload["initial_commit"] != true {
+	if payload["template_version"] != defaultTemplateVersion || payload["template_url"] != vibeTemplateURL(vibeRailsAppStack, defaultTemplateVersion) || payload["initial_commit"] != true {
 		t.Fatalf("payload = %#v, want pinned template and initial commit", payload)
 	}
 	if payload["skill_id"] != "rails-app" || payload["skill_name"] != "devopsellence-rails-app" || payload["launched"] != false {
@@ -418,6 +463,9 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if strings.Contains(string(prompt), "then begin building without asking") {
 		t.Fatalf("prompt = %q, want builder autonomy to wait for confirmation", prompt)
 	}
+	if strings.Contains(string(prompt), "Rails app app") {
+		t.Fatalf("prompt = %q, want stack display name without duplicated app suffix", prompt)
+	}
 	railsArgs, err := os.ReadFile(railsArgsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -444,8 +492,175 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
+	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AppStack != "rails-app" || manifest.AppStackName != "Rails app" || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want repo-relative paths", manifest)
+	}
+}
+
+func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	home := setFakeVibeHome(t, cwd)
+	installFakeIndexPHPVibeTools(t)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "tiny-notes",
+		"--stack", "index.php",
+		"--ai-agent", "generic",
+		"--idea", "A tiny notes board for solo founders",
+		"--no-launch",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	projectsDir := filepath.Join(home, defaultVibeProjectsDirName)
+	appDir := filepath.Join(projectsDir, "tiny-notes")
+	defaultTemplateVersion := defaultVibeTemplateVersion()
+	if payload["directory"] != appDir || payload["projects_dir"] != projectsDir || payload["app_stack"] != "index-php" || payload["app_stack_name"] != "index.php" || payload["template_url"] != vibeTemplateURL(vibeIndexPHPStack, defaultTemplateVersion) {
+		t.Fatalf("payload = %#v, want prepared index.php workspace", payload)
+	}
+	if payload["skill_id"] != "index-php" || payload["skill_name"] != "devopsellence-index-php-app" || payload["skill"] != "devopsellence-index-php-app" {
+		t.Fatalf("payload = %#v, want index.php skill metadata", payload)
+	}
+	for _, path := range []string{
+		filepath.Join(appDir, ".git"),
+		filepath.Join(appDir, ".mise.toml"),
+		filepath.Join(appDir, "Dockerfile"),
+		filepath.Join(appDir, "devopsellence.yml"),
+		filepath.Join(appDir, "public", "index.php"),
+		filepath.Join(appDir, "scripts", "check"),
+		filepath.Join(appDir, ".agents", "skills", "devopsellence", "SKILL.md"),
+		filepath.Join(appDir, ".agents", "skills", "devopsellence-index-php-app", "SKILL.md"),
+		filepath.Join(appDir, ".agents", "devopsellence-vibe.json"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{filepath.Join(appDir, "scripts", "check")} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&0o111 == 0 {
+			t.Fatalf("%s is not executable", path)
+		}
+	}
+	dataInfo, err := os.Stat(filepath.Join(appDir, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("data dir mode = %o, want 700", dataInfo.Mode().Perm())
+	}
+	index, err := os.ReadFile(filepath.Join(appDir, "public", "index.php"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	devopsellenceConfig, err := os.ReadFile(filepath.Join(appDir, "devopsellence.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := os.ReadFile(filepath.Join(appDir, ".agents", "prompts", "devopsellence-vibe.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"PRAGMA journal_mode=WAL", "/healthz", "new PDO('sqlite:'"} {
+		if !strings.Contains(string(index), want) {
+			t.Fatalf("index.php missing %q", want)
+		}
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(appDir, "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"FROM nginx:latest", "php8.4-fpm", "php8.4-sqlite3", "env[DB_PATH] = $DB_PATH", "chown -R www-data:www-data /app/data", "display_errors = Off", "expose_php = Off", "cgi.fix_pathinfo = 0", "session.cookie_httponly = 1", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
+		if !strings.Contains(string(dockerfile), want) {
+			t.Fatalf("Dockerfile missing %q:\n%s", want, dockerfile)
+		}
+	}
+	for _, want := range []string{"target: /app/data", "path: /healthz", "source: tiny-notes-data"} {
+		if !strings.Contains(string(devopsellenceConfig), want) {
+			t.Fatalf("devopsellence.yml missing %q:\n%s", want, devopsellenceConfig)
+		}
+	}
+	for _, want := range []string{"App stack: index.php (index-php)", "devopsellence-index-php-app", "nginx latest with PHP-FPM", "PDO prepared statements", "htmlspecialchars", "tasks.release", "Cloudflare as the first edge/services expansion", "Start as one file", "Keep SQLite on one writable node"} {
+		if !strings.Contains(string(prompt), want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	manifestData, err := os.ReadFile(filepath.Join(appDir, ".agents", "devopsellence-vibe.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest vibeManifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.AppStack != "index-php" || manifest.AppStackName != "index.php" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
+		t.Fatalf("manifest = %#v, want index.php stack metadata", manifest)
+	}
+	for _, path := range []string{".gitignore", ".mise.toml", "Dockerfile", "public/index.php", "scripts/check"} {
+		assertFilesEqual(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", path), filepath.Join(appDir, path))
+	}
+	assertGeneratedTemplateFile(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", "README.md"), filepath.Join(appDir, "README.md"), "index-php-app", "tiny-notes")
+	assertGeneratedTemplateFile(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", "devopsellence.yml"), filepath.Join(appDir, "devopsellence.yml"), "index-php-app", "tiny-notes")
+}
+
+func assertFilesEqual(t *testing.T, wantPath, gotPath string) {
+	t.Helper()
+	want, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", wantPath, err)
+	}
+	got, err := os.ReadFile(gotPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", gotPath, err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("%s differs from %s", gotPath, wantPath)
+	}
+}
+
+func assertGeneratedTemplateFile(t *testing.T, wantPath, gotPath, templateName, generatedName string) {
+	t.Helper()
+	want, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", wantPath, err)
+	}
+	got, err := os.ReadFile(gotPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", gotPath, err)
+	}
+	expected := strings.ReplaceAll(string(want), templateName, generatedName)
+	if string(got) != expected {
+		t.Fatalf("%s differs from %s after template name replacement", gotPath, wantPath)
+	}
+}
+
+func TestRootVibeRejectsTemplateVersionFlag(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	installFakeIndexPHPVibeTools(t)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "tiny-notes",
+		"--stack", "index.php",
+		"--idea", "A tiny notes board for solo founders",
+		"--template-version", "v1-test",
+		"--no-launch",
+	})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unknown flag: --template-version") {
+		t.Fatalf("error = %v, want unknown template-version flag", err)
 	}
 }
 

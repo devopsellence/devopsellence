@@ -595,7 +595,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	vibeOpts.Launch = true
 	vibeCommand := &cobra.Command{
 		Use:   "vibe [name-or-directory]",
-		Short: "Generate a blessed Rails app and start an AI-agent build loop",
+		Short: "Generate a blessed app and start an AI-agent build loop",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -605,6 +605,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return app.Vibe(cmd.Context(), vibeOpts)
 		},
 	}
+	vibeCommand.Flags().StringVar(&vibeOpts.Stack, "stack", defaultVibeStack, "App stack: rails-app or index-php")
 	vibeCommand.Flags().StringVar(&vibeOpts.AIAgent, "ai-agent", "", "AI agent to seed: codex, claude, pi, opencode, or generic")
 	vibeCommand.Flags().StringVar(&vibeOpts.AgentEffort, "agent-effort", defaultVibeAgentEffort, "AI agent effort/thinking level: default, low, medium, high, or xhigh")
 	vibeCommand.Flags().StringVar(&vibeOpts.AgentAutonomy, "autonomy", defaultVibeAgentAutonomy, "Agent freedom: careful, builder, or full-access")
@@ -618,9 +619,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	vibeCommand.Flags().StringVar(&vibeOpts.TLSEmail, "tls-email", "", "TLS email to use when configuring ingress")
 	vibeCommand.Flags().StringVar(&vibeOpts.Services, "services", "later", "Comma-separated external services: later, managed-postgres, object-storage, email, cloudflare-dns")
 	vibeCommand.Flags().StringVar(&vibeOpts.ProjectsDir, "projects-dir", "", "Directory for bare app names (default ~/devopsellence-projects or DEVOPSELLENCE_PROJECTS_DIR)")
-	vibeCommand.Flags().StringVar(&vibeOpts.TemplateVersion, "template-version", defaultVibeTemplateVersion(), "devopsellence Rails template git ref")
-	vibeCommand.Flags().BoolVar(&vibeNoLaunch, "no-launch", false, "Prepare the Rails app without starting the AI agent")
-	vibeCommand.Flags().BoolVar(&vibeOpts.NoAgent, "no-agent", false, "Prepare the Rails app and prompt without selecting or starting an AI agent")
+	vibeCommand.Flags().BoolVar(&vibeNoLaunch, "no-launch", false, "Prepare the app without starting the AI agent")
+	vibeCommand.Flags().BoolVar(&vibeOpts.NoAgent, "no-agent", false, "Prepare the app and prompt without selecting or starting an AI agent")
 	vibeCommand.Flags().BoolVar(&vibeOpts.Force, "force", false, "Allow initializing a non-empty directory")
 	root.AddCommand(vibeCommand)
 

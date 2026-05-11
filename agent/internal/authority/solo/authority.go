@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/devopsellence/devopsellence/agent/internal/authority"
 	"github.com/devopsellence/devopsellence/agent/internal/desiredstatecache"
@@ -20,8 +19,6 @@ type Authority struct {
 	read   func(string) ([]byte, error)
 
 	// cached state for change detection
-	modTime time.Time
-	size    int64
 	digest  [sha256.Size]byte
 	desired *authority.FetchResult
 }
@@ -69,8 +66,6 @@ func (a *Authority) Fetch(_ context.Context) (*authority.FetchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load desired state: %w", err)
 	}
-	a.modTime = info.ModTime()
-	a.size = info.Size()
 	a.digest = digest
 	if !present {
 		a.desired = nil

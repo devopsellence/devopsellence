@@ -2292,13 +2292,18 @@ func TestCheckIngressBeforeDeployAllowsManualTLSWithoutConcreteHostnames(t *test
 func TestCheckIngressBeforeDeployRequiresDNSForConcreteHTTPHost(t *testing.T) {
 	cfg := config.DefaultProjectConfig("solo", "demo", "production")
 	cfg.Ingress = &config.IngressConfig{
-		Hosts: []string{"definitely-not-resolving-devopsellence-test.invalid"},
+		Hosts: []string{"app.example"},
 		Rules: []config.IngressRuleConfig{{
-			Match:  config.IngressMatchConfig{Host: "definitely-not-resolving-devopsellence-test.invalid", PathPrefix: "/"},
+			Match:  config.IngressMatchConfig{Host: "app.example", PathPrefix: "/"},
 			Target: config.IngressTargetConfig{Service: config.DefaultWebServiceName, Port: "http"},
 		}},
 		TLS: config.IngressTLSConfig{Mode: "off"},
 	}
+	oldLookup := ingressDNSLookupHost
+	ingressDNSLookupHost = func(context.Context, string) ([]string, error) {
+		return nil, errors.New("lookup failed")
+	}
+	t.Cleanup(func() { ingressDNSLookupHost = oldLookup })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

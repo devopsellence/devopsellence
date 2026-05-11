@@ -7559,6 +7559,7 @@ type ingressTLSProbeResult struct {
 }
 
 var ingressTLSProbe = defaultIngressTLSProbe
+var ingressDNSLookupHost = net.DefaultResolver.LookupHost
 
 type ingressHint struct {
 	Code            string            `json:"code"`
@@ -7686,7 +7687,7 @@ func ingressReadinessReport(ctx context.Context, cfg *config.ProjectConfig, sele
 	}
 	for _, host := range hosts {
 		result := ingressDNSHostResult{Host: host}
-		resolved, err := net.DefaultResolver.LookupHost(ctx, host)
+		resolved, err := ingressDNSLookupHost(ctx, host)
 		if err != nil {
 			result.Error = err.Error()
 		}

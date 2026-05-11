@@ -906,13 +906,18 @@ const vibeIndexPHPMiseTOML = `[tools]
 php = "8.4"
 `
 
-const vibeIndexPHPGitignore = `.env
-.env.*
-!.env.example
-data/*.sqlite
+const vibeIndexPHPGitignore = `data/*.sqlite
 data/*.sqlite-*
 data/*.db
 data/*.db-*
+
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+tmp/
+log/
 `
 
 const vibeIndexPHPDockerfile = `FROM nginx:latest
@@ -927,7 +932,8 @@ RUN apt-get update \
   && sed -i 's|^listen = .*|listen = 127.0.0.1:9000|' "/etc/php/${php_version}/fpm/pool.d/www.conf" \
   && printf '\nenv[APP_ENV] = $APP_ENV\nenv[DB_PATH] = $DB_PATH\n' >> "/etc/php/${php_version}/fpm/pool.d/www.conf" \
   && mkdir -p /app/data /var/www/html \
-  && chown -R www-data:www-data /app/data /var/www/html
+  && chown -R www-data:www-data /app/data /var/www/html \
+  && chmod 700 /app/data
 
 RUN cat > /etc/nginx/conf.d/default.conf <<'NGINX'
 server {
@@ -954,6 +960,7 @@ RUN cat > /usr/local/bin/start-index-php <<'SH'
 set -eu
 mkdir -p /app/data
 chown -R www-data:www-data /app/data
+chmod 700 /app/data
 php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)"
 "$php_fpm" -D
 exec nginx -g 'daemon off;'
@@ -1027,8 +1034,9 @@ declare(strict_types=1);
 
 $dbPath = getenv('DB_PATH') ?: dirname(__DIR__) . '/data/app.sqlite';
 $dbDir = dirname($dbPath);
-if (!is_dir($dbDir)) {
-    mkdir($dbDir, 0775, true);
+if (!is_dir($dbDir) && !mkdir($dbDir, 0700, true) && !is_dir($dbDir)) {
+    http_response_code(500);
+    throw new RuntimeException('Unable to create SQLite data directory');
 }
 
 $db = new PDO('sqlite:' . $dbPath, null, null, [

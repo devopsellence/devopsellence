@@ -32,6 +32,7 @@ class IndexPHPTemplateSmokeTest < Minitest::Test
       refute_includes dockerfile, " sqlite3"
       assert_includes dockerfile, "env[DB_PATH] = $DB_PATH"
       assert_includes dockerfile, "chown -R www-data:www-data /app/data"
+      assert_includes dockerfile, "chmod 700 /app/data"
       assert_includes dockerfile, "try_files $uri /index.php$is_args$args"
       assert_includes dockerfile, "CMD [\"start-index-php\"]"
       assert_includes devopsellence_config, "target: /app/data"

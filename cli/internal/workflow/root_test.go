@@ -597,7 +597,7 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 	if manifest.AppStack != "index-php" || manifest.AppStackName != "index.php" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want index.php stack metadata", manifest)
 	}
-	for _, path := range []string{".mise.toml", "Dockerfile", "public/index.php", "scripts/check"} {
+	for _, path := range []string{".gitignore", ".mise.toml", "Dockerfile", "public/index.php", "scripts/check"} {
 		assertFilesEqual(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", path), filepath.Join(appDir, path))
 	}
 	assertGeneratedTemplateFile(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", "README.md"), filepath.Join(appDir, "README.md"), "index-php-app", "tiny-notes")

@@ -3,8 +3,9 @@ declare(strict_types=1);
 
 $dbPath = getenv('DB_PATH') ?: dirname(__DIR__) . '/data/app.sqlite';
 $dbDir = dirname($dbPath);
-if (!is_dir($dbDir)) {
-    mkdir($dbDir, 0775, true);
+if (!is_dir($dbDir) && !mkdir($dbDir, 0700, true) && !is_dir($dbDir)) {
+    http_response_code(500);
+    throw new RuntimeException('Unable to create SQLite data directory');
 }
 
 $db = new PDO('sqlite:' . $dbPath, null, null, [

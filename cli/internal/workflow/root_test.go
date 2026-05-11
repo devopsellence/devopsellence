@@ -463,6 +463,9 @@ func TestRootVibePreparesRailsAppWorkspace(t *testing.T) {
 	if strings.Contains(string(prompt), "then begin building without asking") {
 		t.Fatalf("prompt = %q, want builder autonomy to wait for confirmation", prompt)
 	}
+	if strings.Contains(string(prompt), "Rails app app") {
+		t.Fatalf("prompt = %q, want stack display name without duplicated app suffix", prompt)
+	}
 	railsArgs, err := os.ReadFile(railsArgsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -569,7 +572,7 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"FROM nginx:latest", "php-fpm", "php-sqlite3", "clear_env = no", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
+	for _, want := range []string{"FROM nginx:latest", "php-fpm", "php-sqlite3", "sqlite3", "env[DB_PATH] = $DB_PATH", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
 		if !strings.Contains(string(dockerfile), want) {
 			t.Fatalf("Dockerfile missing %q:\n%s", want, dockerfile)
 		}

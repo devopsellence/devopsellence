@@ -278,7 +278,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if err := ensureGitRepository(ctx, target); err != nil {
 		return err
 	}
-	initialCommit, err := ensureInitialVibeCommit(ctx, target, stackSpec.Name)
+	initialCommit, err := ensureInitialVibeCommit(ctx, target, vibeAppKind(stackSpec))
 	if err != nil {
 		return err
 	}
@@ -778,7 +778,7 @@ func ensureGitRepository(ctx context.Context, path string) error {
 	return nil
 }
 
-func ensureInitialVibeCommit(ctx context.Context, path, stackName string) (bool, error) {
+func ensureInitialVibeCommit(ctx context.Context, path, appKind string) (bool, error) {
 	if err := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--quiet", "--verify", "HEAD").Run(); err == nil {
 		return false, nil
 	} else {
@@ -790,7 +790,7 @@ func ensureInitialVibeCommit(ctx context.Context, path, stackName string) (bool,
 	if output, err := exec.CommandContext(ctx, "git", "-C", path, "add", ".").CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git add: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	message := "Initial devopsellence " + stackName + " app"
+	message := "Initial devopsellence " + appKind
 	cmd := exec.CommandContext(ctx, "git", "-C", path, "-c", "user.name=devopsellence", "-c", "user.email=devopsellence@example.invalid", "commit", "-m", message)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(output)))
@@ -926,12 +926,12 @@ const vibeIndexPHPDockerfile = `FROM nginx:latest
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends php-fpm php-sqlite3 \
+  && apt-get install -y --no-install-recommends php-fpm php-sqlite3 sqlite3 \
   && rm -rf /var/lib/apt/lists/* \
   && php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)" \
   && php_version="${php_fpm#/usr/sbin/php-fpm}" \
   && sed -i 's|^listen = .*|listen = 127.0.0.1:9000|' "/etc/php/${php_version}/fpm/pool.d/www.conf" \
-  && printf '\nclear_env = no\n' >> "/etc/php/${php_version}/fpm/pool.d/www.conf" \
+  && printf '\nenv[APP_ENV] = $APP_ENV\nenv[DB_PATH] = $DB_PATH\n' >> "/etc/php/${php_version}/fpm/pool.d/www.conf" \
   && mkdir -p /app/data /var/www/html \
   && chown -R www-data:www-data /app/data /var/www/html
 
@@ -1054,7 +1054,7 @@ if ($path === '/healthz') {
     exit;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $body = trim((string)($_POST['body'] ?? ''));
     if ($body !== '') {
         $stmt = $db->prepare('INSERT INTO notes (body) VALUES (:body)');
@@ -1112,6 +1112,10 @@ const vibeIndexPHPBackupScript = `#!/usr/bin/env bash
 set -euo pipefail
 
 db="${DB_PATH:-data/app.sqlite}"
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "sqlite3 not found; install sqlite3 before running backups" >&2
+  exit 127
+fi
 mkdir -p backups
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 sqlite3 "$db" ".backup 'backups/app-$stamp.sqlite'"
@@ -1161,7 +1165,7 @@ func defaultVibeTemplateVersion() string {
 
 func vibePrompt(agent, autonomy string, stack vibeStackSpec, templateURL, idea string, intent vibeDeploymentIntent) string {
 	var firstLine string
-	appKind := stack.Name + " app"
+	appKind := vibeAppKind(stack)
 	switch agent {
 	case "codex":
 		firstLine = "/goal Build this app idea into a deployable " + appKind + " using the installed " + stack.SkillName + " skill."
@@ -1216,6 +1220,13 @@ func vibePrompt(agent, autonomy string, stack vibeStackSpec, templateURL, idea s
 		"",
 	)
 	return strings.Join(lines, "\n")
+}
+
+func vibeAppKind(stack vibeStackSpec) string {
+	if strings.HasSuffix(strings.ToLower(stack.Name), " app") {
+		return stack.Name
+	}
+	return stack.Name + " app"
 }
 
 func vibePlanApprovalPromptLine(autonomy string) string {

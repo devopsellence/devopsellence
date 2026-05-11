@@ -3,12 +3,12 @@ FROM nginx:latest
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends php-fpm php-sqlite3 \
+  && apt-get install -y --no-install-recommends php-fpm php-sqlite3 sqlite3 \
   && rm -rf /var/lib/apt/lists/* \
   && php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)" \
   && php_version="${php_fpm#/usr/sbin/php-fpm}" \
   && sed -i 's|^listen = .*|listen = 127.0.0.1:9000|' "/etc/php/${php_version}/fpm/pool.d/www.conf" \
-  && printf '\nclear_env = no\n' >> "/etc/php/${php_version}/fpm/pool.d/www.conf" \
+  && printf '\nenv[APP_ENV] = $APP_ENV\nenv[DB_PATH] = $DB_PATH\n' >> "/etc/php/${php_version}/fpm/pool.d/www.conf" \
   && mkdir -p /app/data /var/www/html \
   && chown -R www-data:www-data /app/data /var/www/html
 

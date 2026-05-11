@@ -26,7 +26,7 @@ if ($path === '/healthz') {
     exit;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $body = trim((string)($_POST['body'] ?? ''));
     if ($body !== '') {
         $stmt = $db->prepare('INSERT INTO notes (body) VALUES (:body)');

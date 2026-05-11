@@ -118,6 +118,28 @@ func TestFetch_ReReadsSameSizeSameModTimeOverwrite(t *testing.T) {
 	}
 }
 
+func TestFetch_ReadMissingFileReturnsNoDesiredState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "desired-state-override.json")
+	state := `{"schemaVersion":2,"revision":"v1","environments":[]}`
+	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(path, observability.NewLogger(0))
+	a.read = func(string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+
+	_, err := a.Fetch(context.Background())
+	if err != authority.ErrNoDesiredState {
+		t.Fatalf("expected ErrNoDesiredState for read race, got %v", err)
+	}
+	if a.desired != nil {
+		t.Fatal("expected cached desired state to be cleared")
+	}
+}
+
 func TestFetch_DisabledOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "desired-state-override.json")

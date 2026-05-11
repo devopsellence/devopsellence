@@ -17,6 +17,7 @@ import (
 type Authority struct {
 	path   string
 	logger *slog.Logger
+	read   func(string) ([]byte, error)
 
 	// cached state for change detection
 	modTime time.Time
@@ -29,6 +30,7 @@ func New(path string, logger *slog.Logger) *Authority {
 	return &Authority{
 		path:   path,
 		logger: logger,
+		read:   os.ReadFile,
 	}
 }
 
@@ -36,13 +38,22 @@ func (a *Authority) Fetch(_ context.Context) (*authority.FetchResult, error) {
 	info, err := os.Stat(a.path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			a.desired = nil
 			return nil, authority.ErrNoDesiredState
 		}
 		return nil, fmt.Errorf("stat desired state file: %w", err)
 	}
 
-	data, err := os.ReadFile(a.path)
+	read := a.read
+	if read == nil {
+		read = os.ReadFile
+	}
+	data, err := read(a.path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			a.desired = nil
+			return nil, authority.ErrNoDesiredState
+		}
 		return nil, fmt.Errorf("read desired state file: %w", err)
 	}
 	digest := sha256.Sum256(data)

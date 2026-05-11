@@ -22,6 +22,7 @@ import (
 
 type VibeOptions struct {
 	Directory         string
+	Stack             string
 	AIAgent           string
 	AgentEffort       string
 	AgentAutonomy     string
@@ -48,6 +49,7 @@ type vibeManifest struct {
 	AgentAutonomy    string               `json:"agent_autonomy"`
 	DetectedAgents   []string             `json:"detected_agents"`
 	AppStack         string               `json:"app_stack"`
+	AppStackName     string               `json:"app_stack_name"`
 	TemplateURL      string               `json:"template_url"`
 	TemplateVersion  string               `json:"template_version"`
 	SkillDir         string               `json:"skill_dir"`
@@ -72,7 +74,11 @@ type vibeDeploymentIntent struct {
 }
 
 const (
-	vibeAppStack                 = "rails-app"
+	vibeRailsAppStack            = "rails-app"
+	vibeRailsAppStackName        = "Rails app"
+	vibeIndexPHPStack            = "index-php"
+	vibeIndexPHPStackName        = "index.php"
+	defaultVibeStack             = vibeRailsAppStack
 	defaultVibeProjectsDirName   = "devopsellence-projects"
 	defaultVibeAgentEffort       = "high"
 	defaultVibeAgentAutonomy     = "builder"
@@ -87,12 +93,57 @@ const (
 	maxVibeIdeaLength            = 4096
 )
 
+type vibeStackSpec struct {
+	ID        string
+	Name      string
+	SkillID   string
+	SkillName string
+}
+
 var vibeSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
 var vibeAgentPreference = []string{"codex", "claude", "pi", "opencode"}
 
 var errVibeAgentProbeTimeout = errors.New("agent readiness probe timed out")
 
+func normalizeVibeStack(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	normalized = strings.ReplaceAll(normalized, " ", "-")
+	switch normalized {
+	case "", "rails", "rails-app":
+		return vibeRailsAppStack, nil
+	case "index.php", "index-php", "php", "php-sqlite", "plain-php", "onefile-php":
+		return vibeIndexPHPStack, nil
+	default:
+		return "", ExitError{Code: 2, Err: fmt.Errorf("unsupported vibe stack %q; use rails-app or index-php", value)}
+	}
+}
+
+func vibeStack(id string) vibeStackSpec {
+	switch id {
+	case vibeIndexPHPStack:
+		return vibeStackSpec{
+			ID:        vibeIndexPHPStack,
+			Name:      vibeIndexPHPStackName,
+			SkillID:   agentskill.IndexPHPAppID,
+			SkillName: agentskill.IndexPHPAppName,
+		}
+	default:
+		return vibeStackSpec{
+			ID:        vibeRailsAppStack,
+			Name:      vibeRailsAppStackName,
+			SkillID:   agentskill.RailsAppID,
+			SkillName: agentskill.RailsAppName,
+		}
+	}
+}
+
 func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
+	stack, err := normalizeVibeStack(opts.Stack)
+	if err != nil {
+		return err
+	}
+	stackSpec := vibeStack(stack)
 	opts.AIAgent = strings.ToLower(strings.TrimSpace(opts.AIAgent))
 	agentEffort, err := normalizeVibeAgentEffort(opts.AgentEffort)
 	if err != nil {
@@ -157,8 +208,8 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if opts.TemplateVersion == "" {
 		opts.TemplateVersion = defaultVibeTemplateVersion()
 	}
-	templateURL := vibeTemplateURL(opts.TemplateVersion)
-	if err := a.ensureVibeTools(); err != nil {
+	templateURL := vibeTemplateURL(stackSpec.ID, opts.TemplateVersion)
+	if err := a.ensureVibeTools(stackSpec.ID); err != nil {
 		return err
 	}
 
@@ -169,7 +220,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if err := prepareVibeDirectory(target, opts.Force); err != nil {
 		return err
 	}
-	if err := a.generateVibeRailsApp(ctx, target, templateURL, opts.Force); err != nil {
+	if err := a.generateVibeApp(ctx, stackSpec.ID, target, templateURL, opts.Force); err != nil {
 		return err
 	}
 
@@ -182,17 +233,17 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if _, err := agentskill.Install(agentskill.InstallOptions{SkillsDir: skillsDir, Skill: agentskill.Name}, version.String()); err != nil {
 		return err
 	}
-	if _, err := agentskill.Install(agentskill.InstallOptions{SkillsDir: skillsDir, Skill: agentskill.RailsAppID}, version.String()); err != nil {
+	if _, err := agentskill.Install(agentskill.InstallOptions{SkillsDir: skillsDir, Skill: stackSpec.SkillID}, version.String()); err != nil {
 		return err
 	}
-	if err := ensureVibeRailsAppSkill(target); err != nil {
+	if err := ensureVibeAppSkill(target, stackSpec.SkillName); err != nil {
 		return err
 	}
 	if err := ensureVibeGitignore(target); err != nil {
 		return err
 	}
 
-	prompt := vibePrompt(opts.AIAgent, opts.AgentAutonomy, templateURL, opts.Idea, intent)
+	prompt := vibePrompt(opts.AIAgent, opts.AgentAutonomy, stackSpec, templateURL, opts.Idea, intent)
 	promptPath := filepath.Join(promptsDir, "devopsellence-vibe.md")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return fmt.Errorf("write prompt: %w", err)
@@ -206,7 +257,8 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		AgentEffort:      opts.AgentEffort,
 		AgentAutonomy:    opts.AgentAutonomy,
 		DetectedAgents:   detectedAgents,
-		AppStack:         vibeAppStack,
+		AppStack:         stackSpec.ID,
+		AppStackName:     stackSpec.Name,
 		TemplateURL:      templateURL,
 		TemplateVersion:  opts.TemplateVersion,
 		SkillDir:         filepath.Join(".agents", "skills"),
@@ -226,7 +278,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if err := ensureGitRepository(ctx, target); err != nil {
 		return err
 	}
-	initialCommit, err := ensureInitialVibeCommit(ctx, target)
+	initialCommit, err := ensureInitialVibeCommit(ctx, target, stackSpec.Name)
 	if err != nil {
 		return err
 	}
@@ -240,12 +292,13 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		"agent_effort":      opts.AgentEffort,
 		"agent_autonomy":    opts.AgentAutonomy,
 		"detected_agents":   detectedAgents,
-		"app_stack":         vibeAppStack,
+		"app_stack":         stackSpec.ID,
+		"app_stack_name":    stackSpec.Name,
 		"template_url":      templateURL,
 		"template_version":  opts.TemplateVersion,
-		"skill_id":          agentskill.RailsAppID,
-		"skill_name":        agentskill.RailsAppName,
-		"skill":             agentskill.RailsAppName,
+		"skill_id":          stackSpec.SkillID,
+		"skill_name":        stackSpec.SkillName,
+		"skill":             stackSpec.SkillName,
 		"skill_dir":         skillsDir,
 		"prompt_path":       promptPath,
 		"manifest_path":     manifestPath,
@@ -725,7 +778,7 @@ func ensureGitRepository(ctx context.Context, path string) error {
 	return nil
 }
 
-func ensureInitialVibeCommit(ctx context.Context, path string) (bool, error) {
+func ensureInitialVibeCommit(ctx context.Context, path, stackName string) (bool, error) {
 	if err := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--quiet", "--verify", "HEAD").Run(); err == nil {
 		return false, nil
 	} else {
@@ -737,7 +790,8 @@ func ensureInitialVibeCommit(ctx context.Context, path string) (bool, error) {
 	if output, err := exec.CommandContext(ctx, "git", "-C", path, "add", ".").CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git add: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", path, "-c", "user.name=devopsellence", "-c", "user.email=devopsellence@example.invalid", "commit", "-m", "Initial devopsellence Rails app")
+	message := "Initial devopsellence " + stackName + " app"
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "-c", "user.name=devopsellence", "-c", "user.email=devopsellence@example.invalid", "commit", "-m", message)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -782,17 +836,28 @@ func ensureVibeGitignore(path string) error {
 	return os.WriteFile(gitignore, []byte(strings.Join(required, "\n")+"\n"), 0o644)
 }
 
-func (a *App) ensureVibeTools() error {
+func (a *App) ensureVibeTools(stack string) error {
 	if _, err := a.LookPath("mise"); err != nil {
 		return ExitError{Code: 2, Err: errors.New("mise not found; install mise before running devopsellence vibe: https://mise.jdx.dev/getting-started.html")}
 	}
-	if _, err := a.LookPath("rails"); err != nil {
-		return ExitError{Code: 2, Err: errors.New("rails not found; install Rails with mise-managed Ruby before running devopsellence vibe")}
+	if stack == vibeRailsAppStack {
+		if _, err := a.LookPath("rails"); err != nil {
+			return ExitError{Code: 2, Err: errors.New("rails not found; install Rails with mise-managed Ruby before running devopsellence vibe")}
+		}
 	}
 	if _, err := a.LookPath("git"); err != nil {
 		return ExitError{Code: 2, Err: errors.New("git not found; install git before running devopsellence vibe")}
 	}
 	return nil
+}
+
+func (a *App) generateVibeApp(ctx context.Context, stack, target, templateURL string, force bool) error {
+	switch stack {
+	case vibeIndexPHPStack:
+		return generateVibeIndexPHPApp(target)
+	default:
+		return a.generateVibeRailsApp(ctx, target, templateURL, force)
+	}
 }
 
 func (a *App) generateVibeRailsApp(ctx context.Context, target, templateURL string, force bool) error {
@@ -811,19 +876,279 @@ func (a *App) generateVibeRailsApp(ctx context.Context, target, templateURL stri
 	return nil
 }
 
-func ensureVibeRailsAppSkill(target string) error {
-	path := filepath.Join(target, ".agents", "skills", agentskill.RailsAppName, "SKILL.md")
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("rails template did not install %s at %s", agentskill.RailsAppName, path)
+func generateVibeIndexPHPApp(target string) error {
+	appName := vibeSlug(filepath.Base(target))
+	files := map[string]string{
+		".mise.toml":            vibeIndexPHPMiseTOML,
+		".gitignore":            vibeIndexPHPGitignore,
+		"README.md":             strings.ReplaceAll(vibeIndexPHPREADME, "{{APP_NAME}}", appName),
+		"Dockerfile":            vibeIndexPHPDockerfile,
+		"devopsellence.yml":     strings.ReplaceAll(vibeIndexPHPDevopsellenceYAML, "{{APP_NAME}}", appName),
+		"public/index.php":      vibeIndexPHPIndex,
+		"scripts/backup-sqlite": vibeIndexPHPBackupScript,
+		"scripts/check":         vibeIndexPHPCheckScript,
+	}
+	for path, data := range files {
+		fullPath := filepath.Join(target, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			return fmt.Errorf("create %s parent: %w", path, err)
 		}
-		return fmt.Errorf("inspect rails app skill: %w", err)
+		mode := os.FileMode(0o644)
+		if strings.HasPrefix(path, "scripts/") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(fullPath, []byte(data), mode); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(target, "data"), 0o755); err != nil {
+		return fmt.Errorf("create data dir: %w", err)
 	}
 	return nil
 }
 
-func vibeTemplateURL(version string) string {
-	return "https://raw.githubusercontent.com/devopsellence/devopsellence/" + version + "/vibe-templates/rails-app/template.rb"
+const vibeIndexPHPMiseTOML = `[tools]
+php = "8.4"
+`
+
+const vibeIndexPHPGitignore = `.env
+.env.*
+!.env.example
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*
+backups/
+`
+
+const vibeIndexPHPDockerfile = `FROM nginx:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends php-fpm php-sqlite3 \
+  && rm -rf /var/lib/apt/lists/* \
+  && php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)" \
+  && php_version="${php_fpm#/usr/sbin/php-fpm}" \
+  && sed -i 's|^listen = .*|listen = 127.0.0.1:9000|' "/etc/php/${php_version}/fpm/pool.d/www.conf" \
+  && printf '\nclear_env = no\n' >> "/etc/php/${php_version}/fpm/pool.d/www.conf" \
+  && mkdir -p /app/data /var/www/html \
+  && chown -R www-data:www-data /app/data /var/www/html
+
+RUN cat > /etc/nginx/conf.d/default.conf <<'NGINX'
+server {
+    listen 80;
+    server_name _;
+    root /var/www/html;
+    index index.php;
+
+    location / {
+        try_files $uri /index.php$is_args$args;
+    }
+
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param DOCUMENT_ROOT $document_root;
+        fastcgi_pass 127.0.0.1:9000;
+    }
+}
+NGINX
+
+RUN cat > /usr/local/bin/start-index-php <<'SH'
+#!/usr/bin/env sh
+set -eu
+php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)"
+"$php_fpm" -D
+exec nginx -g 'daemon off;'
+SH
+
+RUN chmod +x /usr/local/bin/start-index-php
+
+WORKDIR /var/www/html
+COPY public/ /var/www/html/
+
+ENV DB_PATH=/app/data/app.sqlite
+EXPOSE 80
+CMD ["start-index-php"]
+`
+
+const vibeIndexPHPDevopsellenceYAML = `schema_version: 1
+organization: solo
+project: {{APP_NAME}}
+default_environment: production
+
+build:
+  context: .
+  dockerfile: Dockerfile
+  platforms:
+    - linux/amd64
+
+services:
+  web:
+    ports:
+      - name: http
+        port: 80
+    healthcheck:
+      path: /healthz
+      port: 80
+    volumes:
+      - source: {{APP_NAME}}-data
+        target: /app/data
+    env:
+      APP_ENV: production
+      DB_PATH: /app/data/app.sqlite
+`
+
+const vibeIndexPHPREADME = `# {{APP_NAME}}
+
+Tiny ` + "`index.php`" + ` app generated by devopsellence vibe.
+
+## Local
+
+` + "```sh" + `
+mise install
+php -S 127.0.0.1:8000 -t public
+` + "```" + `
+
+## Check
+
+` + "```sh" + `
+scripts/check
+` + "```" + `
+
+## Deploy
+
+` + "```sh" + `
+devopsellence deploy --dry-run
+` + "```" + `
+
+The SQLite database lives at ` + "`data/app.sqlite`" + ` locally and at ` + "`/app/data/app.sqlite`" + ` in production. Keep one writable web node while using SQLite.
+`
+
+const vibeIndexPHPIndex = `<?php
+declare(strict_types=1);
+
+$dbPath = getenv('DB_PATH') ?: dirname(__DIR__) . '/data/app.sqlite';
+$dbDir = dirname($dbPath);
+if (!is_dir($dbDir)) {
+    mkdir($dbDir, 0775, true);
+}
+
+$db = new PDO('sqlite:' . $dbPath, null, null, [
+    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+]);
+$db->exec('PRAGMA journal_mode=WAL');
+$db->exec('PRAGMA busy_timeout=5000');
+$db->exec('CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)');
+
+$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+if ($path === '/healthz') {
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true]) . "\n";
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $body = trim((string)($_POST['body'] ?? ''));
+    if ($body !== '') {
+        $stmt = $db->prepare('INSERT INTO notes (body) VALUES (:body)');
+        $stmt->execute(['body' => $body]);
+    }
+    header('Location: /', true, 303);
+    exit;
+}
+
+$notes = $db->query('SELECT id, body, created_at FROM notes ORDER BY id DESC LIMIT 20')->fetchAll();
+
+function h(string $value): string
+{
+    return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+?><!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>index.php</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }
+    main { width: min(720px, calc(100vw - 32px)); padding: 48px 0; }
+    h1 { font-size: clamp(2rem, 7vw, 4.5rem); margin: 0 0 8px; letter-spacing: 0; }
+    p { margin: 0 0 24px; color: color-mix(in srgb, CanvasText 72%, Canvas); }
+    form { display: flex; gap: 8px; margin-bottom: 24px; }
+    input { flex: 1; min-width: 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); border-radius: 6px; font: inherit; }
+    button { padding: 12px 16px; border: 0; border-radius: 6px; font: inherit; font-weight: 700; background: #1f7a4d; color: white; cursor: pointer; }
+    ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+    li { border: 1px solid color-mix(in srgb, CanvasText 14%, Canvas); border-radius: 6px; padding: 12px 14px; }
+    small { display: block; margin-top: 4px; color: color-mix(in srgb, CanvasText 58%, Canvas); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>index.php</h1>
+    <p>One PHP file, SQLite, one VM. Start small; split files only when the product earns it.</p>
+    <form method="post">
+      <input name="body" autocomplete="off" maxlength="240" placeholder="Ship a note" required>
+      <button type="submit">Add</button>
+    </form>
+    <ol>
+      <?php foreach ($notes as $note): ?>
+        <li><?= h($note['body']) ?><small><?= h($note['created_at']) ?></small></li>
+      <?php endforeach; ?>
+    </ol>
+  </main>
+</body>
+</html>
+`
+
+const vibeIndexPHPBackupScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+db="${DB_PATH:-data/app.sqlite}"
+mkdir -p backups
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+sqlite3 "$db" ".backup 'backups/app-$stamp.sqlite'"
+echo "backups/app-$stamp.sqlite"
+`
+
+const vibeIndexPHPCheckScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v php >/dev/null 2>&1; then
+  php -l public/index.php
+elif command -v docker >/dev/null 2>&1; then
+  docker run --rm -v "$PWD:/app" -w /app php:8.4-cli php -l public/index.php
+else
+  echo "php not found; install it with mise or run Docker before checking" >&2
+  exit 127
+fi
+`
+
+func ensureVibeAppSkill(target, skillName string) error {
+	path := filepath.Join(target, ".agents", "skills", skillName, "SKILL.md")
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("vibe scaffold did not install %s at %s", skillName, path)
+		}
+		return fmt.Errorf("inspect app skill: %w", err)
+	}
+	return nil
+}
+
+func vibeTemplateURL(stack, version string) string {
+	switch stack {
+	case vibeIndexPHPStack:
+		return "https://github.com/devopsellence/devopsellence/tree/" + version + "/vibe-templates/index-php"
+	default:
+		return "https://raw.githubusercontent.com/devopsellence/devopsellence/" + version + "/vibe-templates/rails-app/template.rb"
+	}
 }
 
 func defaultVibeTemplateVersion() string {
@@ -834,17 +1159,18 @@ func defaultVibeTemplateVersion() string {
 	return value
 }
 
-func vibePrompt(agent, autonomy, templateURL, idea string, intent vibeDeploymentIntent) string {
+func vibePrompt(agent, autonomy string, stack vibeStackSpec, templateURL, idea string, intent vibeDeploymentIntent) string {
 	var firstLine string
+	appKind := stack.Name + " app"
 	switch agent {
 	case "codex":
-		firstLine = "/goal Build this app idea into a deployable Rails product using the installed devopsellence Rails app skill."
+		firstLine = "/goal Build this app idea into a deployable " + appKind + " using the installed " + stack.SkillName + " skill."
 	case "claude":
-		firstLine = "Run a tight build-test-deploy loop for this Rails app idea using the installed devopsellence Rails app skill."
+		firstLine = "Run a tight build-test-deploy loop for this " + appKind + " idea using the installed " + stack.SkillName + " skill."
 	case "pi":
-		firstLine = "Use the installed devopsellence Rails app skill as the operating instructions for this app build."
+		firstLine = "Use the installed " + stack.SkillName + " skill as the operating instructions for this app build."
 	default:
-		firstLine = "Build this Rails app idea using the installed devopsellence Rails app skill."
+		firstLine = "Build this " + appKind + " idea using the installed " + stack.SkillName + " skill."
 	}
 	lines := []string{
 		firstLine,
@@ -852,7 +1178,8 @@ func vibePrompt(agent, autonomy, templateURL, idea string, intent vibeDeployment
 		"App idea:",
 		idea,
 		"",
-		"Rails template: " + templateURL,
+		"App stack: " + stack.Name + " (" + stack.ID + ")",
+		"Template: " + templateURL,
 		"",
 		"Deployment intent:",
 		"- First workflow: " + intent.FirstWorkflow,
@@ -869,12 +1196,12 @@ func vibePrompt(agent, autonomy, templateURL, idea string, intent vibeDeployment
 	lines = append(lines, vibeAgentAutonomyPromptLines(autonomy)...)
 	lines = append(lines,
 		"",
-		"Use .agents/skills/devopsellence-rails-app for app-building guidance.",
+		"Use .agents/skills/"+stack.SkillName+" for app-building guidance.",
 		"Use .agents/skills/devopsellence for deploy, secrets, logs, status, rollback, and node operations.",
 		vibePlanApprovalPromptLine(autonomy),
-		"Stay inside the blessed Rails MVP baseline: Rails 8.1, SQLite by default, Hotwire, Tailwind, Solid Queue/Cache/Cable, Active Storage only when needed, Minitest, Docker, and mise.",
-		"Treat managed PostgreSQL, backup/restore, object storage, Sentry, OpenTelemetry, Cloudflare DNS, and other external services as stack-expansion follow-ups once the MVP needs them.",
-		"Do not add Redis, Sidekiq, React, GraphQL, Elasticsearch, Kubernetes, or an admin framework unless the product need is explicit.",
+	)
+	lines = append(lines, vibeStackPromptLines(stack.ID)...)
+	lines = append(lines,
 		"",
 		"Deployment rules:",
 		"- Do not write provider tokens, API keys, passwords, or secret values into prompts, manifests, git, logs, or commits.",
@@ -896,6 +1223,24 @@ func vibePlanApprovalPromptLine(autonomy string) string {
 		return "Start by deriving the MVP and sequencing the work yourself. Write a short implementation plan, then begin building without asking the user to choose the task order unless product ambiguity blocks progress."
 	}
 	return "Start by deriving the MVP and sequencing the work yourself. Write a short implementation plan, then ask the user to confirm before changing app behavior or adding product code."
+}
+
+func vibeStackPromptLines(stack string) []string {
+	switch stack {
+	case vibeIndexPHPStack:
+		return []string{
+			"Stay inside the index.php baseline: PHP 8.4, nginx latest with PHP-FPM, one public/index.php entrypoint, PDO SQLite, no build step, Docker, and mise.",
+			"Use jQuery only when it keeps the product simpler than plain JavaScript. Do not add Laravel, Symfony, React, Next.js, Vite, Node build tooling, Redis, or Postgres unless the product need is explicit.",
+			"Keep SQLite on one writable node with a persistent volume. Treat managed PostgreSQL, object storage, email, monitoring, CDN/DNS, and multi-node writes as stack-expansion follow-ups once the MVP needs them.",
+			"Start as one file; split files only when the product earns it.",
+		}
+	default:
+		return []string{
+			"Stay inside the blessed Rails MVP baseline: Rails 8.1, SQLite by default, Hotwire, Tailwind, Solid Queue/Cache/Cable, Active Storage only when needed, Minitest, Docker, and mise.",
+			"Treat managed PostgreSQL, backup/restore, object storage, Sentry, OpenTelemetry, Cloudflare DNS, and other external services as stack-expansion follow-ups once the MVP needs them.",
+			"Do not add Redis, Sidekiq, React, GraphQL, Elasticsearch, Kubernetes, or an admin framework unless the product need is explicit.",
+		}
+	}
 }
 
 func vibePromptServerPlan(intent vibeDeploymentIntent) string {

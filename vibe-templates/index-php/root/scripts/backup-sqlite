@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+db="${DB_PATH:-data/app.sqlite}"
+mkdir -p backups
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+sqlite3 "$db" ".backup 'backups/app-$stamp.sqlite'"
+echo "backups/app-$stamp.sqlite"

@@ -45,13 +45,32 @@ func TestInstallWritesRailsAppSkillByID(t *testing.T) {
 	}
 }
 
+func TestInstallWritesIndexPHPAppSkillByID(t *testing.T) {
+	dir := t.TempDir()
+	result, err := Install(InstallOptions{SkillsDir: dir, Skill: "index-php"}, "v1-test")
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if result.ID != "index-php" || result.Name != "devopsellence-index-php-app" || result.Source != "embedded" {
+		t.Fatalf("result = %#v, want index.php app skill", result)
+	}
+	path := filepath.Join(dir, "devopsellence-index-php-app", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if !strings.Contains(string(data), "index.php") || !strings.Contains(string(data), "PDO SQLite") {
+		t.Fatalf("%s does not look like the index.php skill", path)
+	}
+}
+
 func TestAvailableIncludesRailsAppSkill(t *testing.T) {
 	got := Available()
 	var ids []string
 	for _, skill := range got {
 		ids = append(ids, skill.ID)
 	}
-	for _, want := range []string{"devopsellence", "rails-app"} {
+	for _, want := range []string{"devopsellence", "index-php", "rails-app"} {
 		if !containsString(ids, want) {
 			t.Fatalf("Available() ids = %v, missing %q", ids, want)
 		}

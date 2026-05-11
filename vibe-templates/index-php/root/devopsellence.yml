@@ -1,0 +1,25 @@
+schema_version: 1
+organization: solo
+project: index-php-app
+default_environment: production
+
+build:
+  context: .
+  dockerfile: Dockerfile
+  platforms:
+    - linux/amd64
+
+services:
+  web:
+    ports:
+      - name: http
+        port: 80
+    healthcheck:
+      path: /healthz
+      port: 80
+    volumes:
+      - source: index-php-app-data
+        target: /app/data
+    env:
+      APP_ENV: production
+      DB_PATH: /app/data/app.sqlite

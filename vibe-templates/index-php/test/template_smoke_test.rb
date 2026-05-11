@@ -29,7 +29,7 @@ class IndexPHPTemplateSmokeTest < Minitest::Test
       assert_includes dockerfile, "FROM nginx:latest"
       assert_includes dockerfile, "php8.4-fpm"
       assert_includes dockerfile, "php8.4-sqlite3"
-      assert_includes dockerfile, "sqlite3"
+      refute_includes dockerfile, " sqlite3"
       assert_includes dockerfile, "env[DB_PATH] = $DB_PATH"
       assert_includes dockerfile, "chown -R www-data:www-data /app/data"
       assert_includes dockerfile, "try_files $uri /index.php$is_args$args"

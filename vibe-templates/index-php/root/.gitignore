@@ -5,4 +5,3 @@ data/*.sqlite
 data/*.sqlite-*
 data/*.db
 data/*.db-*
-backups/

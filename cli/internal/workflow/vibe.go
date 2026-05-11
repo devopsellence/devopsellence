@@ -875,14 +875,13 @@ func (a *App) generateVibeRailsApp(ctx context.Context, target, templateURL stri
 func generateVibeIndexPHPApp(target string) error {
 	appName := vibeSlug(filepath.Base(target))
 	files := map[string]string{
-		".mise.toml":            vibeIndexPHPMiseTOML,
-		".gitignore":            vibeIndexPHPGitignore,
-		"README.md":             strings.ReplaceAll(vibeIndexPHPREADME, "{{APP_NAME}}", appName),
-		"Dockerfile":            vibeIndexPHPDockerfile,
-		"devopsellence.yml":     strings.ReplaceAll(vibeIndexPHPDevopsellenceYAML, "{{APP_NAME}}", appName),
-		"public/index.php":      vibeIndexPHPIndex,
-		"scripts/backup-sqlite": vibeIndexPHPBackupScript,
-		"scripts/check":         vibeIndexPHPCheckScript,
+		".mise.toml":        vibeIndexPHPMiseTOML,
+		".gitignore":        vibeIndexPHPGitignore,
+		"README.md":         strings.ReplaceAll(vibeIndexPHPREADME, "{{APP_NAME}}", appName),
+		"Dockerfile":        vibeIndexPHPDockerfile,
+		"devopsellence.yml": strings.ReplaceAll(vibeIndexPHPDevopsellenceYAML, "{{APP_NAME}}", appName),
+		"public/index.php":  vibeIndexPHPIndex,
+		"scripts/check":     vibeIndexPHPCheckScript,
 	}
 	for path, data := range files {
 		fullPath := filepath.Join(target, path)
@@ -914,7 +913,6 @@ data/*.sqlite
 data/*.sqlite-*
 data/*.db
 data/*.db-*
-backups/
 `
 
 const vibeIndexPHPDockerfile = `FROM nginx:latest
@@ -922,7 +920,7 @@ const vibeIndexPHPDockerfile = `FROM nginx:latest
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends php8.4-fpm php8.4-sqlite3 sqlite3 \
+  && apt-get install -y --no-install-recommends php8.4-fpm php8.4-sqlite3 \
   && rm -rf /var/lib/apt/lists/* \
   && php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)" \
   && php_version="${php_fpm#/usr/sbin/php-fpm}" \
@@ -1106,20 +1104,6 @@ function h(string $value): string
 </html>
 `
 
-const vibeIndexPHPBackupScript = `#!/usr/bin/env bash
-set -euo pipefail
-
-db="${DB_PATH:-data/app.sqlite}"
-if ! command -v sqlite3 >/dev/null 2>&1; then
-  echo "sqlite3 not found; install sqlite3 before running backups" >&2
-  exit 127
-fi
-mkdir -p backups
-stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-sqlite3 "$db" ".backup 'backups/app-$stamp.sqlite'"
-echo "backups/app-$stamp.sqlite"
-`
-
 const vibeIndexPHPCheckScript = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -1241,6 +1225,7 @@ func vibeStackPromptLines(stack string) []string {
 			"Stay inside the index.php baseline: PHP 8.4, nginx latest with PHP-FPM, one public/index.php entrypoint, PDO SQLite, no build step, Docker, and mise.",
 			"Use jQuery only when it keeps the product simpler than plain JavaScript. Do not add Laravel, Symfony, React, Next.js, Vite, Node build tooling, Redis, or Postgres unless the product need is explicit.",
 			"Keep the PHP security baseline explicit: PDO prepared statements for user-controlled SQL values, htmlspecialchars for HTML output, POST for state changes, CSRF tokens before sessions/auth/destructive forms, safe upload validation, and password_hash/password_verify if auth is added.",
+			"Keep the starter SQLite schema inline and idempotent while tiny. When schema/data changes need ordering before rollout, add an idempotent migration script, track applied versions in SQLite, and wire it through devopsellence tasks.release rather than doing risky request-time migrations.",
 			"Keep SQLite on one writable node with a persistent volume. Treat managed PostgreSQL, email, monitoring, and multi-node writes as stack-expansion follow-ups once the MVP needs them.",
 			"When the MVP needs a real domain, public traffic, media, or abuse protection, prefer Cloudflare as the first edge/services expansion: domains, DNS, CDN caching, image resizing, R2 object storage, Stream video, Turnstile, WAF/DDoS, and Tunnel in front of the VPS.",
 			"Keep the app runtime on a normal VPS, commonly Hetzner in solo mode; Cloudflare is the edge/services layer, not a second deployment system.",

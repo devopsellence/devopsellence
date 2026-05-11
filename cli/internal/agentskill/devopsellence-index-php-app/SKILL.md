@@ -1,6 +1,6 @@
 ---
 name: devopsellence-index-php-app
-description: Use when building, modifying, testing, deploying, or scaling the devopsellence index.php application baseline. Covers PHP 8.4, one-file-first apps, PDO SQLite, optional jQuery, Docker, mise, backups, and devopsellence solo on Linux servers.
+description: Use when building, modifying, testing, deploying, or scaling the devopsellence index.php application baseline. Covers PHP 8.4, one-file-first apps, PDO SQLite, optional jQuery, Docker, mise, and devopsellence solo on Linux servers.
 ---
 
 # devopsellence index.php App
@@ -30,6 +30,15 @@ Use this skill inside apps generated from the devopsellence index.php template.
 - Validate uploads and file paths before adding file storage. Do not trust client filenames, MIME types, extensions, or relative paths.
 - Use `password_hash` and `password_verify` for passwords if auth is added; never invent password storage.
 
+## Schema Changes
+
+- Keep the starter schema inline in `public/index.php` with idempotent `CREATE TABLE IF NOT EXISTS` statements while the app is tiny.
+- When a change needs `ALTER TABLE`, data backfill, destructive cleanup, or ordering before rollout, add a small idempotent migration script and wire it as `tasks.release` in `devopsellence.yml`.
+- Release tasks run before rollout and reuse the web image, env, secrets, and `/app/data` volume. Use them for schema/data changes that must happen once per release, not for normal request-time setup.
+- Track applied migrations in a tiny SQLite table such as `schema_migrations`; never rely on comments, timestamps, or “probably already ran” assumptions.
+- Make migrations forward-only and repeat-safe: check existing columns/tables before altering, wrap related changes in a transaction where SQLite allows it, and fail loudly on partial or unknown state.
+- Before risky migrations or production cutovers, plan a backup/restore point with the user; do not silently add backup scripts to the first scaffold.
+
 ## Build Loop
 
 1. Inspect the app and the user's request.
@@ -40,13 +49,13 @@ Use this skill inside apps generated from the devopsellence index.php template.
    - `scripts/check`
    - `php -S 127.0.0.1:8000 -t public` for manual local smoke checks
    - `docker build .` when deploy packaging changed
-5. Keep production concerns wired while building features: health checks, persistent SQLite volume, backups, secrets, logs, and deploy config.
+5. Keep production concerns wired while building features: health checks, persistent SQLite volume, secrets, logs, and deploy config.
 
 ## Stack Expansion
 
 Start with one PHP web process and SQLite. Add capabilities deliberately when the MVP has real pressure:
 
-- Backups and restore drills: use `scripts/backup-sqlite` locally and follow https://docs.devopsellence.com/guides/backup-restore/ before risky migrations, data imports, or production cutovers.
+- Backup/restore: do not add backup scripts to the first scaffold. Plan and test backups before risky migrations, data imports, or production cutovers, using https://docs.devopsellence.com/guides/backup-restore/ as the deployment-level guide.
 - PostgreSQL: move to managed or dedicated PostgreSQL when write concurrency, reporting, data size, operations, team workflows, or multi-node writes outgrow SQLite.
 - Durable uploads: move uploaded files to S3-compatible object storage when files must survive node replacement or be shared across nodes.
 - Email: add a transactional email provider only when the product sends real user-facing mail.

@@ -532,7 +532,6 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 		filepath.Join(appDir, "Dockerfile"),
 		filepath.Join(appDir, "devopsellence.yml"),
 		filepath.Join(appDir, "public", "index.php"),
-		filepath.Join(appDir, "scripts", "backup-sqlite"),
 		filepath.Join(appDir, "scripts", "check"),
 		filepath.Join(appDir, ".agents", "skills", "devopsellence", "SKILL.md"),
 		filepath.Join(appDir, ".agents", "skills", "devopsellence-index-php-app", "SKILL.md"),
@@ -542,7 +541,7 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 			t.Fatalf("expected %s: %v", path, err)
 		}
 	}
-	for _, path := range []string{filepath.Join(appDir, "scripts", "backup-sqlite"), filepath.Join(appDir, "scripts", "check")} {
+	for _, path := range []string{filepath.Join(appDir, "scripts", "check")} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
@@ -572,7 +571,7 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"FROM nginx:latest", "php8.4-fpm", "php8.4-sqlite3", "sqlite3", "env[DB_PATH] = $DB_PATH", "chown -R www-data:www-data /app/data", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
+	for _, want := range []string{"FROM nginx:latest", "php8.4-fpm", "php8.4-sqlite3", "env[DB_PATH] = $DB_PATH", "chown -R www-data:www-data /app/data", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
 		if !strings.Contains(string(dockerfile), want) {
 			t.Fatalf("Dockerfile missing %q:\n%s", want, dockerfile)
 		}
@@ -582,7 +581,7 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 			t.Fatalf("devopsellence.yml missing %q:\n%s", want, devopsellenceConfig)
 		}
 	}
-	for _, want := range []string{"App stack: index.php (index-php)", "devopsellence-index-php-app", "nginx latest with PHP-FPM", "PDO prepared statements", "htmlspecialchars", "Cloudflare as the first edge/services expansion", "Start as one file", "Keep SQLite on one writable node"} {
+	for _, want := range []string{"App stack: index.php (index-php)", "devopsellence-index-php-app", "nginx latest with PHP-FPM", "PDO prepared statements", "htmlspecialchars", "tasks.release", "Cloudflare as the first edge/services expansion", "Start as one file", "Keep SQLite on one writable node"} {
 		if !strings.Contains(string(prompt), want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}

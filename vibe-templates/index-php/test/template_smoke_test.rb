@@ -31,7 +31,7 @@ class IndexPHPTemplateSmokeTest < Minitest::Test
       assert_includes dockerfile, "php8.4-sqlite3"
       assert_includes dockerfile, "sqlite3"
       assert_includes dockerfile, "env[DB_PATH] = $DB_PATH"
-      assert_includes dockerfile, "chown www-data:www-data /app/data"
+      assert_includes dockerfile, "chown -R www-data:www-data /app/data"
       assert_includes dockerfile, "try_files $uri /index.php$is_args$args"
       assert_includes dockerfile, "CMD [\"start-index-php\"]"
       assert_includes devopsellence_config, "target: /app/data"

@@ -955,7 +955,7 @@ RUN cat > /usr/local/bin/start-index-php <<'SH'
 #!/usr/bin/env sh
 set -eu
 mkdir -p /app/data
-chown www-data:www-data /app/data
+chown -R www-data:www-data /app/data
 php_fpm="$(find /usr/sbin -maxdepth 1 -name 'php-fpm*' | sort -V | tail -1)"
 "$php_fpm" -D
 exec nginx -g 'daemon off;'

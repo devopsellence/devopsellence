@@ -572,7 +572,7 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"FROM nginx:latest", "php8.4-fpm", "php8.4-sqlite3", "sqlite3", "env[DB_PATH] = $DB_PATH", "chown www-data:www-data /app/data", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
+	for _, want := range []string{"FROM nginx:latest", "php8.4-fpm", "php8.4-sqlite3", "sqlite3", "env[DB_PATH] = $DB_PATH", "chown -R www-data:www-data /app/data", "try_files $uri /index.php$is_args$args", "CMD [\"start-index-php\"]"} {
 		if !strings.Contains(string(dockerfile), want) {
 			t.Fatalf("Dockerfile missing %q:\n%s", want, dockerfile)
 		}

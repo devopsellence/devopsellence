@@ -30,7 +30,7 @@ Already have a Dockerized app:
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 ~/.local/bin/devopsellence skill install --global
 cd my-app
-codex e "Deploy this app with devopsellence solo."
+codex "deploy with devopsellence solo"
 ```
 
 `devopsellence skill install` installs the matching AI agent skill from the CLI

@@ -550,6 +550,13 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 			t.Fatalf("%s is not executable", path)
 		}
 	}
+	dataInfo, err := os.Stat(filepath.Join(appDir, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("data dir mode = %o, want 700", dataInfo.Mode().Perm())
+	}
 	index, err := os.ReadFile(filepath.Join(appDir, "public", "index.php"))
 	if err != nil {
 		t.Fatal(err)

@@ -896,7 +896,7 @@ func generateVibeIndexPHPApp(target string) error {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(target, "data"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(target, "data"), 0o700); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
 	return nil

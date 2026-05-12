@@ -744,11 +744,13 @@ func ensureInitialVibeCommit(ctx context.Context, path, appKind string) (bool, e
 
 func ensureVibeGitignore(path string) error {
 	gitignore := filepath.Join(path, ".gitignore")
-	required := []string{".env", ".env.*", "!.env.example", "node_modules/", "dist/", "tmp/", "log/"}
+	required := []string{".devopsellence/", "data/", "*.sqlite", "*.sqlite-*", "", ".env", ".env.*", "!.env.example", "node_modules/", "dist/", "tmp/", "log/"}
 	if data, err := os.ReadFile(gitignore); err == nil {
 		requiredSet := map[string]bool{}
 		for _, line := range required {
-			requiredSet[line] = true
+			if line != "" {
+				requiredSet[line] = true
+			}
 		}
 
 		var next []string

@@ -845,7 +845,7 @@ func TestRootVibeAppendsSecretPatternsToExistingGitignore(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitignore := string(data)
-	for _, want := range []string{"coverage/", ".env", ".env.*", "!.env.example"} {
+	for _, want := range []string{"coverage/", ".devopsellence/", "data/", "*.sqlite", "*.sqlite-*", ".env", ".env.*", "!.env.example"} {
 		if !strings.Contains(gitignore, want) {
 			t.Fatalf(".gitignore = %q, missing %q", gitignore, want)
 		}

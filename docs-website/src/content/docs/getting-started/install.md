@@ -9,6 +9,12 @@ Install the CLI:
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 ```
 
+Or install the CLI and immediately start a vibe scaffold:
+
+```bash
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- vibe my-app --idea "A tiny CRM for solo consultants"
+```
+
 The installer writes to `~/.local/bin` by default. If that directory is not on
 your `PATH`, it prints the shell command to add it.
 

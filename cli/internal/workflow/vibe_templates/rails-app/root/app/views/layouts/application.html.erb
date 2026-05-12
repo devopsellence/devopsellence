@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>{{APP_NAME}}</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+    <style>
+      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }
+      main { width: min(760px, calc(100vw - 32px)); padding: 56px 0; }
+      .eyebrow { margin: 0 0 12px; color: color-mix(in srgb, CanvasText 58%, Canvas); font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0; }
+      h1 { margin: 0 0 12px; font-size: clamp(2.25rem, 8vw, 5rem); letter-spacing: 0; }
+      p { font-size: 1.125rem; line-height: 1.55; }
+    </style>
+  </head>
+
+  <body>
+    <%= yield %>
+  </body>
+</html>

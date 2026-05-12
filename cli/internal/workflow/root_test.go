@@ -100,14 +100,13 @@ fi
 exit 0
 `)
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
 	return binDir
 }
 
 func installFakeIndexPHPVibeTools(t *testing.T) string {
 	t.Helper()
 	binDir := t.TempDir()
-	writeExecutable(t, filepath.Join(binDir, "mise"), "#!/usr/bin/env bash\nexit 0\n")
 	writeExecutable(t, filepath.Join(binDir, "git"), `#!/usr/bin/env bash
 set -euo pipefail
 cwd="$PWD"
@@ -145,8 +144,12 @@ case "${1:-}" in
     ;;
 esac
 `)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
 	return binDir
+}
+
+func TestRailsVibeTemplateMirrorMatchesCanonicalRoot(t *testing.T) {
+	assertDirsEqual(t, filepath.Join("..", "..", "..", "vibe-templates", "rails-app", "root"), filepath.Join("vibe_templates", "rails-app", "root"))
 }
 
 func setFakeVibeHome(t *testing.T, cwd string) string {
@@ -611,6 +614,60 @@ func TestRootVibePreparesIndexPHPWorkspace(t *testing.T) {
 	assertGeneratedTemplateFile(t, filepath.Join("..", "..", "..", "vibe-templates", "index-php", "root", "devopsellence.yml"), filepath.Join(appDir, "devopsellence.yml"), "index-php-app", "tiny-notes")
 }
 
+func TestRootVibePreparesBundledRailsWorkspaceWithoutMiseOrRails(t *testing.T) {
+	cwd := t.TempDir()
+	home := setFakeVibeHome(t, cwd)
+	installFakeIndexPHPVibeTools(t)
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"vibe", "tiny-crm",
+		"--stack", "rails-app",
+		"--ai-agent", "generic",
+		"--idea", "A tiny CRM for solo consultants",
+		"--no-launch",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	payload := decodeJSONOutput(t, &stdout)
+	appDir := filepath.Join(home, defaultVibeProjectsDirName, "tiny-crm")
+	if payload["directory"] != appDir || payload["app_stack"] != "rails-app" || payload["app_stack_name"] != "Rails app" {
+		t.Fatalf("payload = %#v, want bundled rails workspace", payload)
+	}
+	for _, path := range []string{
+		filepath.Join(appDir, ".git"),
+		filepath.Join(appDir, ".mise.toml"),
+		filepath.Join(appDir, "Gemfile"),
+		filepath.Join(appDir, "Dockerfile"),
+		filepath.Join(appDir, "devopsellence.yml"),
+		filepath.Join(appDir, "app", "controllers", "home_controller.rb"),
+		filepath.Join(appDir, ".agents", "skills", "devopsellence", "SKILL.md"),
+		filepath.Join(appDir, ".agents", "skills", "devopsellence-rails-app", "SKILL.md"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s: %v", path, err)
+		}
+	}
+	application, err := os.ReadFile(filepath.Join(appDir, "config", "application.rb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(application), "module TinyCrm") || strings.Contains(string(application), "{{APP_MODULE}}") {
+		t.Fatalf("config/application.rb = %q, want app module replacement", application)
+	}
+	devopsellenceConfig, err := os.ReadFile(filepath.Join(appDir, "devopsellence.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(devopsellenceConfig), "project: tiny-crm") || strings.Contains(string(devopsellenceConfig), "{{APP_NAME}}") {
+		t.Fatalf("devopsellence.yml = %q, want app name replacement", devopsellenceConfig)
+	}
+}
+
 func assertFilesEqual(t *testing.T, wantPath, gotPath string) {
 	t.Helper()
 	want, err := os.ReadFile(wantPath)
@@ -623,6 +680,40 @@ func assertFilesEqual(t *testing.T, wantPath, gotPath string) {
 	}
 	if string(got) != string(want) {
 		t.Fatalf("%s differs from %s", gotPath, wantPath)
+	}
+}
+
+func assertDirsEqual(t *testing.T, wantRoot, gotRoot string) {
+	t.Helper()
+	wantFiles := map[string]bool{}
+	if err := filepath.WalkDir(wantRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(wantRoot, path)
+		if err != nil {
+			return err
+		}
+		wantFiles[rel] = true
+		assertFilesEqual(t, path, filepath.Join(gotRoot, rel))
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", wantRoot, err)
+	}
+	if err := filepath.WalkDir(gotRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(gotRoot, path)
+		if err != nil {
+			return err
+		}
+		if !wantFiles[rel] {
+			t.Fatalf("unexpected file in %s: %s", gotRoot, rel)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", gotRoot, err)
 	}
 }
 

@@ -28,9 +28,15 @@ class CliInstallsController < ActionController::Base
       CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
       TARGET_NAME="devopsellence"
+      POST_INSTALL_ARGS=()
 
       while [[ $# -gt 0 ]]; do
         case "$1" in
+          --)
+            shift
+            POST_INSTALL_ARGS=("$@")
+            break
+            ;;
           --base-url)
             BASE_URL="$2"
             shift 2
@@ -56,8 +62,8 @@ class CliInstallsController < ActionController::Base
             shift
             ;;
           *)
-            echo "unknown argument: $1" >&2
-            exit 1
+            POST_INSTALL_ARGS=("$@")
+            break
             ;;
         esac
       done
@@ -213,6 +219,11 @@ class CliInstallsController < ActionController::Base
 
       echo "agent skill available; install it with:"
       echo "  \"$INSTALL_DIR/$TARGET_NAME\" skill install --global"
+
+      if [[ "${#POST_INSTALL_ARGS[@]}" -gt 0 ]]; then
+        echo "running devopsellence ${POST_INSTALL_ARGS[*]}..."
+        "$INSTALL_DIR/$TARGET_NAME" "${POST_INSTALL_ARGS[@]}"
+      fi
     SH
   end
 end

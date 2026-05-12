@@ -141,6 +141,23 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_nil installed_skill
   end
 
+  test "cli install script can run a post-install devopsellence command" do
+    get "/lfg.sh", params: { version: "master-0053792f6aec" }
+
+    assert_response :success
+
+    stdout, stderr, status, installed_cli = run_cli_install_script(
+      response.body,
+      version: "master-0053792f6aec",
+      command_args: ["vibe", "tiny-crm", "--idea", "A tiny CRM for solo consultants"]
+    )
+
+    assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
+    assert_includes stdout, "running devopsellence vibe tiny-crm --idea A tiny CRM for solo consultants"
+    assert_includes stdout, "ran: vibe tiny-crm --idea A tiny CRM for solo consultants"
+    assert_includes installed_cli, "prerelease build"
+  end
+
   test "cli install script defaults to user local bin on linux" do
     get "/lfg.sh", params: { version: "master-0053792f6aec" }
 
@@ -273,7 +290,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
 
   private
 
-  def run_cli_install_script(script_body, version:, install_dir: :explicit, include_npx: true)
+  def run_cli_install_script(script_body, version:, install_dir: :explicit, include_npx: true, command_args: [])
     Dir.mktmpdir("devopsellence-cli-install-test") do |tmpdir|
       fixtures_dir = File.join(tmpdir, "fixtures")
       fakebin_dir = File.join(tmpdir, "fakebin")
@@ -363,7 +380,11 @@ class InstallsTest < ActionDispatch::IntegrationTest
           exit 0
         fi
 
-        printf 'prerelease build\n'
+        if [[ "$#" -gt 0 ]]; then
+          printf 'ran: %s\n' "$*"
+        else
+          printf 'prerelease build\n'
+        fi
       SH
       digest = Digest::SHA256.file(artifact_path).hexdigest
       File.write(checksums_path, "#{digest}  cli-linux-amd64\n")
@@ -452,7 +473,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
       env["DEVOPSELLENCE_CLI_INSTALL_DIR"] = effective_install_dir if effective_install_dir
       working_dir = File.join(tmpdir, "work")
       FileUtils.mkdir_p(working_dir)
-      stdout, stderr, status = Open3.capture3(env, script_path, chdir: working_dir)
+      stdout, stderr, status = Open3.capture3(env, script_path, *command_args, chdir: working_dir)
       expected_install_dir =
         if effective_install_dir.nil?
           File.join(tmpdir, ".local", "bin")

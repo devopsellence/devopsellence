@@ -29,14 +29,13 @@ asking it to invent production shell choreography.
 ### Quickstart
 
 ```bash
-curl -fsSL https://www.devopsellence.com/lfg.sh | bash
-~/.local/bin/devopsellence skill install --global
-cd my-app
-codex "deploy with devopsellence solo"
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- vibe my-app --idea "A tiny CRM for solo consultants"
+cd ~/devopsellence-projects/my-app
+codex "Read .agents/prompts/devopsellence-vibe.md and follow it."
 ```
 
-`devopsellence skill install` installs the matching devopsellence agent skill
-from the CLI itself.
+The installer downloads the CLI, then the `vibe` command prepares the app,
+project-local agent skills, and AI build prompt.
 
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 

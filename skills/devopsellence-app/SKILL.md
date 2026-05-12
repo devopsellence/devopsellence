@@ -1,3 +1,9 @@
+---
+name: devopsellence-app
+description: Build the Go and vanilla web app baseline created by devopsellence vibe.
+homepage: https://www.devopsellence.com
+---
+
 # devopsellence app
 
 Use this skill when building the web app created by `devopsellence vibe`.

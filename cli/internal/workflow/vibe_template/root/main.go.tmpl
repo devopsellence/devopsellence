@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"embed"
 	"errors"
 	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -29,7 +31,10 @@ type note struct {
 type app struct {
 	db        *sql.DB
 	templates *template.Template
+	static    http.Handler
 }
+
+const maxNotes = 50
 
 func main() {
 	addr := env("ADDR", ":8080")
@@ -72,7 +77,16 @@ func newApp(db *sql.DB) (*app, error) {
 		return nil, err
 	}
 
-	return &app{db: db, templates: templates}, nil
+	staticFiles, err := fs.Sub(assets, "static")
+	if err != nil {
+		return nil, err
+	}
+
+	return &app{
+		db:        db,
+		templates: templates,
+		static:    http.StripPrefix("/static/", http.FileServer(http.FS(staticFiles))),
+	}, nil
 }
 
 func migrate(db *sql.DB) error {
@@ -89,7 +103,7 @@ func migrate(db *sql.DB) error {
 
 func (a *app) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /static/", http.FileServer(http.FS(assets)))
+	mux.Handle("GET /static/", a.static)
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /", a.home)
 	mux.HandleFunc("POST /notes", a.createNote)
@@ -111,9 +125,13 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.templates.ExecuteTemplate(w, "index.html", map[string]any{"Notes": notes}); err != nil {
+	var body bytes.Buffer
+	if err := a.templates.ExecuteTemplate(&body, "index.html", map[string]any{"Notes": notes}); err != nil {
 		log.Printf("render home: %v", err)
+		http.Error(w, "could not render page", http.StatusInternalServerError)
+		return
 	}
+	_, _ = body.WriteTo(w)
 }
 
 func (a *app) createNote(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +161,7 @@ func (a *app) listNotes(ctx context.Context) ([]note, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	rows, err := a.db.QueryContext(ctx, `SELECT id, title, body, created_at FROM notes ORDER BY id DESC`)
+	rows, err := a.db.QueryContext(ctx, `SELECT id, title, body, created_at FROM notes ORDER BY id DESC LIMIT ?`, maxNotes)
 	if err != nil {
 		return nil, err
 	}

@@ -64,3 +64,25 @@ func TestHomeListsCreatedNotes(t *testing.T) {
 		t.Fatalf("home response missing saved note: %s", homeResponse.Body.String())
 	}
 }
+
+func TestStaticFilesAreConfinedToStaticDirectory(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	application, err := newApp(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/static/../templates/index.html", nil)
+
+	application.routes().ServeHTTP(response, request)
+
+	if response.Code == http.StatusOK {
+		t.Fatalf("expected non-200 for static traversal, got %d", response.Code)
+	}
+}

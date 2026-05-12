@@ -30,7 +30,7 @@ asking it to invent production shell choreography.
 
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
-devopsellence vibe my-app --idea "A tiny CRM for solo consultants"
+~/.local/bin/devopsellence vibe my-app --idea "A tiny CRM for solo consultants"
 cd ~/devopsellence-projects/my-app
 codex "Read .agents/prompts/devopsellence-vibe.md and follow it."
 ```

@@ -1,0 +1,12 @@
+.devopsellence/
+data/
+*.sqlite
+*.sqlite-*
+
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+tmp/
+log/

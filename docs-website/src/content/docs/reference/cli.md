@@ -64,5 +64,5 @@ devopsellence skill list
 devopsellence skill install
 devopsellence skill install --global
 devopsellence skill install --dir .agents/skills
-devopsellence skill install rails-app --dir .agents/skills
+devopsellence skill install app --dir .agents/skills
 ```

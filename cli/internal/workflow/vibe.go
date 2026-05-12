@@ -28,14 +28,12 @@ type VibeOptions struct {
 	AgentEffort       string
 	AgentAutonomy     string
 	Idea              string
-	FirstWorkflow     string
 	DeployGoal        string
 	DevopsellenceMode string
 	ServerStrategy    string
 	ServerTarget      string
 	Domain            string
 	TLSEmail          string
-	Services          string
 	ProjectsDir       string
 	Launch            bool
 	NoAgent           bool
@@ -48,8 +46,6 @@ type vibeManifest struct {
 	AgentEffort      string               `json:"agent_effort"`
 	AgentAutonomy    string               `json:"agent_autonomy"`
 	DetectedAgents   []string             `json:"detected_agents"`
-	TemplateURL      string               `json:"template_url"`
-	TemplateVersion  string               `json:"template_version"`
 	SkillDir         string               `json:"skill_dir"`
 	PromptPath       string               `json:"prompt_path"`
 	Idea             string               `json:"idea"`
@@ -58,17 +54,15 @@ type vibeManifest struct {
 }
 
 type vibeDeploymentIntent struct {
-	FirstWorkflow      string   `json:"first_workflow"`
-	DeployGoal         string   `json:"deploy_goal"`
-	DevopsellenceMode  string   `json:"devopsellence_mode"`
-	ServerStrategy     string   `json:"server_strategy"`
-	ServerTarget       string   `json:"server_target,omitempty"`
-	Provider           string   `json:"provider,omitempty"`
-	ProviderAuthStatus string   `json:"provider_auth_status,omitempty"`
-	ProviderAuthSource string   `json:"provider_auth_source,omitempty"`
-	Domain             string   `json:"domain"`
-	TLSEmail           string   `json:"tls_email,omitempty"`
-	Services           []string `json:"services"`
+	DeployGoal         string `json:"deploy_goal"`
+	DevopsellenceMode  string `json:"devopsellence_mode"`
+	ServerStrategy     string `json:"server_strategy"`
+	ServerTarget       string `json:"server_target,omitempty"`
+	Provider           string `json:"provider,omitempty"`
+	ProviderAuthStatus string `json:"provider_auth_status,omitempty"`
+	ProviderAuthSource string `json:"provider_auth_source,omitempty"`
+	Domain             string `json:"domain"`
+	TLSEmail           string `json:"tls_email,omitempty"`
 }
 
 const (
@@ -78,7 +72,6 @@ const (
 	defaultVibeDeployGoal        = "deploy-ready"
 	defaultVibeMode              = "solo"
 	defaultVibeServerStrategy    = "none"
-	defaultVibeTemplateRef       = "master"
 	vibeDomainLater              = "later"
 	vibePromptInstruction        = "Read .agents/prompts/devopsellence-vibe.md and follow it."
 	defaultVibeAgentProbeTimeout = 5 * time.Second
@@ -155,8 +148,6 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if err != nil {
 		return err
 	}
-	templateVersion := defaultVibeTemplateVersion()
-	templateURL := vibeTemplateURL(templateVersion)
 	if err := a.ensureVibeTools(); err != nil {
 		return err
 	}
@@ -191,7 +182,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		return err
 	}
 
-	prompt := vibePrompt(opts.AIAgent, opts.AgentAutonomy, templateURL, opts.Idea, intent)
+	prompt := vibePrompt(opts.AIAgent, opts.AgentAutonomy, opts.Idea, intent)
 	promptPath := filepath.Join(promptsDir, "devopsellence-vibe.md")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return fmt.Errorf("write prompt: %w", err)
@@ -205,8 +196,6 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		AgentEffort:      opts.AgentEffort,
 		AgentAutonomy:    opts.AgentAutonomy,
 		DetectedAgents:   detectedAgents,
-		TemplateURL:      templateURL,
-		TemplateVersion:  templateVersion,
 		SkillDir:         filepath.Join(".agents", "skills"),
 		PromptPath:       filepath.Join(".agents", "prompts", "devopsellence-vibe.md"),
 		Idea:             opts.Idea,
@@ -238,8 +227,6 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		"agent_effort":      opts.AgentEffort,
 		"agent_autonomy":    opts.AgentAutonomy,
 		"detected_agents":   detectedAgents,
-		"template_url":      templateURL,
-		"template_version":  templateVersion,
 		"skill_id":          agentskill.AppID,
 		"skill_name":        agentskill.AppName,
 		"skill":             agentskill.AppName,
@@ -348,16 +335,13 @@ func firstNonNilWriter(writer io.Writer) io.Writer {
 }
 
 func (a *App) resolveVibeDeploymentIntent(opts VibeOptions) (vibeDeploymentIntent, error) {
-	firstWorkflow := strings.TrimSpace(opts.FirstWorkflow)
 	deployGoal := strings.TrimSpace(opts.DeployGoal)
 	mode := strings.TrimSpace(opts.DevopsellenceMode)
 	serverStrategy := strings.TrimSpace(opts.ServerStrategy)
 	serverTarget := strings.TrimSpace(opts.ServerTarget)
 	domain := strings.TrimSpace(opts.Domain)
 	tlsEmail := strings.TrimSpace(opts.TLSEmail)
-	services := strings.TrimSpace(opts.Services)
 
-	firstWorkflow = firstNonEmpty(strings.TrimSpace(firstWorkflow), "derive from the app idea")
 	deployGoal, err := normalizeVibeDeployGoal(deployGoal)
 	if err != nil {
 		return vibeDeploymentIntent{}, err
@@ -377,19 +361,13 @@ func (a *App) resolveVibeDeploymentIntent(opts VibeOptions) (vibeDeploymentInten
 		serverTarget = firstNonEmpty(serverTarget, "prod-1")
 	}
 	domain = normalizeVibeLater(domain)
-	parsedServices, err := normalizeVibeServices(services)
-	if err != nil {
-		return vibeDeploymentIntent{}, err
-	}
 	intent := vibeDeploymentIntent{
-		FirstWorkflow:     truncateVibeText(firstWorkflow, 2048),
 		DeployGoal:        deployGoal,
 		DevopsellenceMode: mode,
 		ServerStrategy:    serverStrategy,
 		ServerTarget:      truncateVibeText(serverTarget, 512),
 		Domain:            truncateVibeText(domain, 512),
 		TLSEmail:          truncateVibeText(tlsEmail, 512),
-		Services:          parsedServices,
 	}
 	if intent.ServerStrategy == "hetzner" {
 		intent.Provider = providerHetzner
@@ -467,47 +445,6 @@ func normalizeVibeLater(value string) string {
 		return vibeDomainLater
 	}
 	return value
-}
-
-func normalizeVibeServices(value string) ([]string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return []string{"later"}, nil
-	}
-	parts := strings.FieldsFunc(value, func(r rune) bool {
-		return r == ',' || r == ';' || r == '\n'
-	})
-	seen := map[string]bool{}
-	var services []string
-	for _, part := range parts {
-		service := strings.ToLower(strings.TrimSpace(part))
-		if service == "" {
-			continue
-		}
-		service = strings.ReplaceAll(service, "_", "-")
-		switch service {
-		case "later", "managed-postgres", "object-storage", "email", "cloudflare-dns":
-		default:
-			return nil, ExitError{Code: 2, Err: fmt.Errorf("unsupported external service %q; use later, managed-postgres, object-storage, email, or cloudflare-dns", service)}
-		}
-		if !seen[service] {
-			seen[service] = true
-			services = append(services, service)
-		}
-	}
-	if len(services) == 0 {
-		return []string{"later"}, nil
-	}
-	if len(services) > 1 && seen["later"] {
-		filtered := services[:0]
-		for _, service := range services {
-			if service != "later" {
-				filtered = append(filtered, service)
-			}
-		}
-		services = filtered
-	}
-	return services, nil
 }
 
 func truncateVibeText(value string, max int) string {
@@ -860,19 +797,7 @@ func ensureVibeAppSkill(target, skillName string) error {
 	return nil
 }
 
-func vibeTemplateURL(version string) string {
-	return "https://github.com/devopsellence/devopsellence/tree/" + version + "/vibe-template"
-}
-
-func defaultVibeTemplateVersion() string {
-	value := strings.TrimSpace(version.Version)
-	if value == "" || value == "dev" || value == "unknown" {
-		return defaultVibeTemplateRef
-	}
-	return value
-}
-
-func vibePrompt(agent, autonomy string, templateURL, idea string, intent vibeDeploymentIntent) string {
+func vibePrompt(agent, autonomy string, idea string, intent vibeDeploymentIntent) string {
 	var firstLine string
 	appKind := vibeAppKind()
 	switch agent {
@@ -891,16 +816,12 @@ func vibePrompt(agent, autonomy string, templateURL, idea string, intent vibeDep
 		"App idea:",
 		idea,
 		"",
-		"Template: " + templateURL,
-		"",
 		"Deployment intent:",
-		"- First workflow: " + intent.FirstWorkflow,
 		"- devopsellence mode: " + intent.DevopsellenceMode,
 		"- Build/deploy goal: " + intent.DeployGoal,
 		"- Server plan: " + vibePromptServerPlan(intent),
 		"- Domain: " + intent.Domain,
 		"- TLS email: " + firstNonEmpty(intent.TLSEmail, "ask before configuring ingress"),
-		"- External services: " + strings.Join(intent.Services, ", "),
 		"",
 		"Agent autonomy:",
 		"- Level: " + vibeAgentAutonomyLabel(autonomy),
@@ -913,7 +834,6 @@ func vibePrompt(agent, autonomy string, templateURL, idea string, intent vibeDep
 		vibePlanApprovalPromptLine(autonomy),
 		"Build with Go, net/http, html/template, SQLite, Docker, and vanilla HTML/CSS/JavaScript.",
 		"Keep the app usable without a frontend build step unless the user explicitly asks for one.",
-		"Treat managed databases, object storage, queues, monitoring, Cloudflare, and other services as explicit product follow-ups.",
 		"",
 		"Deployment rules:",
 		"- Do not write provider tokens, API keys, passwords, or secret values into prompts, manifests, git, logs, or commits.",
@@ -922,7 +842,6 @@ func vibePrompt(agent, autonomy string, templateURL, idea string, intent vibeDep
 	)
 	lines = append(lines, vibeDeployGoalPromptLines(intent)...)
 	lines = append(lines, vibeServerPromptLines(intent)...)
-	lines = append(lines, vibeServicesPromptLines(intent)...)
 	lines = append(lines,
 		"- After deploy, report devopsellence status, app logs, node logs, and HTTPS evidence when ingress is configured.",
 		"",
@@ -1021,26 +940,6 @@ func vibeServerPromptLines(intent vibeDeploymentIntent) []string {
 	default:
 		return []string{"- No server is selected yet. Do not create or attach nodes until the user chooses existing server or Hetzner provisioning."}
 	}
-}
-
-func vibeServicesPromptLines(intent vibeDeploymentIntent) []string {
-	if len(intent.Services) == 0 || (len(intent.Services) == 1 && intent.Services[0] == "later") {
-		return []string{"- External services are later. Keep the initial app local/portable and mark service follow-ups explicitly."}
-	}
-	var lines []string
-	for _, service := range intent.Services {
-		switch service {
-		case "managed-postgres":
-			lines = append(lines, "- Plan managed PostgreSQL before production data; keep local development simple until credentials are provided through devopsellence secrets.")
-		case "object-storage":
-			lines = append(lines, "- Plan S3-compatible object storage for uploads; do not commit access keys.")
-		case "email":
-			lines = append(lines, "- Plan transactional email provider setup; keep API keys in devopsellence secrets.")
-		case "cloudflare-dns":
-			lines = append(lines, "- Plan Cloudflare DNS changes only after the user confirms the zone and approves DNS mutation.")
-		}
-	}
-	return lines
 }
 
 func vibeNextCommands(target, agentCommand string, intent vibeDeploymentIntent) []string {

@@ -1,10 +1,16 @@
-FROM golang:1.26-bookworm AS build
-
+FROM golang:1.26-bookworm AS base
+ENV CGO_ENABLED=0
+ENV GOOS=linux
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/app .
+
+FROM base AS test
+RUN go test ./...
+
+FROM base AS build
+RUN go build -trimpath -ldflags="-s -w" -o /out/app .
 RUN mkdir -p /out/data && touch /out/data/.keep
 
 FROM gcr.io/distroless/static-debian12:nonroot

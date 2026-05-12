@@ -23,7 +23,7 @@ type note struct {
 	ID        int64
 	Title     string
 	Body      string
-	CreatedAt time.Time
+	CreatedAt string
 }
 
 type app struct {

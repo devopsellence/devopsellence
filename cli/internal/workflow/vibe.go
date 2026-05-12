@@ -46,8 +46,6 @@ type vibeManifest struct {
 	AgentEffort      string               `json:"agent_effort"`
 	AgentAutonomy    string               `json:"agent_autonomy"`
 	DetectedAgents   []string             `json:"detected_agents"`
-	TemplateURL      string               `json:"template_url"`
-	TemplateVersion  string               `json:"template_version"`
 	SkillDir         string               `json:"skill_dir"`
 	PromptPath       string               `json:"prompt_path"`
 	Idea             string               `json:"idea"`
@@ -74,7 +72,6 @@ const (
 	defaultVibeDeployGoal        = "deploy-ready"
 	defaultVibeMode              = "solo"
 	defaultVibeServerStrategy    = "none"
-	defaultVibeTemplateRef       = "master"
 	vibeDomainLater              = "later"
 	vibePromptInstruction        = "Read .agents/prompts/devopsellence-vibe.md and follow it."
 	defaultVibeAgentProbeTimeout = 5 * time.Second
@@ -151,8 +148,6 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if err != nil {
 		return err
 	}
-	templateVersion := defaultVibeTemplateVersion()
-	templateURL := vibeTemplateURL(templateVersion)
 	if err := a.ensureVibeTools(); err != nil {
 		return err
 	}
@@ -187,7 +182,7 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		return err
 	}
 
-	prompt := vibePrompt(opts.AIAgent, opts.AgentAutonomy, templateURL, opts.Idea, intent)
+	prompt := vibePrompt(opts.AIAgent, opts.AgentAutonomy, opts.Idea, intent)
 	promptPath := filepath.Join(promptsDir, "devopsellence-vibe.md")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return fmt.Errorf("write prompt: %w", err)
@@ -201,8 +196,6 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		AgentEffort:      opts.AgentEffort,
 		AgentAutonomy:    opts.AgentAutonomy,
 		DetectedAgents:   detectedAgents,
-		TemplateURL:      templateURL,
-		TemplateVersion:  templateVersion,
 		SkillDir:         filepath.Join(".agents", "skills"),
 		PromptPath:       filepath.Join(".agents", "prompts", "devopsellence-vibe.md"),
 		Idea:             opts.Idea,
@@ -234,8 +227,6 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 		"agent_effort":      opts.AgentEffort,
 		"agent_autonomy":    opts.AgentAutonomy,
 		"detected_agents":   detectedAgents,
-		"template_url":      templateURL,
-		"template_version":  templateVersion,
 		"skill_id":          agentskill.AppID,
 		"skill_name":        agentskill.AppName,
 		"skill":             agentskill.AppName,
@@ -806,19 +797,7 @@ func ensureVibeAppSkill(target, skillName string) error {
 	return nil
 }
 
-func vibeTemplateURL(version string) string {
-	return "https://github.com/devopsellence/devopsellence/tree/" + version + "/vibe-template"
-}
-
-func defaultVibeTemplateVersion() string {
-	value := strings.TrimSpace(version.Version)
-	if value == "" || value == "dev" || value == "unknown" {
-		return defaultVibeTemplateRef
-	}
-	return value
-}
-
-func vibePrompt(agent, autonomy string, templateURL, idea string, intent vibeDeploymentIntent) string {
+func vibePrompt(agent, autonomy string, idea string, intent vibeDeploymentIntent) string {
 	var firstLine string
 	appKind := vibeAppKind()
 	switch agent {
@@ -836,8 +815,6 @@ func vibePrompt(agent, autonomy string, templateURL, idea string, intent vibeDep
 		"",
 		"App idea:",
 		idea,
-		"",
-		"Template: " + templateURL,
 		"",
 		"Deployment intent:",
 		"- devopsellence mode: " + intent.DevopsellenceMode,

@@ -80,14 +80,6 @@ exit 0
 	return binDir
 }
 
-func TestVibeTemplateMirrorMatchesCanonicalRoot(t *testing.T) {
-	assertDirsEqual(t, filepath.Join("..", "..", "..", "vibe-template", "root"), filepath.Join("vibe_template", "root"), map[string]string{
-		"go.mod":       "go.mod.tmpl",
-		"main.go":      "main.go.tmpl",
-		"main_test.go": "main_test.go.tmpl",
-	})
-}
-
 func setFakeVibeHome(t *testing.T, cwd string) string {
 	t.Helper()
 	home := filepath.Join(cwd, "home")
@@ -371,9 +363,8 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	if intent["deploy_goal"] != "deploy-ready" || intent["devopsellence_mode"] != "solo" || intent["server_strategy"] != "none" {
 		t.Fatalf("deployment_intent = %#v, want solo deploy-ready defaults", intent)
 	}
-	defaultTemplateVersion := defaultVibeTemplateVersion()
-	if payload["template_version"] != defaultTemplateVersion || payload["template_url"] != vibeTemplateURL(defaultTemplateVersion) || payload["initial_commit"] != true {
-		t.Fatalf("payload = %#v, want pinned template and initial commit", payload)
+	if payload["initial_commit"] != true {
+		t.Fatalf("payload = %#v, want initial commit", payload)
 	}
 	if payload["skill_id"] != "app" || payload["skill_name"] != "devopsellence-app" || payload["launched"] != false {
 		t.Fatalf("payload = %#v, want stable skill metadata and no launched agent", payload)
@@ -434,81 +425,33 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
+	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want repo-relative paths", manifest)
 	}
 	for _, path := range []string{".dockerignore", ".gitignore", "Dockerfile", "go.sum", "main.go", "main_test.go", "static/app.css"} {
-		assertFilesEqual(t, filepath.Join("..", "..", "..", "vibe-template", "root", path), filepath.Join(appDir, path))
+		source := path
+		switch path {
+		case "main.go":
+			source = "main.go.tmpl"
+		case "main_test.go":
+			source = "main_test.go.tmpl"
+		}
+		assertEmbeddedTemplateFile(t, source, filepath.Join(appDir, path), "{{APP_NAME}}", "my-app")
 	}
 	for _, path := range []string{"README.md", "devopsellence.yml", "go.mod", "scripts/check", "templates/index.html"} {
-		assertGeneratedTemplateFile(t, filepath.Join("..", "..", "..", "vibe-template", "root", path), filepath.Join(appDir, path), "{{APP_NAME}}", "my-app")
+		source := path
+		if path == "go.mod" {
+			source = "go.mod.tmpl"
+		}
+		assertEmbeddedTemplateFile(t, source, filepath.Join(appDir, path), "{{APP_NAME}}", "my-app")
 	}
 }
 
-func assertFilesEqual(t *testing.T, wantPath, gotPath string) {
+func assertEmbeddedTemplateFile(t *testing.T, sourceRel, gotPath, templateName, generatedName string) {
 	t.Helper()
-	want, err := os.ReadFile(wantPath)
+	want, err := vibeTemplates.ReadFile(filepath.Join("vibe_template", "root", sourceRel))
 	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", wantPath, err)
-	}
-	got, err := os.ReadFile(gotPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", gotPath, err)
-	}
-	if string(got) != string(want) {
-		t.Fatalf("%s differs from %s", gotPath, wantPath)
-	}
-}
-
-func assertDirsEqual(t *testing.T, wantRoot, gotRoot string, remappedFiles map[string]string) {
-	t.Helper()
-	wantFiles := map[string]bool{}
-	if err := filepath.WalkDir(wantRoot, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		rel, err := filepath.Rel(wantRoot, path)
-		if err != nil {
-			return err
-		}
-		wantFiles[rel] = true
-		gotRel := rel
-		if remappedFiles != nil && remappedFiles[rel] != "" {
-			gotRel = remappedFiles[rel]
-		}
-		assertFilesEqual(t, path, filepath.Join(gotRoot, gotRel))
-		return nil
-	}); err != nil {
-		t.Fatalf("walk %s: %v", wantRoot, err)
-	}
-	gotFiles := map[string]bool{}
-	for rel, gotRel := range remappedFiles {
-		if wantFiles[rel] {
-			gotFiles[gotRel] = true
-		}
-	}
-	if err := filepath.WalkDir(gotRoot, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		rel, err := filepath.Rel(gotRoot, path)
-		if err != nil {
-			return err
-		}
-		if !wantFiles[rel] && !gotFiles[rel] {
-			t.Fatalf("unexpected file in %s: %s", gotRoot, rel)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("walk %s: %v", gotRoot, err)
-	}
-}
-
-func assertGeneratedTemplateFile(t *testing.T, wantPath, gotPath, templateName, generatedName string) {
-	t.Helper()
-	want, err := os.ReadFile(wantPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", wantPath, err)
+		t.Fatalf("ReadFile(%q) error = %v", sourceRel, err)
 	}
 	got, err := os.ReadFile(gotPath)
 	if err != nil {
@@ -516,11 +459,11 @@ func assertGeneratedTemplateFile(t *testing.T, wantPath, gotPath, templateName, 
 	}
 	expected := strings.ReplaceAll(string(want), templateName, generatedName)
 	if string(got) != expected {
-		t.Fatalf("%s differs from %s after template name replacement", gotPath, wantPath)
+		t.Fatalf("%s differs from embedded %s after template name replacement", gotPath, sourceRel)
 	}
 }
 
-func TestRootVibeRejectsTemplateVersionFlag(t *testing.T) {
+func TestRootVibeRejectsRemovedTemplateVersionFlag(t *testing.T) {
 	cwd := t.TempDir()
 	setFakeVibeHome(t, cwd)
 	installFakeVibeTools(t)

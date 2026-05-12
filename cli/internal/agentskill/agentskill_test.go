@@ -127,24 +127,6 @@ func TestInstallRequiresTarget(t *testing.T) {
 	}
 }
 
-func TestBundledSkillMatchesPublicSkill(t *testing.T) {
-	for _, skill := range Available() {
-		t.Run(skill.Name, func(t *testing.T) {
-			bundled, err := os.ReadFile(filepath.Join(skill.Name, "SKILL.md"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			public, err := os.ReadFile(filepath.Join("..", "..", "..", "skills", skill.Name, "SKILL.md"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(bundled) != string(public) {
-				t.Fatalf("bundled %s skill differs from skills/%s/SKILL.md", skill.Name, skill.Name)
-			}
-		})
-	}
-}
-
 func containsString(items []string, needle string) bool {
 	for _, item := range items {
 		if item == needle {

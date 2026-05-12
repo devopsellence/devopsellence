@@ -605,7 +605,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return app.Vibe(cmd.Context(), vibeOpts)
 		},
 	}
-	vibeCommand.Flags().StringVar(&vibeOpts.Stack, "stack", defaultVibeStack, "App stack: rails-app or index-php")
 	vibeCommand.Flags().StringVar(&vibeOpts.AIAgent, "ai-agent", "", "AI agent to seed: codex, claude, pi, opencode, or generic")
 	vibeCommand.Flags().StringVar(&vibeOpts.AgentEffort, "agent-effort", defaultVibeAgentEffort, "AI agent effort/thinking level: default, low, medium, high, or xhigh")
 	vibeCommand.Flags().StringVar(&vibeOpts.AgentAutonomy, "autonomy", defaultVibeAgentAutonomy, "Agent freedom: careful, builder, or full-access")

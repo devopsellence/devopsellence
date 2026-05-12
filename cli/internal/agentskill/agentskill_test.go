@@ -26,51 +26,32 @@ func TestInstallWritesBundledSkill(t *testing.T) {
 	}
 }
 
-func TestInstallWritesRailsAppSkillByID(t *testing.T) {
+func TestInstallWritesAppSkillByID(t *testing.T) {
 	dir := t.TempDir()
-	result, err := Install(InstallOptions{SkillsDir: dir, Skill: "rails-app"}, "v1-test")
+	result, err := Install(InstallOptions{SkillsDir: dir, Skill: "app"}, "v1-test")
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	if result.ID != "rails-app" || result.Name != "devopsellence-rails-app" || result.Source != "embedded" {
-		t.Fatalf("result = %#v, want rails app skill", result)
+	if result.ID != "app" || result.Name != "devopsellence-app" || result.Source != "embedded" {
+		t.Fatalf("result = %#v, want app skill", result)
 	}
-	path := filepath.Join(dir, "devopsellence-rails-app", "SKILL.md")
+	path := filepath.Join(dir, "devopsellence-app", "SKILL.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
-	if !strings.Contains(string(data), "Rails") {
-		t.Fatalf("%s does not look like the Rails skill", path)
+	if !strings.Contains(string(data), "Go") || !strings.Contains(string(data), "vanilla") {
+		t.Fatalf("%s does not look like the app skill", path)
 	}
 }
 
-func TestInstallWritesIndexPHPAppSkillByID(t *testing.T) {
-	dir := t.TempDir()
-	result, err := Install(InstallOptions{SkillsDir: dir, Skill: "index-php"}, "v1-test")
-	if err != nil {
-		t.Fatalf("Install() error = %v", err)
-	}
-	if result.ID != "index-php" || result.Name != "devopsellence-index-php-app" || result.Source != "embedded" {
-		t.Fatalf("result = %#v, want index.php app skill", result)
-	}
-	path := filepath.Join(dir, "devopsellence-index-php-app", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", path, err)
-	}
-	if !strings.Contains(string(data), "index.php") || !strings.Contains(string(data), "PDO SQLite") {
-		t.Fatalf("%s does not look like the index.php skill", path)
-	}
-}
-
-func TestAvailableIncludesRailsAppSkill(t *testing.T) {
+func TestAvailableIncludesAppSkill(t *testing.T) {
 	got := Available()
 	var ids []string
 	for _, skill := range got {
 		ids = append(ids, skill.ID)
 	}
-	for _, want := range []string{"devopsellence", "index-php", "rails-app"} {
+	for _, want := range []string{"devopsellence", "app"} {
 		if !containsString(ids, want) {
 			t.Fatalf("Available() ids = %v, missing %q", ids, want)
 		}

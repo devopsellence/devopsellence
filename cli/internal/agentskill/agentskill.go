@@ -10,10 +10,8 @@ import (
 )
 
 const Name = "devopsellence"
-const RailsAppID = "rails-app"
-const RailsAppName = "devopsellence-rails-app"
-const IndexPHPAppID = "index-php"
-const IndexPHPAppName = "devopsellence-index-php-app"
+const AppID = "app"
+const AppName = "devopsellence-app"
 
 type Skill struct {
 	ID          string `json:"id"`
@@ -28,18 +26,13 @@ var skills = []Skill{
 		Description: "Operate devopsellence deployments, nodes, secrets, logs, diagnostics, and rollback.",
 	},
 	{
-		ID:          RailsAppID,
-		Name:        RailsAppName,
-		Description: "Build, test, run, deploy, and scale the blessed devopsellence Rails app baseline.",
-	},
-	{
-		ID:          IndexPHPAppID,
-		Name:        IndexPHPAppName,
-		Description: "Build, test, run, deploy, and scale the devopsellence index.php app baseline.",
+		ID:          AppID,
+		Name:        AppName,
+		Description: "Build, test, run, deploy, and scale the devopsellence Go web app baseline.",
 	},
 }
 
-//go:embed all:devopsellence all:devopsellence-rails-app all:devopsellence-index-php-app
+//go:embed all:devopsellence all:devopsellence-app
 var bundled embed.FS
 
 type InstallResult struct {

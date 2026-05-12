@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{APP_NAME}}</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>{{APP_NAME}}</h1>
+        <p>A small Go app with durable storage and deployment defaults ready for devopsellence.</p>
+      </header>
+
+      <section class="panel" aria-label="New note">
+        <form method="post" action="/notes">
+          <label>
+            Title
+            <input name="title" autocomplete="off" required>
+          </label>
+          <label>
+            Body
+            <textarea name="body"></textarea>
+          </label>
+          <button type="submit">Save note</button>
+        </form>
+      </section>
+
+      <section class="notes" aria-label="Notes">
+        {{ if .Notes }}
+          {{ range .Notes }}
+            <article class="note">
+              <h2>{{ .Title }}</h2>
+              <p>{{ .Body }}</p>
+            </article>
+          {{ end }}
+        {{ else }}
+          <div class="empty">No notes yet.</div>
+        {{ end }}
+      </section>
+    </main>
+  </body>
+</html>

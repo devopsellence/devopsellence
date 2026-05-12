@@ -56,7 +56,8 @@ class CliInstallsController < ActionController::Base
             shift
             ;;
           *)
-            echo "unknown argument: $1" >&2
+            echo "unknown installer option: $1" >&2
+            echo "usage: lfg.sh [--base-url URL] [--version VERSION] [--install-dir DIR]" >&2
             exit 1
             ;;
         esac
@@ -148,14 +149,6 @@ class CliInstallsController < ActionController::Base
           echo "checksum mismatch for downloaded CLI" >&2
           exit 1
         fi
-      }
-
-      json_string() {
-        local value="$1"
-        value="${value//\\\\/\\\\\\\\}"
-        value="${value//\\"/\\\\\\"}"
-        value="${value//$'\\n'/\\\\n}"
-        printf '"%s"' "$value"
       }
 
       echo "downloading devopsellence CLI..."

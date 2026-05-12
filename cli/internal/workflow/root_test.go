@@ -207,7 +207,7 @@ func TestRootSkillInstallWritesBundledSkill(t *testing.T) {
 	}
 }
 
-func TestRootSkillListIncludesRailsAppSkill(t *testing.T) {
+func TestRootSkillListIncludesAppSkill(t *testing.T) {
 	var stdout bytes.Buffer
 	cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, t.TempDir())
 	cmd.SetOut(&stdout)
@@ -380,7 +380,6 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	}
 	for _, path := range []string{
 		filepath.Join(appDir, ".git"),
-		filepath.Join(appDir, ".mise.toml"),
 		filepath.Join(appDir, "go.mod"),
 		filepath.Join(appDir, "main.go"),
 		filepath.Join(appDir, "templates", "index.html"),
@@ -438,7 +437,7 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.TemplateVersion != defaultTemplateVersion || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want repo-relative paths", manifest)
 	}
-	for _, path := range []string{".dockerignore", ".gitignore", ".mise.toml", "Dockerfile", "go.sum", "main.go", "main_test.go", "static/app.css"} {
+	for _, path := range []string{".dockerignore", ".gitignore", "Dockerfile", "go.sum", "main.go", "main_test.go", "static/app.css"} {
 		assertFilesEqual(t, filepath.Join("..", "..", "..", "vibe-template", "root", path), filepath.Join(appDir, path))
 	}
 	for _, path := range []string{"README.md", "devopsellence.yml", "go.mod", "scripts/check", "templates/index.html"} {
@@ -539,6 +538,29 @@ func TestRootVibeRejectsTemplateVersionFlag(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "unknown flag: --template-version") {
 		t.Fatalf("error = %v, want unknown template-version flag", err)
+	}
+}
+
+func TestRootVibeRejectsRemovedPlanningFlags(t *testing.T) {
+	cwd := t.TempDir()
+	setFakeVibeHome(t, cwd)
+	installFakeVibeTools(t)
+	for _, flag := range []string{"--first-workflow", "--services"} {
+		var stdout bytes.Buffer
+		cmd := NewRootCommand(bytes.NewBuffer(nil), &stdout, &stdout, cwd)
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stdout)
+		cmd.SetArgs([]string{
+			"vibe", "tiny-notes",
+			"--idea", "A tiny notes board",
+			flag, "later",
+			"--no-launch",
+		})
+
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), "unknown flag: "+flag) {
+			t.Fatalf("flag %s error = %v, want unknown flag", flag, err)
+		}
 	}
 }
 
@@ -658,12 +680,8 @@ func TestRootVibeWizardOnlyAsksForAppIdea(t *testing.T) {
 		t.Fatalf("payload = %#v, want generic builder defaults", payload)
 	}
 	intent := jsonMapFromAny(t, payload["deployment_intent"])
-	if intent["deploy_goal"] != "deploy-ready" || intent["server_strategy"] != "none" || intent["first_workflow"] != "derive from the app idea" {
+	if intent["deploy_goal"] != "deploy-ready" || intent["server_strategy"] != "none" {
 		t.Fatalf("deployment_intent = %#v, want deploy-ready defaults", intent)
-	}
-	services := jsonArrayFromMap(t, intent, "services")
-	if len(services) != 1 || services[0] != "later" {
-		t.Fatalf("services = %#v, want later by default", services)
 	}
 	manifestData, err := os.ReadFile(filepath.Join(appDir, ".agents", "devopsellence-vibe.json"))
 	if err != nil {

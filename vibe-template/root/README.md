@@ -5,22 +5,22 @@ A devopsellence-ready web app: Go backend, vanilla HTML/CSS, SQLite storage, and
 ## Local development
 
 ```sh
-mise install
-mise run dev
+docker build --target test .
+docker build -t {{APP_NAME}}:local .
+docker run --rm -p 8080:8080 -v {{APP_NAME}}-data:/data {{APP_NAME}}:local
 ```
 
-Or use an existing Go install:
+The app listens on `http://localhost:8080`.
+
+If Go is installed locally:
 
 ```sh
 go run .
 ```
 
-The app listens on `http://localhost:8080`.
-
 ## Check
 
 ```sh
-mise run test
 ./scripts/check
 ```
 

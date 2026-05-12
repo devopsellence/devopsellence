@@ -1,9 +1,13 @@
-FROM golang:1.26-bookworm AS build
-
+FROM golang:1.26-bookworm AS base
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
+
+FROM base AS test
+RUN go test ./...
+
+FROM test AS build
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/app .
 RUN mkdir -p /out/data && touch /out/data/.keep
 

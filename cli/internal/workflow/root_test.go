@@ -81,7 +81,11 @@ exit 0
 }
 
 func TestVibeTemplateMirrorMatchesCanonicalRoot(t *testing.T) {
-	assertDirsEqual(t, filepath.Join("..", "..", "..", "vibe-template", "root"), filepath.Join("vibe_template", "root"), map[string]string{"go.mod": "go.mod.tmpl"})
+	assertDirsEqual(t, filepath.Join("..", "..", "..", "vibe-template", "root"), filepath.Join("vibe_template", "root"), map[string]string{
+		"go.mod":       "go.mod.tmpl",
+		"main.go":      "main.go.tmpl",
+		"main_test.go": "main_test.go.tmpl",
+	})
 }
 
 func setFakeVibeHome(t *testing.T, cwd string) string {

@@ -815,8 +815,8 @@ func copyEmbeddedVibeTemplate(root, target string, replacements map[string]strin
 			return os.MkdirAll(target, 0o755)
 		}
 		destRel := rel
-		if destRel == "go.mod.tmpl" {
-			destRel = "go.mod"
+		if strings.HasSuffix(destRel, ".tmpl") {
+			destRel = strings.TrimSuffix(destRel, ".tmpl")
 		}
 		dest := filepath.Join(target, destRel)
 		if entry.IsDir() {

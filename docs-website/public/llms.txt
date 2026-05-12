@@ -1,0 +1,54 @@
+# devopsellence docs
+
+> Documentation for deploying and operating containerized apps on familiar VMs with devopsellence.
+
+devopsellence is AI-operator-first: commands should expose explicit plan/apply boundaries, structured status, deterministic errors, and ordinary-tool escape hatches. It targets Dockerized apps on VMs, not PaaS or Kubernetes-lite abstractions.
+
+Solo and shared are management topologies over the same deployment model. Solo is SSH-first local operation. Shared is control-plane-backed team operation where node agents pull published desired state.
+
+## Start
+
+- [Overview](https://docs.devopsellence.com/getting-started/overview/): Product overview and starting points.
+- [Install](https://docs.devopsellence.com/getting-started/install/): CLI installation and agent skill setup.
+- [Solo quickstart](https://docs.devopsellence.com/getting-started/solo-quickstart/): Shortest path to deploy an app to one VM.
+- [Shared overview](https://docs.devopsellence.com/getting-started/shared-overview/): Control-plane-backed workflow for teams.
+
+## Concepts
+
+- [Runtime model](https://docs.devopsellence.com/concepts/runtime-model/): Desired state, releases, services, tasks, nodes, status, and reconciliation.
+- [Solo and shared](https://docs.devopsellence.com/concepts/solo-and-shared/): Management topology differences and shared runtime semantics.
+- [Node agent and desired state](https://docs.devopsellence.com/concepts/agent-desired-state/): Agent reconciliation model.
+- [AI operator model](https://docs.devopsellence.com/concepts/agent-primary/): AI assistant as the primary operator acting for a human.
+
+## Guides
+
+- [Deploy with solo](https://docs.devopsellence.com/guides/solo-deploy/): Full solo deploy walkthrough.
+- [Deploy with shared](https://docs.devopsellence.com/guides/shared-deploy/): Shared-mode deploy workflow.
+- [GitHub Actions](https://docs.devopsellence.com/guides/github-actions/): CI integration.
+- [Secrets](https://docs.devopsellence.com/guides/secrets/): Secret management workflow.
+- [Supporting services](https://docs.devopsellence.com/guides/supporting-services/): Redis, Memcached, and similar companion services.
+- [Ingress and TLS](https://docs.devopsellence.com/guides/ingress-tls/): DNS, hostnames, Envoy ingress, and automatic TLS.
+- [Rollback](https://docs.devopsellence.com/guides/rollback/): Rollback workflow.
+- [Backup and restore](https://docs.devopsellence.com/guides/backup-restore/): State backup and recovery guidance.
+- [Troubleshooting](https://docs.devopsellence.com/guides/troubleshooting/): Diagnostic flow for common failures.
+- [Cleanup](https://docs.devopsellence.com/guides/cleanup/): Removing apps, nodes, and local state.
+
+## Examples
+
+- [Basecamp Fizzy on Rails](https://docs.devopsellence.com/examples/fizzy-rails-solo/): Rails app deployed with solo mode.
+- [Flue agents on Node.js](https://docs.devopsellence.com/examples/flue-node-solo/): Node.js webhook agent server deployed as an ordinary containerized service.
+
+## Reference
+
+- [devopsellence.yml](https://docs.devopsellence.com/reference/devopsellence-yml/): App configuration reference.
+- [CLI commands](https://docs.devopsellence.com/reference/cli/): Common command groups and examples.
+- [Result JSON](https://docs.devopsellence.com/reference/result-json/): Structured output contract for AI operators.
+- [Environment variables](https://docs.devopsellence.com/reference/environment-variables/): Supported environment variables.
+
+## Optional
+
+- [CloudStack VMs](https://docs.devopsellence.com/guides/cloudstack-vms/): Using CloudStack as an infrastructure source for VMs.
+- [Cloudprober](https://docs.devopsellence.com/guides/cloudprober/): User-managed monitoring workload guidance.
+- [Operate this docs site](https://docs.devopsellence.com/operate/docs-website/): How the docs website is built and deployed.
+- [Main website](https://www.devopsellence.com/): Product homepage and installer entry point.
+- [GitHub repository](https://github.com/devopsellence/devopsellence): Public source for devopsellence.

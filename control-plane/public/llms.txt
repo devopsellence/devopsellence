@@ -1,0 +1,33 @@
+# devopsellence
+
+> devopsellence is an AI-operator-first deployment toolkit for containerized apps on familiar VMs.
+
+devopsellence gives AI coding and operations assistants a narrow, auditable command surface for deploying Dockerized apps without introducing a PaaS, Kubernetes-lite layer, or hidden scheduler.
+
+Use the docs site for implementation details. Use the main website for product positioning, installation, and entry points.
+
+## Start
+
+- [Install the CLI](https://www.devopsellence.com/lfg.sh): Shell installer for the current devopsellence CLI.
+- [Documentation](https://docs.devopsellence.com/): Public docs for installing, deploying, operating, and troubleshooting devopsellence.
+- [Solo quickstart](https://docs.devopsellence.com/getting-started/solo-quickstart/): Short path for deploying a Dockerized app to one VM.
+- [GitHub repository](https://github.com/devopsellence/devopsellence): Public source for the CLI, agent, deployment core, control plane, and docs site.
+
+## Product Boundaries
+
+- [Runtime model](https://docs.devopsellence.com/concepts/runtime-model/): Core model for desired state, releases, services, nodes, and status.
+- [Solo and shared](https://docs.devopsellence.com/concepts/solo-and-shared/): Management topology differences; not separate deployment systems.
+- [AI operator model](https://docs.devopsellence.com/concepts/agent-primary/): Why the CLI is shaped for AI assistants acting for humans.
+- [Node agent and desired state](https://docs.devopsellence.com/concepts/agent-desired-state/): How nodes reconcile published intent.
+
+## Operations
+
+- [CLI commands](https://docs.devopsellence.com/reference/cli/): AI-operator-safe command groups for deploys, status, logs, nodes, secrets, ingress, and skills.
+- [devopsellence.yml](https://docs.devopsellence.com/reference/devopsellence-yml/): App configuration schema.
+- [Ingress and TLS](https://docs.devopsellence.com/guides/ingress-tls/): Hostnames, DNS checks, and HTTPS verification.
+- [Rollback](https://docs.devopsellence.com/guides/rollback/): Rollback workflow and boundaries.
+
+## Optional
+
+- [Preview terms](https://www.devopsellence.com/terms): Terms for the public control plane.
+- [Privacy](https://www.devopsellence.com/privacy): Privacy information for the public control plane.

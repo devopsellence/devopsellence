@@ -141,7 +141,7 @@ class InstallsTest < ActionDispatch::IntegrationTest
     assert_nil installed_skill
   end
 
-  test "cli install script can run a post-install devopsellence command" do
+  test "cli install script rejects post-install devopsellence commands" do
     get "/lfg.sh", params: { version: "master-0053792f6aec" }
 
     assert_response :success
@@ -152,10 +152,9 @@ class InstallsTest < ActionDispatch::IntegrationTest
       command_args: ["vibe", "tiny-crm", "--idea", "A tiny CRM for solo consultants"]
     )
 
-    assert_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
-    assert_includes stdout, "running devopsellence vibe tiny-crm --idea A tiny CRM for solo consultants"
-    assert_includes stdout, "ran: vibe tiny-crm --idea A tiny CRM for solo consultants"
-    assert_includes installed_cli, "prerelease build"
+    refute_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
+    assert_includes stderr, "unknown installer option: vibe"
+    assert_nil installed_cli
   end
 
   test "cli install script defaults to user local bin on linux" do

@@ -29,12 +29,13 @@ asking it to invent production shell choreography.
 ### Quickstart
 
 ```bash
-curl -fsSL https://www.devopsellence.com/lfg.sh | bash -s -- vibe my-app --idea "A tiny CRM for solo consultants"
+curl -fsSL https://www.devopsellence.com/lfg.sh | bash
+devopsellence vibe my-app --idea "A tiny CRM for solo consultants"
 cd ~/devopsellence-projects/my-app
 codex "Read .agents/prompts/devopsellence-vibe.md and follow it."
 ```
 
-The installer downloads the CLI, then the `vibe` command prepares the app,
+The installer downloads the CLI. The `vibe` command prepares the app,
 project-local agent skills, and AI build prompt.
 
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).

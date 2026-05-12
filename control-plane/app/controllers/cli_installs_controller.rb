@@ -28,15 +28,9 @@ class CliInstallsController < ActionController::Base
       CLI_CHECKSUM_URL="${DEVOPSELLENCE_CLI_CHECKSUM_URL:-}"
       INSTALL_DIR="${DEVOPSELLENCE_CLI_INSTALL_DIR:-}"
       TARGET_NAME="devopsellence"
-      POST_INSTALL_ARGS=()
 
       while [[ $# -gt 0 ]]; do
         case "$1" in
-          --)
-            shift
-            POST_INSTALL_ARGS=("$@")
-            break
-            ;;
           --base-url)
             BASE_URL="$2"
             shift 2
@@ -62,8 +56,9 @@ class CliInstallsController < ActionController::Base
             shift
             ;;
           *)
-            POST_INSTALL_ARGS=("$@")
-            break
+            echo "unknown installer option: $1" >&2
+            echo "usage: lfg.sh [--base-url URL] [--version VERSION] [--install-dir DIR]" >&2
+            exit 1
             ;;
         esac
       done
@@ -156,14 +151,6 @@ class CliInstallsController < ActionController::Base
         fi
       }
 
-      json_string() {
-        local value="$1"
-        value="${value//\\\\/\\\\\\\\}"
-        value="${value//\\"/\\\\\\"}"
-        value="${value//$'\\n'/\\\\n}"
-        printf '"%s"' "$value"
-      }
-
       echo "downloading devopsellence CLI..."
       curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BIN"
       curl -fsSL "$CHECKSUM_URL" -o "$TMP_SUMS"
@@ -219,11 +206,6 @@ class CliInstallsController < ActionController::Base
 
       echo "agent skill available; install it with:"
       echo "  \"$INSTALL_DIR/$TARGET_NAME\" skill install --global"
-
-      if [[ "${#POST_INSTALL_ARGS[@]}" -gt 0 ]]; then
-        echo "running devopsellence ${POST_INSTALL_ARGS[*]}..."
-        "$INSTALL_DIR/$TARGET_NAME" "${POST_INSTALL_ARGS[@]}"
-      fi
     SH
   end
 end

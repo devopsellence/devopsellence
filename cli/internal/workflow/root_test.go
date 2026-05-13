@@ -421,6 +421,8 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 		"vanilla HTML/CSS/JavaScript",
 		"Do not introduce a frontend framework",
 		"Deploy-readiness checklist",
+		"If Go is installed locally, use go test ./... for fast backend iteration",
+		"Always run ./scripts/check before treating the app as deploy-ready",
 		"devopsellence deploy --dry-run must either succeed or report the expected no-node blocker",
 		"after confirmation, delete or rewrite generated shell code",
 		"subtraction pass",

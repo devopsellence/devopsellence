@@ -44,8 +44,11 @@ Work loop:
 6. After each slice, run a subtraction pass: remove unused routes, handlers,
    styles, helpers, placeholder content, stale tests, and speculative
    abstractions while preserving user-confirmed behavior.
-7. Run `go test ./...` after backend or data changes.
-8. Run `./scripts/check` before treating the app as deploy-ready.
+7. If Go is installed locally, run `go test ./...` after backend or data
+   changes for fast iteration.
+8. Run `./scripts/check` before treating the app as deploy-ready; this is the
+   portable baseline and uses Docker test/build targets when local Go is
+   unavailable.
 9. Run `./scripts/smoke` against a running local server after UI or HTTP changes.
 10. Keep the app deployable after every feature slice.
 
@@ -151,9 +154,9 @@ Deploy readiness:
 - Keep persistent data under `/data` when deploying with the generated volume.
 - Keep `scripts/dev`, `scripts/smoke`, and `scripts/check` current as routes,
   text, health behavior, ports, or deploy config change.
-- Before handoff, the machine-checkable baseline is `go test ./...`,
-  `./scripts/check`, local smoke when HTTP behavior changed, and
-  `devopsellence deploy --dry-run`.
+- Before handoff, the machine-checkable baseline is `./scripts/check`, local
+  smoke when HTTP behavior changed, and `devopsellence deploy --dry-run`. Use
+  `go test ./...` as an additional fast local check when Go is installed.
 - If no server is selected yet, the acceptable dry-run blocker is the explicit
   no-node/no-attachment message. Mode unset, invalid config, build failure, or
   health mismatch is not acceptable.

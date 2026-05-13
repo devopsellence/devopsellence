@@ -9,6 +9,7 @@ operators and use explicit plan/apply boundaries.
 ## Workspace
 
 ```bash
+devopsellence vibe my-app --idea "A tiny CRM for solo consultants"
 devopsellence init --mode solo
 devopsellence init --mode shared
 devopsellence context show

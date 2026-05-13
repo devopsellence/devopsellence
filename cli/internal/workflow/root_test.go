@@ -398,8 +398,21 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Agent autonomy") || !strings.Contains(string(prompt), "ask the user to confirm before changing app behavior") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Go, net/http") || !strings.Contains(string(prompt), "vanilla HTML/CSS/JavaScript") {
-		t.Fatalf("prompt = %q, want seeded codex prompt", prompt)
+	for _, want := range []string{
+		"/goal",
+		"A tiny CRM",
+		"Deployment intent",
+		"Agent autonomy",
+		"ask the user to confirm before changing app behavior",
+		"Before any production mutation",
+		"Go, net/http",
+		"vanilla HTML/CSS/JavaScript",
+		"Do not introduce a frontend framework",
+		"subtraction pass",
+	} {
+		if !strings.Contains(string(prompt), want) {
+			t.Fatalf("prompt = %q, missing %q", prompt, want)
+		}
 	}
 	for _, unwanted := range []string{"App stack", "Rails", "index.php", "stack-expansion"} {
 		if strings.Contains(string(prompt), unwanted) {
@@ -410,8 +423,15 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(appSkill), "Go") || !strings.Contains(string(appSkill), "vanilla") || strings.Contains(string(appSkill), "Rails") || strings.Contains(string(appSkill), "index.php") {
-		t.Fatalf("app skill = %q, want Go and vanilla web guidance", appSkill)
+	for _, want := range []string{"Go", "vanilla", "Do not add React", "Do not create a frontend build step", "subtraction pass"} {
+		if !strings.Contains(string(appSkill), want) {
+			t.Fatalf("app skill = %q, missing %q", appSkill, want)
+		}
+	}
+	for _, unwanted := range []string{"Rails", "index.php"} {
+		if strings.Contains(string(appSkill), unwanted) {
+			t.Fatalf("app skill = %q, should not contain %q", appSkill, unwanted)
+		}
 	}
 	nextCommands := jsonArrayFromMap(t, payload, "next_commands")
 	if !jsonArrayContains(nextCommands, "codex --sandbox 'workspace-write' --ask-for-approval 'on-request' -c 'model_reasoning_effort=\"high\"' 'Read .agents/prompts/devopsellence-vibe.md and follow it.'") {

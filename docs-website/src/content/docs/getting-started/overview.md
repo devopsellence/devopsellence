@@ -11,6 +11,12 @@ The immediate solo-mode value is an operator-safe deployment loop: dry-run,
 deploy, status, doctor, logs, exec, secrets, rollback, DNS checks, and HTTPS
 verification with structured output an AI assistant can act on.
 
+For new apps, `devopsellence vibe` creates a small native-web Go workspace and a
+project-local app-building skill so an AI agent can turn an idea into a
+deployable app without introducing a frontend framework or build system. See
+[Build with vibe](/getting-started/vibe/) and
+[Vibe philosophy](/concepts/vibe-philosophy/).
+
 The system has three product surfaces:
 
 - **Node agent**: runs on each node and reconciles containers, Envoy ingress,

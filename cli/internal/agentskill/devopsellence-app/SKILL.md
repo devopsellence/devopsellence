@@ -38,9 +38,12 @@ Work loop:
 3. Make a short implementation plan with data model, pages, actions, and states.
 4. Implement in small reversible slices; commit/checkpoint before risky changes
    when git is available.
-5. Run `docker build --target test .` after backend or data changes.
-6. Run `docker build .` after Dockerfile or deploy-surface changes.
-7. Keep the app deployable after every feature slice.
+5. After each slice, run a subtraction pass: remove unused routes, handlers,
+   styles, helpers, placeholder content, stale tests, and speculative
+   abstractions while preserving user-confirmed behavior.
+6. Run `docker build --target test .` after backend or data changes.
+7. Run `docker build .` after Dockerfile or deploy-surface changes.
+8. Keep the app deployable after every feature slice.
 
 Product shaping:
 
@@ -49,6 +52,8 @@ Product shaping:
 - Build complete first-use, empty, success, validation, and error states.
 - Prefer one coherent app flow over many shallow pages.
 - Mark larger ideas as follow-ups instead of adding hidden abstractions early.
+- Prefer subtraction and clearer existing code over new abstractions; add
+  structure only when it removes real complexity.
 
 Go implementation:
 

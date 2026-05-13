@@ -398,7 +398,7 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Agent autonomy") || !strings.Contains(string(prompt), "ask the user to confirm before changing app behavior") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Go, net/http") || !strings.Contains(string(prompt), "vanilla HTML/CSS/JavaScript") || !strings.Contains(string(prompt), "Do not introduce a frontend framework") {
+	if !strings.Contains(string(prompt), "/goal") || !strings.Contains(string(prompt), "A tiny CRM") || !strings.Contains(string(prompt), "Deployment intent") || !strings.Contains(string(prompt), "Agent autonomy") || !strings.Contains(string(prompt), "ask the user to confirm before changing app behavior") || !strings.Contains(string(prompt), "Before any production mutation") || !strings.Contains(string(prompt), "Go, net/http") || !strings.Contains(string(prompt), "vanilla HTML/CSS/JavaScript") || !strings.Contains(string(prompt), "Do not introduce a frontend framework") || !strings.Contains(string(prompt), "subtraction pass") {
 		t.Fatalf("prompt = %q, want seeded codex prompt", prompt)
 	}
 	for _, unwanted := range []string{"App stack", "Rails", "index.php", "stack-expansion"} {

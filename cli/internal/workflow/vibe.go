@@ -834,6 +834,7 @@ func vibePrompt(agent, autonomy string, idea string, intent vibeDeploymentIntent
 		vibePlanApprovalPromptLine(autonomy),
 		"Build with Go, net/http, html/template, SQLite, Docker, and vanilla HTML/CSS/JavaScript.",
 		"Do not introduce a frontend framework, npm, bundler, transpiler, Tailwind, or frontend build step unless the user explicitly asks for one.",
+		"After each feature slice, do a subtraction pass: remove unused scaffolding, duplicate code, stale styles, placeholder content, and speculative abstractions while preserving user-confirmed behavior.",
 		"",
 		"Deployment rules:",
 		"- Do not write provider tokens, API keys, passwords, or secret values into prompts, manifests, git, logs, or commits.",

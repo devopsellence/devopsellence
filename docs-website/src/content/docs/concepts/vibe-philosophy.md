@@ -59,10 +59,23 @@ The generated `devopsellence-app` skill carries the harder product guidance:
 - build complete empty, success, validation, and error states;
 - use vanilla JavaScript only for progressive enhancement;
 - keep every slice deployable;
+- run regular subtraction passes so unused scaffolding, stale styles, duplicate
+  helpers, placeholder UI, and speculative abstractions do not accumulate;
 - checkpoint changes so iteration and revert stay natural.
 
 That split keeps the codebase small while still giving the agent enough taste
 and discipline to build a good app.
+
+## Subtraction as quality control
+
+Vibe-generated apps should get clearer as they mature. Every iteration should
+ask what can be removed, merged, or simplified before adding another route,
+helper, table, style block, or interaction.
+
+Subtraction is not permission to delete confirmed product behavior. It is the
+habit of removing leftovers: unused routes, duplicate code, stale tests,
+placeholder copy, speculative abstractions, and UI states that no longer serve
+the app.
 
 ## AI app-builder feel, inspectable output
 

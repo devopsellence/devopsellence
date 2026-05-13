@@ -43,7 +43,9 @@ The intended loop is:
 3. The app stays native-web: Go, SQLite, HTML, CSS, and small vanilla JavaScript.
 4. The agent runs `docker build --target test .` while changing app behavior.
 5. The agent keeps Docker and `devopsellence.yml` deploy-ready as the app grows.
-6. Before a real deploy, the agent runs `devopsellence deploy --dry-run`.
+6. After each feature slice, the agent does a subtraction pass to remove unused
+   routes, styles, helpers, placeholder UI, and speculative abstractions.
+7. Before a real deploy, the agent runs `devopsellence deploy --dry-run`.
 
 `vibe` does not ask the agent to invent a stack. It gives the agent a narrow
 workspace and a high-quality set of product and implementation instructions.

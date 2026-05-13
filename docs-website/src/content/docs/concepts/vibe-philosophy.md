@@ -64,7 +64,7 @@ The generated `devopsellence-app` skill carries the harder product guidance:
 That split keeps the codebase small while still giving the agent enough taste
 and discipline to build a good app.
 
-## Replit-like, but inspectable
+## AI app-builder feel, inspectable output
 
 `vibe` can feel like an AI app builder because the user starts with an idea and
 an agent does the work. The difference is the ownership model.

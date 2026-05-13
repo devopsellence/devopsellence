@@ -62,13 +62,17 @@ The generated app has a single readiness check:
 ./scripts/check
 ```
 
-If Go is installed locally, `./scripts/check` also runs `go test ./...`.
-The agent may use these during local iteration:
+If Go is installed locally, `./scripts/check` also runs `go test ./...`; without
+local Go, Docker remains the portable test/build path. The agent may use these
+during local iteration:
 
 ```bash
 ./scripts/dev
 ./scripts/smoke
 ```
+
+`./scripts/dev` uses `go run .`, so it is a local-Go convenience. The portable
+deploy-readiness contract is still `./scripts/check`.
 
 `./scripts/check` requires Docker, runs the Docker test/build targets, and runs a
 `devopsellence deploy --dry-run` when the CLI is available. If no server is

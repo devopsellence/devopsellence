@@ -62,14 +62,15 @@ The generated app has a single readiness check:
 ./scripts/check
 ```
 
-If Go is installed locally, the agent may also run:
+If Go is installed locally, `./scripts/check` also runs `go test ./...`.
+The agent may use these during local iteration:
 
 ```bash
 ./scripts/dev
 ./scripts/smoke
 ```
 
-`./scripts/check` runs Go tests, Docker test/build targets, and a
+`./scripts/check` requires Docker, runs the Docker test/build targets, and runs a
 `devopsellence deploy --dry-run` when the CLI is available. If no server is
 selected yet, the expected result is an explicit no-node/no-attachment blocker,
 not an unset mode or invalid config error.

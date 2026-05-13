@@ -60,6 +60,9 @@ func TestHomeRendersAppShell(t *testing.T) {
 	if homeResponse.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", homeResponse.Code, homeResponse.Body.String())
 	}
+	if got := homeResponse.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want text/html; charset=utf-8", got)
+	}
 	for _, want := range []string{"{{APP_NAME}}", "Deploy-ready app shell", "/healthz"} {
 		if !strings.Contains(homeResponse.Body.String(), want) {
 			t.Fatalf("home response missing %q: %s", want, homeResponse.Body.String())

@@ -23,9 +23,10 @@ To smoke-test a running local server:
 ./scripts/check
 ```
 
-The check runs Go tests, Docker test/build targets, and a devopsellence dry-run
-when the CLI is available. If no node is attached yet, the expected dry-run
-blocker is accepted.
+The check requires Docker. It also runs `go test ./...` when Go is installed
+locally, then runs Docker test/build targets and a devopsellence dry-run when
+the CLI is available. If no node is attached yet, the expected dry-run blocker
+is accepted.
 
 The app can also be run through Docker:
 

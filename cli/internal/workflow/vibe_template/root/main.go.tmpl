@@ -118,6 +118,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not render page", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = body.WriteTo(w)
 }
 

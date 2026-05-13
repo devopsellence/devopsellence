@@ -13,10 +13,13 @@ run() {
   "$@"
 }
 
-require go
 require docker
 
-run go test ./...
+if command -v go >/dev/null 2>&1; then
+  run go test ./...
+else
+  echo "go not found; Docker test target will run the test suite"
+fi
 run docker build --target test .
 run docker build .
 

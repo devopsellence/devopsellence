@@ -44,12 +44,14 @@ surface area for an agent to manage.
 The app template should be understandable in a few minutes. It exists to provide
 a safe shape:
 
-- routes;
+- a neutral root route;
+- `/healthz`;
 - templates;
 - static assets;
 - SQLite setup;
 - tests;
 - Docker;
+- dev and smoke scripts;
 - `devopsellence.yml`.
 
 The generated `devopsellence-app` skill carries the harder product guidance:
@@ -61,6 +63,8 @@ The generated `devopsellence-app` skill carries the harder product guidance:
 - keep every slice deployable;
 - run regular subtraction passes so unused scaffolding, stale styles, duplicate
   helpers, placeholder UI, and speculative abstractions do not accumulate;
+- start product work by deleting or rewriting any generated shell code, routes,
+  content, styles, and tests that do not serve the user's idea;
 - checkpoint changes so iteration and revert stay natural.
 
 That split keeps the codebase small while still giving the agent enough taste
@@ -100,7 +104,9 @@ A good vibe-generated app should:
 - look intentionally designed for its domain;
 - expose clear health and error states;
 - keep secrets out of prompts, commits, and logs;
-- pass `docker build --target test .`;
-- remain deployable with `devopsellence deploy --dry-run`.
+- pass `go test ./...`, `./scripts/check`, and focused smoke checks when HTTP
+  behavior changes;
+- reach either a successful `devopsellence deploy --dry-run` or the expected
+  no-node blocker when no server is selected yet.
 
 The goal is durable software, not a throwaway mockup.

@@ -5,23 +5,33 @@ A devopsellence-ready web app: Go backend, vanilla HTML/CSS, SQLite storage, and
 ## Local development
 
 ```sh
-docker build --target test .
-docker build -t {{APP_NAME}}:local .
-docker run --rm -p 8080:8080 -v {{APP_NAME}}-data:/data {{APP_NAME}}:local
+./scripts/dev
 ```
 
-The app listens on `http://localhost:8080`.
+The app listens on `http://localhost:18080` and stores development data at
+`/tmp/{{APP_NAME}}.sqlite`.
 
-If Go is installed locally:
+To smoke-test a running local server:
 
 ```sh
-go run .
+./scripts/smoke
 ```
 
 ## Check
 
 ```sh
 ./scripts/check
+```
+
+The check runs Go tests, Docker test/build targets, and a devopsellence dry-run
+when the CLI is available. If no node is attached yet, the expected dry-run
+blocker is accepted.
+
+The app can also be run through Docker:
+
+```sh
+docker build -t {{APP_NAME}}:local .
+docker run --rm -p 8080:8080 -v {{APP_NAME}}-data:/data {{APP_NAME}}:local
 ```
 
 ## Deploy

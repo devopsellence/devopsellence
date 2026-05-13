@@ -378,6 +378,8 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 		filepath.Join(appDir, "Dockerfile"),
 		filepath.Join(appDir, "devopsellence.yml"),
 		filepath.Join(appDir, "scripts", "check"),
+		filepath.Join(appDir, "scripts", "dev"),
+		filepath.Join(appDir, "scripts", "smoke"),
 		filepath.Join(appDir, ".agents", "skills", "devopsellence", "SKILL.md"),
 		filepath.Join(appDir, ".agents", "skills", "devopsellence-app", "SKILL.md"),
 		filepath.Join(appDir, ".agents", "devopsellence-vibe.json"),
@@ -386,12 +388,22 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 			t.Fatalf("expected %s: %v", path, err)
 		}
 	}
-	info, err := os.Stat(filepath.Join(appDir, "scripts", "check"))
-	if err != nil {
-		t.Fatal(err)
+	for _, script := range []string{"check", "dev", "smoke"} {
+		info, err := os.Stat(filepath.Join(appDir, "scripts", script))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&0o111 == 0 {
+			t.Fatalf("scripts/%s is not executable", script)
+		}
 	}
-	if info.Mode()&0o111 == 0 {
-		t.Fatalf("scripts/check is not executable")
+	modeApp := NewApp(bytes.NewBuffer(nil), &stdout, &stdout, appDir)
+	mode, ok, modeErr := modeApp.savedMode()
+	if modeErr != nil {
+		t.Fatalf("savedMode error = %v", modeErr)
+	}
+	if !ok || mode != ModeSolo {
+		t.Fatalf("saved mode = %q, %v; want solo, true", mode, ok)
 	}
 	promptPath := filepath.Join(appDir, ".agents", "prompts", "devopsellence-vibe.md")
 	prompt, err := os.ReadFile(promptPath)
@@ -408,6 +420,9 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 		"Go, net/http",
 		"vanilla HTML/CSS/JavaScript",
 		"Do not introduce a frontend framework",
+		"Deploy-readiness checklist",
+		"devopsellence deploy --dry-run must either succeed or report the expected no-node blocker",
+		"after confirmation, delete or rewrite generated shell code",
 		"subtraction pass",
 	} {
 		if !strings.Contains(string(prompt), want) {
@@ -423,7 +438,7 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Go", "vanilla", "Do not add React", "Do not create a frontend build step", "subtraction pass"} {
+	for _, want := range []string{"Go", "vanilla", "Do not add React", "Do not create a frontend build step", "subtraction pass", "Pattern snippets", "Static traversal guard"} {
 		if !strings.Contains(string(appSkill), want) {
 			t.Fatalf("app skill = %q, missing %q", appSkill, want)
 		}
@@ -448,6 +463,15 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 	if filepath.IsAbs(manifest.SkillDir) || filepath.IsAbs(manifest.PromptPath) || manifest.AgentEffort != "high" || manifest.AgentAutonomy != "builder" || manifest.DeploymentIntent.DeployGoal != "deploy-ready" {
 		t.Fatalf("manifest = %#v, want repo-relative paths", manifest)
 	}
+	mainSource, err := os.ReadFile(filepath.Join(appDir, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{"/notes", "CREATE TABLE IF NOT EXISTS notes", "type note struct"} {
+		if strings.Contains(string(mainSource), unwanted) {
+			t.Fatalf("main.go = %q, should not contain %q", mainSource, unwanted)
+		}
+	}
 	for _, path := range []string{".dockerignore", ".gitignore", "Dockerfile", "go.sum", "main.go", "main_test.go", "static/app.css"} {
 		source := path
 		switch path {
@@ -458,7 +482,7 @@ func TestRootVibePreparesGoWebWorkspace(t *testing.T) {
 		}
 		assertEmbeddedTemplateFile(t, source, filepath.Join(appDir, path), "{{APP_NAME}}", "my-app")
 	}
-	for _, path := range []string{"README.md", "devopsellence.yml", "go.mod", "scripts/check", "templates/index.html"} {
+	for _, path := range []string{"README.md", "devopsellence.yml", "go.mod", "scripts/check", "scripts/dev", "scripts/smoke", "templates/index.html"} {
 		source := path
 		if path == "go.mod" {
 			source = "go.mod.tmpl"

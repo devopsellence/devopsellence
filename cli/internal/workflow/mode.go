@@ -33,17 +33,21 @@ func normalizeMode(value string) (Mode, error) {
 	}
 }
 
-func (a *App) modeWorkspaceKey() string {
-	if discovered, err := discovery.Discover(a.Cwd); err == nil && strings.TrimSpace(discovered.WorkspaceRoot) != "" {
+func modeWorkspaceKeyFor(cwd string) string {
+	if discovered, err := discovery.Discover(cwd); err == nil && strings.TrimSpace(discovered.WorkspaceRoot) != "" {
 		if path, absErr := filepath.Abs(discovered.WorkspaceRoot); absErr == nil {
 			return path
 		}
 		return discovered.WorkspaceRoot
 	}
-	if path, err := filepath.Abs(a.Cwd); err == nil {
+	if path, err := filepath.Abs(cwd); err == nil {
 		return path
 	}
-	return a.Cwd
+	return cwd
+}
+
+func (a *App) modeWorkspaceKey() string {
+	return modeWorkspaceKeyFor(a.Cwd)
 }
 
 func (a *App) savedMode() (Mode, bool, error) {
@@ -83,6 +87,14 @@ func (a *App) savedEnvironment() (string, bool, error) {
 }
 
 func (a *App) SetMode(mode Mode) error {
+	return a.setModeForKey(a.modeWorkspaceKey(), mode)
+}
+
+func (a *App) SetModeForPath(path string, mode Mode) error {
+	return a.setModeForKey(modeWorkspaceKeyFor(path), mode)
+}
+
+func (a *App) setModeForKey(key string, mode Mode) error {
 	if a.WorkspaceState == nil {
 		return nil
 	}
@@ -91,7 +103,7 @@ func (a *App) SetMode(mode Mode) error {
 		if modes == nil {
 			modes = map[string]any{}
 		}
-		modes[a.modeWorkspaceKey()] = string(mode)
+		modes[key] = string(mode)
 		current["modes"] = modes
 		return current, nil
 	})

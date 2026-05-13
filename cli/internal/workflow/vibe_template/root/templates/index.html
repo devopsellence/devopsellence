@@ -8,36 +8,25 @@
   </head>
   <body>
     <main>
-      <header>
+      <header class="hero">
+        <p class="eyebrow">Deploy-ready app shell</p>
         <h1>{{APP_NAME}}</h1>
-        <p>A small Go app with durable storage and deployment defaults ready for devopsellence.</p>
+        <p>A neutral Go, SQLite, and vanilla web baseline ready for the first real product workflow.</p>
       </header>
 
-      <section class="panel" aria-label="New note">
-        <form method="post" action="/notes">
-          <label>
-            Title
-            <input name="title" autocomplete="off" required>
-          </label>
-          <label>
-            Body
-            <textarea name="body"></textarea>
-          </label>
-          <button type="submit">Save note</button>
-        </form>
-      </section>
-
-      <section class="notes" aria-label="Notes">
-        {{ if .Notes }}
-          {{ range .Notes }}
-            <article class="note">
-              <h2>{{ .Title }}</h2>
-              <p>{{ .Body }}</p>
-            </article>
-          {{ end }}
-        {{ else }}
-          <div class="empty">No notes yet.</div>
-        {{ end }}
+      <section class="status-grid" aria-label="Runtime readiness">
+        <article>
+          <span>HTTP</span>
+          <strong>online</strong>
+        </article>
+        <article>
+          <span>SQLite</span>
+          <strong>ready</strong>
+        </article>
+        <article>
+          <span>Health</span>
+          <strong>/healthz</strong>
+        </article>
       </section>
     </main>
   </body>

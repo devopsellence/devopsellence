@@ -25,8 +25,10 @@ The generated app starts with:
 
 - Go `net/http` handlers and `html/template` pages.
 - SQLite storage.
+- A neutral root page and `/healthz`; no idea-specific placeholder CRUD.
 - Semantic HTML, one CSS file, and no frontend build step.
 - A Dockerfile with a `test` target.
+- `scripts/dev`, `scripts/smoke`, and `scripts/check`.
 - `devopsellence.yml` with the default web service, health check, and `/data`
   volume.
 - `.agents/skills/devopsellence-app`, the app-building skill used by the agent.
@@ -43,30 +45,34 @@ The intended loop is:
 3. The app stays native-web: Go, SQLite, HTML, CSS, and small vanilla JavaScript.
 4. The agent runs `docker build --target test .` while changing app behavior.
 5. The agent keeps Docker and `devopsellence.yml` deploy-ready as the app grows.
-6. After each feature slice, the agent does a subtraction pass to remove unused
+6. Before adding product behavior, the agent deletes or rewrites generated shell
+   code, routes, content, styles, and tests that do not serve the idea.
+7. After each feature slice, the agent does a subtraction pass to remove unused
    routes, styles, helpers, placeholder UI, and speculative abstractions.
-7. Before a real deploy, the agent runs `devopsellence deploy --dry-run`.
+8. Before a real deploy, the agent runs `devopsellence deploy --dry-run`.
 
 `vibe` does not ask the agent to invent a stack. It gives the agent a narrow
 workspace and a high-quality set of product and implementation instructions.
 
 ## Local checks
 
-The generated app can be checked with Docker only:
+The generated app has a single readiness check:
 
 ```bash
 ./scripts/check
-docker build .
 ```
 
 If Go is installed locally, the agent may also run:
 
 ```bash
-go test ./...
-go run .
+./scripts/dev
+./scripts/smoke
 ```
 
-The Docker path is the portable contract. Local Go is just a convenience.
+`./scripts/check` runs Go tests, Docker test/build targets, and a
+`devopsellence deploy --dry-run` when the CLI is available. If no server is
+selected yet, the expected result is an explicit no-node/no-attachment blocker,
+not an unset mode or invalid config error.
 
 ## Deploy
 

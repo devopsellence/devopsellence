@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+set -eu
+
+: "${BASE_URL:=http://127.0.0.1:18080}"
+
+body="$(mktemp)"
+trap 'rm -f "$body"' EXIT
+
+curl -fsS "$BASE_URL/" -o "$body"
+grep -F "{{APP_NAME}}" "$body" >/dev/null
+grep -F "Deploy-ready app shell" "$body" >/dev/null
+curl -fsS -o /dev/null "$BASE_URL/healthz"
+
+echo "smoke checks passed for $BASE_URL"

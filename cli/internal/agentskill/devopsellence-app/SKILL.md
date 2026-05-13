@@ -33,17 +33,21 @@ Hard constraints:
 
 Work loop:
 
-1. Preserve the generated baseline and understand the user's app idea.
+1. Understand the user's app idea and treat the generated app shell as a
+   deploy-ready starting point, not product behavior.
 2. Derive the smallest real product workflow that proves the app concept.
 3. Make a short implementation plan with data model, pages, actions, and states.
-4. Implement in small reversible slices; commit/checkpoint before risky changes
+4. After confirmation when the prompt requires it, delete or rewrite generated
+   shell code, routes, content, styles, and tests that do not serve the idea.
+5. Implement in small reversible slices; commit/checkpoint before risky changes
    when git is available.
-5. After each slice, run a subtraction pass: remove unused routes, handlers,
+6. After each slice, run a subtraction pass: remove unused routes, handlers,
    styles, helpers, placeholder content, stale tests, and speculative
    abstractions while preserving user-confirmed behavior.
-6. Run `docker build --target test .` after backend or data changes.
-7. Run `docker build .` after Dockerfile or deploy-surface changes.
-8. Keep the app deployable after every feature slice.
+7. Run `go test ./...` after backend or data changes.
+8. Run `./scripts/check` before treating the app as deploy-ready.
+9. Run `./scripts/smoke` against a running local server after UI or HTTP changes.
+10. Keep the app deployable after every feature slice.
 
 Product shaping:
 
@@ -69,6 +73,57 @@ Go implementation:
 - Do not add goroutines, background jobs, queues, caches, or service layers
   unless the product need is clear.
 
+Pattern snippets:
+
+Use these as shape examples, not as product scaffolding to preserve.
+
+Root route:
+
+```go
+func (a *app) home(w http.ResponseWriter, r *http.Request) {
+  if err := a.templates.ExecuteTemplate(w, "index.html", data); err != nil {
+    http.Error(w, "could not render page", http.StatusInternalServerError)
+  }
+}
+```
+
+SQLite-backed readiness:
+
+```go
+func (a *app) health(w http.ResponseWriter, r *http.Request) {
+  ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+  defer cancel()
+  var ok int
+  if err := a.db.QueryRowContext(ctx, `SELECT 1`).Scan(&ok); err != nil {
+    http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+    return
+  }
+  w.WriteHeader(http.StatusNoContent)
+}
+```
+
+Handler test shape:
+
+```go
+response := httptest.NewRecorder()
+request := httptest.NewRequest(http.MethodGet, "/", nil)
+application.routes().ServeHTTP(response, request)
+if response.Code != http.StatusOK {
+  t.Fatalf("expected 200, got %d", response.Code)
+}
+```
+
+Static traversal guard:
+
+```go
+response := httptest.NewRecorder()
+request := httptest.NewRequest(http.MethodGet, "/static/../templates/index.html", nil)
+application.routes().ServeHTTP(response, request)
+if response.Code == http.StatusOK {
+  t.Fatal("static traversal returned 200")
+}
+```
+
 Native UI craft:
 
 - Use semantic HTML first: forms, labels, buttons, headings, tables, lists,
@@ -90,6 +145,14 @@ Deploy readiness:
 - Keep runtime configuration in env vars and `devopsellence.yml`, not hardcoded
   secrets.
 - Keep persistent data under `/data` when deploying with the generated volume.
+- Keep `scripts/dev`, `scripts/smoke`, and `scripts/check` current as routes,
+  text, health behavior, ports, or deploy config change.
+- Before handoff, the machine-checkable baseline is `go test ./...`,
+  `./scripts/check`, local smoke when HTTP behavior changed, and
+  `devopsellence deploy --dry-run`.
+- If no server is selected yet, the acceptable dry-run blocker is the explicit
+  no-node/no-attachment message. Mode unset, invalid config, build failure, or
+  health mismatch is not acceptable.
 - Use `devopsellence deploy --dry-run` before a real deploy.
 - After deploy, report status, logs, health, and public URL evidence when
   ingress is configured.

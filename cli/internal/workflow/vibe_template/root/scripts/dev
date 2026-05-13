@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+set -eu
+
+: "${ADDR:=:18080}"
+: "${DB_PATH:=/tmp/{{APP_NAME}}.sqlite}"
+export ADDR DB_PATH
+
+printf 'Starting dev server with ADDR=%s DB_PATH=%s\n' "$ADDR" "$DB_PATH"
+exec go run .

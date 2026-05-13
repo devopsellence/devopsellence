@@ -1,9 +1,42 @@
 #!/usr/bin/env sh
 set -eu
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is required to check this app" >&2
-  exit 1
-fi
+require() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "$1 is required to check this app" >&2
+    exit 1
+  fi
+}
 
-docker build --target test .
+run() {
+  printf '\n==> %s\n' "$*"
+  "$@"
+}
+
+require docker
+
+if command -v go >/dev/null 2>&1; then
+  run go test ./...
+else
+  echo "go not found; Docker test target will run the test suite"
+fi
+run docker build --target test .
+run docker build .
+
+if command -v devopsellence >/dev/null 2>&1; then
+  printf '\n==> devopsellence deploy --dry-run\n'
+  set +e
+  output="$(devopsellence deploy --dry-run 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "$output"
+  if [ "$status" -ne 0 ]; then
+    if printf '%s\n' "$output" | grep -Eiq 'no nodes attached|no nodes selected|node attach'; then
+      echo "dry-run reached expected no-node blocker"
+    else
+      exit "$status"
+    fi
+  fi
+else
+  echo "devopsellence not found; skipping deploy dry-run"
+fi

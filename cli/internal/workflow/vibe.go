@@ -181,6 +181,13 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	if err := ensureVibeGitignore(target); err != nil {
 		return err
 	}
+	workspaceModeSet := false
+	if intent.DevopsellenceMode == string(ModeSolo) {
+		if err := a.SetModeForPath(target, ModeSolo); err != nil {
+			return fmt.Errorf("set vibe workspace mode: %w", err)
+		}
+		workspaceModeSet = a.WorkspaceState != nil
+	}
 
 	prompt := vibePrompt(opts.AIAgent, opts.AgentAutonomy, opts.Idea, intent)
 	promptPath := filepath.Join(promptsDir, "devopsellence-vibe.md")
@@ -219,25 +226,26 @@ func (a *App) Vibe(ctx context.Context, opts VibeOptions) error {
 	}
 
 	payload := map[string]any{
-		"schema_version":    outputSchemaVersion,
-		"action":            "initialized",
-		"directory":         target,
-		"projects_dir":      projectsDir,
-		"ai_agent":          opts.AIAgent,
-		"agent_effort":      opts.AgentEffort,
-		"agent_autonomy":    opts.AgentAutonomy,
-		"detected_agents":   detectedAgents,
-		"skill_id":          agentskill.AppID,
-		"skill_name":        agentskill.AppName,
-		"skill":             agentskill.AppName,
-		"skill_dir":         skillsDir,
-		"prompt_path":       promptPath,
-		"manifest_path":     manifestPath,
-		"deployment_intent": intent,
-		"initial_commit":    initialCommit,
-		"launch_requested":  opts.Launch,
-		"launched":          false,
-		"next_commands":     nextCommands,
+		"schema_version":     outputSchemaVersion,
+		"action":             "initialized",
+		"directory":          target,
+		"projects_dir":       projectsDir,
+		"ai_agent":           opts.AIAgent,
+		"agent_effort":       opts.AgentEffort,
+		"agent_autonomy":     opts.AgentAutonomy,
+		"detected_agents":    detectedAgents,
+		"skill_id":           agentskill.AppID,
+		"skill_name":         agentskill.AppName,
+		"skill":              agentskill.AppName,
+		"skill_dir":          skillsDir,
+		"prompt_path":        promptPath,
+		"manifest_path":      manifestPath,
+		"deployment_intent":  intent,
+		"workspace_mode_set": workspaceModeSet,
+		"initial_commit":     initialCommit,
+		"launch_requested":   opts.Launch,
+		"launched":           false,
+		"next_commands":      nextCommands,
 	}
 	var launchErr error
 	if opts.Launch {
@@ -834,7 +842,14 @@ func vibePrompt(agent, autonomy string, idea string, intent vibeDeploymentIntent
 		vibePlanApprovalPromptLine(autonomy),
 		"Build with Go, net/http, html/template, SQLite, Docker, and vanilla HTML/CSS/JavaScript.",
 		"Do not introduce a frontend framework, npm, bundler, transpiler, Tailwind, or frontend build step unless the user explicitly asks for one.",
+		"If this prompt asks for plan confirmation, wait for it; after confirmation, delete or rewrite generated shell code, routes, content, styles, and tests that do not serve the user's idea.",
 		"After each feature slice, do a subtraction pass: remove unused scaffolding, duplicate code, stale styles, placeholder content, and speculative abstractions while preserving user-confirmed behavior.",
+		"",
+		"Deploy-readiness checklist:",
+		"- go test ./...",
+		"- ./scripts/check",
+		"- ./scripts/smoke against a running local server when UI or HTTP behavior changes.",
+		"- devopsellence deploy --dry-run must either succeed or report the expected no-node blocker when no server is selected.",
 		"",
 		"Deployment rules:",
 		"- Do not write provider tokens, API keys, passwords, or secret values into prompts, manifests, git, logs, or commits.",

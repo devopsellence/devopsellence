@@ -21,20 +21,11 @@ import (
 //go:embed templates/*.html static/*
 var assets embed.FS
 
-type note struct {
-	ID        int64
-	Title     string
-	Body      string
-	CreatedAt string
-}
-
 type app struct {
 	db        *sql.DB
 	templates *template.Template
 	static    http.Handler
 }
-
-const maxNotes = 50
 
 func main() {
 	addr := env("ADDR", ":8080")
@@ -91,13 +82,15 @@ func newApp(db *sql.DB) (*app, error) {
 
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS notes (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			title TEXT NOT NULL,
-			body TEXT NOT NULL DEFAULT '',
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
+		CREATE TABLE IF NOT EXISTS app_state (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		INSERT INTO app_state (key, value)
+		VALUES ('schema', 'ready')
+		ON CONFLICT(key) DO NOTHING;
+		`)
 	return err
 }
 
@@ -106,76 +99,37 @@ func (a *app) routes() http.Handler {
 	mux.Handle("GET /static/", a.static)
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /", a.home)
-	mux.HandleFunc("POST /notes", a.createNote)
 	return mux
 }
 
 func (a *app) health(w http.ResponseWriter, r *http.Request) {
-	if err := a.db.PingContext(r.Context()); err != nil {
+	if err := a.databaseReady(r.Context()); err != nil {
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *app) home(w http.ResponseWriter, r *http.Request) {
-	notes, err := a.listNotes(r.Context())
-	if err != nil {
-		http.Error(w, "could not load notes", http.StatusInternalServerError)
-		return
-	}
-
 	var body bytes.Buffer
-	if err := a.templates.ExecuteTemplate(&body, "index.html", map[string]any{"Notes": notes}); err != nil {
+	if err := a.templates.ExecuteTemplate(&body, "index.html", nil); err != nil {
 		log.Printf("render home: %v", err)
 		http.Error(w, "could not render page", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = body.WriteTo(w)
 }
 
-func (a *app) createNote(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return
-	}
-
-	title := strings.TrimSpace(r.FormValue("title"))
-	body := strings.TrimSpace(r.FormValue("body"))
-	if title == "" {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+func (a *app) databaseReady(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if _, err := a.db.ExecContext(ctx, `INSERT INTO notes (title, body) VALUES (?, ?)`, title, body); err != nil {
-		http.Error(w, "could not save note", http.StatusInternalServerError)
-		return
+	if err := a.db.PingContext(ctx); err != nil {
+		return err
 	}
-
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-func (a *app) listNotes(ctx context.Context) ([]note, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	rows, err := a.db.QueryContext(ctx, `SELECT id, title, body, created_at FROM notes ORDER BY id DESC LIMIT ?`, maxNotes)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var notes []note
-	for rows.Next() {
-		var item note
-		if err := rows.Scan(&item.ID, &item.Title, &item.Body, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		notes = append(notes, item)
-	}
-	return notes, rows.Err()
+	var value string
+	return a.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, "schema").Scan(&value)
 }
 
 func env(key, fallback string) string {

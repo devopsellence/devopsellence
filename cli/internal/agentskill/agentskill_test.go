@@ -40,7 +40,7 @@ func TestInstallWritesAppSkillByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
-	for _, want := range []string{"Go", "vanilla", "Do not add React", "Do not create a frontend build step", "subtraction pass", "docker build --target test ."} {
+	for _, want := range []string{"Go", "vanilla", "Do not add React", "Do not create a frontend build step", "subtraction pass", "./scripts/check", "Pattern snippets"} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("%s missing %q", path, want)
 		}

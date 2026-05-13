@@ -81,9 +81,13 @@ Root route:
 
 ```go
 func (a *app) home(w http.ResponseWriter, r *http.Request) {
-  if err := a.templates.ExecuteTemplate(w, "index.html", data); err != nil {
+  var body bytes.Buffer
+  if err := a.templates.ExecuteTemplate(&body, "index.html", data); err != nil {
     http.Error(w, "could not render page", http.StatusInternalServerError)
+    return
   }
+  w.Header().Set("Content-Type", "text/html; charset=utf-8")
+  _, _ = body.WriteTo(w)
 }
 ```
 

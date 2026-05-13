@@ -3,7 +3,7 @@ set -eu
 
 : "${BASE_URL:=http://127.0.0.1:18080}"
 
-body="$(mktemp)"
+body="$(mktemp "${TMPDIR:-/tmp}/{{APP_NAME}}-smoke.XXXXXX")"
 trap 'rm -f "$body"' EXIT
 
 curl -fsS "$BASE_URL/" -o "$body"

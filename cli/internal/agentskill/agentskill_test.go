@@ -40,7 +40,12 @@ func TestInstallWritesAppSkillByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
-	if !strings.Contains(string(data), "Go") || !strings.Contains(string(data), "vanilla") {
+	for _, want := range []string{"Go", "vanilla", "Do not add React", "Do not create a frontend build step", "docker build --target test ."} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("%s missing %q", path, want)
+		}
+	}
+	if strings.Contains(string(data), "golangci-lint") || strings.Contains(string(data), "Motion library") {
 		t.Fatalf("%s does not look like the app skill", path)
 	}
 }

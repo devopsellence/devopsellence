@@ -833,7 +833,7 @@ func vibePrompt(agent, autonomy string, idea string, intent vibeDeploymentIntent
 		"Use .agents/skills/devopsellence for deploy, secrets, logs, status, rollback, and node operations.",
 		vibePlanApprovalPromptLine(autonomy),
 		"Build with Go, net/http, html/template, SQLite, Docker, and vanilla HTML/CSS/JavaScript.",
-		"Keep the app usable without a frontend build step unless the user explicitly asks for one.",
+		"Do not introduce a frontend framework, npm, bundler, transpiler, Tailwind, or frontend build step unless the user explicitly asks for one.",
 		"",
 		"Deployment rules:",
 		"- Do not write provider tokens, API keys, passwords, or secret values into prompts, manifests, git, logs, or commits.",

@@ -24,6 +24,7 @@ export default defineConfig({
           items: [
             { label: "Overview", link: "/getting-started/overview/" },
             { label: "Install", link: "/getting-started/install/" },
+            { label: "Build with vibe", link: "/getting-started/vibe/" },
             { label: "Solo quickstart", link: "/getting-started/solo-quickstart/" },
             { label: "Shared overview", link: "/getting-started/shared-overview/" },
           ],
@@ -35,6 +36,7 @@ export default defineConfig({
             { label: "Solo and shared", link: "/concepts/solo-and-shared/" },
             { label: "Node agent and desired state", link: "/concepts/agent-desired-state/" },
             { label: "AI operator model", link: "/concepts/agent-primary/" },
+            { label: "Vibe philosophy", link: "/concepts/vibe-philosophy/" },
           ],
         },
         {

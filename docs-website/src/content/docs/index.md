@@ -36,6 +36,9 @@ codex "deploy with devopsellence solo"
 `devopsellence skill install` installs the matching AI agent skill from the CLI
 itself.
 
+- [Build with vibe](/getting-started/vibe/) for starting from an app idea and
+  letting an AI agent build a native-web Go app with no frontend framework or
+  build system.
 - [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
   one VM.
 - [Ingress and TLS](/guides/ingress-tls/) for hostnames, DNS checks, and HTTPS
@@ -47,6 +50,8 @@ itself.
 - [AI operator model](/concepts/agent-primary/) for the product thesis: a CLI
   that gives AI operators structured feedback, safe boundaries, and facts they
   can compose with the user's tools.
+- [Vibe philosophy](/concepts/vibe-philosophy/) for why vibe keeps the template
+  lean and puts the app-building discipline in a project-local skill.
 - [Runtime model](/concepts/runtime-model/) for desired state, releases,
   services, nodes, and status.
 - [CLI reference](/reference/cli/) for the AI-operator-safe command surface.

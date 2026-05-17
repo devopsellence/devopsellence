@@ -1,7 +1,0 @@
-.git
-.devopsellence
-.env
-tmp
-data
-*.sqlite
-*.sqlite-*

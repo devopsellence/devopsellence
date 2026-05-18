@@ -32,13 +32,19 @@ asking it to invent production shell choreography.
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
 cd /path/to/your/containerized-app
 ~/.local/bin/devopsellence init --mode solo
+git add devopsellence.yml
+git commit -m "Initialize devopsellence"
+~/.local/bin/devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
+~/.local/bin/devopsellence node create prod-1 --provider hetzner --install --attach
 ~/.local/bin/devopsellence doctor
 ~/.local/bin/devopsellence deploy --dry-run
 ```
 
 The installer downloads the CLI. `init` writes or validates `devopsellence.yml`,
-`doctor` checks readiness, and `deploy --dry-run` shows the deployment plan before
-any production mutation.
+the git commit gives deployments an immutable app revision, `node create --attach`
+registers the first solo VM, `doctor` checks readiness, and `deploy --dry-run`
+shows the deployment plan before any production mutation. For existing VMs or more
+node options, see the [solo deploy guide](https://docs.devopsellence.com/guides/solo-deploy/).
 
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 

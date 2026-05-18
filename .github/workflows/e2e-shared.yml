@@ -23,10 +23,9 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 env:
-  E2E_RUNNER_IMAGE_NAME: devopsellence-e2e-runner-v2
+  E2E_RUNNER_IMAGE: devopsellence/e2e-runner:ci
 
 jobs:
   e2e-shared:
@@ -34,17 +33,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-
-      - name: Normalize owner
-        id: owner
-        run: echo "value=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Preload e2e helper images
         env:
@@ -59,7 +47,7 @@ jobs:
           DEVOPSELLENCE_CLI_ROOT: ${{ github.workspace }}/cli
           DEVOPSELLENCE_AGENT_ROOT: ${{ github.workspace }}/agent
           DEVOPSELLENCE_GCP_MOCK_ROOT: ${{ github.workspace }}/test/support/gcp-mock
-          DEVOPSELLENCE_E2E_RUNNER_IMAGE: ghcr.io/${{ steps.owner.outputs.value }}/${{ env.E2E_RUNNER_IMAGE_NAME }}:master
+          DEVOPSELLENCE_E2E_RUNNER_IMAGE: ${{ env.E2E_RUNNER_IMAGE }}
           DEVOPSELLENCE_E2E_BUILD_RUNNER_IMAGE: "1"
         run: test/e2e/run-in-runner.sh
 

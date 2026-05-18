@@ -26,43 +26,6 @@ func TestInstallWritesBundledSkill(t *testing.T) {
 	}
 }
 
-func TestInstallWritesAppSkillByID(t *testing.T) {
-	dir := t.TempDir()
-	result, err := Install(InstallOptions{SkillsDir: dir, Skill: "app"}, "v1-test")
-	if err != nil {
-		t.Fatalf("Install() error = %v", err)
-	}
-	if result.ID != "app" || result.Name != "devopsellence-app" || result.Source != "embedded" {
-		t.Fatalf("result = %#v, want app skill", result)
-	}
-	path := filepath.Join(dir, "devopsellence-app", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", path, err)
-	}
-	for _, want := range []string{"Go", "vanilla", "Do not add React", "Do not create a frontend build step", "subtraction pass", "./scripts/check", "Pattern snippets"} {
-		if !strings.Contains(string(data), want) {
-			t.Fatalf("%s missing %q", path, want)
-		}
-	}
-	if strings.Contains(string(data), "golangci-lint") || strings.Contains(string(data), "Motion library") {
-		t.Fatalf("%s does not look like the app skill", path)
-	}
-}
-
-func TestAvailableIncludesAppSkill(t *testing.T) {
-	got := Available()
-	var ids []string
-	for _, skill := range got {
-		ids = append(ids, skill.ID)
-	}
-	for _, want := range []string{"devopsellence", "app"} {
-		if !containsString(ids, want) {
-			t.Fatalf("Available() ids = %v, missing %q", ids, want)
-		}
-	}
-}
-
 func TestInstallDefaultsToProjectAgentSkillDirs(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, ".claude"), 0o755); err != nil {

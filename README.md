@@ -30,13 +30,21 @@ asking it to invent production shell choreography.
 
 ```bash
 curl -fsSL https://www.devopsellence.com/lfg.sh | bash
-~/.local/bin/devopsellence vibe my-app --idea "A tiny CRM for solo consultants"
-cd ~/devopsellence-projects/my-app
-codex "Read .agents/prompts/devopsellence-vibe.md and follow it."
+cd /path/to/your/containerized-app
+~/.local/bin/devopsellence init --mode solo
+git add devopsellence.yml
+git commit -m "Initialize devopsellence"
+~/.local/bin/devopsellence provider login hetzner --token "$HCLOUD_TOKEN"
+~/.local/bin/devopsellence node create prod-1 --provider hetzner --install --attach
+~/.local/bin/devopsellence doctor
+~/.local/bin/devopsellence deploy --dry-run
 ```
 
-The installer downloads the CLI. The `vibe` command prepares the app,
-project-local agent skills, and AI build prompt.
+The installer downloads the CLI. `init` writes or validates `devopsellence.yml`,
+the git commit gives deployments an immutable app revision, `node create --attach`
+registers the first solo VM, `doctor` checks readiness, and `deploy --dry-run`
+shows the deployment plan before any production mutation. For existing VMs or more
+node options, see the [solo deploy guide](https://docs.devopsellence.com/guides/solo-deploy/).
 
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 

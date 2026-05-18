@@ -149,11 +149,11 @@ class InstallsTest < ActionDispatch::IntegrationTest
     stdout, stderr, status, installed_cli = run_cli_install_script(
       response.body,
       version: "master-0053792f6aec",
-      command_args: ["vibe", "tiny-crm", "--idea", "A tiny CRM for solo consultants"]
+      command_args: ["init", "--mode", "solo"]
     )
 
     refute_predicate status, :success?, -> { "stdout:\n#{stdout}\nstderr:\n#{stderr}" }
-    assert_includes stderr, "unknown installer option: vibe"
+    assert_includes stderr, "unknown installer option: init"
     assert_nil installed_cli
   end
 

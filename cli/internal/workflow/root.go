@@ -590,37 +590,6 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	skillCommand.AddCommand(skillListCommand, skillInstallCommand)
 	root.AddCommand(skillCommand)
 
-	var vibeOpts VibeOptions
-	var vibeNoLaunch bool
-	vibeOpts.Launch = true
-	vibeCommand := &cobra.Command{
-		Use:   "vibe [name-or-directory]",
-		Short: "Generate a blessed app and start an AI-agent build loop",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				vibeOpts.Directory = args[0]
-			}
-			vibeOpts.Launch = !vibeNoLaunch
-			return app.Vibe(cmd.Context(), vibeOpts)
-		},
-	}
-	vibeCommand.Flags().StringVar(&vibeOpts.AIAgent, "ai-agent", "", "AI agent to seed: codex, claude, pi, opencode, or generic")
-	vibeCommand.Flags().StringVar(&vibeOpts.AgentEffort, "agent-effort", defaultVibeAgentEffort, "AI agent effort/thinking level: default, low, medium, high, or xhigh")
-	vibeCommand.Flags().StringVar(&vibeOpts.AgentAutonomy, "autonomy", defaultVibeAgentAutonomy, "Agent freedom: careful, builder, or full-access")
-	vibeCommand.Flags().StringVar(&vibeOpts.Idea, "idea", "", "App idea to seed into the AI agent prompt")
-	vibeCommand.Flags().StringVar(&vibeOpts.DeployGoal, "deploy-goal", defaultVibeDeployGoal, "Build/deploy goal: build-only, deploy-ready, dry-run, or deploy-with-approval")
-	vibeCommand.Flags().StringVar(&vibeOpts.DevopsellenceMode, "devopsellence-mode", defaultVibeMode, "Deployment mode intent: solo, shared-later, or decide-later")
-	vibeCommand.Flags().StringVar(&vibeOpts.ServerStrategy, "server", defaultVibeServerStrategy, "Server plan: none, existing, or hetzner")
-	vibeCommand.Flags().StringVar(&vibeOpts.ServerTarget, "server-target", "", "Existing node/server name or desired provider node name")
-	vibeCommand.Flags().StringVar(&vibeOpts.Domain, "domain", vibeDomainLater, "Domain intent, or later")
-	vibeCommand.Flags().StringVar(&vibeOpts.TLSEmail, "tls-email", "", "TLS email to use when configuring ingress")
-	vibeCommand.Flags().StringVar(&vibeOpts.ProjectsDir, "projects-dir", "", "Directory for bare app names (default ~/devopsellence-projects or DEVOPSELLENCE_PROJECTS_DIR)")
-	vibeCommand.Flags().BoolVar(&vibeNoLaunch, "no-launch", false, "Prepare the app without starting the AI agent")
-	vibeCommand.Flags().BoolVar(&vibeOpts.NoAgent, "no-agent", false, "Prepare the app and prompt without selecting or starting an AI agent")
-	vibeCommand.Flags().BoolVar(&vibeOpts.Force, "force", false, "Allow initializing a non-empty directory")
-	root.AddCommand(vibeCommand)
-
 	var initSharedOpts InitOptions
 	var initMode string
 	initCommand := &cobra.Command{

@@ -10,8 +10,6 @@ import (
 )
 
 const Name = "devopsellence"
-const AppID = "app"
-const AppName = "devopsellence-app"
 
 type Skill struct {
 	ID          string `json:"id"`
@@ -25,14 +23,9 @@ var skills = []Skill{
 		Name:        Name,
 		Description: "Operate devopsellence deployments, nodes, secrets, logs, diagnostics, and rollback.",
 	},
-	{
-		ID:          AppID,
-		Name:        AppName,
-		Description: "Build, test, run, deploy, and scale the devopsellence Go web app baseline.",
-	},
 }
 
-//go:embed all:devopsellence all:devopsellence-app
+//go:embed all:devopsellence
 var bundled embed.FS
 
 type InstallResult struct {

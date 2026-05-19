@@ -117,7 +117,8 @@ devopsellence secret set HTTP_AUTH_PASSWORD --service web --store 1password --op
 
 ## Deploy Sessy
 
-Attach or create a solo node, then deploy:
+If `prod-1` already exists, is reachable over SSH, has the agent installed, and is attached to this
+workspace, deploy from the Sessy checkout:
 
 ```bash
 devopsellence node attach prod-1
@@ -126,6 +127,9 @@ devopsellence deploy --dry-run
 devopsellence deploy
 devopsellence status
 ```
+
+If you have not created the node yet, follow step 3 in the
+[Solo quickstart](/getting-started/solo-quickstart/) first, then return to this deploy command block.
 
 Open `https://sessy.example.com`, sign in, and create a source for each SES configuration set you want
 to observe. Sessy shows the webhook URL for that source, in this form:

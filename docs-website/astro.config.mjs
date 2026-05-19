@@ -59,6 +59,7 @@ export default defineConfig({
           items: [
             { label: "Basecamp Fizzy on Rails", link: "/examples/fizzy-rails-solo/" },
             { label: "Flue agents on Node.js", link: "/examples/flue-node-solo/" },
+            { label: "Sessy for Amazon SES", link: "/examples/sessy-amazon-ses-solo/" },
           ],
         },
         {

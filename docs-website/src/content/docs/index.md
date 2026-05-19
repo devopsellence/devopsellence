@@ -44,6 +44,8 @@ itself.
   example that maps a Kamal-style deployment to devopsellence solo.
 - [Flue agents on Node.js](/examples/flue-node-solo/) for deploying an
   experimental Flue webhook agent server as an ordinary containerized service.
+- [Sessy for Amazon SES](/examples/sessy-amazon-ses-solo/) for running an SES
+  observability dashboard on a VM while your app sends through Amazon SES.
 - [AI operator model](/concepts/agent-primary/) for the product thesis: a CLI
   that gives AI operators structured feedback, safe boundaries, and facts they
   can compose with the user's tools.

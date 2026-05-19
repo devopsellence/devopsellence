@@ -1,7 +1,13 @@
 ---
 name: devopsellence
-description: Use the devopsellence CLI to choose solo or shared workspace mode, deploy the current app, inspect status, and manage secrets or nodes.
-homepage: https://www.devopsellence.com
+description: Operate devopsellence solo/shared deployments, nodes, secrets, logs, diagnostics, lifecycle hooks, and rollback.
+version: 0.2.0
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - devopsellence
+    homepage: https://www.devopsellence.com
 ---
 
 # devopsellence

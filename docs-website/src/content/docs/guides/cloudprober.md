@@ -112,8 +112,9 @@ devopsellence exec cloudprober -- wget -qO- http://127.0.0.1:9313/status
 devopsellence exec cloudprober -- wget -qO- http://127.0.0.1:9313/metrics
 ```
 
-In shared mode today, inspect the node with direct SSH or your existing
-monitoring collector until shared exec tunnel support is available.
+In devopsellence company workflows today, inspect the node with direct SSH or
+your existing monitoring collector until managed exec tunnel support is
+available.
 
 Expose Cloudprober publicly only when you have a reason to do so and the
 endpoint is acceptable for your environment. For most teams, keep it private.

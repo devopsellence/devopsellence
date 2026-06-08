@@ -1,9 +1,9 @@
 ---
 title: GitHub Actions
-description: Deploy from CI in shared mode.
+description: Deploy from CI with devopsellence company workflows.
 ---
 
-GitHub Actions deployment is a shared-mode workflow. CI should use an API token
+GitHub Actions deployment is a devopsellence company workflow. CI should use an API token
 and the same root CLI commands a local operator uses.
 
 Create a deploy token:

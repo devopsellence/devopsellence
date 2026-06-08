@@ -2,17 +2,18 @@
 
 Built for AI operators, transparent for humans.
 
-devopsellence is an AI-operator-first deployment toolkit for containerized apps
-on familiar VMs. It keeps the runtime boring: Docker, SSH, Envoy, files, JSON,
-logs, and a node agent that reconciles desired state.
+devopsellence is an AI-operator-first internal deployment platform for
+containerized apps on GCP VMs. It keeps the runtime boring: Docker, Envoy,
+files, JSON, logs, GCP primitives, and a node agent that reconciles desired
+state.
 
-No PaaS. No Kubernetes-lite. No hidden scheduler pretending machines do not
-exist.
+No platform-owned compute abstraction. No Kubernetes-lite. No hidden scheduler
+pretending machines do not exist.
 
 Why care today: devopsellence gives an AI assistant a narrow deployment
 contract it can follow without guessing from prose logs or shell history:
-deploy a Dockerized app to a VM, verify status and HTTPS, inspect logs, manage
-secrets, and roll back.
+deploy a Dockerized internal app to a VM, verify status and HTTPS, inspect
+logs, manage secrets, and roll back.
 
 ## AI-operator-first
 
@@ -48,17 +49,19 @@ node options, see the [solo deploy guide](https://docs.devopsellence.com/guides/
 
 Full docs: [docs.devopsellence.com](https://docs.devopsellence.com/).
 
-## Modes
+## Product boundary
 
-| | Solo | Shared |
+| | Solo | devopsellence |
 |---|---|---|
-| Best for | single operator, one app, direct VM ownership | teams, API tokens, org/project/env workflows |
-| Control surface | local CLI and files | control plane |
+| Best for | one operator or trusted AI agent | internal company apps and teams |
+| Control surface | local CLI and files | hosted or self-hosted control plane |
 | Transport | SSH | node agent pulls published state |
-| Secrets | local state or external refs | server-side team secret management |
+| Infrastructure | existing Linux VMs | GCP primitives |
+| Secrets | local state or external refs | Secret Manager-backed team secrets |
 | Runtime | same node agent | same node agent |
 
-Solo and shared are management topologies, not separate deployment systems.
+Solo is a separate local operator product. devopsellence is the GCP-native
+company product. They share one deployment core and node-agent runtime.
 
 ## Example config
 
@@ -117,7 +120,7 @@ ingress:
 | Directory | Description |
 |---|---|
 | [`agent/`](agent/) | single-node reconciliation daemon |
-| [`cli/`](cli/) | end-user CLI for solo and shared workflows |
+| [`cli/`](cli/) | end-user CLI for solo and devopsellence workflows |
 | [`control-plane/`](control-plane/) | Rails API and web app |
 | [`deployment-core/`](deployment-core/) | shared Go deployment model and desired-state generation |
 | [`docs-website/`](docs-website/) | public static documentation site |

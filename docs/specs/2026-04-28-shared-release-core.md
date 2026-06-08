@@ -1,7 +1,7 @@
 # Shared release core
 
-P4 should converge solo and shared on one logical release/deployment model.
-Shared Rails already has the better shape: immutable releases, deployments as
+P4 should converge solo and devopsellence on one logical release/deployment model.
+devopsellence Rails already has the better shape: immutable releases, deployments as
 operations, environment current-release pointers, and per-node desired-state
 publication. Solo should use that same model with a local store.
 
@@ -16,15 +16,15 @@ publication. Solo should use that same model with a local store.
 - desired-state publications;
 - rollback selection;
 - desired-state publication planning;
-- a store interface for mode-specific persistence and publication IO.
+- a store interface for product-surface-specific persistence and publication IO.
 
-The store is the mode boundary:
+The store is the product-surface boundary:
 
 - solo store: local state plus SSH/file desired-state publication;
-- shared store: Rails/Postgres plus object storage or standalone desired-state
+- devopsellence store: Rails/Postgres plus object storage or standalone desired-state
   document publication.
 
-The core must not know whether a deployment is solo or shared.
+The core must not know whether a deployment is solo or devopsellence.
 
 ## Rollback
 

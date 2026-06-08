@@ -1,11 +1,11 @@
 ---
 title: Secrets
-description: Secret handling in solo and shared mode.
+description: Secret handling in solo and devopsellence workflows.
 ---
 
 Application config should refer to secrets by name. Secret values should live in
-a local operator-controlled store, an external password manager, or a shared
-secret manager depending on mode.
+a local operator-controlled store, an external password manager, or a
+devopsellence-managed secret manager depending on product surface.
 
 ## Solo mode
 
@@ -35,7 +35,7 @@ Solo plaintext secrets are stored in the local solo state file with `0600`
 permissions. This fits quick single-operator SSH workflows, but 1Password is the
 safer default for production secrets.
 
-## Shared mode
+## devopsellence
 
-Use shared mode when server-side encrypted team secrets and deploy tokens are
+Use devopsellence when server-side encrypted team secrets and deploy tokens are
 part of the workflow.

@@ -43,7 +43,7 @@ The result is a split model where repo config is more opinionated and less expre
 4. Require explicit `target.service` and `target.port` per ingress rule.
 5. Keep service ports explicit; do not rely on implicit ingress port inference.
 6. Support multiple hosts and path-based fan-out cleanly.
-7. Keep solo/shared semantics aligned by mapping the repo config directly onto the existing desired-state routing model.
+7. Keep solo/devopsellence semantics aligned by mapping the repo config directly onto the existing desired-state routing model.
 
 ---
 
@@ -418,7 +418,7 @@ Prefer a clean schema-versioned break over compatibility shims that keep the old
 4. Ingress target validation no longer depends on `kind: web`.
 5. Ingress target validation no longer hardcodes `port: http`.
 6. README examples and setup output reflect the new schema.
-7. Solo and shared flows continue to produce the same desired-state ingress model.
+7. Solo and devopsellence flows continue to produce the same desired-state ingress model.
 
 ---
 

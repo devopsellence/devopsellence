@@ -12,7 +12,7 @@ surface for all devopsellence workflows, not an implementation detail of
 Use this component for public docs such as:
 
 - getting started guides;
-- solo and shared workflow docs;
+- solo and devopsellence workflow docs;
 - CLI and configuration references;
 - deployment, ingress, secrets, nodes, and troubleshooting guides;
 - migration guides and examples.

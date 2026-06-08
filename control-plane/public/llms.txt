@@ -1,8 +1,8 @@
 # devopsellence
 
-> devopsellence is an AI-operator-first deployment toolkit for containerized apps on familiar VMs.
+> devopsellence is an AI-operator-first internal deployment platform for containerized apps on GCP VMs.
 
-devopsellence gives AI coding and operations assistants a narrow, auditable command surface for deploying Dockerized apps without introducing a PaaS, Kubernetes-lite layer, or hidden scheduler.
+devopsellence gives AI coding and operations assistants a narrow, auditable command surface for deploying Dockerized internal apps without introducing a platform-owned compute abstraction, Kubernetes-lite layer, or hidden scheduler.
 
 Use the docs site for implementation details. Use the main website for product positioning, installation, and entry points.
 
@@ -16,7 +16,7 @@ Use the docs site for implementation details. Use the main website for product p
 ## Product Boundaries
 
 - [Runtime model](https://docs.devopsellence.com/concepts/runtime-model/): Core model for desired state, releases, services, nodes, and status.
-- [Solo and shared](https://docs.devopsellence.com/concepts/solo-and-shared/): Management topology differences; not separate deployment systems.
+- [Solo and devopsellence](https://docs.devopsellence.com/concepts/solo-and-devopsellence/): Product boundary and shared runtime semantics.
 - [AI operator model](https://docs.devopsellence.com/concepts/agent-primary/): Why the CLI is shaped for AI assistants acting for humans.
 - [Node agent and desired state](https://docs.devopsellence.com/concepts/agent-desired-state/): How nodes reconcile published intent.
 

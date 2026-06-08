@@ -80,9 +80,23 @@ func (e UnsupportedOperationError) Error() string {
 		operation = "operation"
 	}
 	if reason == "" {
-		return fmt.Sprintf("%s is not supported in %s mode", operation, mode)
+		return fmt.Sprintf("%s is not supported in %s", operation, modeDescription(mode))
 	}
-	return fmt.Sprintf("%s is not supported in %s mode: %s", operation, mode, reason)
+	return fmt.Sprintf("%s is not supported in %s: %s", operation, modeDescription(mode), reason)
+}
+
+func modeDescription(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case string(ModeShared):
+		return "devopsellence company workflow"
+	case string(ModeSolo):
+		return "solo"
+	default:
+		if strings.TrimSpace(mode) == "" {
+			return "the selected workflow"
+		}
+		return strings.TrimSpace(mode) + " mode"
+	}
 }
 
 func (e UnsupportedOperationError) ErrorFields() map[string]any {

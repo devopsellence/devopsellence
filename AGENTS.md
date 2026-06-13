@@ -10,13 +10,18 @@ Critical defaults:
 
 - devopsellence targets containerized apps on VMs; do not introduce PaaS/Kubernetes-lite abstractions.
 - Desired state is the stable control surface; agent reconciliation is the core loop.
-- Solo/shared are management topologies, not separate deployment systems.
+- Solo and devopsellence are separate product surfaces that share one deployment
+  core. Do not frame solo publicly as a mode of devopsellence.
+- Solo is the local operator product for one human or trusted AI agent working
+  from a workstation or admin box.
+- devopsellence is the GCP-native internal deployment platform for medium and
+  large companies that want zero-abstraction PaaS ergonomics on cloud primitives.
 - Prefer one common Go deployment core for config interpretation, validation, planning, desired-state generation, ingress, placement, and status interpretation.
-- CLI should call the common core in-process for solo; Rails should eventually call it through service/RPC for shared.
+- CLI should call the common core in-process for solo; Rails should eventually call it through service/RPC for devopsellence company workflows.
 - Rails owns product state: accounts, authz, billing, hosted persistence, API surfaces.
-- Agent runtime should stay mode-agnostic; wire concrete adapters for desired-state source, secret resolver, status sink, registry auth, etc.
-- Placement is policy, not runtime schema. Shared may require one environment per node; solo may allow multiple environments per node.
-- Provider-specific integration belongs behind infrastructure adapters; do not leak cloud/provider concepts into the core runtime model.
+- Agent runtime should stay product-agnostic; wire concrete adapters for desired-state source, secret resolver, status sink, registry auth, etc.
+- Placement is policy, not runtime schema. Company workflows may require one environment per node; solo may allow multiple environments per node.
+- Provider-specific integration belongs behind infrastructure adapters; do not leak cloud/provider concepts into the core runtime model. GCP is the primary devopsellence product surface, but not a core runtime abstraction.
 - Desired-state/status payloads backed by protobuf use protobuf JSON casing; Rails-owned JSON/API payloads use snake_case.
 - Product intent: one shared stable release version. Use `DEVOPSELLENCE_STABLE_VERSION`; do not add per-component stable version env vars or defaults.
 - Keep ordinary-tool escape hatches: SSH, Docker, files, logs, JSON, cloud CLIs.
@@ -27,7 +32,7 @@ Critical defaults:
 | Path | Stack | Purpose |
 |---|---|---|
 | `agent/` | Go | Single-node reconciler: desired state, Docker, Envoy, status. |
-| `cli/` | Go | `devopsellence` CLI: login, deploy, secrets, nodes, solo/shared workflows. |
+| `cli/` | Go | `devopsellence` CLI: login, deploy, secrets, nodes, solo and devopsellence workflows. |
 | `control-plane/` | Rails 8 | Web/API app: tenants, deployments, nodes, GCP/standalone resources. |
 | `deployment-core/` | Go | Common deployment core: config interpretation, validation, planning, desired-state generation. |
 | `test/e2e/` | Ruby + shell | Root-owned integration harness across agent, CLI, control plane, GCP mock. |

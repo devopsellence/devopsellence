@@ -146,6 +146,6 @@ restic command output are raw operational output. Treat them as sensitive.
 
 Build a backup service when your app needs one. Do not add backup-specific
 devopsellence concepts unless the ordinary-service pattern proves insufficient.
-Future shared mode can wrap the same model with team auth, policy, scheduled
-runs, audit trails, and hosted evidence without changing how the app is backed
-up on a VM.
+devopsellence company workflows can wrap the same model with team auth,
+policy, scheduled runs, audit trails, and hosted evidence without changing how
+the app is backed up on a VM.

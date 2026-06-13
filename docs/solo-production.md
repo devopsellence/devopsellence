@@ -1,9 +1,10 @@
 # solo production operations
 
-Solo mode is for a single operator or agent working from a trusted workstation
+Solo is for a single operator or agent working from a trusted workstation
 or admin box against directly owned VMs. It should be structured, repeatable,
-and recoverable, but it is not the CI/CD product surface. Use shared mode for
-CI deploys, team credentials, deploy locks, provenance, and audit trails.
+and recoverable, but it is not the CI/CD product surface. Use devopsellence for
+CI deploys, team credentials, deploy locks, provenance, GCP primitives, and
+audit trails.
 
 This guide is the production golden path for solo until the public docs carry a
 full runbook.

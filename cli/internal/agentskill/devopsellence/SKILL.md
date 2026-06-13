@@ -1,6 +1,6 @@
 ---
 name: devopsellence
-description: Operate devopsellence solo/shared deployments, nodes, secrets, logs, diagnostics, lifecycle hooks, and rollback.
+description: Operate solo and devopsellence deployments, nodes, secrets, logs, diagnostics, lifecycle hooks, and rollback.
 version: 0.2.0
 metadata:
   openclaw:
@@ -34,16 +34,16 @@ devopsellence context show || true
 
 If a mode is already configured, use it. If no mode is configured and the user has not explicitly chosen one, do not default silently. Ask a short mode-selection question, make a recommendation, and wait for confirmation before running `devopsellence init`:
 
-> devopsellence has two workspace modes:
+> devopsellence has two workspace surfaces backed by CLI modes:
 >
 > - `solo`: SSH-first, single-operator, existing or provider-created VMs, local node state, local secrets, direct Docker image streaming over SSH.
-> - `shared`: hosted sign-in, org/project/env context, team workflows, shared encrypted secrets, and control-plane-managed nodes.
+> - `shared`: compatibility mode value for the devopsellence company workflow: hosted sign-in, org/project/env context, team workflows, encrypted team secrets, auditability, and control-plane-managed nodes.
 >
 > Based on what you’ve told me, I recommend `<solo|shared>` because `<reason>`. Should I initialize this repo in `<solo|shared>` mode?
 
 Recommend `solo` when the user mentions their own VM/server, SSH, single-operator usage, local secrets, direct image streaming, or avoiding hosted/team workflows.
 
-Recommend `shared` when the user mentions teams, org/project/env context, browser sign-in, hosted control plane, shared encrypted secrets, managed nodes, auditability, or collaboration.
+Recommend the devopsellence company workflow (`--mode shared`) when the user mentions teams, org/project/env context, browser sign-in, hosted control plane, encrypted team secrets, managed nodes, auditability, or collaboration.
 
 If intent is still ambiguous, ask whether they are deploying SSH-first to their own VM as one operator or want the hosted/team workflow.
 
@@ -53,14 +53,14 @@ If intent is still ambiguous, ask whether they are deploying SSH-first to their 
 devopsellence init --mode solo
 ```
 
-For shared:
+For devopsellence company workflows:
 
 ```sh
 devopsellence auth whoami || devopsellence auth login
 devopsellence init --mode shared
 ```
 
-If the user already knows the shared target workspace values, prefer explicit flags:
+If the user already knows the devopsellence target workspace values, prefer explicit flags:
 
 ```sh
 devopsellence init --mode shared --org acme --project shop --env staging
@@ -78,7 +78,7 @@ devopsellence doctor
 devopsellence deploy
 ```
 
-In shared mode, if the user wants to deploy an existing image digest instead of building locally:
+In devopsellence company workflows, if the user wants to deploy an existing image digest instead of building locally:
 
 ```sh
 devopsellence deploy --image docker.io/example/app@sha256:...
@@ -129,7 +129,7 @@ devopsellence secret set NAME --service web --store 1password --op-ref op://vaul
 
 ## Bring your own node
 
-Use these in shared mode for a provider-created node. By default, `node create` registers and attaches the node to the current environment:
+Use these in devopsellence company workflows for a provider-created node. By default, `node create` registers and attaches the node to the current environment:
 
 ```sh
 devopsellence init --mode shared
@@ -141,14 +141,14 @@ devopsellence node detach <id>
 devopsellence node remove <id>
 ```
 
-If you intentionally create an unassigned shared node, attach it later:
+If you intentionally create an unassigned company-workflow node, attach it later:
 
 ```sh
 devopsellence node create prod-1 --provider hetzner --unassigned
 devopsellence node attach <id>
 ```
 
-Use this in shared mode for an existing server that you will install manually:
+Use this in devopsellence company workflows for an existing server that you will install manually:
 
 ```sh
 devopsellence node register
@@ -203,6 +203,6 @@ When the user is editing `devopsellence.yml`, recognize these deploy-time hooks:
 ## Heuristics
 
 - Prefer `devopsellence doctor` after init and before `devopsellence deploy`.
-- If Docker is missing or not running, surface the problem clearly. In shared mode, switch to `devopsellence deploy --image ...` when the user already has a pushed image digest.
+- If Docker is missing or not running, surface the problem clearly. In devopsellence company workflows, switch to `devopsellence deploy --image ...` when the user already has a pushed image digest.
 - If the workspace is not a git checkout and the CLI needs git metadata, stop and ask before creating a repo or commit.
 - Keep secrets out of logs and chat output. Use environment variables plus `--stdin`.

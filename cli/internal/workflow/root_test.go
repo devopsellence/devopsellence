@@ -840,7 +840,7 @@ func TestNodeExecReturnsStructuredUnsupportedInSharedMode(t *testing.T) {
 
 func TestUnsupportedOperationErrorUsesFallbackOperation(t *testing.T) {
 	err := UnsupportedOperationError{Mode: " shared ", Reason: " not here "}
-	if got, want := err.Error(), "operation is not supported in shared mode: not here"; got != want {
+	if got, want := err.Error(), "operation is not supported in devopsellence company workflow: not here"; got != want {
 		t.Fatalf("Error() = %q, want %q", got, want)
 	}
 	fields := err.ErrorFields()
@@ -849,7 +849,7 @@ func TestUnsupportedOperationErrorUsesFallbackOperation(t *testing.T) {
 	}
 
 	err = UnsupportedOperationError{Operation: " exec ", Mode: " shared "}
-	if got, want := err.Error(), "exec is not supported in shared mode"; got != want {
+	if got, want := err.Error(), "exec is not supported in devopsellence company workflow"; got != want {
 		t.Fatalf("Error() = %q, want %q", got, want)
 	}
 }

@@ -27,7 +27,7 @@ HTTPS as ready.
 
 ## Auto TLS On Multiple Nodes
 
-Auto TLS uses the same node-agent mechanism in solo and shared mode: desired
+Auto TLS uses the same node-agent mechanism in solo and devopsellence: desired
 state carries ingress intent plus node peers, and each web node runs an ACME
 HTTP-01 challenge responder. If Let's Encrypt asks one node for a challenge token
 that another node created, the node can fetch the challenge response from its web

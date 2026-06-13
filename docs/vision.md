@@ -4,23 +4,23 @@ This document captures the design center for devopsellence: the assumptions it s
 
 ## Thesis
 
-devopsellence starts from a simple belief: most teams do not need a new compute abstraction. Existing virtual machines are enough. Existing containerization is enough. Existing cloud primitives such as object storage, secret managers, and container registries are enough.
+devopsellence starts from a simple belief: most companies do not need a new compute abstraction for internal applications. Existing virtual machines are enough. Existing containerization is enough. Existing GCP primitives such as Compute Engine, Cloud Storage, Secret Manager, Artifact Registry, IAM, DNS, and logging are enough.
 
-The problem is not that infrastructure providers failed to invent enough abstractions. The problem is that using the primitives well still requires too much glue code, too many sharp edges, and too much operational ceremony. devopsellence aims to be that missing glue. It is a toolkit and a building block, not a new universe. The closest framing is Mitchell Hashimoto's [building block economy](https://mitchellh.com/writing/building-block-economy): choose strong primitives, compose them cleanly, avoid replacing them with a grander but leakier abstraction.
+The problem is not that infrastructure providers failed to invent enough abstractions. The problem is that using the primitives well still requires too much glue code, too many sharp edges, and too much operational ceremony. devopsellence aims to be that missing glue for medium and large companies running internal software on GCP. It is a toolkit and a building block, not a new universe. The closest framing is Mitchell Hashimoto's [building block economy](https://mitchellh.com/writing/building-block-economy): choose strong primitives, compose them cleanly, avoid replacing them with a grander but leakier abstraction.
 
 In practical terms, devopsellence is very close to "take a small compose-style application description and apply it consistently across a fleet of VMs." Today the concrete configuration is `devopsellence.yml` and the node agent desired-state schema, not a literal `docker-compose.yml`, but the mental model is intentionally that simple.
 
 ## Strong opinions
 
 - One does not need further abstraction than the VM.
-- One does not need a PaaS. One needs better tooling for running applications on VMs.
+- One does not need a platform-owned compute abstraction. One needs PaaS-level ergonomics while keeping the VM and cloud primitives visible.
 - One should not be forced into a platform-owned stack for analytics, logging, metrics, databases, caching, queues, or other adjacent services.
 
-These opinions are the foundation for everything else in this document. devopsellence should reduce toil around provisioning, deployment, secrets, ingress, and reconciliation without trying to hide the machine as the primary unit of execution.
+These opinions are the foundation for everything else in this document. devopsellence should reduce toil around provisioning, deployment, secrets, ingress, identity, auditability, and reconciliation without trying to hide the machine as the primary unit of execution.
 
 ## What devopsellence is
 
-devopsellence is a reconciler and toolkit for running containerized applications on familiar VMs.
+devopsellence is a GCP-native internal deployment platform for running containerized company applications on familiar VMs.
 
 At its core:
 
@@ -33,7 +33,7 @@ Everything else is optional convenience around that loop.
 
 The CLI is convenience. The control plane is convenience. Hosted workflows are convenience. Those pieces matter, but they are not the essence of the system. The essence is the contract between desired state and the node agent that enforces it.
 
-The product should grow from a shared, fundamental core. The closer code is to that core, the more stable, explicit, and mode-independent it should be. The further a feature sits from the core, the more malleable it can become for solo workflows, hosted workflows, managed infrastructure, user interfaces, and policy choices.
+The product should grow from a shared, fundamental core. The closer code is to that core, the more stable, explicit, and product-independent it should be. The further a feature sits from the core, the more malleable it can become for solo workflows, devopsellence company workflows, managed infrastructure, user interfaces, and policy choices.
 
 devopsellence also does not try to own the rest of the application stack. It does not come with a mandatory database, cache, message queue, logging backend, metrics backend, or analytics product. Users are free to integrate with existing hosted services such as PlanetScale, or run their own supporting services on infrastructure they control. A major goal is to make that choice easy rather than replace it with a devopsellence-specific answer.
 
@@ -47,31 +47,31 @@ devopsellence also does not try to own the rest of the application stack. It doe
 - Provider-native primitives are usually better than rebuilding weaker versions of them inside devopsellence.
 - Users should be able to adopt devopsellence incrementally, starting from just the node agent.
 
-These assumptions are visible in the code today. The product has a solo path that reads desired state from local files and a shared path that fetches desired state and secrets from external systems. Over time, those paths should converge on the same planning, validation, and desired-state core, with only ownership, persistence, transport, and policy changing by mode.
+These assumptions are visible in the code today. The repository has a solo path that reads desired state from local files and a company path that fetches desired state and secrets from external systems. Over time, those paths should converge on the same planning, validation, and desired-state core, with only ownership, persistence, transport, infrastructure adapter, and policy changing by product surface.
 
 ## Invariants
 
-- Solo and shared mode should behave the same at the deployment-model level. They differ in user, organization, project, ownership, persistence, and transport concerns.
+- Solo and devopsellence should behave the same at the deployment-model level. They differ in product positioning, user, organization, project, ownership, persistence, infrastructure adapter, and transport concerns.
 - The core runtime model should allow a node to carry one or more environment instances. Whether a deployment target permits that is placement policy.
 - A node may run multiple services for an environment, including multiple workers. Service identity should be explicit, not inferred from fixed names such as one `web` and one `worker`.
 - The node agent is the mandatory runtime component. Everything else is replaceable.
 - Desired state is the control surface. The node agent should not need imperative per-deploy shell choreography to know what to run.
-- Desired state should describe node runtime state in a mode-independent shape. Solo should be able to use that shape through local function calls and files; shared should be able to use that shape through service calls and remote stores.
-- Mode is management-plane vocabulary, not node agent vocabulary. The node agent runtime should not branch on solo or shared; it should be wired with concrete adapters for desired-state source, secret resolution, status reporting, registry auth, and related IO.
-- Solo mode uses the local filesystem as the source of truth for desired state and local status artifacts.
-- Shared mode should use simple external primitives: object storage for desired state, a secret manager for secrets, and a container registry for images.
+- Desired state should describe node runtime state in a product-independent shape. Solo should be able to use that shape through local function calls and files; devopsellence should be able to use that shape through service calls and GCP-backed remote stores.
+- Product surface is management-plane vocabulary, not node agent vocabulary. The node agent runtime should not branch on solo or devopsellence; it should be wired with concrete adapters for desired-state source, secret resolution, status reporting, registry auth, and related IO.
+- Solo uses the local filesystem as the source of truth for desired state and local status artifacts.
+- devopsellence should use GCP primitives: Cloud Storage for desired state, Secret Manager for secrets, Artifact Registry for images, IAM for identity, and Compute Engine for nodes.
 - The runtime data plane should stay decoupled from the management plane as much as possible.
-- Ingress desired state should be the same in solo and shared mode: hostnames, public web nodes, Envoy, and node-owned TLS. The control plane may help publish DNS, but certificate private keys should stay on the node.
+- Ingress desired state should be the same in solo and devopsellence: hostnames, public web nodes, Envoy, and node-owned TLS. The control plane may help publish DNS, but certificate private keys should stay on the node.
 - Local override must always remain possible. Operators need an escape hatch.
 - The system should remain understandable with ordinary tools: SSH, Docker, files, logs, JSON, and cloud CLIs.
 
-Placement policy matters, but it should sit outside the core runtime schema. A hosted shared environment may choose one environment per node for isolation, quota, and operational clarity. Solo mode may allow several small environments on one node. Both should use the same core concepts and validation rules wherever possible.
+Placement policy matters, but it should sit outside the core runtime schema. A devopsellence company environment may choose one environment per node for isolation, quota, and operational clarity. Solo may allow several small environments on one node. Both should use the same core concepts and validation rules wherever possible.
 
-## Solo And Shared
+## Product surfaces
 
-Solo mode is the minimal expression of devopsellence.
+Solo is a separate local operator product that shares the devopsellence deployment core.
 
-In solo mode:
+In solo:
 
 - desired state lives on the local filesystem;
 - the node agent reads it directly;
@@ -79,20 +79,22 @@ In solo mode:
 - secrets can be resolved before the desired state ever reaches the node agent;
 - users can manage the state with any tool they want.
 
-This is the composability story in its purest form. If you can write the right file to disk, you can use devopsellence. You do not need a hosted control plane to get value from the node agent.
+This is the composability story in its purest form. If you can write the right file to disk, you can use the node agent and deployment core. You do not need a hosted control plane to get value from the local operator product.
 
-Shared mode exists to preserve the same model while moving the source of truth off the machine.
+devopsellence is the company product that preserves the same runtime model while moving the source of truth into GCP-backed infrastructure and a control plane.
 
-In shared mode:
+In devopsellence:
 
-- desired state belongs in object storage;
-- secrets belong in a secret manager;
-- images belong in a container registry;
+- desired state belongs in Cloud Storage;
+- secrets belong in Secret Manager;
+- images belong in Artifact Registry;
+- nodes belong on Compute Engine VMs;
+- identity belongs in IAM;
 - the node agent reads and reconciles those primitives directly.
 
-Today the repo's main shared path is GCP-shaped: Cloud Storage, Secret Manager, Artifact Registry, and control-plane-issued identity. That is an implementation of the vision, not the vision itself. The deeper idea is that shared mode should still be made of understandable building blocks rather than a proprietary all-in-one substrate.
+GCP is not incidental positioning for devopsellence. It is the initial product surface because medium and large companies already trust those primitives, can audit them, and can operate them with ordinary cloud tools. Provider-specific code still belongs behind infrastructure adapters so the deployment core does not turn into a cloud API model.
 
-The two modes should not grow separate deploy semantics. Eventually the shared deployment core should be Go code that can run in-process for CLI solo workflows and behind an RPC boundary for the Rails control plane. Rails should own product state, accounts, billing, authorization, and persistence. The Go core should own the shared deployment model: config interpretation, validation, planning, desired-state generation, placement constraints, ingress model, and status interpretation.
+Solo and devopsellence should not grow separate deploy semantics. The deployment core should be Go code that can run in-process for solo workflows and behind an RPC boundary for the Rails control plane. Rails should own product state, accounts, billing, authorization, audit trails, and persistence. The Go core should own the shared deployment model: config interpretation, validation, planning, desired-state generation, placement constraints, ingress model, and status interpretation.
 
 ## Tradeoffs
 
@@ -100,7 +102,7 @@ devopsellence makes deliberate tradeoffs.
 
 - It chooses simplicity over maximum bin-packing efficiency.
 - It chooses explicit placement policy over hidden scheduling.
-- It chooses provider primitives over cross-provider abstraction layers.
+- It chooses GCP primitives for the devopsellence product surface over cross-provider abstraction layers.
 - It chooses reconciliation over ad hoc deploy scripts.
 - It chooses composability over lock-in to one blessed control surface.
 - It chooses boring operational tools over clever internal machinery.
@@ -170,7 +172,7 @@ Layer 2:
 
 Layer 3:
 
-- add the CLI and control plane for better workflows, multi-user management, bootstrap flows, and hosted convenience.
+- add the devopsellence control plane for company workflows, multi-user management, bootstrap flows, auditability, and hosted convenience.
 
 This layering matters. It prevents devopsellence from becoming all-or-nothing software. The low-level contract must remain useful even when the higher-level product surfaces are absent.
 
@@ -182,9 +184,9 @@ Good signs:
 
 - less hidden machinery;
 - clearer contracts;
-- better solo and shared composability;
+- better solo and devopsellence composability;
 - clearer separation between core runtime model and placement policy;
-- fewer solo/shared semantic forks;
+- fewer product-surface semantic forks;
 - more leverage from existing infrastructure primitives;
 - easier debugging with normal tools.
 
@@ -197,4 +199,4 @@ Bad signs:
 
 The shortest version of the vision is this:
 
-devopsellence should make containerized applications on VMs feel operationally simple without pretending VMs, containers, files, registries, and secret stores do not exist.
+devopsellence should make internal containerized applications on GCP VMs feel operationally simple without pretending VMs, containers, files, registries, identity, and secret stores do not exist.

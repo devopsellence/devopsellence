@@ -84,7 +84,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 					return modeErr
 				}
 				if mode != ModeShared {
-					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in shared mode; run `devopsellence init --mode shared`", name)}
+					return ExitError{Code: 2, Err: fmt.Errorf("%s is only available in the devopsellence company workflow; run `devopsellence init --mode shared`", name)}
 				}
 				return run(ctx)
 			})
@@ -94,9 +94,9 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var rootVersion bool
 	root := &cobra.Command{
 		Use:   "devopsellence",
-		Short: "Agent-primary deployment toolkit for containerized apps on VMs",
+		Short: "Agent-primary internal deployment platform for containerized apps on GCP VMs",
 		Long: strings.Join([]string{
-			"devopsellence is an agent-primary deployment toolkit for containerized apps on VMs.",
+			"devopsellence is an agent-primary internal deployment platform for containerized apps on GCP VMs.",
 			"Commands emit structured JSON by default and avoid terminal-only interaction.",
 			"Use explicit flags, stdin, plans, and desired-state operations instead of prompts.",
 			"",
@@ -594,11 +594,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var initMode string
 	initCommand := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize workspace config for solo or shared mode",
+		Short: "Initialize workspace config for solo or devopsellence workflows",
 		Long: strings.Join([]string{
-			"Initialize the current workspace for a selected mode.",
+			"Initialize the current workspace for a selected workflow.",
 			"  solo   - write devopsellence.yml if missing and validate it if present",
-			"  shared - sign in, create/select org/project/env, and write devopsellence.yml",
+			"  shared - compatibility mode value for devopsellence company workflows: sign in, create/select org/project/env, and write devopsellence.yml",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runWithTimeout(cmd, func(ctx context.Context) error {
@@ -617,23 +617,23 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})
 		},
 	}
-	initCommand.Flags().StringVar(&initMode, "mode", "", "Set and use workspace mode for init (solo or shared)")
-	initCommand.Flags().StringVar(&initSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
-	initCommand.Flags().StringVar(&initSharedOpts.ProjectName, "project", "", "Project name override (shared mode)")
-	initCommand.Flags().StringVar(&initSharedOpts.Environment, "env", "", "Environment name override (shared mode)")
-	initCommand.Flags().BoolVar(&initSharedOpts.NonInteractive, "non-interactive", false, "Fail instead of prompting for missing values in shared mode")
+	initCommand.Flags().StringVar(&initMode, "mode", "", "Set and use workspace mode for init (solo or shared; shared selects devopsellence company workflows)")
+	initCommand.Flags().StringVar(&initSharedOpts.Organization, "org", "", "Organization name override (devopsellence company workflow)")
+	initCommand.Flags().StringVar(&initSharedOpts.ProjectName, "project", "", "Project name override (devopsellence company workflow)")
+	initCommand.Flags().StringVar(&initSharedOpts.Environment, "env", "", "Environment name override (devopsellence company workflow)")
+	initCommand.Flags().BoolVar(&initSharedOpts.NonInteractive, "non-interactive", false, "Fail instead of prompting for missing values in devopsellence company workflows")
 	root.AddCommand(initCommand)
 
 	var deploySharedOpts DeployOptions
 	var deploySoloOpts SoloDeployOptions
 	deployCommand := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy the current app using the selected workspace mode",
+		Short: "Deploy the current app using the selected workspace workflow",
 		Long: strings.Join([]string{
-			"Deploy the current app using the selected workspace mode.",
+			"Deploy the current app using the selected workspace workflow.",
 			"  solo   - deploys to nodes attached to the current workspace/environment; use `devopsellence node attach|detach` to change scope",
 			"           and uses the current git commit as the workload revision, so the app must be inside a git checkout with at least one commit.",
-			"  shared - deploys through the control plane using org/project/environment context",
+			"  shared - compatibility mode value for devopsellence company workflows through the control plane using org/project/environment context",
 		}, "\n"),
 		RunE: runByMode(func(ctx context.Context) error {
 			deploySoloOpts.Environment = deploySharedOpts.Environment
@@ -644,11 +644,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	}
 	deployCommand.Flags().BoolVar(&deploySoloOpts.SkipDNSCheck, "skip-dns-check", false, "Skip ingress DNS readiness check before deploy (solo mode)")
 	deployCommand.Flags().BoolVar(&deploySoloOpts.DryRun, "dry-run", false, "Plan solo deploy without building, publishing, SSHing, or mutating state")
-	deployCommand.Flags().StringVar(&deploySharedOpts.Organization, "org", os.Getenv("DEVOPSELLENCE_ORGANIZATION"), "Organization name override (shared mode)")
-	deployCommand.Flags().StringVar(&deploySharedOpts.Project, "project", os.Getenv("DEVOPSELLENCE_PROJECT"), "Project name override (shared mode)")
-	deployCommand.Flags().StringVar(&deploySharedOpts.Image, "image", "", "Deploy an existing digest ref instead of building locally (shared mode)")
-	deployCommand.Flags().StringVar(&deploySharedOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (solo/shared)")
-	deployCommand.Flags().BoolVar(&deploySharedOpts.NonInteractive, "non-interactive", false, "Disable interactive prompts if re-initialization is needed (shared mode)")
+	deployCommand.Flags().StringVar(&deploySharedOpts.Organization, "org", os.Getenv("DEVOPSELLENCE_ORGANIZATION"), "Organization name override (devopsellence company workflow)")
+	deployCommand.Flags().StringVar(&deploySharedOpts.Project, "project", os.Getenv("DEVOPSELLENCE_PROJECT"), "Project name override (devopsellence company workflow)")
+	deployCommand.Flags().StringVar(&deploySharedOpts.Image, "image", "", "Deploy an existing digest ref instead of building locally (devopsellence company workflow)")
+	deployCommand.Flags().StringVar(&deploySharedOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override")
+	deployCommand.Flags().BoolVar(&deploySharedOpts.NonInteractive, "non-interactive", false, "Disable interactive prompts if re-initialization is needed in devopsellence company workflows")
 	root.AddCommand(deployCommand)
 
 	var ingressSetOpts IngressSetOptions
@@ -715,7 +715,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var statusSoloOpts SoloStatusOptions
 	statusCommand := &cobra.Command{
 		Use:   "status",
-		Short: "Show deploy or runtime status for the selected workspace mode",
+		Short: "Show deploy or runtime status for the selected workspace workflow",
 		RunE: runByMode(func(ctx context.Context) error {
 			statusSoloOpts.Environment = statusSharedOpts.Environment
 			return app.SoloStatus(ctx, statusSoloOpts)
@@ -724,9 +724,9 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		}),
 	}
 	statusCommand.Flags().StringSliceVar(&statusSoloOpts.Nodes, "nodes", nil, "Comma-separated node names (solo mode)")
-	statusCommand.Flags().StringVar(&statusSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
-	statusCommand.Flags().StringVar(&statusSharedOpts.Project, "project", "", "Project name override (shared mode)")
-	statusCommand.Flags().StringVar(&statusSharedOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override (solo/shared)")
+	statusCommand.Flags().StringVar(&statusSharedOpts.Organization, "org", "", "Organization name override (devopsellence company workflow)")
+	statusCommand.Flags().StringVar(&statusSharedOpts.Project, "project", "", "Project name override (devopsellence company workflow)")
+	statusCommand.Flags().StringVar(&statusSharedOpts.Environment, "env", os.Getenv("DEVOPSELLENCE_ENVIRONMENT"), "Environment name override")
 	root.AddCommand(statusCommand)
 
 	var releaseListOpts SoloReleaseListOptions
@@ -741,7 +741,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		RunE: runByMode(func(ctx context.Context) error {
 			return app.SoloReleaseList(ctx, releaseListOpts)
 		}, func(ctx context.Context) error {
-			return ExitError{Code: 2, Err: errors.New("release list is not wired for shared mode yet")}
+			return ExitError{Code: 2, Err: errors.New("release list is not wired for devopsellence company workflows yet")}
 		}),
 	}
 	releaseListCommand.Flags().IntVar(&releaseListOpts.Limit, "limit", 20, "Maximum releases to return (0 for full history)")
@@ -763,7 +763,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return runByMode(func(ctx context.Context) error {
 				return app.SoloReleaseRollback(ctx, releaseRollbackOpts)
 			}, func(ctx context.Context) error {
-				return ExitError{Code: 2, Err: errors.New("release rollback is not wired for shared mode yet")}
+				return ExitError{Code: 2, Err: errors.New("release rollback is not wired for devopsellence company workflows yet")}
 			})(cmd, args)
 		},
 	}
@@ -796,7 +796,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var secretReference string
 	secretCommand := &cobra.Command{
 		Use:   "secret",
-		Short: "Manage secrets for the selected workspace mode",
+		Short: "Manage secrets for the selected workspace workflow",
 	}
 	secretSetCommand := &cobra.Command{
 		Use:   "set <name>",
@@ -829,8 +829,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
-	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Organization, "org", "", "Organization name override (shared mode)")
-	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Project, "project", "", "Project name override (shared mode)")
+	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Organization, "org", "", "Organization name override (devopsellence company workflow)")
+	secretSetCommand.Flags().StringVar(&secretSharedSetOpts.Project, "project", "", "Project name override (devopsellence company workflow)")
 	secretSetCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
 	secretSetCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name (required)")
 	secretSetCommand.Flags().StringVar(&secretStore, "store", "", "Solo secret store: plaintext or 1password")
@@ -856,8 +856,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
-	secretListCommand.Flags().StringVar(&secretSharedListOpts.Organization, "org", "", "Organization name override (shared mode)")
-	secretListCommand.Flags().StringVar(&secretSharedListOpts.Project, "project", "", "Project name override (shared mode)")
+	secretListCommand.Flags().StringVar(&secretSharedListOpts.Organization, "org", "", "Organization name override (devopsellence company workflow)")
+	secretListCommand.Flags().StringVar(&secretSharedListOpts.Project, "project", "", "Project name override (devopsellence company workflow)")
 	secretListCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
 	secretListCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name filter (solo mode)")
 	secretDeleteCommand := &cobra.Command{
@@ -878,8 +878,8 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
-	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Organization, "org", "", "Organization name override (shared mode)")
-	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Project, "project", "", "Project name override (shared mode)")
+	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Organization, "org", "", "Organization name override (devopsellence company workflow)")
+	secretDeleteCommand.Flags().StringVar(&secretSharedDeleteOpts.Project, "project", "", "Project name override (devopsellence company workflow)")
 	secretDeleteCommand.Flags().StringVar(&secretEnvironment, "env", "", "Environment name override")
 	secretDeleteCommand.Flags().StringVar(&secretServiceName, "service", "", "Service name (required)")
 	secretCommand.AddCommand(secretSetCommand, secretListCommand, secretDeleteCommand)
@@ -911,12 +911,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	var workloadExecOpts SoloExecOptions
 	nodeCommand := &cobra.Command{
 		Use:   "node",
-		Short: "Manage nodes for the selected workspace mode",
+		Short: "Manage nodes for the selected workspace workflow",
 	}
 	nodeRegisterCommand := &cobra.Command{
 		Use:   "register",
-		Short: "Create a node install command for shared mode",
-		Long:  "Create a short-lived install command to register a shared-mode node (paid orgs only). By default the command signs in if needed, initializes the current app if needed, and auto-attaches the node to the current project and environment; pass --unassigned to only register it.",
+		Short: "Create a node install command for devopsellence company workflows",
+		Long:  "Create a short-lived install command to register a devopsellence company-workflow node (paid orgs only). By default the command signs in if needed, initializes the current app if needed, and auto-attaches the node to the current project and environment; pass --unassigned to only register it.",
 		RunE: runSharedOnly("node register", func(ctx context.Context) error {
 			return app.NodeBootstrap(ctx, nodeRegisterOpts)
 		}),
@@ -929,7 +929,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Use:   "create <name>",
 		Short: "Create or register a node",
 		Long: strings.Join([]string{
-			"Create or register a node for the selected workspace mode.",
+			"Create or register a node for the selected workspace workflow.",
 			"Solo --host nodes must be reachable over SSH with the selected key. devopsellence stores SSH host keys in its own state directory and uses StrictHostKeyChecking=accept-new, so first contact does not write to ~/.ssh/known_hosts.",
 			"If local SSH config is broken or too opinionated, set DEVOPSELLENCE_SSH_CONFIG=none to skip local SSH config; on Unix, DEVOPSELLENCE_SSH_CONFIG=/dev/null is equivalent.",
 			"The solo agent install can install Docker on supported Ubuntu VMs when Docker is missing; otherwise install Docker yourself or make the SSH user able to run docker via passwordless sudo.",
@@ -962,10 +962,10 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 	nodeCreateCommand.Flags().StringVar(&nodeCreateOpts.SSHPublicKey, "ssh-public-key", "", "SSH public key path for provider provisioning")
 	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Install, "install", false, "Install the solo agent after creating the node (solo mode)")
 	nodeCreateCommand.Flags().BoolVar(&nodeCreateOpts.Attach, "attach", false, "Attach the created solo node to the current environment (solo mode)")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Organization, "org", "", "Shared-mode organization name override")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Project, "project", "", "Shared-mode project name override")
-	nodeCreateCommand.Flags().StringVar(&nodeCreateEnvironment, "env", "", "Environment name override (solo/shared)")
-	nodeCreateCommand.Flags().BoolVar(&nodeCreateBootstrapOpts.Unassigned, "unassigned", false, "Shared mode: register without auto-attaching to the current environment")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Organization, "org", "", "Organization name override (devopsellence company workflow)")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateBootstrapOpts.Project, "project", "", "Project name override (devopsellence company workflow)")
+	nodeCreateCommand.Flags().StringVar(&nodeCreateEnvironment, "env", "", "Environment name override")
+	nodeCreateCommand.Flags().BoolVar(&nodeCreateBootstrapOpts.Unassigned, "unassigned", false, "Register without auto-attaching to the current environment (devopsellence company workflow)")
 	nodeListCommand := &cobra.Command{
 		Use:   "list",
 		Short: "List nodes",
@@ -975,11 +975,11 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return app.NodeList(ctx, nodeListSharedOpts)
 		}),
 	}
-	nodeListCommand.Flags().StringVar(&nodeListSharedOpts.Organization, "org", "", "Organization name override (shared mode)")
+	nodeListCommand.Flags().StringVar(&nodeListSharedOpts.Organization, "org", "", "Organization name override (devopsellence company workflow)")
 	nodeListCommand.Flags().BoolVar(&nodeListSoloOpts.All, "all", false, "List all registered solo nodes instead of only the current environment")
 	nodeAttachCommand := &cobra.Command{
 		Use:   "attach <name|id>",
-		Short: "Attach a node to the current environment (solo: name, shared: numeric id)",
+		Short: "Attach a node to the current environment (solo: name, devopsellence: numeric id)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeAttachSoloOpts.Node = args[0]
@@ -997,12 +997,12 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			})(cmd, args)
 		},
 	}
-	nodeAttachCommand.Flags().StringVar(&nodeAttachEnvironment, "env", "", "Environment name override (solo/shared)")
+	nodeAttachCommand.Flags().StringVar(&nodeAttachEnvironment, "env", "", "Environment name override")
 	nodeAttachCommand.Flags().StringVar(&nodeAttachOpts.Organization, "org", "", "Organization name override")
 	nodeAttachCommand.Flags().StringVar(&nodeAttachOpts.Project, "project", "", "Project name override")
 	nodeDetachCommand := &cobra.Command{
 		Use:   "detach <name|id>",
-		Short: "Detach a node from the current environment (solo: name, shared: numeric id)",
+		Short: "Detach a node from the current environment (solo: name, devopsellence: numeric id)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			nodeDetachSoloOpts.Node = args[0]
@@ -1025,7 +1025,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Long: strings.Join([]string{
 			"Remove a node from devopsellence state.",
 			"For solo existing-SSH nodes this only forgets the node locally; detach the node, then run `devopsellence agent uninstall <name> --yes` before removal to clean the remote VM.",
-			"For provider-managed solo nodes and shared nodes, removal deletes the provider/control-plane node where supported.",
+			"For provider-managed solo nodes and devopsellence company-workflow nodes, removal deletes the provider/control-plane node where supported.",
 		}, "\n"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -1099,7 +1099,7 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 		Long: strings.Join([]string{
 			"Collect a bounded runtime snapshot from a node.",
 			"In solo mode, pass the node name and the CLI collects SSH, Docker, agent, port, status, image, network, and container details over SSH.",
-			"In shared mode, pass the numeric node id and the control plane asks the node for a snapshot.",
+			"In devopsellence company workflows, pass the numeric node id and the control plane asks the node for a snapshot.",
 		}, "\n"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

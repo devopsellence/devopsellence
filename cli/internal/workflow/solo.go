@@ -6130,7 +6130,7 @@ func (a *App) SharedSoloNodeCreate(ctx context.Context, opts SharedSoloNodeCreat
 		return ExitError{Code: 2, Err: fmt.Errorf("node create --attach is only available in solo mode")}
 	}
 	if strings.TrimSpace(opts.Provider) == "" {
-		return ExitError{Code: 2, Err: fmt.Errorf("node create requires --provider in shared mode")}
+		return ExitError{Code: 2, Err: fmt.Errorf("node create requires --provider in devopsellence company workflows")}
 	}
 	tokens, err := a.ensureAuth(ctx, false)
 	if err != nil {
@@ -7441,7 +7441,7 @@ func (a *App) soloEnvironmentCreate(opts EnvironmentCreateOptions) error {
 
 func (a *App) soloEnvironmentList(opts EnvironmentListOptions) error {
 	if strings.TrimSpace(opts.Organization) != "" || strings.TrimSpace(opts.Project) != "" {
-		return ExitError{Code: 2, Err: errors.New("--org and --project are only supported in shared mode")}
+		return ExitError{Code: 2, Err: errors.New("--org and --project are only supported in devopsellence company workflows")}
 	}
 	cfg, _, err := a.loadSoloProjectConfig()
 	if err != nil {

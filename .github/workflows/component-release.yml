@@ -54,7 +54,7 @@ jobs:
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
           echo "Resolved source ref: $source_ref"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.resolve_source_ref.outputs.source_ref }}

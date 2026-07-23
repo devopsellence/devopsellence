@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/charmbracelet/keygen v0.5.4
 	github.com/devopsellence/devopsellence/deployment-core v0.0.0
-	github.com/oklog/ulid/v2 v2.1.1
+	github.com/oklog/ulid/v2 v2.1.2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.54.0
 )

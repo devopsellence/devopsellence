@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/envoyproxy/go-control-plane v0.14.0
-	github.com/envoyproxy/go-control-plane/envoy v1.37.0
+	github.com/envoyproxy/go-control-plane/envoy v1.39.0
 	github.com/go-acme/lego/v4 v4.35.2
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.1

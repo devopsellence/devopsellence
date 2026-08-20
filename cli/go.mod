@@ -7,7 +7,7 @@ require (
 	github.com/devopsellence/devopsellence/deployment-core v0.0.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.55.0
 )
 
 require (

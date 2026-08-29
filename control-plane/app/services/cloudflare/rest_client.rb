@@ -26,8 +26,8 @@ module Cloudflare
       @api_base = api_base.to_s.strip.presence || DEFAULT_API_BASE
     end
 
-    def replace_dns_a_records(hostname:, addresses:, ttl: 60)
-      replace_dns_records(hostname:, type: "A", values: Array(addresses).map { |entry| entry.to_s.strip }.reject(&:blank?), ttl:, proxied: false)
+    def replace_dns_a_records(hostname:, addresses:, ttl: 60, proxied: false)
+      replace_dns_records(hostname:, type: "A", values: Array(addresses).map { |entry| entry.to_s.strip }.reject(&:blank?), ttl:, proxied:)
     end
 
     def replace_dns_txt_records(hostname:, values:, ttl: 60)

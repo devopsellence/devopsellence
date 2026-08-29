@@ -1,9 +1,9 @@
 ---
-title: Deploy with shared
-description: Shared mode deployment flow and node registration.
+title: Deploy with devopsellence
+description: devopsellence company deployment flow and node registration.
 ---
 
-Shared mode keeps the same root verbs as solo, but the control plane owns
+devopsellence company workflows keep the same root verbs as solo, but the control plane owns
 organization, project, environment, release, token, and node coordination.
 
 ```bash
@@ -27,5 +27,5 @@ node.
 CloudStack VMs use this existing-server path today. See
 [CloudStack VMs](/guides/cloudstack-vms/).
 
-Shared mode is the right default when API tokens, browser auth, team workflows,
+devopsellence is the right default when API tokens, browser auth, team workflows,
 and hosted/self-hosted coordination are part of the product requirement.

@@ -1,41 +1,44 @@
 ---
 title: Overview
-description: What devopsellence is and when to use each mode.
+description: What devopsellence is and how it relates to solo.
 ---
 
-devopsellence deploys containerized applications to familiar VMs. It does not
-try to hide machines, containers, files, registries, or secret stores. It makes
-the ordinary primitives easier to use together.
+devopsellence deploys internal containerized applications to GCP VMs. It does
+not try to hide machines, containers, files, registries, identities, or secret
+stores. It makes the ordinary GCP primitives easier to use together.
 
-The immediate solo-mode value is an operator-safe deployment loop: dry-run,
-deploy, status, doctor, logs, exec, secrets, rollback, DNS checks, and HTTPS
-verification with structured output an AI assistant can act on.
+Solo is a separate local operator tool that shares the same deployment core. Its
+value is an operator-safe local loop: dry-run, deploy, status, doctor, logs,
+exec, secrets, rollback, DNS checks, and HTTPS verification with structured
+output an AI assistant can act on.
 
 The system has three product surfaces:
 
 - **Node agent**: runs on each node and reconciles containers, Envoy ingress,
   secrets, and status.
-- **CLI**: runs locally or in CI to plan, deploy, inspect, and manage solo/shared
-  workflows.
+- **CLI**: runs locally to plan, deploy, inspect, and manage solo workflows,
+  and talks to devopsellence APIs for company workflows.
 - **Control plane**: adds sign-in, organizations, projects, environments, tokens,
-  release coordination, and team workflows for shared mode.
+  release coordination, GCP-backed state, and team workflows for devopsellence.
 
-## Pick a mode
+## Product boundary
 
-| | Solo | Shared |
+| | Solo | devopsellence |
 | --- | --- | --- |
 | Control surface | Local CLI and files | Hosted or self-hosted APIs |
 | Transport | SSH | Node agent pulls published state |
 | Auth | SSH keys | Browser auth and API tokens |
-| Images | Streamed or loaded through SSH workflows | Pushed to a registry |
-| Secrets | Local operator-controlled state or references | Server-side team secret management |
-| Best for | Side projects, single-dev apps, staging | Teams, production, multi-environment apps |
+| Images | Streamed or loaded through SSH workflows | Artifact Registry |
+| Secrets | Local operator-controlled state or references | Secret Manager-backed team secrets |
+| Infrastructure | Existing Linux VMs | GCP primitives |
+| Best for | One operator or trusted AI agent | Internal company apps and teams |
 
-Both modes should converge on the same config and deploy semantics. Mode is a
-management topology, not a different runtime.
+Solo and devopsellence should converge on the same config and deploy semantics.
+They are separate product surfaces, not separate runtimes.
 
 ## What devopsellence is not
 
-devopsellence is not a PaaS, functions platform, Kubernetes-lite, cloud API
-abstraction layer, or bundle for databases/caches/queues/logging. Bring the
-services you want; devopsellence focuses on deploying and reconciling your app.
+devopsellence is not a traditional PaaS, functions platform, Kubernetes-lite,
+cloud API abstraction layer, or bundle for databases/caches/queues/logging.
+Bring the services you want; devopsellence focuses on deploying and reconciling
+your internal app while keeping GCP primitives visible.

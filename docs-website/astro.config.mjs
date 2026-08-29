@@ -3,10 +3,15 @@ import starlight from "@astrojs/starlight";
 
 export default defineConfig({
   site: "https://docs.devopsellence.com",
+  redirects: {
+    "/concepts/solo-and-shared/": "/concepts/solo-and-devopsellence/",
+    "/getting-started/shared-overview/": "/getting-started/devopsellence-overview/",
+    "/guides/shared-deploy/": "/guides/devopsellence-deploy/",
+  },
   integrations: [
     starlight({
       title: "devopsellence docs",
-      description: "Deploy and operate containerized apps on VMs with devopsellence.",
+      description: "Deploy and operate internal apps on GCP VMs with devopsellence.",
       editLink: {
         baseUrl: "https://github.com/devopsellence/devopsellence/edit/master/docs-website/",
       },
@@ -25,14 +30,14 @@ export default defineConfig({
             { label: "Overview", link: "/getting-started/overview/" },
             { label: "Install", link: "/getting-started/install/" },
             { label: "Solo quickstart", link: "/getting-started/solo-quickstart/" },
-            { label: "Shared overview", link: "/getting-started/shared-overview/" },
+            { label: "devopsellence overview", link: "/getting-started/devopsellence-overview/" },
           ],
         },
         {
           label: "Core concepts",
           items: [
             { label: "Runtime model", link: "/concepts/runtime-model/" },
-            { label: "Solo and shared", link: "/concepts/solo-and-shared/" },
+            { label: "Solo and devopsellence", link: "/concepts/solo-and-devopsellence/" },
             { label: "Node agent and desired state", link: "/concepts/agent-desired-state/" },
             { label: "AI operator model", link: "/concepts/agent-primary/" },
           ],
@@ -41,7 +46,7 @@ export default defineConfig({
           label: "Guides",
           items: [
             { label: "Deploy with solo", link: "/guides/solo-deploy/" },
-            { label: "Deploy with shared", link: "/guides/shared-deploy/" },
+            { label: "Deploy with devopsellence", link: "/guides/devopsellence-deploy/" },
             { label: "CloudStack VMs", link: "/guides/cloudstack-vms/" },
             { label: "GitHub Actions", link: "/guides/github-actions/" },
             { label: "Secrets", link: "/guides/secrets/" },

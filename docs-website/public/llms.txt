@@ -1,29 +1,29 @@
 # devopsellence docs
 
-> Documentation for deploying and operating containerized apps on familiar VMs with devopsellence.
+> Documentation for deploying and operating internal containerized apps on GCP VMs with devopsellence.
 
-devopsellence is AI-operator-first: commands should expose explicit plan/apply boundaries, structured status, deterministic errors, and ordinary-tool escape hatches. It targets Dockerized apps on VMs, not PaaS or Kubernetes-lite abstractions.
+devopsellence is AI-operator-first: commands should expose explicit plan/apply boundaries, structured status, deterministic errors, and ordinary-tool escape hatches. It targets Dockerized internal apps on GCP VMs, not platform-owned compute abstractions or Kubernetes-lite.
 
-Solo and shared are management topologies over the same deployment model. Solo is SSH-first local operation. Shared is control-plane-backed team operation where node agents pull published desired state.
+Solo is the local operator product for SSH-first operation. devopsellence is the GCP-native company product where node agents pull published desired state from control-plane-backed infrastructure. Both share the same deployment model.
 
 ## Start
 
 - [Overview](https://docs.devopsellence.com/getting-started/overview/): Product overview and starting points.
 - [Install](https://docs.devopsellence.com/getting-started/install/): CLI installation and agent skill setup.
 - [Solo quickstart](https://docs.devopsellence.com/getting-started/solo-quickstart/): Shortest path to deploy an app to one VM.
-- [Shared overview](https://docs.devopsellence.com/getting-started/shared-overview/): Control-plane-backed workflow for teams.
+- [devopsellence overview](https://docs.devopsellence.com/getting-started/devopsellence-overview/): Control-plane-backed workflow for internal company apps.
 
 ## Concepts
 
 - [Runtime model](https://docs.devopsellence.com/concepts/runtime-model/): Desired state, releases, services, tasks, nodes, status, and reconciliation.
-- [Solo and shared](https://docs.devopsellence.com/concepts/solo-and-shared/): Management topology differences and shared runtime semantics.
+- [Solo and devopsellence](https://docs.devopsellence.com/concepts/solo-and-devopsellence/): Product boundary and shared runtime semantics.
 - [Node agent and desired state](https://docs.devopsellence.com/concepts/agent-desired-state/): Agent reconciliation model.
 - [AI operator model](https://docs.devopsellence.com/concepts/agent-primary/): AI assistant as the primary operator acting for a human.
 
 ## Guides
 
 - [Deploy with solo](https://docs.devopsellence.com/guides/solo-deploy/): Full solo deploy walkthrough.
-- [Deploy with shared](https://docs.devopsellence.com/guides/shared-deploy/): Shared-mode deploy workflow.
+- [Deploy with devopsellence](https://docs.devopsellence.com/guides/devopsellence-deploy/): Company deploy workflow.
 - [GitHub Actions](https://docs.devopsellence.com/guides/github-actions/): CI integration.
 - [Secrets](https://docs.devopsellence.com/guides/secrets/): Secret management workflow.
 - [Supporting services](https://docs.devopsellence.com/guides/supporting-services/): Redis, Memcached, and similar companion services.
@@ -35,7 +35,7 @@ Solo and shared are management topologies over the same deployment model. Solo i
 
 ## Examples
 
-- [Basecamp Fizzy on Rails](https://docs.devopsellence.com/examples/fizzy-rails-solo/): Rails app deployed with solo mode.
+- [Basecamp Fizzy on Rails](https://docs.devopsellence.com/examples/fizzy-rails-solo/): Rails app deployed with solo.
 - [Flue agents on Node.js](https://docs.devopsellence.com/examples/flue-node-solo/): Node.js webhook agent server deployed as an ordinary containerized service.
 
 ## Reference

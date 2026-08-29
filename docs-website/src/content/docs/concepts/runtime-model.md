@@ -3,7 +3,7 @@ title: Runtime model
 description: The core objects devopsellence uses to make deployments deterministic.
 ---
 
-devopsellence has one deployment model across solo and shared mode.
+Solo and devopsellence share one deployment model.
 
 The core objects are:
 
@@ -27,5 +27,5 @@ and operational clarity.
 
 A useful consequence is that solo remains local-only without being single-node
 only. The CLI can publish enough desired state over SSH for nodes to cooperate at
-runtime, while the node agent stays mode-agnostic and reconciles the same shape
-of intent in both solo and shared mode.
+runtime, while the node agent stays product-agnostic and reconciles the same
+shape of intent in both solo and devopsellence.

@@ -80,8 +80,9 @@ devopsellence node label set prod-1 --labels web,worker
 devopsellence deploy
 ```
 
-In shared mode, use the same config shape. The control plane and node agent use
-the same desired-state model; only image publication and secret storage differ.
+In devopsellence company workflows, use the same config shape. The control
+plane and node agent use the same desired-state model; image publication, secret
+storage, identity, and desired-state transport move to GCP-backed primitives.
 
 ## Release tasks
 

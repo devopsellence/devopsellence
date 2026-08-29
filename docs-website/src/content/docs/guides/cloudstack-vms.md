@@ -45,9 +45,9 @@ devopsellence deploy
 devopsellence status
 ```
 
-## Shared mode
+## devopsellence
 
-For shared mode, register the existing CloudStack VM from the workspace:
+For devopsellence company workflows, register the existing CloudStack VM from the workspace:
 
 ```bash
 devopsellence node register

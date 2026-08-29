@@ -19,6 +19,6 @@ Desired state is the stable write boundary. AI operators, humans, CLIs, APIs,
 and control planes should publish desired state through explicit contracts
 instead of inventing live production shell choreography.
 
-The node agent should stay mode-agnostic. It should be wired with concrete
+The node agent should stay product-agnostic. It should be wired with concrete
 adapters for source, secret resolution, status, and registry auth rather than
-branching on product concepts such as solo or shared.
+branching on product concepts such as solo or devopsellence.

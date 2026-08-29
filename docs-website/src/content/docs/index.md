@@ -1,21 +1,21 @@
 ---
 title: devopsellence docs
-description: AI-operator-first deployment docs for containerized apps on VMs.
+description: AI-operator-first deployment docs for internal apps on GCP VMs.
 template: splash
 hero:
-  tagline: AI-operator-first deployments on vanilla VMs.
+  tagline: AI-operator-first deployments on GCP VMs.
   actions:
     - text: Quickstart
       link: /getting-started/solo-quickstart/
       icon: right-arrow
 ---
 
-devopsellence helps AI coding and operations assistants deploy containerized
-apps without inventing production shell choreography.
+devopsellence helps AI coding and operations assistants deploy internal
+containerized apps on GCP VMs without inventing production shell choreography.
 
 Why care today: it gives Codex, Claude, or a human operator a narrow deployment
-contract for Dockerized apps on VMs. Plan a change, deploy it, verify status and
-HTTPS, inspect logs, manage secrets, and roll back with structured evidence
+contract for Dockerized internal apps. Plan a change, deploy it, verify status
+and HTTPS, inspect logs, manage secrets, and roll back with structured evidence
 instead of guesses.
 
 The contract stays narrow: inspect, plan, apply desired state, observe
@@ -36,8 +36,8 @@ codex "deploy with devopsellence solo"
 `devopsellence skill install` installs the matching AI agent skill from the CLI
 itself.
 
-- [Solo quickstart](/getting-started/solo-quickstart/) for the shortest path to
-  one VM.
+- [Solo quickstart](/getting-started/solo-quickstart/) for the shortest local
+  operator path to one VM.
 - [Ingress and TLS](/guides/ingress-tls/) for hostnames, DNS checks, and HTTPS
   verification.
 - [Basecamp Fizzy on Rails](/examples/fizzy-rails-solo/) for a real Rails app
@@ -53,5 +53,6 @@ itself.
   services, nodes, and status.
 - [CLI reference](/reference/cli/) for the AI-operator-safe command surface.
 
-Solo and shared use the same runtime model. Mode changes ownership,
-persistence, and transport; it should not change deployment semantics.
+Solo and devopsellence use the same runtime model. The product surface changes
+ownership, persistence, infrastructure adapters, and transport; it should not
+change deployment semantics.

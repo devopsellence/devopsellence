@@ -52,7 +52,7 @@ module EnvironmentIngresses
       end
       ingress.hosts.each do |host|
         client.delete_dns_records(hostname: host, type: "CNAME")
-        client.replace_dns_a_records(hostname: host, addresses:)
+        client.replace_dns_a_records(hostname: host, addresses:, proxied: true)
       end
     rescue StandardError
       restore_dns_snapshots(snapshots)

@@ -17,8 +17,8 @@ module EnvironmentIngresses
         operations << [ :delete, hostname, type ]
       end
 
-      def replace_dns_a_records(hostname:, addresses:, ttl: 60)
-        operations << [ :replace_a, hostname, addresses, ttl ]
+      def replace_dns_a_records(hostname:, addresses:, ttl: 60, proxied: false)
+        operations << [ :replace_a, hostname, addresses, ttl, proxied ]
         raise "boom" if @fail_replace
       end
 
@@ -80,7 +80,7 @@ module EnvironmentIngresses
         [ :records, ingress.hostname, "CNAME" ],
         [ :records, ingress.hostname, "A" ],
         [ :delete, ingress.hostname, "CNAME" ],
-        [ :replace_a, ingress.hostname, [ "198.51.100.10" ], 60 ]
+        [ :replace_a, ingress.hostname, [ "198.51.100.10" ], 60, true ]
       ], client.operations
     end
 
@@ -136,7 +136,7 @@ module EnvironmentIngresses
         [ :records, ingress.hostname, "CNAME" ],
         [ :records, ingress.hostname, "A" ],
         [ :delete, ingress.hostname, "CNAME" ],
-        [ :replace_a, ingress.hostname, [ "198.51.100.10" ], 60 ],
+        [ :replace_a, ingress.hostname, [ "198.51.100.10" ], 60, true ],
         [ :delete, ingress.hostname, "A" ],
         [ :delete, ingress.hostname, "CNAME" ],
         [ :restore, [{ "name" => ingress.hostname, "type" => "CNAME", "content" => "old.example.test", "proxied" => false, "ttl" => 60 }] ]

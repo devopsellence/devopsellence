@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devopsellence/cli/internal/agentskill"
+	"github.com/devopsellence/cli/internal/desktop"
 	"github.com/devopsellence/cli/internal/discovery"
 	"github.com/devopsellence/cli/internal/version"
 
@@ -126,6 +127,35 @@ func NewRootCommand(in io.Reader, out, err io.Writer, cwd string) *cobra.Command
 			return app.Printer.PrintJSON(versionPayload())
 		},
 	})
+
+	var desktopAddr string
+	var desktopNoOpen bool
+	desktopCommand := &cobra.Command{
+		Use:   "desktop",
+		Short: "Run the local solo desktop app",
+		Long: strings.Join([]string{
+			"Run a local loopback desktop-style control surface for solo mode.",
+			"The app reads local solo state and devopsellence.yml, redacts secret values,",
+			"and prints a structured desktop_ready event containing the local URL.",
+		}, "\n"),
+		Example: "  devopsellence desktop --no-open",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return desktop.Serve(ctx, desktop.Options{
+				Addr:          desktopAddr,
+				WorkspaceRoot: cwd,
+				OpenBrowser:   !desktopNoOpen,
+				Out:           out,
+				Err:           err,
+			})
+		},
+	}
+	desktopCommand.Flags().StringVar(&desktopAddr, "addr", "127.0.0.1:0", "Loopback address to listen on")
+	desktopCommand.Flags().BoolVar(&desktopNoOpen, "no-open", false, "Print the URL without opening a browser")
+	root.AddCommand(desktopCommand)
 
 	modeCommand := &cobra.Command{
 		Use:   "mode",

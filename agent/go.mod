@@ -7,8 +7,8 @@ require (
 	github.com/envoyproxy/go-control-plane v0.14.0
 	github.com/envoyproxy/go-control-plane/envoy v1.40.0
 	github.com/go-acme/lego/v4 v4.35.2
-	github.com/moby/moby/api v1.56.1
-	github.com/moby/moby/client v0.6.2
+	github.com/moby/moby/api v1.57.0
+	github.com/moby/moby/client v0.6.3
 	github.com/prometheus/client_golang v1.25.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
